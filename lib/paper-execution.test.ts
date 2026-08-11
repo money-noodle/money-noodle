@@ -1,0 +1,87 @@
+import { describe, expect, it } from 'vitest';
+import { MAX_FILLABLE_ASK, estimatePaperFill, groupedRecentOrders, venueFeeCents } from './paper-execution';
+import type { PaperOrder } from './types';
+import { MAX_ENTRY_PRICE, MIN_ENTRY_PRICE, MIN_NET_EDGE, venueFeeRate } from './prediction-policy';
+
+const liveAttempt = (patch: Partial<PaperOrder> = {}): PaperOrder => ({
+  id: 'live:XRP:close', logicalOrderId: 'live:XRP:close', attemptNumber: 1, executionMode: 'live',
+  clientOrderId: 'live:XRP:close', symbol: 'XRP', venue: 'kalshi', contractId: 'TEST', side: 'UP', status: 'unfilled',
+  createdAt: '2026-01-01T00:00:00Z', calculationAt: '2026-01-01T00:00:00Z', closesAt: '2026-01-01T00:15:00Z',
+  modelProbabilityUp: 0.7, confidence: 0.7, askPrice: 0.4, bidPrice: 0.39, spread: 0.01,
+  quantity: 0.2, stakeCents: 9, feeCents: 1, potentialPayoutCents: 20, ...patch,
+});
+
+describe('paper execution fills', () => {
+  it('keeps Polymarket whole but sizes Kalshi in 0.01-contract increments', () => {
+    expect(estimatePaperFill(100, 0.50, 'polymarket')).toEqual({
+      quantity: 1, limitPriceCents: 50, purchaseCents: 50, feeCents: 1, stakeCents: 51, potentialPayoutCents: 100,
+    });
+    expect(estimatePaperFill(100, 0.50, 'kalshi')).toEqual({
+      quantity: 1.92, limitPriceCents: 50, purchaseCents: 96, feeCents: 4, stakeCents: 100, potentialPayoutCents: 192,
+    });
+  });
+
+  it('preserves Kalshi sub-cent price increments while reserving whole cents', () => {
+    // Tapered crypto books trade in 0.1c increments. Submit 5.4c, but reserve 6c of principal.
+    const plan = estimatePaperFill(10, 0.054, 'kalshi')!;
+    expect(plan.limitPriceCents).toBeCloseTo(5.4);
+    expect(plan.quantity).toBe(1.66);
+    expect(plan.purchaseCents).toBe(9);
+    expect(plan.stakeCents).toBe(plan.purchaseCents + plan.feeCents);
+    expect(plan.stakeCents).toBeLessThanOrEqual(10);
+  });
+
+  it('spends the cap on as many contracts as fees allow', () => {
+    const plan = estimatePaperFill(100, 0.10, 'kalshi')!;
+    expect(plan.quantity).toBeGreaterThan(1);
+    expect(plan.stakeCents).toBeLessThanOrEqual(100);
+    // One more contract would breach the cap once its actual venue fee is added.
+    const nextQuantity = Number((plan.quantity + 0.01).toFixed(2));
+    const nextTotal = Math.ceil(nextQuantity * plan.limitPriceCents) + venueFeeCents('kalshi', plan.limitPriceCents, nextQuantity);
+    expect(nextTotal).toBeGreaterThan(100);
+  });
+
+  it('uses fractional Kalshi quantity when a whole contract does not fit', () => {
+    expect(estimatePaperFill(25, 0.50, 'kalshi')?.quantity).toBe(0.48);
+    expect(estimatePaperFill(4, MIN_ENTRY_PRICE, 'kalshi')?.quantity).toBe(0.6);
+    expect(estimatePaperFill(10, 0.35, 'kalshi')).toMatchObject({ quantity: 0.25, stakeCents: 10 });
+    expect(estimatePaperFill(9, 0.28, 'kalshi')).toMatchObject({ quantity: 0.28, stakeCents: 9 });
+    expect(estimatePaperFill(1, 0.50, 'kalshi')).toBeNull();
+    expect(estimatePaperFill(100, 0, 'polymarket')).toBeNull();
+  });
+
+  it('groups maker retries by logical intent and marks a recovered fill', () => {
+    const first = liveAttempt({ noFillReason: 'post_only_race' });
+    const retry = liveAttempt({
+      id: 'live:XRP:close:retry:2', attemptNumber: 2, status: 'open', filledCount: 0.2,
+      createdAt: '2026-01-01T00:01:00Z', noFillReason: undefined,
+    });
+    const grouped = groupedRecentOrders([first, retry]);
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0]).toMatchObject({ id: retry.id, recoveredAfterRetry: true });
+    expect(grouped[0].attemptHistory?.map((attempt) => [attempt.attemptNumber, attempt.noFillReason, attempt.status])).toEqual([
+      [1, 'post_only_race', 'unfilled'], [2, undefined, 'open'],
+    ]);
+  });
+
+  it('infers historical rested and post-only no-fill classifications for presentation', () => {
+    const crossed = liveAttempt({ reason: 'Post-only price crossed after three quote refreshes.' });
+    const rested = liveAttempt({ id: 'live:BNB:close', logicalOrderId: 'live:BNB:close', symbol: 'BNB', venueOrderId: 'venue' });
+    expect(groupedRecentOrders([crossed, rested]).map((order) => order.noFillReason)).toEqual(['post_only_race', 'rested_no_fill']);
+  });
+
+  it('refuses fills at or above the $1 payout, which are a guaranteed loss', () => {
+    expect(estimatePaperFill(200, MAX_FILLABLE_ASK, 'kalshi')).not.toBeNull();
+    expect(estimatePaperFill(200, MAX_FILLABLE_ASK + 0.005, 'kalshi')).toBeNull();
+    expect(estimatePaperFill(200, 1.0, 'kalshi')).toBeNull();
+  });
+
+  it('leaves expensive entries to the expected-value gate rather than a price ceiling', () => {
+    // The price ceiling is permissive, so edge after fees is what actually binds: even a maximally
+    // confident model cannot clear the bar near the top of the range.
+    const mostConfident = 0.97;
+    const dearest = mostConfident - MIN_NET_EDGE - venueFeeRate('kalshi', 0.9);
+    expect(dearest).toBeLessThan(MAX_ENTRY_PRICE);
+    expect(dearest).toBeLessThan(0.92);
+  });
+});

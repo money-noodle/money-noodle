@@ -1,0 +1,298 @@
+# Signal Desk — Implementation Status
+
+> **Living status document · Updated 2026-08-11**  
+> Product requirements and architectural decisions are maintained in [`SPEC.md`](SPEC.md).
+
+## Executive summary
+
+Signal Desk is operational locally as a research dashboard, continuous paper shadow trader, and explicitly armed live Kalshi trader. Core side-aware UP/YES and DOWN/NO order submission, reconciliation, failure recovery, quiescent pause, portfolio constraints, contract provenance, independent venue targets, and observation-model plumbing are implemented. The first 100-window evaluator ran without changing production and found insufficient, negative-return trade evidence. Major remaining work is refining venue reference comparability, hardening evaluator/promotion criteria, learning reduce-only HOLD/EXIT/SWITCH/BUY choices from position paths, measuring maker queue/adverse selection, and proving profitable edge without contaminating the tradeable probability with venue prices.
+
+| Area | Status |
+|---|---|
+| Dashboard and live feeds | Functional |
+| Forecast tracking and performance | Functional; evidence still accumulating |
+| Signed venue accounts | Kalshi verified live; Polymarket read/account integration only |
+| Paper execution | Continuous and independently funded |
+| Live execution | Mechanically functional and active; lifetime raw P&L is nearly flat after a follow-up losing cohort, with high tail concentration; no real switch yet |
+| Model calibration | 210 independent windows; runs through 200 retained production baseline and changed nothing |
+| Production durability | Local atomic JSON; startup/periodic/manual reconciliation, failure injection, guarded auto-resume, and quiescent pause implemented |
+
+## Current measured state
+
+Follow-up review snapshot: **2026-08-11 05:47 UTC**. A 52-minute read-only monitor collected 208 samples across the 05:00, 05:15, 05:30, and 05:45 boundaries without changing configuration or operator intent.
+
+- Forecast record: **19,325 resolved qualifying updates**, **1,106 resolved asset-cycles**, and **210 independent settlement windows**; 74.4% update accuracy, 70.5% cycle-balanced accuracy, and 0.193 Brier.
+- The monitor resolved three traded windows plus one no-trade window. All five live fills lost: BNB −8.32¢, XRP −8.32¢, SOL −8.40¢, DOGE −9¢, and BNB −8.04¢, for **−42.08¢**. Five resolved live no-fills included four DOWN outcomes and one missed BTC UP; conservative paper settled six trades for −21¢.
+- Since the prior 00:02 review, live added 33 settlements across 19 windows, 7 wins / 26 losses, and lost **51.33¢** on 265.33¢ stake. Lifetime live is now **187 settled across 109 windows, 48 wins / 139 losses, +5.90¢, +0.4% raw ROI**. Window-clustered mean return is +1.6% ±16.5pp—effectively indistinguishable from zero.
+- Since the 15:23 Resume: 88 settled first-attempt fills across 48 windows, 23 wins / 65 losses, +151.27¢ on 702.73¢ exact stake (+21.5% raw ROI). Window-clustered mean fell to +14.8% ±29.8pp.
+- Tail concentration is now stronger: the same 5.8¢ DOGE and 10¢ BTC wins total +195.61¢, or 129.3% of post-Resume profit. **Excluding those two leaves −44.34¢.**
+- Post-Resume asset results now include DOGE +165.11¢, BTC +77.63¢, BNB +49.83¢, HYPE +18.56¢, XRP −20.21¢, ETH −29.98¢, and SOL **0/14, −109.67¢**. SOL remains the clearest adverse segment, but no filter was changed.
+- Lifetime maker evidence weakened during the added sample: attempt 1 mean filled return fell from +9.9% to **+4.9% over 173 resolved fills**; all attempts are now −0.6%. Paired maker return gap is −4.2pp ±25.0pp and paired win-rate gap −8.1pp ±5.4pp over 71 windows. Attempt 2 remains disabled at 1/12 and −79.2%.
+- Walk-forward run 200 strengthened the case for retaining—not changing—the production baseline: baseline mean window return +4.08% across 100 held-out windows/72 trades versus candidate +1.59%/68 trades. Candidate beat baseline in only 2/5 folds and parameter mode was only 2/5; production remained unchanged.
+- Operational execution remained healthy: 99 successful control/dashboard monitor reads showed automation active, reconciliation ready or briefly running, no real blockers, no periodic failures, no ambiguity, and exact local/venue position agreement. Ten observed periodic completions all passed. Final state had zero positions/reservations, 184¢ available, and +84¢ conservative current-period P&L.
+- Five monitor reads exceeded the monitor's 12-second HTTP deadline. Follow-up dashboard probes returned HTTP 200 in 3.75–11.48 seconds and control probes in 0.10–1.89 seconds; server logs showed no corresponding API/trading error. This is dashboard/feed latency, not an execution or reconciliation failure, but should remain observable.
+- The temporary accepted-order `not_found` issue from the prior review did not recur during this monitor. Current drawdown reporting still uses starting rather than peak equity; exact post-Resume drawdown is currently 68.27¢ below peak and maximum observed remains 73.26¢.
+- Execution presentation still overloads `askPrice` with actual fill while retaining issuance bid/spread, and paper remains a conservative immediate-ask signal shadow rather than a maker-execution simulator.
+
+The follow-up does **not** support calling the recent profitability stable. It supports retaining the model, stake, and retry controls. After this review, binary buy policy v10 was explicitly authorized and deployed: UP/YES and DOWN/NO now compete on side-specific expected value while the venue-independent probability model remains unchanged.
+
+Binary-entry deployment verification at **06:36 UTC**: live was paused/drained to restart-safe before the change; all then-current tests, TypeScript, and production build passed; startup reconciliation found zero positions/reservations/discrepancies; automation was explicitly resumed under the unchanged 10¢ purchase cap. The first post-deployment cycle produced one clean UP no-fill and two full UP maker fills (DOGE 8.06¢ exact stake and ETH 7.80¢), with reconciliation ready and no API errors. Later organic BNB and DOGE DOWN maker fills established signed NO exposure; manual authoritative reconciliation confirmed two local/venue managed positions and 18¢ reservation with zero failures.
+
+Standalone-exit deployment exposed shared-account interference before restart: external/manual SOL NO orders on the same ticker netted against a Signal Desk YES fill, so Pause reconciliation correctly blocked on venue quantity 0 versus local 0.47. No state was overridden. After authoritative settlement cleared the contract, a second Pause/drain passed restart-safe, the 180-test exit build started with clean reconciliation, and automation was explicitly resumed. Do not manually trade the same active crypto ticker while automation owns or may enter it.
+
+## Implemented
+
+### Forecast and research
+
+- Next.js App Router dashboard with responsive cards, charts, countdowns, data-health states, and factor drill-downs.
+- Polymarket, Kalshi, Kraken, CoinGecko, CoinDesk, and historical ingestion for configured crypto assets.
+- Venue-independent contract-basis forecast using one Kraken series for cycle reference, current price, and realized volatility.
+- Binary buy policy v10: at least 5pp expected edge after fees, at least 50% estimate quality, and an enabled actionable selected-side UP/YES or DOWN/NO entry from 5¢ through 97¢.
+- Venue prices are benchmarks and execution costs, not inputs to the tradeable probability.
+- Every qualifying 15-second calculation and a bounded one-minute sample of non-qualifying calculations are tracked; accuracy, Brier/log loss, calibration, cycle-balanced metrics, benchmarks, and realized-versus-predicted edge are reported.
+- Signal-quality metrics are explicitly separated from live and paper trade records.
+- Multi-provider server-side LLM research with isolated Pi authentication and browser-local multi-turn history. LLMs cannot configure or execute trades.
+
+### Accounts and execution
+
+- Signed production Kalshi balances, positions, orders, fills, and v2 order submission.
+- Polymarket public/CLOB account monitoring; no Polymarket live placement.
+- Explicit total live budget verified against signed Kalshi cash.
+- Fixed all-in per-purchase amount including fees, with a separate environment stake ceiling.
+- Kalshi fractional sizing in 0.01-contract increments.
+- Managed post-only GTC maker entries for both sides with passive repricing, tapered tick handling, cancellation, and authoritative fill/fee reconciliation. YES buys map to Kalshi bids; NO buys map to signed YES-book asks while ledger costs remain NO-denominated.
+- Exact sub-cent principal, fee, stake, and realized P&L reporting with conservative whole-cent local reservations.
+- Continuous paper shadow execution with a separate bankroll and ledger.
+- Explicit `TRADE LIVE` arming, environment opt-in, kill switch, pause/resume, maximum stake, maximum filled venue orders per hour, and automatic pause on ambiguous failures. User Pause is a quiescent drain protocol: withdraw operator intent immediately, wait behind the serialized execution queue, cancel/confirm managed remainders, reconcile authoritatively, and report `restart safe` only with zero working or uncertain transactions. Filled positions may remain durably open. Production verification paused with two filled positions, completed manual reconciliation with zero pending/uncertain intents, reported `quiescent · restart safe`, and then resumed without changing the 15¢ authoritative reservation.
+- Hourly order limit counts unique Kalshi entry/exit orders with an actual nonzero fill; unfilled and rejected attempts do not count.
+- Execution-only signal maturity gate shared by paper and live: no entry in the first 60 seconds, current qualification plus 3 persistent snapshots spanning at least 30 seconds, median net edge ≥5pp, and no new entries in the final 120 seconds. Persistence is keyed by asset/window/side, so UP evidence can never authorize DOWN or vice versa.
+- Current positive-edge cards join against the exact live asset/contract order and distinguish collecting, ready/not-attempted, working, filled/open, attempted/no-fill, rejected, switched, and settled states. Automation explicitly reports when all current signals were already attempted instead of incorrectly claiming no edge exists.
+- The Automation summary includes a collapsed-by-default expandable Open orders panel, separated into live and paper tracks, showing side, venue, lifecycle, quantity, exact cost/entry, current owned-side probability, close time, executable return, contract ID, and profit-lock state.
+- Side-aware standalone reduce-only exits and live position switching. Standalone policy uses one fresh snapshot: strict value exits when executable cash beats optimistic hold by 1¢, plus a +75%-armed profit reversal when both executable value and independent probability decline from high water. Switching supports a full portfolio plus protected same-asset opposite-side reversal even before the cap:
+  - compares net liquidation value plus replacement expected profit against incumbent hold value;
+  - includes exit spread/fee, replacement principal/fee, and realized exit loss;
+  - requires replacement-side probability to exceed the owned side by 15pp, or 20pp for same-asset UP↔DOWN reversal;
+  - uses side-aware reduce-only IOC exits and can never create reverse exposure through SELL;
+  - withholds the replacement after zero or partial exit;
+  - blocks switches inside the final 120 seconds and after one completed switch per window.
+
+### Durability and verification
+
+- Atomic JSON cache, forecast history, trading control, provider settings, and execution ledger writes.
+- Unique temporary paths and damaged-history prefix recovery/quarantine.
+- Serialized local background collection and execution.
+- Hard startup reconciliation barrier reads complete paginated Kalshi orders/fills/positions/resting orders and cash before live execution; managed resting remainders are canceled and confirmed, durable client/venue IDs recover lost responses, contradictory state pauses, reservations are rebuilt without artificial P&L, and results are exposed in UI/audit history.
+- Full reconciliation also runs automatically every 5 minutes by default (server-configurable, clamped to 60–3600 seconds). It is serialized behind execution so it cannot race a managed order. A first periodic failure soft-blocks new live orders and retries after 30 seconds; a second consecutive failure safety-suspends and audits. Unchanged successful periodic checks do not bloat the audit ledger; status exposes trigger, next run, and failure count.
+- Operator intent is separate from operational state. Explicit Pause/kill, reconfiguration, mode changes, depletion, and all legacy paused records set paused intent and can never auto-resume. Ambiguous-order/switch and reconciliation failures create a system-originated safety suspension only when automation was already explicitly active. Successful authoritative reconciliation then auto-resumes only if the retained active intent remains and every normal funding, connector, environment, budget, and reconciliation readiness check passes. A user can cancel pending auto-resume while suspended.
+- Ambiguous entry and reduce-only errors retain reservations with `uncertain` state, safety-suspend, and automatically trigger authoritative reconciliation after the engine transaction finishes. Kalshi is retried through a 30-second consistency window before an absent client ID can be called rejected. A resolved system suspension may guarded-auto-resume only with retained active intent and every readiness check clear; manual/kill/configuration pauses remain paused.
+- Deterministic failure-injection coverage includes accepted/lost responses, lost and unconfirmed cancellation, partial maker fills, complete/partial reduce-only exits, signed DOWN entry and DOWN reduce-only recovery, restart recovery and positive/negative position contradictions, Kalshi amendment chains plus aggregate duplicate-overfill detection, stale/insufficient venue cash, malformed collections, and unrelated resting orders.
+- Durable aligned quarter-hour cycle paths backfill and append one oracle point per 15-second bucket. Observation-only diagnostics include sign-flip rate, lag-one return autocorrelation, trend efficiency, range, quadratic cycle-local volatility, and an explicit regime label; issuance-time prefixes are persisted with forecasts and exposed in the Cycle regimes UI/segments without entering probability, confidence, ranking, or gates.
+- Observation-only final-minute settlement-average model uses the Brownian integral variance `T − 2W/3` before the window and conditions on the observed log-price integral inside it. It is benchmarked separately against outcomes and does not replace production `P(UP)` yet.
+- Observation-only maker model records Kalshi bid/ask paths and estimates ask-touch probability using a quote first-passage model over the 12-second managed-order horizon. The execution funnel separates post-only race, venue acceptance, queue fill, and settlement; touch is explicitly not assumed to equal fill. Exact queue size ahead and depth priority are not yet observed.
+- Bounded maker recovery replaces one-shot suppression: each passive entry is managed for 12 seconds with gradual non-crossing reprices under the original edge-approved cap; an accepted zero-fill or definitive post-only acknowledgement race may receive one new durable retry after 30 seconds only if signal persistence, Kalshi-specific edge, constrained portfolio selection, fresh quote, budget, rate, and final-120-second checks all pass again. Maximum 2 attempts per asset/contract; no taker fallback. Repeated create races back off one additional exact tapered tick per refreshed submission, and a rejected post-only amend leaves the accepted resting order under management rather than being treated as ambiguous.
+- Live ledger presentation groups durable attempts by logical asset/window intent while retaining every raw attempt for reconciliation and fill-model reporting. It labels `post-only race` separately from `rested · no fill` and marks a later successful attempt as `recovered on retry`.
+- Constrained portfolio selection ranks candidates by expected dollar contribution after principal/fees, then applies same-window and same-group exposure ceilings plus explicit correlation penalties. A second side of the same asset/window is blocked outside the validated reduce-only switch path. Default live/paper policy allows at most 2 positions per settlement window and 1 per correlation group with a server-side configurable global cap defaulting to 3 and hard-limited to 10.
+- UI/engine persist separate `qualified`, `portfolio-selected`, `switch-candidate`, and `blocked` states with exact reasons and portfolio ranks. A Polymarket-only edge can no longer authorize a live Kalshi order whose own quote fails policy.
+- Switch hardening requires liquidation-cost-adjusted gain plus a configurable uncertainty margin, a default 15pp replacement probability advantage (20pp for same-asset opposite-side reversal), 3 distinct snapshots spanning 30 seconds, minimum-gain hysteresis across the streak, and a configurable 180-second completed-switch cooldown. Completed switches record independent hold outcomes and combined switch-path P&L for switch-versus-hold reporting.
+- Persistence spans are measured by distinct 15-second observation buckets rather than raw scheduler milliseconds, preventing valid three-snapshot evidence from becoming stuck at 29/30 seconds while still rejecting duplicate timestamps.
+- **181 unit tests across 33 files**, passing TypeScript, and passing production build.
+
+## Implemented design milestones
+
+> These milestones are retained as an implementation and safety reference. They are complete and are not part of the remaining roadmap.
+
+### 1. Durable Kalshi reconciliation — core startup barrier implemented
+
+Implemented on every startup before allowing a new order:
+
+- Venue positions.
+- Resting orders.
+- Historical and recent fills.
+- Client order IDs and venue order IDs.
+- Local available and reserved budget.
+- Orders previously classified as rejected, unfilled, pending, or uncertain.
+
+A lost HTTP response after Kalshi accepts an order now retains funds and is recovered by durable client ID. Unconfirmed maker cancellation blocks and pauses. During the calibration-replay deployment, a BNB maker was accepted between the pre-restart pause and process shutdown; startup correctly blocked on unconfirmed cancellation, manual authoritative reconciliation confirmed zero fill/no position, and the 10¢ reservation was released before live resume. The matcher handles complete and partial reduce-only recovery without auto-submitting a replacement, but the first real complete or partial switch has still not occurred and that path remains operationally unproven.
+
+### 2. Failure-injection testing — implemented
+
+Deterministic tests now cover:
+
+- Accepted order followed by timeout/lost response.
+- Cancel response lost or cancellation state uncertain.
+- Partial maker fill.
+- Partial reduce-only exit.
+- Restart with open positions or resting orders.
+- Duplicate client order ID.
+- Stale or contradictory account balance.
+- Malformed venue responses.
+
+Ambiguous states safety-suspend while retaining reservations until authoritative venue reconciliation completes; they are not converted into rejected/no-position states merely because a request failed. Automatic reconciliation retries through the venue consistency window. If the suspension was system-originated, active operator intent was retained, and every normal readiness check passes, guarded auto-resume is allowed; manual/kill/configuration pauses never auto-resume.
+
+### 3. Time and cycle-regime model — observation layer implemented
+
+Implemented in observation-only mode:
+
+- Record 15-second underlying paths for aligned `:00/:15/:30/:45` cycles.
+- Sign-flip rate.
+- Lag-one autocorrelation.
+- Trend efficiency.
+- Cycle range and cycle-local volatility.
+- Explicit final-minute settlement-average uncertainty.
+- Separate maker-fill/first-passage probability from settlement probability.
+
+These features and both alternative probability models are persisted without changing the live buy gate. They remain observation-only until validated across independent settlement windows.
+
+### 4. Portfolio selection and switching — core constraints implemented
+
+The engine and UI now distinguish:
+
+- **Qualified buy** — clears standalone expected-value policy.
+- **Portfolio-selected buy** — belongs in the preferred constrained portfolio.
+- **Switch candidate** — beats an incumbent after liquidation loss and all costs.
+- **Blocked** — correlation, exposure, insufficient improvement, spread, liquidity, or time constraints.
+
+Implemented: same-window and correlation-group limits, correlation penalties, expected-dollar ranking after costs, switch persistence/hysteresis, cooldown, uncertainty margin/configurable gain, and switch-versus-hold counterfactual tracking.
+
+Maker adverse-selection observation is now implemented. The report separates submission, post-only acknowledgement race, venue acceptance, rested no-fill, partial/full queue fill, and settlement outcome. First-passage calibration is conditional on accepted orders only; post-only races are not mislabeled as queue non-fills. Resolved forecasts provide counterfactual outcomes for accepted no-fill attempts without mutating financial ledger state. The UI compares `P(UP | fill)` with `P(UP | accepted, no fill)`, net realized/counterfactual returns, independent window counts, same-window paired gaps with window-clustered standard errors, and attempt/price/distance/quote-volatility segments. These metrics remain observation-only until enough independent filled and non-filled windows exist.
+
+### Live loss containment and observation fixes
+
+- Live was quiescently paused and authoritatively reconciled before deployment; startup reconciliation restored `restart safe` with no open position or reservation.
+- Added configurable current-budget drawdown and immutable lifetime-live loss limits. Both are evaluated from authoritative local accounting; crossing either blocks Resume and guarded auto-resume. Defaults are 25% of configured allocation and 50¢ lifetime loss.
+- Deployed one live maker attempt by default, with the hard two-attempt implementation retained only behind explicit server configuration for future validated use.
+- Added bounded post-DELETE order polling for Kalshi's observed read-after-delete delay; terminal status with nonzero remainder or expiry still fails closed into reconciliation.
+- Corrected live `startingCents` to configured allocation and corrected low/high entry-price buckets in both forecast and executed-trade reports.
+- Added risk-policy, retry-cap, cancellation-delay, cross-module reservation/intent, provenance, target-selection, time-alignment, and report-bucket tests. The verified suite is now **181 tests across 33 files**.
+
+## Canonical remaining roadmap
+
+> Only unfinished implementation, evidence collection, and manual review gates belong here. Remove an item when implementation and required production verification are complete.
+
+### 1. Venue-specific target integrity and promotion readiness — **highest priority before 100 windows**
+
+The target-integrity foundation is now deployed:
+
+- `data/contract-provenance.json` is an append-only atomic registry of full venue rules. Forecast rows retain compact issuance-time references containing venue contract ID, close, rules/source fingerprint, reference source/value when published, and comparability state.
+- Polymarket condition IDs/rules/Chainlink resolution sources and Kalshi tickers/full rules/floor strikes are captured independently. A rules or reference change creates a new fingerprint rather than mutating history.
+- The resolver fetches and retains Polymarket and Kalshi outcomes independently. New returns select the outcome from the same venue/contract as the stored entry; missing provenance and mismatched outcome IDs fail closed.
+- Existing rows remain untouched and are labeled `legacy-polymarket` at evaluation/report time. Real venue entries with legacy/mismatched targets are excluded from walk-forward trade-return scoring.
+- Kalshi discovery now requires the active market to close on the same quarter-hour as Polymarket. This fixed an observed boundary bug where a still-active prior ETH contract could be paired with the new Polymarket window.
+- Cross-module cancellation tests now cover both bounded delayed confirmation with P&L-neutral reservation release and deadline expiry with retained reservation, active intent, system suspension, and authoritative release.
+
+Remaining before the automatic evaluator is decision-grade:
+
+- Prospectively verified: 283 rows across 21 windows carry both outcomes, including three genuine Polymarket-DOWN/Kalshi-UP boundary disagreements; target identity remained venue-specific with zero fail-closed mismatches.
+- Parse/store explicit averaging-window metadata where it is present in venue rules rather than relying only on immutable full rule text and fingerprints.
+- Measure Kraken cycle-reference drift against each venue reference and compare settlement-average paths with actual venue outcomes. Refine `approximate/not-comparable` labels without rewriting history.
+- Harden walk-forward review thresholds so a candidate cannot pass when held-out Brier/log loss, coverage, drawdown, or window-clustered uncertainty regress. Account for candidate-grid selection and report signal-policy return separately from maker-executable return.
+- Make confidence/clock inputs replayable before evaluating a replacement for the implicit elapsed-time quality lift.
+- Add an immutable model registry and explicit manual promotion/rollback workflow. Promotion records dataset fingerprint, folds, parameters, evidence, and operator action; requires quiescent Pause; and cannot be invoked by the evaluator or an LLM.
+
+The scheduler and replay core remain automatic, but no result may be promoted until these remaining integrity and promotion controls pass.
+
+### 2. Position-lifecycle and queue observations — **next learning implementation after target integrity**
+
+The current first-passage model explains ask movement but not queue position, and the ledger does not retain a complete mark-to-market path for every held position. Add observation-only snapshots at each collector cycle plus every create/amend/cancel/exit check:
+
+- Stop overloading `askPrice` after live fill. Persist approved maximum, issuance bid/ask/spread, submitted/amended price path, and authoritative average fill price in separate immutable fields; update UI labels and migrate presentation without rewriting historical execution terms.
+- Add a separately labeled maker-execution paper shadow that simulates post-only acceptance, first passage, queue non-fill, fill price, and maker fees. Keep it separate from the existing conservative immediate-ask signal-policy paper ledger.
+- For every open paper/live position: executable bid/ask, spread, depth, net liquidation value after estimated exit fee, cost basis, unrealized P&L, model `P(UP)`, estimate quality, basis/clock/regime state, and seconds remaining.
+- Position high-water marks: peak net liquidation value, peak model probability, drawdown from peak, probability slope/deterioration, underlying reversal features, and subsequent recovery.
+- Displayed quantity at the selected bid and better prices as a queue-ahead proxy; never claim exact private queue position.
+- Best-bid/ask depth, multi-level imbalance, tapered tick distance, spread, and price-level changes.
+- Time resting at each price, amendment count/path, bid/ask touch or cross events, partial/full fill, and cancellation latency.
+- Durable linkage to position/order IDs, logical intent, attempt number, venue order ID, settlement outcome, and exact realized terms; budget epoch linkage is added before any live sell rollout.
+- Counterfactual liquidation proceeds at fixed observation horizons for every position, not only snapshots where a future sell rule would trigger.
+- Funnel/segment reporting by queue-ahead proxy, imbalance, repricing path, resting duration, profit state, probability deterioration, and time remaining, clustered by independent settlement window.
+
+This instrumentation is observation-only. It cannot alter price, retry count, sizing, selection, holding, or live gates until held-out evidence shows an improvement in net return or an explicitly bounded drawdown trade-off.
+
+### 3. Reduce-only sell strategy and unified action ranking
+
+Scope `SELL` narrowly: it may reduce only the UP/YES or DOWN/NO side already owned. It cannot open the opposite side, exceed authoritative held quantity, or turn a partial exit into reverse exposure. New DOWN/NO exposure uses the separate binary BUY path. Evaluate these action candidates together:
+
+- **HOLD** — retain the incumbent to settlement.
+- **EXIT TO CASH** — initially attempt to close the full remaining incumbent without replacement; an execution may still fill partially and must then stop and reconcile.
+- **SWITCH** — liquidate the incumbent and buy a superior replacement; the protected switch implementation already exists.
+- **BUY** — add a new selected position when budget and portfolio capacity permit.
+
+For quantity `q`, compare executable net liquidation value `L = q × owned-side bid cents − exit fee cents` with venue-independent expected hold payout `H = q × 100¢ × P(side)`, where `P(DOWN)=1−P(UP)`. Original cost basis is sunk for this decision, though it remains essential for realized-P&L reporting. With probability uncertainty `u`, use optimistic hold value `H⁺ = q × 100¢ × min(1, P(side) + u)`. A strict wealth-improving exit qualifies only when `L − H⁺` exceeds a configurable minimum-cent margin after spread, fee, partial-fill risk, persistence, and quote freshness. `P(owned side) < 50%`, an unrealized profit, or a recent winning streak alone never qualifies.
+
+Learn and report three reduce-only candidates separately:
+
+1. **Upgrade switch** — existing future-wealth comparison against a better selected buy.
+2. **Thesis-break/value exit** — one fresh snapshot sells when current owned-side bid net of fee exceeds uncertainty-adjusted optimistic hold value by at least 1¢.
+3. **75% profit-reversal exit** — reaching +75% executable profit arms a lock without selling. Persist executable-value and independent-probability high water; one later fresh snapshot may sell when both decline. Cross-trade winning streaks are excluded.
+
+Switches retain three observations over 30 seconds. Standalone exits intentionally use one fresh snapshot so a fast reversal is actionable. Full sale clears entry persistence and starts a 60-second cooldown; afterward same-asset/window re-entry has no count cap but must rebuild three fresh buy snapshots and clear every normal gate.
+
+Rank recommendations by **risk-adjusted incremental expected cents versus no action**, not raw probability or edge. The portfolio optimizer chooses the desired hold/exit/switch/buy set under budget, global/window/correlation limits; dependent exits execute before replacement buys. UI must show action, rank, executable proceeds/cost, hold value, uncertainty margin, reason, and whether the action is alpha-seeking or risk-limiting.
+
+Implementation persists high-water/arming state and executes full-size reduce-only paper/live exits at the owned-side bid. Zero or partial fill retains the remainder and disables automatic exit retry; ambiguity safety-suspends for reconciliation. Re-entry generations use new durable IDs. Remaining evidence work adds complete HOLD counterfactual paths and buy-and-hold versus buy-plus-exit reports; live results cannot justify stake expansion by themselves.
+
+### 4. Prospective calibration collection and automatic evaluation
+
+The 100-window collection gate has been reached, but evaluation remains review-only and production fitting/promotion stays manual. Calibration progress collapses repeated updates and correlated asset/venue cycles sharing a close timestamp into one window, while retaining asset-cycle diagnostics. Resolved non-qualifying observations count toward window evidence but remain excluded from the positive-edge trade record. Current verified snapshot: **114 independent windows**, 561 resolved asset-cycles, and 9,244 resolved qualifying updates. Review work now includes:
+
+- Evaluate a versioned replacement for the current implicit elapsed-time quality lift so clock effects enter through explicit uncertainty.
+- Fit volatility scale.
+- Fit venue-independent basis and slow-factor weights. Venue prices remain benchmarks/execution costs and may never become inputs to the tradeable probability.
+- Review probability caps.
+- Review the 5pp edge and 50% estimate-quality thresholds.
+- Use held-out and walk-forward evaluation.
+- Correct for winner's curse from selecting the largest apparent edge among correlated assets.
+- Evaluate realized return by entry price, time remaining, volatility ratio, venue divergence, asset, and settlement window.
+- Promote or remove segments only when realized return remains positive after costs across enough independent windows.
+
+Repeated 15-second updates remain useful diagnostics but do not count as independent calibration evidence.
+
+The automatic evaluator ran at 100 windows and repeats every 25 windows. Its first five expanding chronological folds used one fixed five-minute snapshot per asset/window, re-fitting candidates only on past windows and scoring the next unseen block. Baseline produced 9 held-out trades/1 win and the candidate 8/1; both returns were negative, the decision was `insufficient_test_trades`, and production remained unchanged. Versioned `calibration-replay-v1` issuance snapshots persist raw reference/current price, remaining time, realized volatility, baseline basis probability/weight, capped aggregate slow tilt, individual slow-term log odds, and production cap/probability without venue prices. Production replay is checked at issuance and must reproduce the stored tradeable probability to floating-point tolerance. Historical rows use an explicitly labeled z-score/log-odds reconstruction fallback and each evaluation reports exact versus reconstructed coverage and maximum baseline replay error. Candidate grids now cover probability temperature, venue-independent basis weight, volatility scale, aggregate slow-tilt scale, symmetric probability caps, minimum edge, and minimum quality; select at most the largest apparent edge in each correlated window; score net return after stored fees, Brier, log loss, and drawdown; persist a feature-inclusive dataset fingerprint and full fold history to `data/model-evaluations.json`; and repeat at 25-window checkpoints. Candidate output is review-only and cannot change production. Non-qualifying forecast retention was raised to 20,000 rows so the prospective fixed-horizon dataset survives beyond the 100-window gate.
+
+### 5. Real reduce-only switch verification
+
+The switch engine, reconciliation matcher, partial-exit protection, and switch-versus-hold accounting are implemented and tested, but no real switch has occurred. When an organic candidate occurs, verify authoritative Kalshi orders, fills, fees, remaining position, reservations, replacement withholding/submission, and counterfactual accounting. Never force a switch merely to exercise the path.
+
+### 6. Budget epochs, loss gates, and stake-expansion criteria
+
+The current control ledger intentionally resets realized P&L on budget reconfiguration while performance reporting remains lifetime. Make that boundary auditable rather than relying on UI explanation:
+
+- Assign every budget configuration a durable epoch ID and link reservations, fills, settlements, reconciliation adjustments, and orders to it.
+- Report current-epoch, lifetime-live, and paper P&L side by side without blending them; preserve closed epoch summaries through reconfiguration.
+- Add configurable realized-loss/drawdown circuit breakers whose evidence cannot be erased by silently reconfiguring a budget. Manual pauses and kill-switch intent remain dominant.
+- Define an explicit stake-expansion gate using independent live windows, lifetime net P&L after fees, maker adverse-selection uncertainty, walk-forward results, reconciliation health, and real switch evidence. Passing a model-only evaluator is insufficient.
+
+### 7. Secondary expansion — only after safety and evidence
+
+- Depth-aware sizing and slippage only after the observation-only queue layer validates them.
+- Operator fill/order/settlement alerts; reconciliation and drain status UI are already implemented.
+- Historical execution replay/backtesting that clearly separates reconstructed execution assumptions from the prospective walk-forward dataset.
+- Demo/sandbox venue testing where supported.
+- Normalized venue interfaces and schemas.
+- Live Polymarket execution after independent signing, collateral, allowance, fee, and reconciliation verification.
+- Consolidated venue exposure/P&L without blending paper and live.
+- MongoDB repositories, migrations, indexes, and retention.
+- Durable workers, queues, and leases.
+- Authentication/authorization for non-local deployment.
+- Enforce same-origin/CSRF protection on every mutation or billable research route, not only trading control.
+- Deployment hardening, observability, versioned backups, restore tests for critical JSON/audit/evaluation data, secret management, and operational runbooks.
+
+Product improvements such as filters, granular degraded states, richer order/switch history, and stronger news/macro data remain useful but are lower priority than the safety and model-evidence sequence above.
+
+## Remaining implementation and evidence order
+
+1. Harden accepted-order `not_found` consistency handling and separate approved limit, issuance quote/spread, amendment path, and authoritative fill fields in storage/UI.
+2. Add a separate maker-execution paper shadow; report recent/rolling cohorts, tail concentration, high-water drawdown, and SOL/asset segments without changing production gates.
+3. **Before the 225-window checkpoint, harden evaluator thresholds and add immutable manual model promotion/rollback.**
+4. Add explicit averaging-window parsing and Kraken-to-venue reference-drift/comparability reporting.
+5. Capture complete position-lifecycle, counterfactual liquidation, and queue/depth observations.
+6. Add versioned HOLD/EXIT/SWITCH/BUY counterfactual reports around the implemented standalone exit ledger behavior.
+7. Run a separate buy-and-hold versus buy-plus-exit report for strict-value and 75%-armed reversal exits.
+8. Add durable budget epochs, portfolio peak-equity drawdown accounting, and explicit stake-expansion criteria before any larger stake.
+9. Review model, maker, retry, and exit-policy evidence manually. Promote nothing unless unseen-window net return, calibration, uncertainty, stability, drawdown, and maker execution evidence satisfy separate gates.
+10. Capture and authoritatively verify the first organic standalone exit and reduce-only switch; DOWN/NO entry is now authoritatively verified. Never force either exit merely for testing.
+11. **Only after validated profitability and operational evidence** consider larger stake limits, queue-aware execution rules, or live Polymarket.
+
+## Operational posture
+
+Live mode was explicitly **active** at 07:34 UTC after quiescent standalone-exit deployment, with BNB DOWN and DOGE DOWN positions, 18¢ reserved, 259¢ available, reconciliation ready, and zero blockers. Manual reconciliation confirmed both signed NO positions and recovered one fill state. The new exit engine records executable high water continuously; neither position had armed the +75% lock. No model parameter or stake limit changed. Keep stake size and second attempts unchanged while verifying the first organic strict/profit-reversal exit and monitoring re-entry, side-specific return, high-water risk, API consistency, maker-shadow, and evaluator evidence.

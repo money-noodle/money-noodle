@@ -1,0 +1,14 @@
+node_modules/
+.next/
+out/
+.cache/
+data/*.json
+data/*.tmp
+*.tsbuildinfo
+.env
+.env.local
+.env.*.local
+.DS_Store
+npm-debug.log*
+data/archive/
+data/*.corrupt-*

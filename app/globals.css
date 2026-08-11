@@ -1,0 +1,69 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+:root {
+  --radius: 0.75rem;
+  --background: #080b0c;
+  --foreground: #edf2ef;
+  --card: #0d1112;
+  --card-foreground: #edf2ef;
+  --popover: #111617;
+  --popover-foreground: #edf2ef;
+  --primary: #bbf451;
+  --primary-foreground: #101609;
+  --secondary: #171d1e;
+  --secondary-foreground: #d9e0dc;
+  --muted: #151a1b;
+  --muted-foreground: #84908b;
+  --accent: #1a211d;
+  --accent-foreground: #dfffb0;
+  --destructive: #ff6969;
+  --border: #202728;
+  --input: #293132;
+  --ring: #9acb43;
+}
+
+* { border-color: var(--border); }
+html { background: var(--background); }
+body {
+  background:
+    radial-gradient(900px 420px at 50% -180px, rgba(187, 244, 81, 0.09), transparent 68%),
+    var(--background);
+  color: var(--foreground);
+}
+button, a { -webkit-tap-highlight-color: transparent; }
+::selection { background: rgba(187, 244, 81, 0.25); }
+
+.grid-fade {
+  background-image: linear-gradient(rgba(255,255,255,.018) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.018) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(to bottom, black, transparent 72%);
+}
+.scrollbar-none { scrollbar-width: none; }
+.scrollbar-none::-webkit-scrollbar { display: none; }
