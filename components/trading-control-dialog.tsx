@@ -12,9 +12,10 @@ import { cn } from '@/lib/utils';
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const dollars = (cents: number) => usd.format(cents / 100);
 const preciseDollars = (cents: number) => Number.isInteger(cents) ? dollars(cents) : `$${(cents / 100).toFixed(4)}`;
-const attemptOutcome = (status: string, noFillReason?: 'post_only_race' | 'rested_no_fill', filledCount?: number) =>
+const attemptOutcome = (status: string, noFillReason?: 'post_only_race' | 'rested_no_fill' | 'ioc_no_fill', filledCount?: number) =>
   noFillReason === 'post_only_race' ? 'post-only race'
     : noFillReason === 'rested_no_fill' ? 'rested · no fill'
+      : noFillReason === 'ioc_no_fill' ? 'IOC · no fill'
       : (filledCount ?? 0) > 0 && status === 'open' ? 'filled'
         : status.replace('_', ' ');
 

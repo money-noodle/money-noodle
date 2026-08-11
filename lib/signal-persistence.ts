@@ -2,7 +2,7 @@ import { observationBucket } from './observation-window';
 import type { PositionSide } from './types';
 
 export const CYCLE_DURATION_MS = 15 * 60_000;
-export const EXECUTION_WARMUP_MS = 60_000;
+export const EXECUTION_WARMUP_MS = 90_000;
 export const EXECUTION_LATE_CUTOFF_MS = 120_000;
 export const REQUIRED_QUALIFYING_SNAPSHOTS = 3;
 export const REQUIRED_OBSERVATION_SPAN_MS = 30_000;

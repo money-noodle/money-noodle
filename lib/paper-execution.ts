@@ -3,11 +3,12 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { beginLiveTransaction, blockExecutionDrain, completeExecutionDrain, endLiveTransaction, getExecutionDrainStatus, startExecutionDrain } from './execution-drain-state';
 import { reconcileExecutionLedger } from './execution-reconciliation';
+import { entrySideProbability, evaluateEntryExecutionPolicy, makerCohortEvidence, parseEntryExecutionMode, type EntryExecutionDecision } from './entry-execution-policy';
 import { evaluateExitPolicy } from './exit-policy';
 import { isFreshCalculationTimestamp } from './freshness';
 import { fetchKalshiReconciliationSnapshot } from './kalshi-reconciliation';
 import { entryAttemptsForLogicalOrder, makerAttemptId, makerRetryDecision, maximumLiveMakerAttempts } from './maker-retry-policy';
-import { liveBlockers, liveTradingEnabled, maxLiveOrdersPerHour, maxLiveStakeCents, placeKalshiBuy, placeKalshiSell } from './live-orders';
+import { liveBlockers, liveTradingEnabled, maxLiveOrdersPerHour, maxLiveStakeCents, placeKalshiBuy, placeKalshiSell, placeKalshiTakerBuy } from './live-orders';
 import { countFilledLiveVenueOrders } from './order-rate-limit';
 import { selectPortfolio, DEFAULT_PORTFOLIO_CONSTRAINTS, parseMaximumOpenPositions, type PortfolioConstraints } from './portfolio-policy';
 import { bestEntry, bestVenueEntry, edgeStrength, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, qualifiesAsBuyEdge, qualifiesVenueBuyEdge, sideProbability } from './prediction-policy';
@@ -93,6 +94,22 @@ function switchPolicySettings(): { minimumGainCents: number; uncertaintyMarginCe
     cooldownSeconds: bounded('MONEY_NOODLE_SWITCH_COOLDOWN_SECONDS', DEFAULT_SWITCH_COOLDOWN_SECONDS, 3_600),
     minimumProbabilityAdvantage: bounded('MONEY_NOODLE_MIN_SWITCH_PROBABILITY_ADVANTAGE', DEFAULT_MIN_SWITCH_PROBABILITY_ADVANTAGE, 0.5),
     minimumOppositeSideAdvantage: bounded('MONEY_NOODLE_MIN_OPPOSITE_SIDE_ADVANTAGE', DEFAULT_MIN_OPPOSITE_SIDE_ADVANTAGE, 0.5),
+  };
+}
+
+function entryExecutionSettings() {
+  const bounded = (name: string, fallback: number, maximum: number) => {
+    const value = Number(process.env[name] ?? fallback);
+    return Number.isFinite(value) && value >= 0 ? Math.min(maximum, value) : fallback;
+  };
+  return {
+    mode: parseEntryExecutionMode(process.env.MONEY_NOODLE_ENTRY_EXECUTION_MODE),
+    minimumTakerNetEdge: bounded('MONEY_NOODLE_MIN_TAKER_NET_EDGE', 0.15, 0.5),
+    minimumMedianNetEdge: bounded('MONEY_NOODLE_MIN_TAKER_MEDIAN_EDGE', 0.10, 0.5),
+    minimumConfidence: bounded('MONEY_NOODLE_MIN_TAKER_QUALITY', 0.65, 1),
+    maximumSpread: bounded('MONEY_NOODLE_MAX_TAKER_SPREAD', 0.02, 0.25),
+    minimumMakerSamples: Math.max(1, Math.floor(bounded('MONEY_NOODLE_MIN_TAKER_MAKER_SAMPLES', 30, 10_000))),
+    minimumTakerAdvantage: bounded('MONEY_NOODLE_MIN_TAKER_ADVANTAGE', 0.02, 0.5),
   };
 }
 
@@ -199,6 +216,22 @@ function updateSignalPersistence(dashboard: DashboardData, ledger: Ledger): bool
 
 function executionEligibility(prediction: Prediction, side: PositionSide, ledger: Ledger, nowMs = Date.now()): SignalEligibility {
   return evaluateSignalPersistence(ledger.signalPersistence[persistenceKey(prediction, side)], nowMs, MIN_NET_EDGE, MIN_ESTIMATE_QUALITY);
+}
+
+function entryExecutionDecision(prediction: Prediction, side: PositionSide, order: PaperOrder, ledger: Ledger): EntryExecutionDecision {
+  const settings = entryExecutionSettings();
+  const entry = bestVenueEntry(prediction, 'kalshi', side);
+  const eligibility = executionEligibility(prediction, side, ledger);
+  const evidence = makerCohortEvidence(ledger.orders, order.askPrice, order.spread);
+  return evaluateEntryExecutionPolicy({
+    ...settings,
+    currentNetEdge: entry?.netEdge ?? Number.NEGATIVE_INFINITY,
+    medianNetEdge: eligibility.medianNetEdge ?? Number.NEGATIVE_INFINITY,
+    confidence: prediction.confidence,
+    spread: order.spread,
+    makerNetEdge: entrySideProbability(prediction.modelProbabilityUp, side) - order.bidPrice,
+    makerEvidence: evidence,
+  });
 }
 
 function contractId(prediction: Prediction, venue: 'polymarket' | 'kalshi'): string {
@@ -435,7 +468,8 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
 }
 
 async function executePreparedLiveBuy(order: PaperOrder, status: TradingControlData, ledger: Ledger): Promise<void> {
-  beginLiveTransaction(`Managing live ${order.symbol} maker entry.`);
+  const executionStyle = order.entryExecutionDecision?.executedStyle ?? 'maker';
+  beginLiveTransaction(`Managing live ${order.symbol} ${executionStyle} entry.`);
   try {
   ledger.orders.push(order);
   await writeLedger(ledger);
@@ -447,11 +481,16 @@ async function executePreparedLiveBuy(order: PaperOrder, status: TradingControlD
     return;
   }
   try {
-    const fill = await placeKalshiBuy({
-      ticker: order.contractId, positionSide: order.side, priceCents: order.askPrice * 100, startPriceCents: order.bidPrice * 100,
-      count: order.quantity, clientOrderId: order.clientOrderId ?? order.id,
-      onAccepted: async (venueOrderId) => { order.venueOrderId = venueOrderId; await writeLedger(ledger); },
-    });
+    const onAccepted = async (venueOrderId: string) => { order.venueOrderId = venueOrderId; await writeLedger(ledger); };
+    const fill = executionStyle === 'taker'
+      ? await placeKalshiTakerBuy({
+        ticker: order.contractId, positionSide: order.side, maximumPriceCents: order.askPrice * 100,
+        count: order.quantity, clientOrderId: order.clientOrderId ?? order.id, onAccepted,
+      })
+      : await placeKalshiBuy({
+        ticker: order.contractId, positionSide: order.side, priceCents: order.askPrice * 100, startPriceCents: order.bidPrice * 100,
+        count: order.quantity, clientOrderId: order.clientOrderId ?? order.id, onAccepted,
+      });
     order.venueOrderId = fill.venueOrderId;
     order.filledCount = fill.filledCount;
     order.liquidityRole = fill.liquidityRole;
@@ -473,19 +512,22 @@ async function executePreparedLiveBuy(order: PaperOrder, status: TradingControlD
       if (reservedCents > accountedStakeCents) await releaseTradingBudget(reservedCents - accountedStakeCents, order.venue, order.id);
     } else {
       order.status = 'unfilled';
-      order.noFillReason = 'rested_no_fill';
-      order.reason = 'Managed post-only maker limit rested for 12 seconds but received no fill before its remainder was canceled; no money was spent.';
+      order.noFillReason = executionStyle === 'taker' ? 'ioc_no_fill' : 'rested_no_fill';
+      order.reason = executionStyle === 'taker'
+        ? 'Marketable IOC limit received no fill and left no resting remainder; no money was spent.'
+        : 'Managed post-only maker limit rested for 12 seconds but received no fill before its remainder was canceled; no money was spent.';
       await releaseTradingBudget(reservedCents, order.venue, order.id);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Live order placement failed';
     const definitivePostOnlyCross = message.toLowerCase().includes('post only cross');
-    order.status = definitivePostOnlyCross ? 'unfilled' : 'rejected';
-    order.noFillReason = definitivePostOnlyCross ? 'post_only_race' : undefined;
+    const definitiveTakerSkip = message.startsWith('Taker not submitted:');
+    order.status = definitivePostOnlyCross || definitiveTakerSkip ? 'unfilled' : 'rejected';
+    order.noFillReason = definitivePostOnlyCross ? 'post_only_race' : definitiveTakerSkip ? 'ioc_no_fill' : undefined;
     order.reason = definitivePostOnlyCross
       ? 'Post-only acknowledgement race remained after three refreshed submissions with progressive tick backoff; Kalshi rejected it before placement and no money was spent.'
       : message;
-    if (definitivePostOnlyCross) {
+    if (definitivePostOnlyCross || definitiveTakerSkip) {
       await releaseTradingBudget(order.stakeCents, order.venue, order.id).catch(() => undefined);
     } else {
       // A transport/schema/cancellation failure is not evidence that Kalshi rejected the request.
@@ -910,6 +952,9 @@ async function runLive(dashboard: DashboardData, status: TradingControlData, led
   built.order.retryOfOrderId = retry.retryOfOrderId;
   built.order.id = makerAttemptId(logicalId, retry.attemptNumber);
   built.order.clientOrderId = built.order.id;
+  built.order.entryExecutionDecision = entryExecutionDecision(prediction, side, built.order, ledger);
+  built.order.shadowTakerAllInCents = built.order.stakeCents;
+  built.order.shadowTakerQuantity = built.order.quantity;
   ledger.lastLiveSkip = undefined;
   await executePreparedLiveBuy(built.order, status, ledger);
   return true;

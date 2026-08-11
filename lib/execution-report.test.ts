@@ -50,6 +50,20 @@ describe('maker first-passage validation report', () => {
     expect(report.segments.some((segment) => segment.dimension === 'Attempt')).toBe(true);
   });
 
+  it('reports shadow taker recommendations without blending them into actual taker fills', () => {
+    const shadow = order(0.5, 0, {
+      symbol: 'BNB', shadowTakerAllInCents: 9, shadowTakerQuantity: 0.2,
+      entryExecutionDecision: {
+        policyVersion: 'maker-taker-adaptive-shadow-v1', configuredMode: 'maker', executedStyle: 'maker', recommendedStyle: 'taker',
+        reason: 'shadow', takerNetEdge: 0.18, medianNetEdge: 0.14, makerNetEdge: 0.2,
+        makerExpectedCapturedEdge: 0.1, takerAdvantage: 0.08, makerCohort: '25-50c · 1-2c', makerSamples: 40, makerFillRate: 0.5,
+      },
+    });
+    const report = buildMakerFillReport([shadow], [outcome('BNB', shadow.closesAt, 'UP')]);
+    expect(report.adaptiveExecution).toMatchObject({ shadowEvaluations: 1, takerRecommendations: 1, resolvedTakerRecommendations: 1, actualTakerOrders: 0 });
+    expect(report.adaptiveExecution.meanTakerCounterfactualReturn).toBeCloseTo(11 / 9);
+  });
+
   it('scores DOWN fills against DOWN outcomes and side probability', () => {
     const down = order(0.5, 0.2, {
       side: 'DOWN', modelProbabilityUp: 0.2, status: 'won', outcome: 'DOWN',

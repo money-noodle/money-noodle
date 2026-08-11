@@ -638,13 +638,13 @@ export interface PaperOrder {
   venueOrderId?: string;
   filledCount?: number;
   liquidityRole?: 'maker' | 'taker';
-  noFillReason?: 'post_only_race' | 'rested_no_fill';
+  noFillReason?: 'post_only_race' | 'rested_no_fill' | 'ioc_no_fill';
   /** Present on grouped API views; the durable ledger still retains every individual attempt. */
   attemptHistory?: Array<{
     id: string;
     attemptNumber: number;
     status: PaperOrderStatus;
-    noFillReason?: 'post_only_race' | 'rested_no_fill';
+    noFillReason?: 'post_only_race' | 'rested_no_fill' | 'ioc_no_fill';
     filledCount?: number;
     createdAt: string;
   }>;
@@ -676,6 +676,24 @@ export interface PaperOrder {
   actualFeeCents?: number;
   actualStakeCents?: number;
   actualPnlCents?: number;
+  /** Issuance-time maker/taker decision. Maker mode records taker recommendations as shadow only. */
+  entryExecutionDecision?: {
+    policyVersion: string;
+    configuredMode: 'maker' | 'adaptive' | 'taker';
+    executedStyle: 'maker' | 'taker';
+    recommendedStyle: 'maker' | 'taker';
+    reason: string;
+    takerNetEdge: number;
+    medianNetEdge: number;
+    makerNetEdge: number;
+    makerExpectedCapturedEdge: number | null;
+    takerAdvantage: number | null;
+    makerCohort: string;
+    makerSamples: number;
+    makerFillRate: number | null;
+  };
+  shadowTakerAllInCents?: number;
+  shadowTakerQuantity?: number;
   /** Durable standalone-exit observation state; all values use executable owned-side bids. */
   profitLockArmedAt?: string;
   peakNetLiquidationCents?: number;
@@ -740,7 +758,7 @@ export interface ExecutionSignalReadiness {
     filledCount?: number;
     quantity: number;
     reason?: string;
-    noFillReason?: 'post_only_race' | 'rested_no_fill';
+    noFillReason?: 'post_only_race' | 'rested_no_fill' | 'ioc_no_fill';
     attemptNumber?: number;
     maximumAttempts?: number;
     retryEligible?: boolean;
@@ -767,6 +785,17 @@ export interface MakerExecutionSegment {
 }
 
 export interface MakerFillReport {
+  adaptiveExecution: {
+    policyVersion: string;
+    shadowEvaluations: number;
+    takerRecommendations: number;
+    resolvedTakerRecommendations: number;
+    meanTakerCounterfactualReturn: number | null;
+    actualTakerOrders: number;
+    actualTakerFills: number;
+    resolvedActualTakerFills: number;
+    meanActualTakerReturn: number | null;
+  };
   /** Backward-compatible first-passage cohort: accepted terminal attempts carrying a model estimate. */
   attempts: number;
   fills: number;

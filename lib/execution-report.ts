@@ -194,7 +194,32 @@ export function buildMakerFillReport(orders: PaperOrder[], forecasts: TrackedFor
     return [...groups.entries()].map(([label, items]) => makerSegment(dimension, label, items, outcomeFor));
   });
   const fills = attempts.filter((order) => (order.filledCount ?? 0) > 0).length;
+  const shadowEvaluations = orders.filter((order) => order.executionMode === 'live' && Boolean(order.entryExecutionDecision));
+  const takerRecommendations = shadowEvaluations.filter((order) => order.entryExecutionDecision?.recommendedStyle === 'taker');
+  const resolvedShadowTakerReturns = takerRecommendations.flatMap((order) => {
+    const outcome = outcomeFor(order), stake = order.shadowTakerAllInCents, quantity = order.shadowTakerQuantity;
+    if (!outcome || !(stake && stake > 0) || !(quantity && quantity > 0)) return [];
+    const payout = outcome === order.side ? quantity * 100 : 0;
+    return [(payout - stake) / stake];
+  });
+  const actualTakerOrders = orders.filter((order) => order.executionMode === 'live' && !order.id.includes(':exit:')
+    && order.entryExecutionDecision?.executedStyle === 'taker');
+  const actualTakerFills = actualTakerOrders.filter((order) => (order.filledCount ?? 0) > 0);
+  const resolvedActualTakerReturns = actualTakerFills.flatMap((order) => {
+    const outcome = outcomeFor(order);
+    const value = outcome ? makerReturn(order, outcome, true) : null;
+    return value === null ? [] : [value];
+  });
   return {
+    adaptiveExecution: {
+      policyVersion: shadowEvaluations.at(-1)?.entryExecutionDecision?.policyVersion ?? 'maker-taker-adaptive-shadow-v1',
+      shadowEvaluations: shadowEvaluations.length, takerRecommendations: takerRecommendations.length,
+      resolvedTakerRecommendations: resolvedShadowTakerReturns.length,
+      meanTakerCounterfactualReturn: resolvedShadowTakerReturns.length ? resolvedShadowTakerReturns.reduce((sum, value) => sum + value, 0) / resolvedShadowTakerReturns.length : null,
+      actualTakerOrders: actualTakerOrders.length, actualTakerFills: actualTakerFills.length,
+      resolvedActualTakerFills: resolvedActualTakerReturns.length,
+      meanActualTakerReturn: resolvedActualTakerReturns.length ? resolvedActualTakerReturns.reduce((sum, value) => sum + value, 0) / resolvedActualTakerReturns.length : null,
+    },
     attempts: attempts.length, fills,
     meanPredictedProbability: attempts.length ? attempts.reduce((sum, order) => sum + order.makerFillEstimate!.probability, 0) / attempts.length : null,
     observedFillRate: attempts.length ? fills / attempts.length : null,

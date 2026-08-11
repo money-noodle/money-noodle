@@ -166,6 +166,23 @@ function selectedQuote(quote: KalshiBookQuote, side: PositionSide): { bid: numbe
     : { bid: 1 - quote.yesAsk, ask: 1 - quote.yesBid, ranges: selectedRanges(side, quote.ranges) };
 }
 
+export function kalshiTakerEntryOrderBody(input: { ticker: string; positionSide: PositionSide; selectedLimit: number; count: number; clientOrderId: string }) {
+  return {
+    ticker: input.ticker,
+    side: kalshiOrderBookSide(input.positionSide, 'entry'),
+    count: input.count.toFixed(2),
+    price: yesPriceFromSelectedSide(input.selectedLimit, input.positionSide).toFixed(4),
+    time_in_force: 'immediate_or_cancel',
+    self_trade_prevention_type: 'taker_at_cross',
+    post_only: false,
+    cancel_order_on_pause: true,
+    reduce_only: false,
+    subaccount: 0,
+    exchange_index: 0,
+    client_order_id: input.clientOrderId,
+  };
+}
+
 async function fillsFor(orderId: string, ticker: string): Promise<KalshiFill[]> {
   const response = await kalshiRequest<KalshiFillsResponse>(`/portfolio/fills?limit=200&ticker=${encodeURIComponent(ticker)}`);
   return (response.fills ?? []).filter((fill) => fill.order_id === orderId);
@@ -303,6 +320,56 @@ export async function placeKalshiBuy(input: { ticker: string; positionSide?: Pos
   return {
     venueOrderId, filledCount, averagePriceCents, feeCents,
     liquidityRole: fills.some((fill) => fill.is_taker) ? 'taker' : 'maker',
+    status: filledCount >= input.count ? 'filled' : filledCount > 0 ? 'partial' : 'unfilled',
+  };
+}
+
+/**
+ * Opens selected-side exposure with a marketable IOC limit capped at the issuance-approved ask.
+ * This is never an uncapped market order: a moved-away quote fails before submission, and IOC leaves
+ * no resting remainder. The caller must durably persist the client and venue IDs exactly as for maker.
+ */
+export async function placeKalshiTakerBuy(input: { ticker: string; positionSide?: PositionSide; maximumPriceCents: number; count: number; clientOrderId: string; onAccepted?: (venueOrderId: string) => Promise<void> }): Promise<LiveFill> {
+  if (!liveTradingEnabled()) throw new Error('Live trading is disabled.');
+  const positionSide = input.positionSide ?? 'UP';
+  const countUnits = Math.round(input.count * 100);
+  if (!Number.isSafeInteger(countUnits) || countUnits < 1 || Math.abs(input.count * 100 - countUnits) > 1e-8) throw new Error('Live order count must be at least 0.01 contract in 0.01 increments.');
+  if (!Number.isFinite(input.maximumPriceCents) || input.maximumPriceCents < 0.1 || input.maximumPriceCents >= 100) throw new Error('Live order price must be between 0.1 and 99.9 cents.');
+
+  const quote = selectedQuote(await marketQuote(input.ticker), positionSide);
+  const maximumDollars = input.maximumPriceCents / 100;
+  const limit = floorToValidKalshiPrice(Math.min(maximumDollars, quote.ask + 1e-8), quote.ranges);
+  if (limit + 1e-9 < quote.ask) throw new Error(`Taker not submitted: current ${positionSide} ask ${(quote.ask * 100).toFixed(1)}c exceeds approved ${(maximumDollars * 100).toFixed(1)}c cap.`);
+  const created = await kalshiRequest<KalshiCreateOrderV2Response>('/portfolio/events/orders', {
+    method: 'POST',
+    body: kalshiTakerEntryOrderBody({
+      ticker: input.ticker, positionSide, selectedLimit: limit,
+      count: input.count, clientOrderId: input.clientOrderId,
+    }),
+  });
+  const venueOrderId = created.order_id;
+  if (!venueOrderId) throw new Error('Kalshi accepted the taker order but returned no order id.');
+  await input.onAccepted?.(venueOrderId);
+  await confirmKalshiCancellation(
+    venueOrderId,
+    () => kalshiRequest<KalshiOrderResponse>(`/portfolio/orders/${encodeURIComponent(venueOrderId)}`),
+  );
+
+  let fills: KalshiFill[] = [];
+  for (const delayMs of [0, 250, 750, 1_500]) {
+    if (delayMs) await sleep(delayMs);
+    fills = await fillsFor(venueOrderId, input.ticker);
+    if (fills.length || Number(created.fill_count ?? 0) <= 0) break;
+  }
+  if (Number(created.fill_count ?? 0) > 0 && !fills.length) throw new Error(`Kalshi taker fill records remain unavailable for ${venueOrderId}.`);
+  const filledCount = fills.reduce((sum, fill) => sum + Number(fill.count_fp ?? 0), 0);
+  const weightedPriceDollars = fills.reduce((sum, fill) => sum + Number(fill.count_fp ?? 0) * selectedSidePriceFromYes(Number(fill.yes_price_dollars ?? 0), positionSide), 0);
+  const feeDollars = fills.reduce((sum, fill) => sum + Number(fill.fee_cost ?? 0), 0);
+  const averagePriceCents = filledCount ? weightedPriceDollars / filledCount * 100 : 0;
+  const feeCents = feeDollars * 100;
+  if (![filledCount, averagePriceCents, feeCents].every(Number.isFinite) || filledCount > input.count + 1e-8) throw new Error('Kalshi returned malformed taker fill terms.');
+  return {
+    venueOrderId, filledCount, averagePriceCents, feeCents, liquidityRole: 'taker',
     status: filledCount >= input.count ? 'filled' : filledCount > 0 ? 'partial' : 'unfilled',
   };
 }

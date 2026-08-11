@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { backOffValidKalshiPrice, confirmKalshiCancellation, floorToValidKalshiPrice, kalshiOrderBookSide, selectedSidePriceFromYes, yesPriceFromSelectedSide } from './live-orders';
+import { backOffValidKalshiPrice, confirmKalshiCancellation, floorToValidKalshiPrice, kalshiOrderBookSide, kalshiTakerEntryOrderBody, selectedSidePriceFromYes, yesPriceFromSelectedSide } from './live-orders';
 
 const tapered = [
   { start: '0.0000', end: '0.1000', step: '0.0010' },
@@ -46,6 +46,13 @@ describe('Kalshi binary side translation', () => {
     expect(yesPriceFromSelectedSide(0.23, 'UP')).toBeCloseTo(0.23);
     expect(yesPriceFromSelectedSide(0.23, 'DOWN')).toBeCloseTo(0.77);
     expect(selectedSidePriceFromYes(0.77, 'DOWN')).toBeCloseTo(0.23);
+  });
+
+  it('builds price-capped IOC taker entries on the correct signed book side', () => {
+    const up = kalshiTakerEntryOrderBody({ ticker: 'UP', positionSide: 'UP', selectedLimit: 0.23, count: 0.25, clientOrderId: 'up' });
+    const down = kalshiTakerEntryOrderBody({ ticker: 'DOWN', positionSide: 'DOWN', selectedLimit: 0.23, count: 0.25, clientOrderId: 'down' });
+    expect(up).toMatchObject({ side: 'bid', price: '0.2300', time_in_force: 'immediate_or_cancel', post_only: false, reduce_only: false });
+    expect(down).toMatchObject({ side: 'ask', price: '0.7700', time_in_force: 'immediate_or_cancel', post_only: false, reduce_only: false });
   });
 });
 
