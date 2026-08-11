@@ -22,7 +22,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AutomationStatus } from '@/components/automation-status';
 import { DATA_FRESHNESS, isFreshCalculationTimestamp } from '@/lib/freshness';
 import { cn } from '@/lib/utils';
-import { bestEntry, edgeStrength, hasTradableEdge, MAX_ENTRY_PRICE, MIN_ENTRY_PRICE, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, qualifiesAsBuyEdge, sideProbability, venueEntryOptions } from '@/lib/prediction-policy';
+import { bestEntry, edgeStrength, hasTradableEdge, MAX_ENTRY_PRICE, MIN_ENTRY_PRICE, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, MIN_SELECTED_SIDE_PROBABILITY, qualifiesAsBuyEdge, sideProbability, venueEntryOptions } from '@/lib/prediction-policy';
 import type { DashboardData, Direction, ExecutionSignalReadiness, Factor, Prediction, TradeTrackRecord } from '@/lib/types';
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
@@ -284,7 +284,7 @@ function PositiveEdgeBuys({ predictions, updatedAt }: { predictions: Prediction[
             <div className="sm:text-right"><p className="font-mono text-sm">{(edgeStrength(prediction) * 100).toFixed(2)}</p><p className="mt-0.5 text-[8px] text-muted-foreground">net edge × quality</p><div className="mt-2 flex gap-1 sm:justify-end"><span className={cn('size-1.5 rounded-full', edgeGap >= 0 ? 'bg-primary' : 'bg-red-400')}/><span className={cn('size-1.5 rounded-full', confidenceGap >= 0 ? 'bg-primary' : 'bg-red-400')}/><span className={cn('size-1.5 rounded-full', priceRoom ? 'bg-primary' : 'bg-red-400')}/></div></div>
           </div>;
         })}</div>
-        <p className="mt-3 px-1 text-[9px] leading-relaxed text-muted-foreground">Confidence is clamped to 25–86%. “Live” is a source-availability bonus, not the 15% prediction-market factor weight. Venue probabilities are shown for research, while the binary buy gate uses the actionable ask for the selected UP/YES or DOWN/NO side on venues enabled in Budget. Disabled venues are dimmed and cannot qualify the calculation. The tradeable P(UP), and therefore P(DOWN)=1−P(UP), is computed without venue input because prices are execution costs rather than forecast features. Qualification is expected value after venue fees, not directional confidence. Entries remain restricted to the {Math.round(MIN_ENTRY_PRICE * 100)}–{Math.round(MAX_ENTRY_PRICE * 100)}¢ range. Selling remains reduce-only and is never treated as an implicit opposite-side entry.</p>
+        <p className="mt-3 px-1 text-[9px] leading-relaxed text-muted-foreground">Confidence is clamped to 25–86%. “Live” is a source-availability bonus, not the 15% prediction-market factor weight. Venue probabilities are shown for research, while the binary buy gate uses the actionable ask for the selected UP/YES or DOWN/NO side on venues enabled in Budget. Disabled venues are dimmed and cannot qualify the calculation. The tradeable P(UP), and therefore P(DOWN)=1−P(UP), is computed without venue input because prices are execution costs rather than forecast features. Qualification requires expected value after venue fees plus at least {Math.round(MIN_SELECTED_SIDE_PROBABILITY * 100)}% independent probability for the selected side. Entries remain restricted to the {Math.round(MIN_ENTRY_PRICE * 100)}–{Math.round(MAX_ENTRY_PRICE * 100)}¢ range. Selling remains reduce-only and is never treated as an implicit opposite-side entry.</p>
       </div>
     </details>}
   </section>;

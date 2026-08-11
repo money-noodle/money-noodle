@@ -1,7 +1,7 @@
 import type { PositionSide, Prediction } from './types';
 
 /**
- * Buy policy v7.
+ * Binary buy policy v11.
  *
  * The objective is profit, not forecast accuracy. A well-calibrated forecast still loses money when
  * it is bought at or above fair value, so qualification is expressed as expected value net of venue
@@ -16,17 +16,24 @@ export const MIN_NET_EDGE = 0.05;
 /** Minimum confidence in our own estimate. Deliberately independent of agreement with the market. */
 export const MIN_ESTIMATE_QUALITY = 0.5;
 /**
+ * The selected side must be independently more likely than not. Historical fixed-snapshot replay
+ * found that buying sides the model itself called underdogs increased volume but destroyed recent
+ * calibration: model-favored UP and DOWN entries improved both win rate and fee-aware return. This
+ * remains venue-independent; the actionable ask is still used only as execution cost.
+ */
+export const MIN_SELECTED_SIDE_PROBABILITY = 0.55;
+/**
  * Entry price bounds.
  *
  * These are our own limits, not venue limits: Kalshi quotes from $0.001 to $0.999. The ceiling keeps
  * a payout-room backstop, though the expected-value test binds well before it: the model's probability
  * is clamped at 0.97 and edge must clear 5pp after fees, so nothing above roughly 91c can qualify.
- * The floor is deliberately permissive so the segment report can measure whether cheap entries
- * actually pay, rather than assuming it.
+ * The price floor remains permissive because selected-side probability now rejects model-underdog
+ * longshots independently of price; price cohorts remain measurable without treating cheapness as edge.
  */
 export const MIN_ENTRY_PRICE = 0.05;
 export const MAX_ENTRY_PRICE = 0.97;
-export const BUY_POLICY_VERSION = 'buy-binary-edge-net5-quality50-price5to97-v10';
+export const BUY_POLICY_VERSION = 'buy-binary-edge-net5-quality50-owned55-price5to97-v11';
 /** Minimum unique resolved 15-minute settlement timestamps, never updates or per-asset cycles. */
 export const MIN_CALIBRATION_SAMPLE = 100;
 
@@ -48,6 +55,7 @@ export interface VenueEntryOption {
   side: PositionSide;
   price: number;
   feeRate: number;
+  probability: number;
   netEdge: number;
 }
 
@@ -67,7 +75,8 @@ export function venueEntryOptions(prediction: EntryCandidate): VenueEntryOption[
   const consider = (venue: 'polymarket' | 'kalshi', side: PositionSide, price: number | undefined) => {
     if (price === undefined || !(price > 0) || price >= 1) return;
     const feeRate = venueFeeRate(venue, price);
-    options.push({ venue, side, price, feeRate, netEdge: sideProbability(prediction, side) - price - feeRate });
+    const probability = sideProbability(prediction, side);
+    options.push({ venue, side, price, feeRate, probability, netEdge: probability - price - feeRate });
   };
   if (prediction.enabledTradingVenues.includes('polymarket') && prediction.market.live) {
     consider('polymarket', 'UP', prediction.market.askUp);
@@ -81,18 +90,19 @@ export function venueEntryOptions(prediction: EntryCandidate): VenueEntryOption[
 }
 
 /** The entry with the highest expected value, which may be either side of the binary contract. */
-const admissibleEntryPrice = (option: VenueEntryOption) => option.price >= MIN_ENTRY_PRICE && option.price <= MAX_ENTRY_PRICE;
+const admissibleEntry = (option: VenueEntryOption) => option.price >= MIN_ENTRY_PRICE && option.price <= MAX_ENTRY_PRICE
+  && option.probability >= MIN_SELECTED_SIDE_PROBABILITY;
 
 export function bestEntry(prediction: EntryCandidate): VenueEntryOption | undefined {
-  return venueEntryOptions(prediction).find(admissibleEntryPrice);
+  return venueEntryOptions(prediction).find(admissibleEntry);
 }
 
 export function bestEntryForSide(prediction: EntryCandidate, side: PositionSide): VenueEntryOption | undefined {
-  return venueEntryOptions(prediction).find((option) => option.side === side && admissibleEntryPrice(option));
+  return venueEntryOptions(prediction).find((option) => option.side === side && admissibleEntry(option));
 }
 
 export function bestVenueEntry(prediction: EntryCandidate, venue: 'polymarket' | 'kalshi', side?: PositionSide): VenueEntryOption | undefined {
-  return venueEntryOptions(prediction).find((option) => option.venue === venue && (!side || option.side === side) && admissibleEntryPrice(option));
+  return venueEntryOptions(prediction).find((option) => option.venue === venue && (!side || option.side === side) && admissibleEntry(option));
 }
 
 export function hasTradableEdge(prediction: EntryCandidate): boolean {
@@ -108,7 +118,8 @@ export function edgeStrength(prediction: EntryCandidate & Pick<Prediction, 'conf
 export function qualifiesVenueBuyEdge(prediction: EntryCandidate & Pick<Prediction, 'confidence'>, venue: 'polymarket' | 'kalshi', side?: PositionSide): boolean {
   const entry = bestVenueEntry(prediction, venue, side);
   return prediction.confidence >= MIN_ESTIMATE_QUALITY && Boolean(entry
-    && entry.netEdge >= MIN_NET_EDGE && entry.price >= MIN_ENTRY_PRICE && entry.price <= MAX_ENTRY_PRICE);
+    && entry.netEdge >= MIN_NET_EDGE && entry.price >= MIN_ENTRY_PRICE && entry.price <= MAX_ENTRY_PRICE
+    && sideProbability(prediction, entry.side) >= MIN_SELECTED_SIDE_PROBABILITY);
 }
 
 export function qualifiesAsBuyEdge(prediction: EntryCandidate & Pick<Prediction, 'confidence'>): boolean {

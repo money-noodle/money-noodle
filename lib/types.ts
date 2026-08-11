@@ -358,6 +358,12 @@ export interface TradeTrackRecord {
   standardError: number | null;
   switchesEvaluated: number;
   meanSwitchVsHoldCents: number | null;
+  standaloneExitsEvaluated: number;
+  standaloneExitVsHoldCents: number | null;
+  meanStandaloneExitVsHoldCents: number | null;
+  principalRecoveryExitsEvaluated: number;
+  principalRecoveryVsFullExitCents: number | null;
+  meanPrincipalRecoveryVsFullExitCents: number | null;
   segments: SegmentGroup[];
 }
 
@@ -596,6 +602,34 @@ export interface LiveRiskStatus {
   reasons: string[];
 }
 
+export interface AdaptiveRegimeGateStatus {
+  phase: 'disabled' | 'warming' | 'open' | 'closed';
+  allowsEntries: boolean;
+  policyVersion: string;
+  resolvedWindows: number;
+  effectiveWindows: number;
+  weightedMeanEdge: number | null;
+  standardError: number | null;
+  negativeReturnConfidence: number | null;
+  reason: string;
+  pendingWindows: number;
+  latestResolvedAt?: string;
+  configured: {
+    enabled: boolean;
+    minimumPolicyWindows: number;
+    evidenceHalfLifeWindows: number;
+    pauseConfidence: number;
+    resumeConfidence: number;
+  };
+  transitions: Array<{
+    at: string;
+    from: 'disabled' | 'warming' | 'open' | 'closed';
+    to: 'disabled' | 'warming' | 'open' | 'closed';
+    policyVersion: string;
+    reason: string;
+  }>;
+}
+
 export interface BudgetAuditEvent {
   id: string;
   timestamp: string;
@@ -623,6 +657,31 @@ export interface TradingVenueReadiness {
 
 export type PaperOrderStatus = 'pending_reservation' | 'uncertain' | 'open' | 'sold' | 'won' | 'lost' | 'invalid' | 'unfilled' | 'rejected';
 export type ExecutionMode = 'paper' | 'live';
+
+/** Immutable issuance-time evidence explaining why an order cleared the binary edge-buy gates. */
+export interface EntryDecisionSnapshot {
+  version: 'entry-decision-v1';
+  policyVersion: string;
+  calculationAt: string;
+  side: PositionSide;
+  probabilityUp: number;
+  probabilityDown: number;
+  selectedSideProbability: number;
+  confidence: number;
+  confidenceBreakdown: Prediction['confidenceBreakdown'];
+  actionableAsk: number;
+  actionableBid: number;
+  feeRate: number;
+  netEdge: number;
+  spread: number;
+  secondsRemaining: number;
+  qualifyingSnapshots: number;
+  medianNetEdge: number | null;
+  basis?: ContractBasis;
+  calibrationReplay?: CalibrationReplaySnapshot;
+  settlementAverageEstimate?: SettlementAverageEstimate;
+  factors: Factor[];
+}
 
 export interface PaperOrder {
   id: string;
@@ -659,6 +718,8 @@ export interface PaperOrder {
   closesAt: string;
   modelProbabilityUp: number;
   confidence: number;
+  /** Complete immutable decision snapshot for open-position inspection and historical audit. */
+  entryDecision?: EntryDecisionSnapshot;
   /** Observation-only estimate captured for fill-model validation; never used for sizing/gating. */
   makerFillEstimate?: MakerFillEstimate;
   settlementAverageEstimate?: SettlementAverageEstimate;
@@ -875,5 +936,8 @@ export interface TradingControlData {
   liveAvailable: boolean;
   liveBlockers: string[];
   maximumLiveMakerAttempts?: number;
+  portfolioConstraints?: { maximumPositions: number; maximumSameWindow: number; maximumSameGroupPerWindow: number };
   liveRisk: LiveRiskStatus;
+  /** Adaptive soft entry gate; it never withdraws operator intent or blocks reduce-only exits. */
+  regimeGate?: AdaptiveRegimeGateStatus;
 }

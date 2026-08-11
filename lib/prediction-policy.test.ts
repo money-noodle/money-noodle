@@ -19,7 +19,7 @@ const candidate = (overrides: { modelProbabilityUp?: number; confidence?: number
   enabledTradingVenues: overrides.enabledTradingVenues ?? ['polymarket', 'kalshi'] as Array<'polymarket' | 'kalshi'>,
 });
 
-describe('binary buy policy v10', () => {
+describe('binary buy policy v11', () => {
   it('qualifies on expected value after fees rather than directional confidence', () => {
     // 70% belief bought at 51c clears the edge bar.
     expect(qualifiesAsBuyEdge(candidate())).toBe(true);
@@ -29,6 +29,23 @@ describe('binary buy policy v10', () => {
     expect(qualifiesAsBuyEdge(candidate({ modelProbabilityUp: 0.95, market: { ...market, askUp: 0.94 } }))).toBe(false);
     // A modest edge at a cheap price is sufficient.
     expect(qualifiesAsBuyEdge(candidate({ modelProbabilityUp: 0.55, market: { ...market, askUp: 0.42 } }))).toBe(true);
+  });
+
+  it('rejects a cheap side when the independent model still calls that side an underdog', () => {
+    const cheapDownUnderdog = candidate({
+      modelProbabilityUp: 0.6,
+      market: { ...market, askUp: 0.95, askDown: 0.20 },
+    });
+    expect(venueEntryOptions(cheapDownUnderdog)[0]).toMatchObject({ side: 'DOWN', probability: 0.4 });
+    expect(bestEntry(cheapDownUnderdog)).toMatchObject({ side: 'UP', probability: 0.6 });
+    expect(qualifiesAsBuyEdge(cheapDownUnderdog)).toBe(false);
+
+    const favoredDown = candidate({
+      modelProbabilityUp: 0.4,
+      market: { ...market, askUp: 0.95, askDown: 0.40 },
+    });
+    expect(bestEntry(favoredDown)).toMatchObject({ side: 'DOWN', probability: 0.6 });
+    expect(qualifiesAsBuyEdge(favoredDown)).toBe(true);
   });
 
   it('subtracts venue fees before judging the edge', () => {

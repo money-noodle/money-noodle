@@ -286,6 +286,14 @@ export function buildPrediction(coin: CoinSnapshot, market: MarketQuote | undefi
   return prediction;
 }
 
+/** Cached venue data may survive a boundary fetch failure; never carry a prior Kalshi contract into the new window. */
+export function alignedKalshiQuote(market: MarketQuote | undefined, quote: VenueQuote | undefined, nowMs = Date.now()): VenueQuote | undefined {
+  if (!market || !quote) return undefined;
+  const marketClose = Date.parse(market.closesAt), kalshiClose = Date.parse(quote.closesAt);
+  if (!Number.isFinite(marketClose) || !Number.isFinite(kalshiClose) || kalshiClose <= nowMs || Math.abs(marketClose - kalshiClose) > 5_000) return undefined;
+  return quote;
+}
+
 async function buildDashboard(force = false, liveOnly = false): Promise<DashboardData> {
   const refreshSlowFeeds = force && !liveOnly;
   const [coinsResult, marketResult, kalshiResult, newsResult, seasonalResult, referenceResult] = await Promise.all([
@@ -300,6 +308,10 @@ async function buildDashboard(force = false, liveOnly = false): Promise<Dashboar
       .catch(() => ({ value: {} as Record<string, PriceSeries>, fromCache: false })),
   ]);
   const minuteResult = { value: Object.fromEntries(Object.values(referenceResult.value).map((entry) => [entry.symbol, entry.closes])), fromCache: referenceResult.fromCache };
+  const alignedKalshi = Object.fromEntries(Object.entries(kalshiResult.value).flatMap(([symbol, quote]) => {
+    const aligned = alignedKalshiQuote(marketResult.value[symbol], quote);
+    return aligned ? [[symbol, aligned]] : [];
+  })) as Record<string, VenueQuote>;
   const prices = Object.fromEntries(coinsResult.value.map((coin) => [coin.symbol, coin.price]));
   const history = await recordPriceHistory(prices);
   const oracleHistory = await recordOracleHistory(
@@ -307,18 +319,18 @@ async function buildDashboard(force = false, liveOnly = false): Promise<Dashboar
   );
   const venueHistory = await recordVenueHistory(
     Object.fromEntries(Object.entries(marketResult.value).map(([symbol, quote]) => [symbol, quote.probabilityUp])),
-    Object.fromEntries(Object.entries(kalshiResult.value).map(([symbol, quote]) => [symbol, quote.probabilityUp])),
+    Object.fromEntries(Object.entries(alignedKalshi).map(([symbol, quote]) => [symbol, quote.probabilityUp])),
     Object.fromEntries(Object.entries(marketResult.value).map(([symbol, quote]) => [symbol, quote.closesAt])),
     {
       polymarketBidUp: Object.fromEntries(Object.entries(marketResult.value).flatMap(([symbol, quote]) => quote.bidUp === undefined ? [] : [[symbol, quote.bidUp]])),
       polymarketAskUp: Object.fromEntries(Object.entries(marketResult.value).flatMap(([symbol, quote]) => quote.askUp === undefined ? [] : [[symbol, quote.askUp]])),
-      kalshiBidUp: Object.fromEntries(Object.entries(kalshiResult.value).map(([symbol, quote]) => [symbol, quote.bidUp])),
-      kalshiAskUp: Object.fromEntries(Object.entries(kalshiResult.value).map(([symbol, quote]) => [symbol, quote.askUp])),
+      kalshiBidUp: Object.fromEntries(Object.entries(alignedKalshi).map(([symbol, quote]) => [symbol, quote.bidUp])),
+      kalshiAskUp: Object.fromEntries(Object.entries(alignedKalshi).map(([symbol, quote]) => [symbol, quote.askUp])),
     },
   );
   const enabledTradingVenues = await getEnabledTradingVenues().catch(() => ['polymarket', 'kalshi'] as Array<'polymarket' | 'kalshi'>);
   const predictions = coinsResult.value
-    .map((coin) => buildPrediction(coin, marketResult.value[coin.symbol], newsResult.value, history, seasonalResult.value[coin.symbol] ?? [], kalshiResult.value[coin.symbol], venueHistory, enabledTradingVenues, referenceResult.value[coin.symbol], minuteResult.value[coin.symbol] ?? [], oracleHistory))
+    .map((coin) => buildPrediction(coin, marketResult.value[coin.symbol], newsResult.value, history, seasonalResult.value[coin.symbol] ?? [], alignedKalshi[coin.symbol], venueHistory, enabledTradingVenues, referenceResult.value[coin.symbol], minuteResult.value[coin.symbol] ?? [], oracleHistory))
     .sort((a, b) => edgeStrength(b) - edgeStrength(a));
   // Persist regime diagnostics separately and attach the current path prefix for later outcome
   // analysis. Nothing below reads these features into probability, confidence, ranking, or gates.
@@ -338,7 +350,7 @@ async function buildDashboard(force = false, liveOnly = false): Promise<Dashboar
     collector: collectorStatus(),
     sourceStatus: {
       polymarket: Object.values(marketResult.value).some((quote) => quote.live),
-      kalshi: Object.values(kalshiResult.value).some((quote) => quote.live), coinGecko: coinsResult.value.length > 0,
+      kalshi: Object.values(alignedKalshi).some((quote) => quote.live), coinGecko: coinsResult.value.length > 0,
       news: newsResult.value.length > 0, historical: Object.keys(seasonalResult.value).length > 0,
       contractReference: Object.keys(referenceResult.value).length > 0,
       volatility: Object.keys(minuteResult.value).length > 0,

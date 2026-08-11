@@ -253,6 +253,24 @@ export function buildTradeRecord(orders: PaperOrder[], mode: ExecutionMode): Tra
   const returned = settled.reduce((sum, order) => sum + (order.payoutCents ?? 0), 0);
   const overall = settled.length ? segmentStat('all', settled) : null;
   const evaluatedSwitches = mine.filter((order) => order.switchVsHoldCents !== undefined);
+  const evaluatedStandaloneExits = mine.filter((order) => order.status === 'sold' && !order.switchedToOrderId
+    && order.counterfactualHoldPnlCents !== undefined && !order.id.includes(':exit:'));
+  const standaloneExitVsHoldCents = evaluatedStandaloneExits.length
+    ? evaluatedStandaloneExits.reduce((sum, order) => sum + actualPnl(order) - order.counterfactualHoldPnlCents!, 0)
+    : null;
+  // Observation-only alternative: at the full exit's realized average net price, sell only enough
+  // quantity to recover exact principal and retain the residual binary payout. It is intentionally
+  // reported rather than traded until independent exit windows justify changing the approved policy.
+  const principalRecovery = evaluatedStandaloneExits.flatMap((order) => {
+    const stake = actualStake(order), netProceeds = stake + actualPnl(order);
+    if (!(netProceeds >= stake) || !(netProceeds > 0) || !order.counterfactualHoldOutcome) return [];
+    const retainedFraction = Math.max(0, 1 - stake / netProceeds);
+    const counterfactualPnl = order.counterfactualHoldOutcome === order.side ? order.potentialPayoutCents * retainedFraction : 0;
+    return [{ order, incremental: counterfactualPnl - actualPnl(order) }];
+  });
+  const principalRecoveryVsFullExitCents = principalRecovery.length
+    ? principalRecovery.reduce((sum, item) => sum + item.incremental, 0)
+    : null;
   return {
     mode,
     settled: settled.length,
@@ -273,6 +291,12 @@ export function buildTradeRecord(orders: PaperOrder[], mode: ExecutionMode): Tra
     standardError: overall?.standardError ?? null,
     switchesEvaluated: evaluatedSwitches.length,
     meanSwitchVsHoldCents: evaluatedSwitches.length ? evaluatedSwitches.reduce((sum, order) => sum + order.switchVsHoldCents!, 0) / evaluatedSwitches.length : null,
+    standaloneExitsEvaluated: evaluatedStandaloneExits.length,
+    standaloneExitVsHoldCents,
+    meanStandaloneExitVsHoldCents: standaloneExitVsHoldCents === null ? null : standaloneExitVsHoldCents / evaluatedStandaloneExits.length,
+    principalRecoveryExitsEvaluated: principalRecovery.length,
+    principalRecoveryVsFullExitCents,
+    meanPrincipalRecoveryVsFullExitCents: principalRecoveryVsFullExitCents === null ? null : principalRecoveryVsFullExitCents / principalRecovery.length,
     segments: settled.length ? [
       group('Asset', 'Which markets paid', settled, (order) => order.symbol),
       group('Direction', 'Which binary side was purchased', settled, (order) => order.side),

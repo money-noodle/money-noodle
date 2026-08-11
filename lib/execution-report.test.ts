@@ -92,6 +92,19 @@ describe('maker first-passage validation report', () => {
     expect(record.realizedPnlCents).toBe(-1);
   });
 
+  it('reports standalone exit value separately from its authoritative hold counterfactual', () => {
+    const exited = order(0.5, 0.2, {
+      status: 'sold', standaloneExitPolicy: 'profit-reversal-75-v1', payoutCents: 14,
+      actualStakeCents: 9, actualPnlCents: 5, counterfactualHoldOutcome: 'UP', counterfactualHoldPnlCents: 11,
+    });
+    const record = buildTradeRecord([exited], 'live');
+    expect(record.standaloneExitsEvaluated).toBe(1);
+    expect(record.standaloneExitVsHoldCents).toBe(-6);
+    expect(record.meanStandaloneExitVsHoldCents).toBe(-6);
+    expect(record.principalRecoveryExitsEvaluated).toBe(1);
+    expect(record.principalRecoveryVsFullExitCents).toBeCloseTo(20 * (1 - 9 / 14) - 5);
+  });
+
   it('excludes rejected requests and legacy attempts without a model estimate', () => {
     const rejected = order(0.5, 0, { status: 'rejected', venueOrderId: undefined });
     const legacy = order(0.5, 0, { makerFillEstimate: undefined });

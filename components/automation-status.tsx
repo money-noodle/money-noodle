@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { AlertTriangle, ChevronDown, FlaskConical, Pause, Radio, ShieldAlert } from 'lucide-react';
+import { OrderDecisionDetails } from '@/components/order-decision-details';
+import { TradeHistoryDialog } from '@/components/trade-history-dialog';
 import { Badge } from '@/components/ui/badge';
 import { DATA_FRESHNESS } from '@/lib/freshness';
 import type { ExecutionSummary, PaperOrder, TradingControlData } from '@/lib/types';
@@ -65,6 +67,9 @@ function TrackPanel({ track, title, subtitle, equityLabel }: { track: ExecutionS
 function OpenOrderRow({ order }: { order: PaperOrder }) {
   const ownedProbability = order.latestOwnedSideProbability ?? (order.side === 'UP' ? order.modelProbabilityUp : 1 - order.modelProbabilityUp);
   const exactStake = order.actualStakeCents ?? order.stakeCents;
+  const entryProbability = order.entryDecision?.selectedSideProbability ?? (order.side === 'UP' ? order.modelProbabilityUp : 1 - order.modelProbabilityUp);
+  const entryFeeRate = order.entryDecision?.feeRate ?? ((order.actualFeeCents ?? order.feeCents) / Math.max(1, order.potentialPayoutCents));
+  const entryNetEdge = order.entryDecision?.netEdge ?? entryProbability - order.askPrice - entryFeeRate;
   const entryPriceCents = order.actualPurchaseCents !== undefined && order.quantity > 0 ? order.actualPurchaseCents / order.quantity : order.askPrice * 100;
   const state = order.exitPending ? 'exit pending' : order.status === 'pending_reservation' ? 'entry pending' : order.status;
   return <div className="rounded-md border bg-background/45 px-3 py-2">
@@ -80,13 +85,15 @@ function OpenOrderRow({ order }: { order: PaperOrder }) {
       <span><span className="text-muted-foreground">qty </span>{order.quantity.toFixed(2)}</span>
       <span><span className="text-muted-foreground">cost </span>{exactStake.toFixed(2)}¢</span>
       <span><span className="text-muted-foreground">entry </span>{entryPriceCents.toFixed(1)}¢</span>
-      <span><span className="text-muted-foreground">P({order.side}) </span>{(ownedProbability * 100).toFixed(1)}%</span>
+      <span><span className="text-muted-foreground">entry P({order.side}) </span>{(entryProbability * 100).toFixed(1)}%</span>
       <span className="col-span-2 sm:col-span-3"><span className="text-muted-foreground">closes </span>{new Date(order.closesAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
       {order.latestNetProfitPercent !== undefined && <span className={cn(order.latestNetProfitPercent > 0 ? 'text-primary' : order.latestNetProfitPercent < 0 ? 'text-red-400' : '')}><span className="text-muted-foreground">executable </span>{order.latestNetProfitPercent >= 0 ? '+' : ''}{(order.latestNetProfitPercent * 100).toFixed(1)}%</span>}
     </div>
+    <div className="mt-1 grid grid-cols-2 gap-1 font-mono text-[8px] sm:grid-cols-3"><span><span className="text-muted-foreground">entry edge </span><span className={entryNetEdge >= 0.05 ? 'text-primary' : ''}>{entryNetEdge >= 0 ? '+' : ''}{(entryNetEdge * 100).toFixed(1)}pp</span></span><span><span className="text-muted-foreground">quality </span>{(order.confidence * 100).toFixed(1)}%</span><span><span className="text-muted-foreground">current P({order.side}) </span>{(ownedProbability * 100).toFixed(1)}%</span></div>
     <p className="mt-1 truncate font-mono text-[8px] text-muted-foreground" title={order.contractId}>{order.contractId}</p>
     {order.entryExecutionDecision && <p className="mt-1 text-[8px] text-muted-foreground">Execution: <span className="uppercase text-foreground">{order.entryExecutionDecision.executedStyle}</span>{order.entryExecutionDecision.recommendedStyle !== order.entryExecutionDecision.executedStyle ? ` · shadow recommends ${order.entryExecutionDecision.recommendedStyle}` : ''}</p>}
     {order.profitLockArmedAt && <p className="mt-1 text-[8px] text-amber-200">75% profit lock armed · high water {order.peakNetProfitPercent === undefined ? '—' : `+${(order.peakNetProfitPercent * 100).toFixed(1)}%`}</p>}
+    <OrderDecisionDetails order={order}/>
   </div>;
 }
 
@@ -139,6 +146,8 @@ export function AutomationStatus() {
   const active = control.state === 'active';
   const recovering = !active && control.operatorIntent === 'active' && control.pauseOrigin === 'system' && control.autoResumeEligible;
   const liveRunning = Boolean(data.live?.running);
+  const regimeGate = data.regimeGate;
+  const regimeCooling = regimeGate?.phase === 'closed';
   const armed = data.venues.filter((venue) => venue.enabled && venue.tradeReady).map((venue) => venue.venue);
 
   return <section className="mb-6 overflow-hidden rounded-xl border bg-card/60">
@@ -147,18 +156,19 @@ export function AutomationStatus() {
         <div className={cn('grid size-6 place-items-center rounded-md', active ? 'bg-primary/12 text-primary' : 'bg-secondary text-muted-foreground')}>
           {active ? <Radio className="size-3.5"/> : <Pause className="size-3.5"/>}
         </div>
-        <span className="text-xs font-semibold">{active ? 'Automation active' : recovering ? 'Automation safety-suspended — auto-resume armed' : control.state === 'depleted' ? 'Automation stopped — budget depleted' : control.state === 'unconfigured' ? 'Automation not configured' : 'Automation paused'}</span>
+        <span className="text-xs font-semibold">{active ? regimeCooling ? 'Automation active — new entries cooling off' : 'Automation active' : recovering ? 'Automation safety-suspended — auto-resume armed' : control.state === 'depleted' ? 'Automation stopped — budget depleted' : control.state === 'unconfigured' ? 'Automation not configured' : 'Automation paused'}</span>
         <span className="text-[10px] text-muted-foreground">{armed.length ? armed.join(' + ') : 'no armed venue'} · every {DATA_FRESHNESS.dashboardPollMs / 1000}s{!active && data.executionDrain ? ` · ${data.executionDrain.restartSafe ? 'restart safe' : data.executionDrain.phase}` : ''}</span>
       </div>
-      <span className={cn('font-mono text-[9px] uppercase tracking-wider', liveRunning ? 'text-red-300' : 'text-muted-foreground')}>
+      <div className="flex items-center gap-2"><TradeHistoryDialog/><span className={cn('font-mono text-[9px] uppercase tracking-wider', liveRunning ? 'text-red-300' : 'text-muted-foreground')}>
         {liveRunning ? 'real money at risk' : 'no real money at risk'}
-      </span>
+      </span></div>
     </div>
     <div className="flex flex-col gap-3 p-3 sm:flex-row">
       <TrackPanel track={data.live} title="Live" subtitle="Real orders · real money" equityLabel="Budget equity"/>
       <TrackPanel track={data.paper} title="Paper" subtitle="Simulated shadow · always on" equityLabel="Shadow bankroll"/>
     </div>
     <OpenOrdersPanel live={data.live} paper={data.paper}/>
+    {regimeGate && regimeGate.phase !== 'disabled' && <div className={cn('flex items-start gap-2 border-t px-4 py-2.5 text-[9px]', regimeCooling ? 'bg-amber-300/[.04] text-amber-200' : regimeGate.phase === 'warming' ? 'text-muted-foreground' : 'text-primary')}><ShieldAlert className="mt-px size-3 shrink-0"/><span><strong className="uppercase">Adaptive regime gate {regimeGate.phase}</strong> · {regimeGate.reason}{regimeGate.weightedMeanEdge === null ? '' : ` · recent edge ${(regimeGate.weightedMeanEdge * 100).toFixed(1)}pp`}{regimeGate.negativeReturnConfidence === null ? '' : ` · negative confidence ${(regimeGate.negativeReturnConfidence * 100).toFixed(1)}%`} · {regimeGate.resolvedWindows}/{regimeGate.configured.minimumPolicyWindows} policy windows{regimeGate.pendingWindows ? ` · ${regimeGate.pendingWindows} pending` : ''}</span></div>}
     {data.reconciliation && <div className={cn('flex items-start gap-2 border-t px-4 py-2.5 text-[9px]', data.reconciliation.phase === 'ready' ? 'text-primary' : 'text-amber-200')}><ShieldAlert className="mt-px size-3 shrink-0"/><span><strong className="uppercase">Kalshi reconciliation {data.reconciliation.phase}</strong> · {data.reconciliation.reason}{data.reconciliation.nextScheduledAt ? ` · next periodic ${new Date(data.reconciliation.nextScheduledAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}{data.reconciliation.consecutivePeriodicFailures ? ` · ${data.reconciliation.consecutivePeriodicFailures} periodic failure` : ''}</span></div>}
   </section>;
 }

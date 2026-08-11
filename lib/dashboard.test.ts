@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { PRODUCTION_REPLAY_PARAMETERS, replayCalibrationProbability } from './calibration-replay';
-import { buildPrediction } from './dashboard';
+import { alignedKalshiQuote, buildPrediction } from './dashboard';
 import type { CoinSnapshot, ContractReference } from './feeds';
 import { MIN_ESTIMATE_QUALITY } from './prediction-policy';
-import type { ChartPoint, MarketQuote } from './types';
+import type { ChartPoint, MarketQuote, VenueQuote } from './types';
 
 const coin: CoinSnapshot = {
   symbol: 'BTC', name: 'Bitcoin', price: 100, high24h: 103, low24h: 98, volume: 1_000_000,
@@ -39,6 +39,26 @@ function seasonalPoints(): ChartPoint[] {
 const build = (quote: MarketQuote | undefined, currentPrice?: number, weekly: ChartPoint[] = []) =>
   buildPrediction(coin, quote, [], [], weekly, undefined, [], ['polymarket', 'kalshi'],
     currentPrice === undefined ? undefined : reference(currentPrice), currentPrice === undefined ? [] : minuteCloses());
+
+describe('venue window alignment', () => {
+  const kalshi = (closesAt: string): VenueQuote => ({
+    venue: 'kalshi', probabilityUp: 0.5, bidUp: 0.49, askUp: 0.51, bidDown: 0.49, askDown: 0.51,
+    liquidity: 100, volume: 100, url: 'https://kalshi.test', closesAt, ticker: 'KXBTC15M-TEST',
+    live: true, comparability: 'approximate',
+  });
+
+  it('rejects an unexpired cached Kalshi quote from the prior Polymarket window', () => {
+    const now = Date.parse('2026-08-11T19:00:01Z');
+    const currentMarket = { ...market, closesAt: '2026-08-11T19:15:00Z' };
+    expect(alignedKalshiQuote(currentMarket, kalshi('2026-08-11T19:00:00Z'), now)).toBeUndefined();
+  });
+
+  it('retains the same Kalshi ticker even when cross-venue rule comparability is approximate', () => {
+    const now = Date.parse('2026-08-11T19:00:01Z');
+    const currentMarket = { ...market, closesAt: '2026-08-11T19:15:00Z' };
+    expect(alignedKalshiQuote(currentMarket, kalshi('2026-08-11T19:15:00Z'), now)?.ticker).toBe('KXBTC15M-TEST');
+  });
+});
 
 describe('Blend 0.3', () => {
   it('keeps probabilities bounded and separates the venue price from model edge', () => {
