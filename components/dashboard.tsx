@@ -422,8 +422,8 @@ export function Dashboard({ initialData }: { initialData: DashboardData | null }
       <section className="mb-8 flex flex-col justify-between gap-6 lg:flex-row lg:items-end">
         <div className="max-w-2xl">
           <div className="mb-3 flex items-center gap-2"><Badge variant="outline" className="gap-1.5 border-primary/20 bg-primary/5 text-primary"><Sparkles/> {data?.modelVersion ?? 'Blend 0.2'}</Badge><span className="text-[10px] text-muted-foreground">15-minute crypto markets</span></div>
-          <h1 className="text-3xl font-semibold tracking-[-.04em] sm:text-4xl">See the signal.<br/><span className="text-muted-foreground">Inspect the evidence.</span></h1>
-          <p className="mt-4 max-w-xl text-sm leading-relaxed text-muted-foreground">A transparent model layered over prediction-market prices, trend regimes, seasonal history, and breaking crypto news.</p>
+          <h1 className="text-3xl font-semibold tracking-[-.04em] text-primary sm:text-4xl">See the signal.<br/><span className="text-brand-green">Inspect the evidence.</span></h1>
+          <p className="mt-4 max-w-xl text-sm leading-relaxed text-secondary-foreground">A transparent model layered over prediction-market prices, trend regimes, seasonal history, and breaking crypto news.</p>
         </div>
         <div className="w-full max-w-md">
           <p className="mb-2 text-[10px] uppercase tracking-[.16em] text-muted-foreground">Find a market</p>

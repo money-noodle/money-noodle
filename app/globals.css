@@ -38,14 +38,14 @@
   --popover: #ffffff;
   --popover-foreground: #142219;
   --ramen-gold: #e3b04b;
-  --primary: #a66d12;
+  --primary: #c99028;
   --primary-foreground: #fffaf0;
   --brand-green: #2f9843;
   --brand-green-foreground: #f4fff6;
   --secondary: #e3f1e5;
   --secondary-foreground: #216d31;
   --muted: #edf1eb;
-  --muted-foreground: #68756d;
+  --muted-foreground: #526158;
   --accent: #fff3d8;
   --accent-foreground: #79530e;
   --destructive: #c43f3f;
@@ -69,7 +69,7 @@
   --secondary: #12301b;
   --secondary-foreground: #a7e3b2;
   --muted: #151a1b;
-  --muted-foreground: #84908b;
+  --muted-foreground: #aab6b0;
   --accent: #211b13;
   --accent-foreground: #f3d99a;
   --destructive: #ff6969;
@@ -96,7 +96,9 @@ body {
 button, a { -webkit-tap-highlight-color: transparent; }
 ::selection { background: rgba(227, 176, 75, 0.28); }
 html:not(.dark) .text-red-200, html:not(.dark) .text-red-300, html:not(.dark) .text-red-400 { color: #a92f2f; }
-html:not(.dark) .text-amber-100, html:not(.dark) .text-amber-200, html:not(.dark) .text-amber-300 { color: #815500; }
+/* Warning copy must still clear contrast on the live panel's soft-red surface. */
+html:not(.dark) .text-amber-100, html:not(.dark) .text-amber-200, html:not(.dark) .text-amber-300 { color: #624000; }
+html:not(.dark) .text-amber-100\/80, html:not(.dark) .text-amber-200\/90, html:not(.dark) .text-amber-300\/80 { color: #624000; opacity: 1; }
 
 /* Raise dense evidence labels by one pixel without changing component spacing or control heights. */
 .text-\[7px\] { font-size: 8px; }
