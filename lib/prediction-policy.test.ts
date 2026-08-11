@@ -19,7 +19,7 @@ const candidate = (overrides: { modelProbabilityUp?: number; confidence?: number
   enabledTradingVenues: overrides.enabledTradingVenues ?? ['polymarket', 'kalshi'] as Array<'polymarket' | 'kalshi'>,
 });
 
-describe('binary buy policy v11', () => {
+describe('binary buy policy v12', () => {
   it('qualifies on expected value after fees rather than directional confidence', () => {
     // 70% belief bought at 51c clears the edge bar.
     expect(qualifiesAsBuyEdge(candidate())).toBe(true);
@@ -27,8 +27,9 @@ describe('binary buy policy v11', () => {
     expect(qualifiesAsBuyEdge(candidate({ market: { ...market, askUp: 0.90 } }))).toBe(false);
     // A high directional likelihood is not sufficient on its own.
     expect(qualifiesAsBuyEdge(candidate({ modelProbabilityUp: 0.95, market: { ...market, askUp: 0.94 } }))).toBe(false);
-    // A modest edge at a cheap price is sufficient.
-    expect(qualifiesAsBuyEdge(candidate({ modelProbabilityUp: 0.55, market: { ...market, askUp: 0.42 } }))).toBe(true);
+    // Manual v12 promotion admits the narrow 52.5–55% near-miss band, not underdogs below it.
+    expect(qualifiesAsBuyEdge(candidate({ modelProbabilityUp: 0.525, market: { ...market, askUp: 0.42 } }))).toBe(true);
+    expect(qualifiesAsBuyEdge(candidate({ modelProbabilityUp: 0.524, market: { ...market, askUp: 0.42 } }))).toBe(false);
   });
 
   it('rejects a cheap side when the independent model still calls that side an underdog', () => {

@@ -16,12 +16,12 @@ export const MIN_NET_EDGE = 0.05;
 /** Minimum confidence in our own estimate. Deliberately independent of agreement with the market. */
 export const MIN_ESTIMATE_QUALITY = 0.5;
 /**
- * The selected side must be independently more likely than not. Historical fixed-snapshot replay
- * found that buying sides the model itself called underdogs increased volume but destroyed recent
- * calibration: model-favored UP and DOWN entries improved both win rate and fee-aware return. This
- * remains venue-independent; the actionable ask is still used only as execution cost.
+ * The selected side must be independently more likely than not. Manual live promotion on 2026-08-11
+ * narrowly expanded the former 55% v11 floor to 52.5% after separating the 52.5–55% near-miss cohort
+ * from deeper underdogs. This remains a constrained v12 experiment: venue prices do not enter the
+ * probability, and all edge, quality, price, persistence, timing, portfolio, and risk gates remain.
  */
-export const MIN_SELECTED_SIDE_PROBABILITY = 0.55;
+export const MIN_SELECTED_SIDE_PROBABILITY = 0.525;
 /**
  * Entry price bounds.
  *
@@ -33,7 +33,7 @@ export const MIN_SELECTED_SIDE_PROBABILITY = 0.55;
  */
 export const MIN_ENTRY_PRICE = 0.05;
 export const MAX_ENTRY_PRICE = 0.97;
-export const BUY_POLICY_VERSION = 'buy-binary-edge-net5-quality50-owned55-price5to97-v11';
+export const BUY_POLICY_VERSION = 'buy-binary-edge-net5-quality50-owned52.5-price5to97-v12';
 /** Minimum unique resolved 15-minute settlement timestamps, never updates or per-asset cycles. */
 export const MIN_CALIBRATION_SAMPLE = 100;
 
