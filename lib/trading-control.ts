@@ -59,7 +59,7 @@ async function writeStored(stored: StoredTradingControl): Promise<void> {
 }
 
 function maximumPurchasePercent(): number {
-  const configured = Number(process.env.SIGNAL_DESK_MAX_PURCHASE_PERCENT ?? DEFAULT_MAX_PURCHASE_PERCENT);
+  const configured = Number(process.env.MONEY_NOODLE_MAX_PURCHASE_PERCENT ?? DEFAULT_MAX_PURCHASE_PERCENT);
   return Number.isFinite(configured) ? Math.min(100, Math.max(MIN_PURCHASE_PERCENT, configured)) : DEFAULT_MAX_PURCHASE_PERCENT;
 }
 

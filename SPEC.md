@@ -1,11 +1,11 @@
-# Signal Desk — Living Product Specification
+# Money Noodle — Living Product Specification
 
 > **Status:** Draft 0.32 · **Updated:** 2026-08-09  
 > This is the source of truth for product scope, architecture, model behavior, and safety decisions. Update the decision log whenever a requirement changes. Current implementation progress is tracked separately in [`STATUS.md`](STATUS.md).
 
 ## 1. Product statement
 
-Signal Desk is a local-first crypto research and prediction terminal. It combines live prediction-market prices, crypto market data, historical/seasonal features, news, and optional LLM research into transparent forecasts for short- and long-horizon investing decisions.
+Money Noodle is a local-first crypto research and prediction terminal. It combines live prediction-market prices, crypto market data, historical/seasonal features, news, and optional LLM research into transparent forecasts for short- and long-horizon investing decisions.
 
 The primary decision surface is every active crypto **15-minute Up/Down market** shown at `polymarket.com/crypto/15M`, with approximately comparable Kalshi markets alongside it. Account monitoring, continuous paper shadow trading, and explicitly armed Kalshi automation are implemented; longer horizons and live Polymarket execution remain later scope.
 
@@ -38,13 +38,13 @@ Core jobs:
 For each active Polymarket crypto 15-minute option:
 - Asset, current price, and 24h change.
 - Market UP/DOWN probability.
-- Signal Desk UP probability.
+- Money Noodle UP probability.
 - Edge: `model probability − venue UP probability`.
 - Action state: `UP`, `DOWN`, `WATCH`, or `PASS`.
 - Confidence and time to market close.
 - Compact seven-day price chart.
 - Visible factor strip and full factor drill-down.
-- Every qualifying positive-edge buy calculation shows Signal Desk’s venue-independent UP likelihood beside current raw Polymarket and approximately comparable Kalshi UP/DOWN probabilities, then selects either the actionable UP/YES ask against `P(UP)` or DOWN/NO ask against `1 − P(UP)`. Reduce-only HOLD/EXIT/SWITCH actions for owned positions remain a separate portfolio policy.
+- Every qualifying positive-edge buy calculation shows Money Noodle’s venue-independent UP likelihood beside current raw Polymarket and approximately comparable Kalshi UP/DOWN probabilities, then selects either the actionable UP/YES ask against `P(UP)` or DOWN/NO ask against `1 − P(UP)`. Reduce-only HOLD/EXIT/SWITCH actions for owned positions remain a separate portfolio policy.
 - Positive-edge calculations clear after one 15-second observation window even if refresh is delayed or fails. The section shows exact calculation time, live age, and an explicit expired state.
 - A collapsed-by-default debugging region showing directional-likelihood and model-confidence calculations for every market, including below-gate calculations, current raw venue probabilities, threshold margins, confidence components, and ranking strength.
 - Link to the source market.
@@ -73,7 +73,7 @@ Global controls:
 - Interactive multi-turn research chat with retained recent context, follow-up questions, per-answer provider/model/fallback metadata, cancellation, clear-chat control, and browser-local persistence. Every turn receives a fresh server dashboard snapshot.
 - A provider-management view showing every supported provider, server-side configured status, durable enable/disable state, current provider, and editable model name. Secrets remain environment-only and are never returned to the browser.
 - Automatic research uses the current enabled provider first and falls back through the remaining enabled providers; explicitly selected disabled providers are rejected server-side. Each automatic attempt has an 18-second limit and the full fallback chain has a 45-second hard deadline; an explicitly selected provider has 30 seconds. The browser cancels after 50 seconds and cancellation terminates Pi bridge children.
-- Signal Desk discovers compatible providers authenticated in the local Pi registry and exposes them as server-side Pi bridge providers without copying OAuth tokens or API keys. Each isolated bridge call disables tools, sessions, extensions, skills, prompt templates, and context files; only the grounded research prompt is sent.
+- Money Noodle discovers compatible providers authenticated in the local Pi registry and exposes them as server-side Pi bridge providers without copying OAuth tokens or API keys. Each isolated bridge call disables tools, sessions, extensions, skills, prompt templates, and context files; only the grounded research prompt is sent.
 - Current dashboard snapshot, selected assets/markets, news, and account context as opt-in inputs.
 - Answers contain source links, retrieval timestamps, assumptions, disagreement, and confidence.
 - Implemented direct provider adapters: OpenAI, Anthropic, Google Gemini, OpenRouter, Groq, xAI, Mistral, DeepSeek, and local OpenAI-compatible Ollama servers, plus isolated Pi bridge providers discovered from the local Pi registry.
@@ -117,7 +117,7 @@ The trading system has an independent durable working-budget ledger. A venue acc
 - An enabled venue must have an authenticated/readable account connector before it can receive automated orders. Disabled or currently unready venues are never selected for new orders.
 - Saving a Kalshi budget verifies the total allocation against venue cash. Before each order, Kalshi must also cover the planned all-in reservation.
 - Public profile or position data alone does not count as a trade-ready connector. Signing capability, collateral/allowance state, and venue environment must be validated.
-- Funds remain at the venues; Signal Desk stores a risk allocation ledger, not custody.
+- Funds remain at the venues; Money Noodle stores a risk allocation ledger, not custody.
 - Kalshi setup uses a dedicated API key ID plus an RSA private-key PEM path held outside the repository. The Budget UI reports demo/production environment, signed connectivity, cash balance, setup steps, and a connection retest without returning credentials to the browser.
 
 #### Pause/resume state machine
@@ -143,7 +143,7 @@ The trading system has an independent durable working-budget ledger. A venue acc
 - Persist every maker attempt separately for authoritative recovery and fill-model evidence, but group live-ledger presentation by stable asset/window intent. Distinguish `post-only race` (never accepted, no spend) from `rested · no fill` (accepted, then canceled), and label an intent whose later bounded attempt filled as `recovered on retry`.
 - Raw positive-edge signals remain visible and tracked immediately, but paper/live execution uses a durable maturity gate: first 60 seconds blocked; current snapshot qualified; at least 3 qualifying snapshots spanning 30 seconds; median net edge at least 5pp; current quality at least 50%; and no new entry in the final 120 seconds. A failed current snapshot resets persistence, and repeated processing of one timestamp cannot manufacture observations.
 - Signal qualification, execution readiness, venue attempt, and actual position are separate UI states. Each current card is joined to the exact live asset/contract order so unfilled/rejected maker attempts are never presented as open positions, and the automation skip reason distinguishes absent edge from already-attempted signals.
-- Live execution has a hard startup reconciliation barrier. Before any new live order, fetch complete paginated Kalshi cash, positions, orders, fills, and resting orders; match durable client and venue IDs; cancel and confirm Signal Desk resting remainders; recover missing/partial entry and reduce-only fills; validate current position quantities; and align whole-cent local reservations without manufacturing P&L. Unknown managed orders, unrelated resting orders, malformed/incomplete history, contradictory positions, insufficient venue cash, or unconfirmed cancellation block and pause live automation.
+- Live execution has a hard startup reconciliation barrier. Before any new live order, fetch complete paginated Kalshi cash, positions, orders, fills, and resting orders; match durable client and venue IDs; cancel and confirm Money Noodle resting remainders; recover missing/partial entry and reduce-only fills; validate current position quantities; and align whole-cent local reservations without manufacturing P&L. Unknown managed orders, unrelated resting orders, malformed/incomplete history, contradictory positions, insufficient venue cash, or unconfirmed cancellation block and pause live automation.
 - The same full reconciliation runs periodically every 300 seconds by default, configurable server-side and clamped to 60–3600 seconds. It is queued behind serialized execution, so no active managed order can be mistaken for orphaned resting risk. First periodic failure changes reconciliation to blocked and suppresses new orders, then retries after 30 seconds without changing the persisted automation state; a second consecutive failure safety-suspends and audits. A successful retry restores readiness, and unchanged successful periodic passes do not write redundant audit events.
 - Persist explicit operator intent separately from operational state. Manual Pause/kill, reconfiguration, mode changes, depletion, and conservatively migrated legacy pauses withdraw auto-resume permission. System-originated transaction ambiguity or reconciliation failure may preserve active intent only if automation was active beforehand. A successful authoritative reconciliation is the verification trigger, but auto-resume additionally requires all ordinary resume blockers to be clear. A manual pause during suspension cancels pending auto-resume. No free-form pause-reason parsing may grant permission.
 - Entry client intent is durable before submission, and the venue ID is persisted immediately after acceptance. Non-definitive request, schema, amend, cancellation, and exit errors use an `uncertain` state, retain the reservation, safety-suspend, and automatically launch authoritative reconciliation after the current serialized engine operation. Reconciliation retries through a 30-second Kalshi consistency window before treating an absent client ID as rejection. A system-originated suspension may guarded-auto-resume only when active operator intent was retained and every ordinary readiness check passes; manual/kill/configuration pauses never auto-resume. Only a definitively rejected post-only cross can release immediately.
@@ -223,7 +223,7 @@ not general asset bullishness.
 
 ### 3.7 Positive-edge buy track record
 
-Signal Desk must persist every calculation that passes the active buy policy and summarize its eventual outcome. These are model calculations and trade-selection inputs, not personalized recommendations or guarantees.
+Money Noodle must persist every calculation that passes the active buy policy and summarize its eventual outcome. These are model calculations and trade-selection inputs, not personalized recommendations or guarantees.
 
 #### Issuance policy
 
@@ -538,7 +538,7 @@ Recommended future service boundaries:
 | 2026-08-08 | Recommendation policy v3 sets both directional likelihood and model confidence to 57%; historical records retain their original policy version. |
 | 2026-08-08 | Keep conviction internals collapsed by default but expose exact likelihood, confidence components, threshold gaps, and ranking strength for debugging every market. |
 | 2026-08-08 | Replace first-signal-only tracking with every qualifying 15-second update; report both update-level and cycle-balanced accuracy. The calibration threshold was later corrected to 100 unique settlement windows so correlated assets cannot unlock it. |
-| 2026-08-08 | Show raw current Polymarket/Kalshi predictions beside Signal Desk in positive-edge and debug views while retaining smoothed venue context inside the model. |
+| 2026-08-08 | Show raw current Polymarket/Kalshi predictions beside Money Noodle in positive-edge and debug views while retaining smoothed venue context inside the model. |
 | 2026-08-08 | Recommendation policy v4 adds a strict under-97¢ recommended-side gate: at least one live Polymarket/Kalshi quote must leave nominal payout room; execution profitability still requires order-book and cost checks. |
 | 2026-08-08 | Initially expose runtime-driven cadence and disclose browser-dependent polling. |
 | 2026-08-08 | Add a Node-runtime background collector through Next.js instrumentation so collection continues with the browser closed while the local server remains running. |
@@ -579,3 +579,4 @@ Recommended future service boundaries:
 | 2026-08-11 | A subsequent 52-minute/four-boundary monitor had five live fills, all losses (−42.08¢), while reconciliation and execution remained mechanically healthy. Lifetime live fell to +5.90¢ and post-Resume profit excluding the two largest wins to −44.34¢; SOL reached 0/14. This rejects a claim of stable improved profitability and reinforces no model/stake/retry/asset-policy change pending stronger held-out and maker evidence. |
 | 2026-08-11 | Promote opening DOWN/NO from deferred research to binary buy policy v10 under the existing small live caps. Use executable side asks and side probabilities, signed Kalshi maker/reduce-only translation, side-specific persistence/settlement/reconciliation/reporting, and forbid simultaneous opposite exposure. A switch must remain net-profitable after all costs and the replacement probability must exceed the owned side by 15pp, raised to 20pp for same-asset UP↔DOWN reversal. |
 | 2026-08-11 | Add two standalone reduce-only sell paths: one fresh strict-value snapshot when Kalshi net cash beats optimistic independent hold value by 1¢, and a +75%-armed profit reversal when one later fresh snapshot shows both executable value and owned-side model probability below high water. Full exits clear persistence; permit unlimited same-window re-entry generations after 60 seconds and fresh qualification. Skip exposure-driven exits. |
+| 2026-08-11 | Rename the application to Money Noodle and rename all server configuration variables from `SIGNAL_DESK_*` to `MONEY_NOODLE_*`. Preserve pre-rename durable order/client IDs and migrate browser-local research chat so the brand change cannot orphan reconciliation state or user history. |

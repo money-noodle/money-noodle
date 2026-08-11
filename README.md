@@ -1,4 +1,4 @@
-# Signal Desk
+# Money Noodle
 
 A local-first crypto prediction research terminal built with Next.js, TypeScript, Tailwind CSS, and shadcn/ui.
 

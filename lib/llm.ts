@@ -229,7 +229,7 @@ function runPiBridge(args: string[], timeoutMs: number, signal?: AbortSignal): P
 }
 
 async function callProvider(provider: ProviderConfig, query: string, model: string, dashboard: DashboardData, timeoutMs: number, requestSignal?: AbortSignal): Promise<{ provider: string; model: string; answer: string }> {
-  const system = `You are the research analyst inside Signal Desk. Answer only from the supplied live snapshot and clearly identified general knowledge. Distinguish market price from model forecast. Cite relevant supplied news with markdown links. State uncertainty and missing evidence. Never claim certainty, give personalized financial advice, or suggest that an order was placed. Keep the answer concise and decision-oriented. Snapshot:\n${researchContext(dashboard)}`;
+  const system = `You are the research analyst inside Money Noodle. Answer only from the supplied live snapshot and clearly identified general knowledge. Distinguish market price from model forecast. Cite relevant supplied news with markdown links. State uncertainty and missing evidence. Never claim certainty, give personalized financial advice, or suggest that an order was placed. Keep the answer concise and decision-oriented. Snapshot:\n${researchContext(dashboard)}`;
   const signal = requestSignal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), requestSignal]) : AbortSignal.timeout(timeoutMs);
 
   if (provider.kind === 'pi') {

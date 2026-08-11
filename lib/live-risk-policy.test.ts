@@ -17,8 +17,8 @@ const order = (id: string, pnl: number, patch: Partial<PaperOrder> = {}): PaperO
 });
 
 const environment = {
-  SIGNAL_DESK_MAX_CURRENT_EPOCH_DRAWDOWN_PERCENT: '25',
-  SIGNAL_DESK_MAX_LIFETIME_LIVE_LOSS_CENTS: '50',
+  MONEY_NOODLE_MAX_CURRENT_EPOCH_DRAWDOWN_PERCENT: '25',
+  MONEY_NOODLE_MAX_LIFETIME_LIVE_LOSS_CENTS: '50',
 } as unknown as NodeJS.ProcessEnv;
 
 describe('live loss circuit breaker', () => {

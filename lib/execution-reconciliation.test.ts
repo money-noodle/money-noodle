@@ -109,8 +109,8 @@ describe('Kalshi execution ledger reconciliation', () => {
   });
 
   it('recovers a partial reduce-only exit, retains the remainder, and withholds replacement', () => {
-    const incumbent = local({ status: 'open', venueOrderId: 'venue-1', filledCount: 0.3, actualPurchaseCents: 8.7, actualFeeCents: 0, actualStakeCents: 8.7, stakeCents: 9, exitPending: true, exitClientOrderId: 'signal-desk-exit:partial' });
-    const exitOrder = { ...venueOrder, orderId: 'exit-partial', clientOrderId: 'signal-desk-exit:partial', action: 'sell', fillCount: 0.1 };
+    const incumbent = local({ status: 'open', venueOrderId: 'venue-1', filledCount: 0.3, actualPurchaseCents: 8.7, actualFeeCents: 0, actualStakeCents: 8.7, stakeCents: 9, exitPending: true, exitClientOrderId: 'money-noodle-exit:partial' });
+    const exitOrder = { ...venueOrder, orderId: 'exit-partial', clientOrderId: 'money-noodle-exit:partial', action: 'sell', fillCount: 0.1 };
     const exitFill = { ...venueFill, orderId: 'exit-partial', fillId: 'exit-partial-fill', action: 'sell', count: 0.1, yesPriceDollars: 0.2 };
     const result = reconcileExecutionLedger([incumbent], snapshot({ orders: [venueOrder, exitOrder], fills: [venueFill, exitFill], positions: [{ ticker: 'KXBTC-TEST', quantity: 0.2, exposureDollars: 0.058 }] }), now);
     expect(result.issues).toEqual([]);
@@ -123,10 +123,10 @@ describe('Kalshi execution ledger reconciliation', () => {
   });
 
   it('recovers a full DOWN reduce-only exit from a YES buy', () => {
-    const incumbent = local({ side: 'DOWN', status: 'open', venueOrderId: 'venue-1', filledCount: 0.3, actualPurchaseCents: 8.7, actualFeeCents: 0, actualStakeCents: 8.7, stakeCents: 9, exitPending: true, exitClientOrderId: 'signal-desk-exit:down' });
+    const incumbent = local({ side: 'DOWN', status: 'open', venueOrderId: 'venue-1', filledCount: 0.3, actualPurchaseCents: 8.7, actualFeeCents: 0, actualStakeCents: 8.7, stakeCents: 9, exitPending: true, exitClientOrderId: 'money-noodle-exit:down' });
     const entryOrder = { ...venueOrder, action: 'sell' };
     const entryFill = { ...venueFill, action: 'sell', yesPriceDollars: 0.71 };
-    const exitOrder = { ...venueOrder, orderId: 'exit-down', clientOrderId: 'signal-desk-exit:down', action: 'buy', fillCount: 0.3 };
+    const exitOrder = { ...venueOrder, orderId: 'exit-down', clientOrderId: 'money-noodle-exit:down', action: 'buy', fillCount: 0.3 };
     const exitFill = { ...venueFill, orderId: 'exit-down', fillId: 'exit-down-fill', action: 'buy', yesPriceDollars: 0.8 };
     const result = reconcileExecutionLedger([incumbent], snapshot({ orders: [entryOrder, exitOrder], fills: [entryFill, exitFill] }), now);
     expect(result.issues).toEqual([]);
@@ -136,8 +136,8 @@ describe('Kalshi execution ledger reconciliation', () => {
   });
 
   it('recovers a full reduce-only exit without submitting a replacement', () => {
-    const incumbent = local({ status: 'open', venueOrderId: 'venue-1', filledCount: 0.3, actualPurchaseCents: 8.7, actualFeeCents: 0, actualStakeCents: 8.7, stakeCents: 9, exitPending: true, exitClientOrderId: 'signal-desk-exit:test' });
-    const exitOrder = { ...venueOrder, orderId: 'exit-venue', clientOrderId: 'signal-desk-exit:test', action: 'sell', fillCount: 0.3 };
+    const incumbent = local({ status: 'open', venueOrderId: 'venue-1', filledCount: 0.3, actualPurchaseCents: 8.7, actualFeeCents: 0, actualStakeCents: 8.7, stakeCents: 9, exitPending: true, exitClientOrderId: 'money-noodle-exit:test' });
+    const exitOrder = { ...venueOrder, orderId: 'exit-venue', clientOrderId: 'money-noodle-exit:test', action: 'sell', fillCount: 0.3 };
     const exitFill = { ...venueFill, orderId: 'exit-venue', fillId: 'exit-fill', action: 'sell', yesPriceDollars: 0.2 };
     const result = reconcileExecutionLedger([incumbent], snapshot({ orders: [venueOrder, exitOrder], fills: [venueFill, exitFill] }), now);
     expect(result.issues).toEqual([]);

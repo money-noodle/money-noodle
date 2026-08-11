@@ -78,7 +78,7 @@ async function writeLedger(ledger: Ledger): Promise<void> {
 }
 
 function maximumPaperStakeCents(): number {
-  const value = Number(process.env.SIGNAL_DESK_MAX_PAPER_STAKE_CENTS ?? DEFAULT_MAX_PAPER_STAKE_CENTS);
+  const value = Number(process.env.MONEY_NOODLE_MAX_PAPER_STAKE_CENTS ?? DEFAULT_MAX_PAPER_STAKE_CENTS);
   return Number.isSafeInteger(value) && value > 0 ? value : DEFAULT_MAX_PAPER_STAKE_CENTS;
 }
 
@@ -88,16 +88,16 @@ function switchPolicySettings(): { minimumGainCents: number; uncertaintyMarginCe
     return Number.isFinite(value) && value >= 0 ? Math.min(maximum, value) : fallback;
   };
   return {
-    minimumGainCents: bounded('SIGNAL_DESK_MIN_SWITCH_GAIN_CENTS', DEFAULT_MIN_SWITCH_GAIN_CENTS, 100),
-    uncertaintyMarginCents: bounded('SIGNAL_DESK_SWITCH_UNCERTAINTY_MARGIN_CENTS', DEFAULT_SWITCH_UNCERTAINTY_MARGIN_CENTS, 100),
-    cooldownSeconds: bounded('SIGNAL_DESK_SWITCH_COOLDOWN_SECONDS', DEFAULT_SWITCH_COOLDOWN_SECONDS, 3_600),
-    minimumProbabilityAdvantage: bounded('SIGNAL_DESK_MIN_SWITCH_PROBABILITY_ADVANTAGE', DEFAULT_MIN_SWITCH_PROBABILITY_ADVANTAGE, 0.5),
-    minimumOppositeSideAdvantage: bounded('SIGNAL_DESK_MIN_OPPOSITE_SIDE_ADVANTAGE', DEFAULT_MIN_OPPOSITE_SIDE_ADVANTAGE, 0.5),
+    minimumGainCents: bounded('MONEY_NOODLE_MIN_SWITCH_GAIN_CENTS', DEFAULT_MIN_SWITCH_GAIN_CENTS, 100),
+    uncertaintyMarginCents: bounded('MONEY_NOODLE_SWITCH_UNCERTAINTY_MARGIN_CENTS', DEFAULT_SWITCH_UNCERTAINTY_MARGIN_CENTS, 100),
+    cooldownSeconds: bounded('MONEY_NOODLE_SWITCH_COOLDOWN_SECONDS', DEFAULT_SWITCH_COOLDOWN_SECONDS, 3_600),
+    minimumProbabilityAdvantage: bounded('MONEY_NOODLE_MIN_SWITCH_PROBABILITY_ADVANTAGE', DEFAULT_MIN_SWITCH_PROBABILITY_ADVANTAGE, 0.5),
+    minimumOppositeSideAdvantage: bounded('MONEY_NOODLE_MIN_OPPOSITE_SIDE_ADVANTAGE', DEFAULT_MIN_OPPOSITE_SIDE_ADVANTAGE, 0.5),
   };
 }
 
 function maximumOpenPositions(): number {
-  return parseMaximumOpenPositions(process.env.SIGNAL_DESK_MAX_OPEN_POSITIONS);
+  return parseMaximumOpenPositions(process.env.MONEY_NOODLE_MAX_OPEN_POSITIONS);
 }
 
 function portfolioConstraints(): PortfolioConstraints {
@@ -112,10 +112,10 @@ function portfolioConstraints(): PortfolioConstraints {
   };
   return {
     maximumPositions,
-    maximumSameWindow: integer('SIGNAL_DESK_MAX_SAME_WINDOW_POSITIONS', DEFAULT_PORTFOLIO_CONSTRAINTS.maximumSameWindow, maximumPositions),
-    maximumSameGroupPerWindow: integer('SIGNAL_DESK_MAX_SAME_GROUP_POSITIONS', DEFAULT_PORTFOLIO_CONSTRAINTS.maximumSameGroupPerWindow, maximumPositions),
-    correlationPenaltyCents: cents('SIGNAL_DESK_CORRELATION_PENALTY_CENTS', DEFAULT_PORTFOLIO_CONSTRAINTS.correlationPenaltyCents),
-    sameGroupPenaltyCents: cents('SIGNAL_DESK_SAME_GROUP_PENALTY_CENTS', DEFAULT_PORTFOLIO_CONSTRAINTS.sameGroupPenaltyCents),
+    maximumSameWindow: integer('MONEY_NOODLE_MAX_SAME_WINDOW_POSITIONS', DEFAULT_PORTFOLIO_CONSTRAINTS.maximumSameWindow, maximumPositions),
+    maximumSameGroupPerWindow: integer('MONEY_NOODLE_MAX_SAME_GROUP_POSITIONS', DEFAULT_PORTFOLIO_CONSTRAINTS.maximumSameGroupPerWindow, maximumPositions),
+    correlationPenaltyCents: cents('MONEY_NOODLE_CORRELATION_PENALTY_CENTS', DEFAULT_PORTFOLIO_CONSTRAINTS.correlationPenaltyCents),
+    sameGroupPenaltyCents: cents('MONEY_NOODLE_SAME_GROUP_PENALTY_CENTS', DEFAULT_PORTFOLIO_CONSTRAINTS.sameGroupPenaltyCents),
   };
 }
 
@@ -562,7 +562,7 @@ function executePaperStandaloneExit(order: PaperOrder, decision: NonNullable<Ret
 async function executeLiveStandaloneExit(order: PaperOrder, decision: NonNullable<ReturnType<typeof evaluateExitPolicy>>, ledger: Ledger): Promise<void> {
   beginLiveTransaction(`Managing ${order.symbol} ${order.side} standalone reduce-only exit.`);
   try {
-    order.exitClientOrderId = `signal-desk-exit:${crypto.randomUUID()}`;
+    order.exitClientOrderId = `money-noodle-exit:${crypto.randomUUID()}`;
     order.exitRequestedAt = new Date().toISOString();
     order.exitPending = true;
     order.standaloneExitPolicy = decision.policy;
@@ -743,7 +743,7 @@ async function executeSwitch(plan: SwitchPlan, status: TradingControlData, ledge
   try {
   try {
     // Persist intent before the request so a lost response can be matched by deterministic client id.
-    incumbent.exitClientOrderId = `signal-desk-exit:${crypto.randomUUID()}`;
+    incumbent.exitClientOrderId = `money-noodle-exit:${crypto.randomUUID()}`;
     incumbent.exitRequestedAt = new Date().toISOString();
     incumbent.exitPending = true;
     await writeLedger(ledger);

@@ -10,24 +10,24 @@ import type { PositionSide } from './types';
  * unavailable unless it is switched on by environment variable, which cannot be done from the UI.
  */
 export function liveTradingEnabled(): boolean {
-  return process.env.SIGNAL_DESK_ENABLE_LIVE === 'true' && process.env.SIGNAL_DESK_KILL_SWITCH !== 'true';
+  return process.env.MONEY_NOODLE_ENABLE_LIVE === 'true' && process.env.MONEY_NOODLE_KILL_SWITCH !== 'true';
 }
 
 /** Live stakes are capped far below paper stakes while the execution path is being verified. */
 export function maxLiveStakeCents(): number {
-  const value = Number(process.env.SIGNAL_DESK_MAX_LIVE_STAKE_CENTS ?? 25);
+  const value = Number(process.env.MONEY_NOODLE_MAX_LIVE_STAKE_CENTS ?? 25);
   return Number.isSafeInteger(value) && value > 0 ? Math.min(value, 500) : 25;
 }
 
 export function maxLiveOrdersPerHour(): number {
-  const value = Number(process.env.SIGNAL_DESK_MAX_LIVE_ORDERS_PER_HOUR ?? 4);
+  const value = Number(process.env.MONEY_NOODLE_MAX_LIVE_ORDERS_PER_HOUR ?? 4);
   return Number.isSafeInteger(value) && value > 0 ? Math.min(value, 60) : 4;
 }
 
 export function liveBlockers(): string[] {
   const blockers: string[] = [];
-  if (process.env.SIGNAL_DESK_KILL_SWITCH === 'true') blockers.push('Kill switch is engaged (SIGNAL_DESK_KILL_SWITCH).');
-  if (process.env.SIGNAL_DESK_ENABLE_LIVE !== 'true') blockers.push('Live trading is off. Set SIGNAL_DESK_ENABLE_LIVE=true in .env.local and restart.');
+  if (process.env.MONEY_NOODLE_KILL_SWITCH === 'true') blockers.push('Kill switch is engaged (MONEY_NOODLE_KILL_SWITCH).');
+  if (process.env.MONEY_NOODLE_ENABLE_LIVE !== 'true') blockers.push('Live trading is off. Set MONEY_NOODLE_ENABLE_LIVE=true in .env.local and restart.');
   if (!kalshiConfigured()) blockers.push('Kalshi signing credentials are not configured.');
   return blockers;
 }

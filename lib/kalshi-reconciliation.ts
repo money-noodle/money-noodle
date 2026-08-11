@@ -90,8 +90,10 @@ async function allPages<T extends CursorResponse, R>(request: KalshiReconciliati
   throw new Error(`Kalshi reconciliation exceeded ${MAX_PAGES} pages while reading ${field}; history is incomplete.`);
 }
 
-export function isSignalDeskClientOrderId(clientOrderId: string): boolean {
-  return clientOrderId.startsWith('live:') || clientOrderId.startsWith('signal-desk-exit:') || clientOrderId.startsWith('exit-');
+export function isMoneyNoodleClientOrderId(clientOrderId: string): boolean {
+  // Keep recognizing pre-rename exit IDs so an upgrade can still cancel and reconcile them safely.
+  return clientOrderId.startsWith('live:') || clientOrderId.startsWith('money-noodle-exit:')
+    || clientOrderId.startsWith('signal-desk-exit:') || clientOrderId.startsWith('exit-');
 }
 
 async function getOrder(orderId: string, request: KalshiReconciliationRequester): Promise<KalshiOrderRecord | undefined> {
@@ -106,7 +108,7 @@ async function getOrder(orderId: string, request: KalshiReconciliationRequester)
 }
 
 /**
- * Reads a complete authoritative account snapshot and removes only Signal Desk resting orders.
+ * Reads a complete authoritative account snapshot and removes only Money Noodle resting orders.
  * Every managed cancellation is re-read by order id; a lost/uncertain cancel response blocks startup.
  */
 export async function fetchKalshiReconciliationSnapshot(trackedVenueOrderIds: string[] = [], request: KalshiReconciliationRequester = kalshiRequest): Promise<KalshiReconciliationSnapshot> {
@@ -128,7 +130,7 @@ export async function fetchKalshiReconciliationSnapshot(trackedVenueOrderIds: st
   }
 
   let restingOrdersCanceled = 0;
-  for (const order of resting.filter((item) => isSignalDeskClientOrderId(item.clientOrderId))) {
+  for (const order of resting.filter((item) => isMoneyNoodleClientOrderId(item.clientOrderId))) {
     let cancelError: unknown;
     try {
       await request(`/portfolio/events/orders/${encodeURIComponent(order.orderId)}?market_ticker=${encodeURIComponent(order.ticker)}`, { method: 'DELETE' });
@@ -136,7 +138,7 @@ export async function fetchKalshiReconciliationSnapshot(trackedVenueOrderIds: st
     const confirmed = await getOrder(order.orderId, request).catch(() => undefined);
     if (!confirmed || confirmed.status === 'resting' || confirmed.remainingCount > 1e-8) {
       const detail = cancelError instanceof Error ? ` ${cancelError.message}` : '';
-      throw new Error(`Cancellation of Signal Desk order ${order.orderId} could not be confirmed.${detail}`);
+      throw new Error(`Cancellation of Money Noodle order ${order.orderId} could not be confirmed.${detail}`);
     }
     byId.set(confirmed.orderId, confirmed);
     const index = orders.findIndex((item) => item.orderId === confirmed.orderId);
@@ -144,8 +146,8 @@ export async function fetchKalshiReconciliationSnapshot(trackedVenueOrderIds: st
     restingOrdersCanceled += 1;
   }
   const remainingResting = await allPages<RawOrderResponse, KalshiOrderRecord>(request, '/portfolio/orders?status=resting&limit=200', 'orders', orderRecord);
-  const managedStillResting = remainingResting.filter((item) => isSignalDeskClientOrderId(item.clientOrderId));
-  if (managedStillResting.length) throw new Error(`${managedStillResting.length} Signal Desk order(s) remain resting after cancellation.`);
+  const managedStillResting = remainingResting.filter((item) => isMoneyNoodleClientOrderId(item.clientOrderId));
+  if (managedStillResting.length) throw new Error(`${managedStillResting.length} Money Noodle order(s) remain resting after cancellation.`);
 
   // Cancellation can race a final maker fill, so refresh fills after every managed cancellation.
   const authoritativeBalance = restingOrdersCanceled

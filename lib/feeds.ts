@@ -33,7 +33,7 @@ function timeoutSignal(ms = 10_000): AbortSignal {
 
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url, {
-    headers: { Accept: 'application/json', 'User-Agent': 'SignalDesk/0.1 local-research' },
+    headers: { Accept: 'application/json', 'User-Agent': 'MoneyNoodle/0.1 local-research' },
     signal: timeoutSignal(),
   });
   if (!response.ok) throw new Error(`${response.status} from ${new URL(url).hostname}`);
@@ -190,7 +190,7 @@ type ClobBook = { asset_id: string; bids?: Array<{ price: string }>; asks?: Arra
 async function fetchPolymarketBooks(tokenIds: string[]): Promise<Map<string, ClobBook>> {
   if (!tokenIds.length) return new Map();
   const response = await fetch('https://clob.polymarket.com/books', {
-    method: 'POST', headers: { 'content-type': 'application/json', 'User-Agent': 'SignalDesk/0.2 local-research' },
+    method: 'POST', headers: { 'content-type': 'application/json', 'User-Agent': 'MoneyNoodle/0.2 local-research' },
     body: JSON.stringify(tokenIds.map((token_id) => ({ token_id }))), signal: timeoutSignal(),
   });
   if (!response.ok) throw new Error(`Polymarket CLOB books returned ${response.status}`);
@@ -337,7 +337,7 @@ function decodeXml(value: string): string {
 
 export async function fetchCryptoNews(): Promise<NewsItem[]> {
   const response = await fetch('https://www.coindesk.com/arc/outboundfeeds/rss/', {
-    headers: { 'User-Agent': 'SignalDesk/0.1 local-research' },
+    headers: { 'User-Agent': 'MoneyNoodle/0.1 local-research' },
     signal: timeoutSignal(),
   });
   if (!response.ok) throw new Error(`News feed returned ${response.status}`);

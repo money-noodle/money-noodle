@@ -6,7 +6,7 @@ const sans = Geist({ variable: '--font-geist-sans', subsets: ['latin'] });
 const mono = Geist_Mono({ variable: '--font-geist-mono', subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'Signal Desk · Crypto prediction research',
+  title: 'Money Noodle · Crypto prediction research',
   description: 'A local, evidence-first crypto prediction research terminal.',
 };
 

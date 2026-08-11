@@ -278,7 +278,7 @@ export function summarizePerformance(forecasts: TrackedForecast[]): PerformanceS
     benchmarks: [
       // Scored on the buys taken, which asks the question that matters: on the contracts we chose,
       // did our estimate beat the price we paid?
-      score('Signal Desk model', resolved, (forecast) => forecast.probabilityUp),
+      score('Money Noodle model', resolved, (forecast) => forecast.probabilityUp),
       score('Model + venue blend', resolved, (forecast) => forecast.blendedProbabilityUp),
       score('Contract basis only', resolved, (forecast) => forecast.basisProbabilityUp),
       score('Settlement-average observation model', resolved, (forecast) => forecast.settlementAverageEstimate?.probabilityUp),

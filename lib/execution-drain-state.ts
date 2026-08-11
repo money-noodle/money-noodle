@@ -10,7 +10,7 @@ export interface ExecutionDrainStatus {
 }
 
 interface DrainRuntime { status: ExecutionDrainStatus }
-const runtimeKey = Symbol.for('signal-desk.execution-drain');
+const runtimeKey = Symbol.for('money-noodle.execution-drain');
 
 function runtime(): DrainRuntime {
   const root = globalThis as typeof globalThis & { [runtimeKey]?: DrainRuntime };

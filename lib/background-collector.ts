@@ -23,7 +23,7 @@ async function collect(): Promise<void> {
     state.lastError = undefined;
   } catch (error) {
     state.lastError = error instanceof Error ? error.message : 'Background collection failed';
-    console.error('Signal Desk background collection failed:', error);
+    console.error('Money Noodle background collection failed:', error);
   } finally {
     state.inFlight = false;
   }

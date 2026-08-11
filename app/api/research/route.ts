@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
     const totalCharacters = messages.reduce((sum, message) => sum + message.content.length, 0);
     if (totalCharacters > 16_000 || messages.some((message) => message.content.length > 4_000)) return NextResponse.json({ error: 'This chat is too long. Clear it or shorten the conversation.' }, { status: 400 });
     const transcript = messages.map((message) => `${message.role === 'user' ? 'USER' : 'ASSISTANT'}: ${message.content}`).join('\n\n');
-    const query = `Continue this Signal Desk research chat. Use prior turns as context, answer the latest USER message directly, and correct prior claims if the fresh dashboard snapshot conflicts with them.\n\n${transcript}`;
+    const query = `Continue this Money Noodle research chat. Use prior turns as context, answer the latest USER message directly, and correct prior claims if the fresh dashboard snapshot conflicts with them.\n\n${transcript}`;
     const result = await runResearch({ query, providerId: body.providerId, model: body.model, signal: request.signal }, await getDashboard());
     return NextResponse.json({ ...result, generatedAt: new Date().toISOString() });
   } catch (error) {

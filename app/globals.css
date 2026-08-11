@@ -35,30 +35,30 @@
   --card-foreground: #edf2ef;
   --popover: #111617;
   --popover-foreground: #edf2ef;
-  --primary: #bbf451;
-  --primary-foreground: #101609;
+  --primary: #e3b04b;
+  --primary-foreground: #1a1307;
   --secondary: #171d1e;
   --secondary-foreground: #d9e0dc;
   --muted: #151a1b;
   --muted-foreground: #84908b;
-  --accent: #1a211d;
-  --accent-foreground: #dfffb0;
+  --accent: #211b13;
+  --accent-foreground: #f3d99a;
   --destructive: #ff6969;
   --border: #202728;
   --input: #293132;
-  --ring: #9acb43;
+  --ring: #c18c2f;
 }
 
 * { border-color: var(--border); }
 html { background: var(--background); }
 body {
   background:
-    radial-gradient(900px 420px at 50% -180px, rgba(187, 244, 81, 0.09), transparent 68%),
+    radial-gradient(900px 420px at 50% -180px, rgba(227, 176, 75, 0.09), transparent 68%),
     var(--background);
   color: var(--foreground);
 }
 button, a { -webkit-tap-highlight-color: transparent; }
-::selection { background: rgba(187, 244, 81, 0.25); }
+::selection { background: rgba(227, 176, 75, 0.25); }
 
 .grid-fade {
   background-image: linear-gradient(rgba(255,255,255,.018) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.018) 1px, transparent 1px);

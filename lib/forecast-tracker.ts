@@ -133,7 +133,7 @@ async function resolvePolymarketOutcome(forecast: TrackedForecast): Promise<Venu
   if (!slug) return null;
   const resolutionSource = reference?.rulesSource ?? `https://gamma-api.polymarket.com/events?slug=${encodeURIComponent(slug)}`;
   const response = await fetch(`https://gamma-api.polymarket.com/events?slug=${encodeURIComponent(slug)}`, {
-    headers: { Accept: 'application/json', 'User-Agent': 'SignalDesk/0.2 local-research' },
+    headers: { Accept: 'application/json', 'User-Agent': 'MoneyNoodle/0.2 local-research' },
     signal: AbortSignal.timeout(10_000), cache: 'no-store',
   });
   if (!response.ok) return null;
@@ -161,7 +161,7 @@ async function resolveKalshiOutcome(forecast: TrackedForecast): Promise<VenueOut
   if (!reference) return null;
   const resolutionSource = `https://api.elections.kalshi.com/trade-api/v2/markets/${encodeURIComponent(reference.contractId)}`;
   const response = await fetch(resolutionSource, {
-    headers: { Accept: 'application/json', 'User-Agent': 'SignalDesk/0.2 local-research' },
+    headers: { Accept: 'application/json', 'User-Agent': 'MoneyNoodle/0.2 local-research' },
     signal: AbortSignal.timeout(10_000), cache: 'no-store',
   });
   if (!response.ok) return null;

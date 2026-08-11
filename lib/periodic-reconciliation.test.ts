@@ -12,8 +12,8 @@ describe('periodic reconciliation schedule', () => {
   });
 
   it('enforces a one-minute minimum and one-hour maximum', () => {
-    expect(periodicReconciliationIntervalMs({ SIGNAL_DESK_RECONCILIATION_INTERVAL_SECONDS: '10' })).toBe(60_000);
-    expect(periodicReconciliationIntervalMs({ SIGNAL_DESK_RECONCILIATION_INTERVAL_SECONDS: '7200' })).toBe(3_600_000);
+    expect(periodicReconciliationIntervalMs({ MONEY_NOODLE_RECONCILIATION_INTERVAL_SECONDS: '10' })).toBe(60_000);
+    expect(periodicReconciliationIntervalMs({ MONEY_NOODLE_RECONCILIATION_INTERVAL_SECONDS: '7200' })).toBe(3_600_000);
   });
 
   it('schedules relative to the latest completed authoritative check', () => {

@@ -9,7 +9,7 @@ const kalshiFetch = <T>(path: string): Promise<T> => kalshiRequest<T>(path);
 
 async function getKalshiAccount(): Promise<VenueAccount> {
   const configured = kalshiConfigured();
-  if (!configured) return { venue: 'kalshi', environment: kalshiEnvironment(), configured: false, connected: false, tradeAuthenticated: false, positions: [], openOrders: 0, error: 'Set KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH in .env.local, then restart Signal Desk.' };
+  if (!configured) return { venue: 'kalshi', environment: kalshiEnvironment(), configured: false, connected: false, tradeAuthenticated: false, positions: [], openOrders: 0, error: 'Set KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH in .env.local, then restart Money Noodle.' };
   try {
     const [balanceBody, positionsBody, ordersBody] = await Promise.all([
       kalshiFetch<{ balance?: number; balance_dollars?: string }>('/portfolio/balance'),

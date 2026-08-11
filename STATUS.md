@@ -1,11 +1,11 @@
-# Signal Desk — Implementation Status
+# Money Noodle — Implementation Status
 
 > **Living status document · Updated 2026-08-11**  
 > Product requirements and architectural decisions are maintained in [`SPEC.md`](SPEC.md).
 
 ## Executive summary
 
-Signal Desk is operational locally as a research dashboard, continuous paper shadow trader, and explicitly armed live Kalshi trader. Core side-aware UP/YES and DOWN/NO order submission, reconciliation, failure recovery, quiescent pause, portfolio constraints, contract provenance, independent venue targets, and observation-model plumbing are implemented. The first 100-window evaluator ran without changing production and found insufficient, negative-return trade evidence. Major remaining work is refining venue reference comparability, hardening evaluator/promotion criteria, learning reduce-only HOLD/EXIT/SWITCH/BUY choices from position paths, measuring maker queue/adverse selection, and proving profitable edge without contaminating the tradeable probability with venue prices.
+Money Noodle is operational locally as a research dashboard, continuous paper shadow trader, and explicitly armed live Kalshi trader. Core side-aware UP/YES and DOWN/NO order submission, reconciliation, failure recovery, quiescent pause, portfolio constraints, contract provenance, independent venue targets, and observation-model plumbing are implemented. The first 100-window evaluator ran without changing production and found insufficient, negative-return trade evidence. Major remaining work is refining venue reference comparability, hardening evaluator/promotion criteria, learning reduce-only HOLD/EXIT/SWITCH/BUY choices from position paths, measuring maker queue/adverse selection, and proving profitable edge without contaminating the tradeable probability with venue prices.
 
 | Area | Status |
 |---|---|
@@ -38,13 +38,13 @@ The follow-up does **not** support calling the recent profitability stable. It s
 
 Binary-entry deployment verification at **06:36 UTC**: live was paused/drained to restart-safe before the change; all then-current tests, TypeScript, and production build passed; startup reconciliation found zero positions/reservations/discrepancies; automation was explicitly resumed under the unchanged 10¢ purchase cap. The first post-deployment cycle produced one clean UP no-fill and two full UP maker fills (DOGE 8.06¢ exact stake and ETH 7.80¢), with reconciliation ready and no API errors. Later organic BNB and DOGE DOWN maker fills established signed NO exposure; manual authoritative reconciliation confirmed two local/venue managed positions and 18¢ reservation with zero failures.
 
-Standalone-exit deployment exposed shared-account interference before restart: external/manual SOL NO orders on the same ticker netted against a Signal Desk YES fill, so Pause reconciliation correctly blocked on venue quantity 0 versus local 0.47. No state was overridden. After authoritative settlement cleared the contract, a second Pause/drain passed restart-safe, the 180-test exit build started with clean reconciliation, and automation was explicitly resumed. Do not manually trade the same active crypto ticker while automation owns or may enter it.
+Standalone-exit deployment exposed shared-account interference before restart: external/manual SOL NO orders on the same ticker netted against a Money Noodle YES fill, so Pause reconciliation correctly blocked on venue quantity 0 versus local 0.47. No state was overridden. After authoritative settlement cleared the contract, a second Pause/drain passed restart-safe, the 180-test exit build started with clean reconciliation, and automation was explicitly resumed. Do not manually trade the same active crypto ticker while automation owns or may enter it.
 
 ## Implemented
 
 ### Forecast and research
 
-- Next.js App Router dashboard with responsive cards, charts, countdowns, data-health states, and factor drill-downs.
+- Next.js App Router dashboard with responsive cards, charts, countdowns, data-health states, factor drill-downs, and a consistent Ramen Gold (`#E3B04B`) Money Noodle theme across controls, charts, focus states, glow, selection, and app icon.
 - Polymarket, Kalshi, Kraken, CoinGecko, CoinDesk, and historical ingestion for configured crypto assets.
 - Venue-independent contract-basis forecast using one Kraken series for cycle reference, current price, and realized volatility.
 - Binary buy policy v10: at least 5pp expected edge after fees, at least 50% estimate quality, and an enabled actionable selected-side UP/YES or DOWN/NO entry from 5¢ through 97¢.
@@ -95,7 +95,8 @@ Standalone-exit deployment exposed shared-account interference before restart: e
 - UI/engine persist separate `qualified`, `portfolio-selected`, `switch-candidate`, and `blocked` states with exact reasons and portfolio ranks. A Polymarket-only edge can no longer authorize a live Kalshi order whose own quote fails policy.
 - Switch hardening requires liquidation-cost-adjusted gain plus a configurable uncertainty margin, a default 15pp replacement probability advantage (20pp for same-asset opposite-side reversal), 3 distinct snapshots spanning 30 seconds, minimum-gain hysteresis across the streak, and a configurable 180-second completed-switch cooldown. Completed switches record independent hold outcomes and combined switch-path P&L for switch-versus-hold reporting.
 - Persistence spans are measured by distinct 15-second observation buckets rather than raw scheduler milliseconds, preventing valid three-snapshot evidence from becoming stuck at 29/30 seconds while still rejecting duplicate timestamps.
-- **181 unit tests across 33 files**, passing TypeScript, and passing production build.
+- Product branding, package metadata, runtime labels, user agents, browser storage, internal runtime symbols, client IDs, documentation, and server configuration now use **Money Noodle** / `MONEY_NOODLE_*`. Reconciliation still recognizes pre-rename exit IDs, and browser research chat migrates from its legacy key.
+- **182 unit tests across 33 files**, passing TypeScript, and passing production build.
 
 ## Implemented design milestones
 
@@ -163,7 +164,7 @@ Maker adverse-selection observation is now implemented. The report separates sub
 - Deployed one live maker attempt by default, with the hard two-attempt implementation retained only behind explicit server configuration for future validated use.
 - Added bounded post-DELETE order polling for Kalshi's observed read-after-delete delay; terminal status with nonzero remainder or expiry still fails closed into reconciliation.
 - Corrected live `startingCents` to configured allocation and corrected low/high entry-price buckets in both forecast and executed-trade reports.
-- Added risk-policy, retry-cap, cancellation-delay, cross-module reservation/intent, provenance, target-selection, time-alignment, and report-bucket tests. The verified suite is now **181 tests across 33 files**.
+- Added risk-policy, retry-cap, cancellation-delay, cross-module reservation/intent, provenance, target-selection, time-alignment, and report-bucket tests. The verified suite is now **182 tests across 33 files**.
 
 ## Canonical remaining roadmap
 

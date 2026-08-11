@@ -16,13 +16,13 @@ function boundedPositive(value: unknown, fallback: number, maximum: number): num
 
 export function liveRiskLimits(startingBudgetCents: number, environment: NodeJS.ProcessEnv = process.env): LiveRiskLimits {
   const maximumCurrentEpochDrawdownPercent = boundedPositive(
-    environment.SIGNAL_DESK_MAX_CURRENT_EPOCH_DRAWDOWN_PERCENT,
+    environment.MONEY_NOODLE_MAX_CURRENT_EPOCH_DRAWDOWN_PERCENT,
     DEFAULT_MAX_CURRENT_EPOCH_DRAWDOWN_PERCENT,
     100,
   );
   const maximumCurrentEpochDrawdownCents = Math.max(1, Math.floor(startingBudgetCents * maximumCurrentEpochDrawdownPercent / 100));
   const maximumLifetimeLossCents = boundedPositive(
-    environment.SIGNAL_DESK_MAX_LIFETIME_LIVE_LOSS_CENTS,
+    environment.MONEY_NOODLE_MAX_LIFETIME_LIVE_LOSS_CENTS,
     DEFAULT_MAX_LIFETIME_LIVE_LOSS_CENTS,
     1_000_000,
   );

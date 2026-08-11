@@ -7,19 +7,19 @@ interface CollectorRuntime extends CollectorStatus {
 }
 
 declare global {
-  var __signalDeskCollector: CollectorRuntime | undefined;
+  var __moneyNoodleCollector: CollectorRuntime | undefined;
 }
 
 export function collectorRuntime(): CollectorRuntime {
-  if (!globalThis.__signalDeskCollector) {
-    globalThis.__signalDeskCollector = {
-      enabled: process.env.SIGNAL_DESK_BACKGROUND_INGESTION !== 'false',
+  if (!globalThis.__moneyNoodleCollector) {
+    globalThis.__moneyNoodleCollector = {
+      enabled: process.env.MONEY_NOODLE_BACKGROUND_INGESTION !== 'false',
       running: false,
       inFlight: false,
       intervalMs: DATA_FRESHNESS.dashboardPollMs,
     };
   }
-  return globalThis.__signalDeskCollector;
+  return globalThis.__moneyNoodleCollector;
 }
 
 export function collectorStatus(): CollectorStatus {

@@ -40,7 +40,7 @@ export interface DataCadenceItem {
 }
 
 export const DATA_CADENCE: DataCadenceItem[] = [
-  { id: 'model', source: 'Signal Desk model', cadenceMs: DATA_FRESHNESS.dashboardPollMs, cadenceLabel: formatCadence(DATA_FRESHNESS.dashboardPollMs), purpose: 'Recalculates probabilities and edge gates from the latest available inputs.', mode: 'poll' },
+  { id: 'model', source: 'Money Noodle model', cadenceMs: DATA_FRESHNESS.dashboardPollMs, cadenceLabel: formatCadence(DATA_FRESHNESS.dashboardPollMs), purpose: 'Recalculates probabilities and edge gates from the latest available inputs.', mode: 'poll' },
   { id: 'polymarket', source: 'Polymarket', cadenceMs: DATA_FRESHNESS.dashboardPollMs, cadenceLabel: formatCadence(DATA_FRESHNESS.dashboardPollMs), purpose: 'Current 15-minute market probability, liquidity, volume, and close time.', mode: 'poll' },
   { id: 'contract-reference', source: 'Contract oracle reference', cadenceMs: DATA_FRESHNESS.contractReferenceCacheMs, cadenceLabel: formatCadence(DATA_FRESHNESS.contractReferenceCacheMs), purpose: 'Cycle open reference price and live oracle price that decide contract settlement.', mode: 'poll' },
   { id: 'volatility', source: 'Kraken 1m realized volatility', cadenceMs: DATA_FRESHNESS.minuteHistoryCacheMs, cadenceLabel: formatCadence(DATA_FRESHNESS.minuteHistoryCacheMs), purpose: 'Recent one-minute returns that scale the expected move over the remaining contract time.', mode: 'cache' },

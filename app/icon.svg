@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Signal Desk">
-  <rect width="32" height="32" rx="7" fill="#bbf451"/>
-  <g transform="translate(7 7) scale(0.75)" fill="none" stroke="#101609" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Money Noodle">
+  <rect width="32" height="32" rx="7" fill="#e3b04b"/>
+  <g transform="translate(7 7) scale(0.75)" fill="none" stroke="#1a1307" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
     <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
   </g>
 </svg>

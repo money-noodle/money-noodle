@@ -17,7 +17,7 @@ export interface KalshiReconciliationStatus {
 
 interface ReconciliationRuntime { status: KalshiReconciliationStatus; inFlight?: Promise<KalshiReconciliationStatus> }
 
-const runtimeKey = Symbol.for('signal-desk.kalshi-reconciliation');
+const runtimeKey = Symbol.for('money-noodle.kalshi-reconciliation');
 
 function runtime(): ReconciliationRuntime {
   const root = globalThis as typeof globalThis & { [runtimeKey]?: ReconciliationRuntime };

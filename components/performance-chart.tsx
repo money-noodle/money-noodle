@@ -12,7 +12,7 @@ export function PerformanceChart({ data }: { data: PerformanceTimelinePoint[] })
       <YAxis domain={[0, 1]} tickFormatter={(value) => `${Math.round(value * 100)}%`} axisLine={false} tickLine={false} tick={{ fill: '#84908b', fontSize: 9 }}/>
       <Tooltip contentStyle={{ background: '#111617', border: '1px solid #293132', borderRadius: 8, fontSize: 11 }} labelFormatter={(value) => new Date(String(value)).toLocaleString()} formatter={(value, name) => [`${(Number(value) * 100).toFixed(1)}%`, name === 'rollingAccuracy' ? 'Rolling last 25' : 'Cumulative']}/>
       <Line type="monotone" dataKey="cumulativeAccuracy" stroke="#edf2ef" strokeWidth={1.5} dot={false} isAnimationActive={false}/>
-      <Line type="monotone" dataKey="rollingAccuracy" stroke="#bbf451" strokeWidth={2} dot={false} isAnimationActive={false}/>
+      <Line type="monotone" dataKey="rollingAccuracy" stroke="#e3b04b" strokeWidth={2} dot={false} isAnimationActive={false}/>
     </LineChart></ResponsiveContainer>
   </div>;
 }

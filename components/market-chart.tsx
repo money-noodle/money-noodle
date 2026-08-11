@@ -7,7 +7,7 @@ const price = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD
 
 export function MarketChart({ data, positive, compact = false }: { data: ChartPoint[]; positive: boolean; compact?: boolean }) {
   const reduced = compact ? data.filter((_, index) => index % Math.max(1, Math.floor(data.length / 60)) === 0) : data;
-  const color = positive ? '#bbf451' : '#ff6969';
+  const color = positive ? '#e3b04b' : '#ff6969';
   if (!data.length) return <div className="flex h-full items-center justify-center text-xs text-muted-foreground">No price history</div>;
   return <ResponsiveContainer width="100%" height="100%">
     <AreaChart data={reduced} margin={compact ? { top: 3, right: 0, bottom: 0, left: 0 } : { top: 10, right: 8, bottom: 0, left: 0 }}>

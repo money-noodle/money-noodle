@@ -6,7 +6,7 @@ export const MAKER_RETRY_LATE_CUTOFF_MS = 120_000;
 
 /** Live defaults to one attempt while retry adverse-selection evidence is negative. */
 export function maximumLiveMakerAttempts(): number {
-  const configured = Number(process.env.SIGNAL_DESK_MAX_LIVE_MAKER_ATTEMPTS ?? 1);
+  const configured = Number(process.env.MONEY_NOODLE_MAX_LIVE_MAKER_ATTEMPTS ?? 1);
   return Number.isSafeInteger(configured) && configured >= 1
     ? Math.min(MAX_MAKER_ATTEMPTS_PER_CONTRACT, configured)
     : 1;

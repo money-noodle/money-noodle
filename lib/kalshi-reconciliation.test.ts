@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-import { fetchKalshiReconciliationSnapshot, type KalshiReconciliationRequester } from './kalshi-reconciliation';
+import { fetchKalshiReconciliationSnapshot, isMoneyNoodleClientOrderId, type KalshiReconciliationRequester } from './kalshi-reconciliation';
 
 const rawOrder = (patch: Record<string, unknown> = {}) => ({
   order_id: 'venue-1', client_order_id: 'live:BTC:2026-01-01T00:15:00Z', ticker: 'KXBTC-TEST',
@@ -37,6 +37,12 @@ function requester(options: { cancelThrows?: boolean; confirmationStatus?: 'rest
 
 describe('Kalshi reconciliation API failure injection', () => {
   beforeAll(() => { vi.useRealTimers(); });
+
+  it('recognizes current and pre-rename durable client IDs', () => {
+    expect(isMoneyNoodleClientOrderId('money-noodle-exit:new')).toBe(true);
+    expect(isMoneyNoodleClientOrderId('signal-desk-exit:legacy')).toBe(true);
+    expect(isMoneyNoodleClientOrderId('external-order')).toBe(false);
+  });
 
   it('confirms cancellation by order read when the DELETE response is lost', async () => {
     const mock = requester({ cancelThrows: true, confirmationStatus: 'canceled' });

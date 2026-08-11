@@ -9,7 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import type { ProviderInfo, ResearchResponse } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
-const CHAT_STORAGE_KEY = 'signal-desk-research-chat-v1';
+const CHAT_STORAGE_KEY = 'money-noodle-research-chat-v1';
+const LEGACY_CHAT_STORAGE_KEY = 'signal-desk-research-chat-v1';
 
 interface ChatMessage {
   id: string;
@@ -47,8 +48,17 @@ export function ResearchDialog() {
   useEffect(() => {
     void loadProviders();
     try {
-      const stored = JSON.parse(window.localStorage.getItem(CHAT_STORAGE_KEY) ?? '[]') as ChatMessage[];
-      if (Array.isArray(stored)) setMessages(stored.filter((message) => message?.role === 'user' || message?.role === 'assistant').slice(-16));
+      const current = window.localStorage.getItem(CHAT_STORAGE_KEY);
+      const legacy = current === null ? window.localStorage.getItem(LEGACY_CHAT_STORAGE_KEY) : null;
+      const stored = JSON.parse(current ?? legacy ?? '[]') as ChatMessage[];
+      if (Array.isArray(stored)) {
+        const retained = stored.filter((message) => message?.role === 'user' || message?.role === 'assistant').slice(-16);
+        setMessages(retained);
+        if (legacy !== null) {
+          window.localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(retained));
+          window.localStorage.removeItem(LEGACY_CHAT_STORAGE_KEY);
+        }
+      }
     } catch { /* Invalid local chat history starts clean. */ }
     setChatLoaded(true);
     return () => requestRef.current?.abort();
@@ -116,7 +126,7 @@ export function ResearchDialog() {
     <DialogTrigger asChild><Button variant="ghost" size="sm"><BookOpen/> Research {enabled.length > 0 && <span className="size-1.5 rounded-full bg-primary"/>}</Button></DialogTrigger>
     <DialogContent className="max-w-3xl p-0">
       <DialogHeader className="border-b p-5 pr-12">
-        <div className="flex items-start justify-between gap-4"><div><DialogTitle className="flex items-center gap-2"><BrainCircuit className="size-4 text-primary"/> Research chat</DialogTitle><DialogDescription className="mt-1">Continue a grounded conversation about the latest Signal Desk snapshot.</DialogDescription></div>{messages.length > 0 && <Button variant="ghost" size="sm" onClick={clearChat} disabled={loading}><Trash2/>Clear chat</Button>}</div>
+        <div className="flex items-start justify-between gap-4"><div><DialogTitle className="flex items-center gap-2"><BrainCircuit className="size-4 text-primary"/> Research chat</DialogTitle><DialogDescription className="mt-1">Continue a grounded conversation about the latest Money Noodle snapshot.</DialogDescription></div>{messages.length > 0 && <Button variant="ghost" size="sm" onClick={clearChat} disabled={loading}><Trash2/>Clear chat</Button>}</div>
       </DialogHeader>
       <div className="max-h-[82vh] overflow-y-auto p-5">
         <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border bg-background/40 p-3">
