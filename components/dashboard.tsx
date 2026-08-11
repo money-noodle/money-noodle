@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useState, useTransition } from 'react';
 import {
-  Activity, ArrowDownRight, ArrowUpRight, BarChart3, BrainCircuit, CheckCircle2,
-  ChevronDown, ChevronRight, CircleDot, Clock3, ExternalLink, History, Info, RefreshCw, Search, ShieldCheck, Sparkles, Target, WalletCards, Zap,
+  ArrowDownRight, ArrowUpRight, BarChart3, BrainCircuit, CheckCircle2,
+  ChevronDown, ChevronRight, CircleDot, Clock3, ExternalLink, History, Info, Menu, RefreshCw, Search, ShieldCheck, Sparkles, Target, WalletCards, X, Zap,
   FlaskConical, ShieldAlert,
 } from 'lucide-react';
 import { AccountDialog } from '@/components/account-dialog';
@@ -12,6 +12,7 @@ import { MarketChart } from '@/components/market-chart';
 import { PerformanceDialog } from '@/components/performance-dialog';
 import { ResearchDialog } from '@/components/research-dialog';
 import { TradingControlDialog } from '@/components/trading-control-dialog';
+import { ThemeToggle } from '@/components/theme-toggle';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -365,6 +366,7 @@ export function Dashboard({ initialData }: { initialData: DashboardData | null }
   const [error, setError] = useState('');
   const [isPending, startTransition] = useTransition();
   const [query, setQuery] = useState('');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     if (data) return;
@@ -404,12 +406,15 @@ export function Dashboard({ initialData }: { initialData: DashboardData | null }
   return <main className="relative min-h-screen overflow-hidden">
     <div className="grid-fade pointer-events-none absolute inset-x-0 top-0 h-[520px]"/>
     <header className="relative border-b bg-background/75 backdrop-blur-xl">
-      <div className="mx-auto flex h-14 max-w-[1500px] items-center justify-between px-4 sm:px-6">
+      <div className="mx-auto flex h-16 max-w-[1500px] items-center justify-between px-4 sm:px-6">
         <div className="flex items-center gap-8">
-          <a href="#" className="flex items-center gap-2"><div className="grid size-7 place-items-center rounded-md bg-primary text-primary-foreground"><Activity className="size-4"/></div><span className="text-sm font-semibold tracking-tight">Money Noodle</span></a>
-          <nav className="hidden items-center gap-1 md:flex"><Button variant="secondary" size="sm"><BarChart3/> Predictions</Button><ResearchDialog/><AccountDialog/><TradingControlDialog/></nav>
+          <a href="#" className="flex items-center gap-2.5" aria-label="Money Noodle home"><img src="/brand/money-noodle-icon-64.png" width="40" height="40" alt="" className="size-10 object-contain drop-shadow-[0_0_10px_rgba(53,169,75,.18)]"/><span className="flex flex-col"><span className="text-sm font-semibold leading-none tracking-tight"><span className="text-primary">Money</span> <span className="text-brand-green">Noodle</span></span><span className="mt-1 hidden text-[8px] font-medium uppercase leading-none tracking-[.16em] text-muted-foreground lg:block">Multiply your noodles.</span></span></a>
+          <nav className="hidden items-center gap-1 lg:flex"><Button variant="secondary" size="sm"><BarChart3/> Predictions</Button><ResearchDialog/><AccountDialog/><TradingControlDialog/></nav>
         </div>
-        <div className="flex items-center gap-2"><div className="md:hidden"><ResearchDialog/></div><div className="md:hidden"><TradingControlDialog/></div>{data && <DataFreshnessDialog data={data}/>}<Button variant="outline" size="sm" onClick={refresh} disabled={isPending}><RefreshCw className={cn(isPending && 'animate-spin')}/><span className="hidden sm:inline">Refresh</span></Button></div>
+        <div className="flex items-center gap-1 min-[450px]:gap-2">
+          <div className="relative min-[450px]:hidden"><Button variant="outline" size="icon" onClick={() => setMobileMenuOpen((open) => !open)} aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}>{mobileMenuOpen ? <X/> : <Menu/>}</Button>{mobileMenuOpen && <div className="absolute right-0 top-11 z-50 w-56 space-y-1 rounded-lg border bg-popover p-2 shadow-xl [&_.hidden]:inline [&_button]:w-full [&_button]:justify-start"><ResearchDialog/><AccountDialog/><TradingControlDialog/>{data && <DataFreshnessDialog data={data}/>}</div>}</div>
+          <div className="hidden min-[450px]:block lg:hidden"><ResearchDialog/></div><div className="hidden min-[450px]:block lg:hidden"><TradingControlDialog/></div><div className="hidden min-[450px]:block">{data && <DataFreshnessDialog data={data}/>}</div><ThemeToggle/><Button variant="outline" size="sm" onClick={refresh} disabled={isPending}><RefreshCw className={cn(isPending && 'animate-spin')}/><span className="hidden sm:inline">Refresh</span></Button>
+        </div>
       </div>
     </header>
 

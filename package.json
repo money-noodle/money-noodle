@@ -10,7 +10,8 @@
     "test": "vitest run",
     "analyze:cycle-streaks": "node scripts/analyze-cycle-streaks.mjs",
     "analyze:kalshi-weight": "node --max-old-space-size=3072 scripts/analyze-kalshi-forecast-weight.mjs",
-    "analyze:time-of-day": "node --max-old-space-size=3072 scripts/analyze-time-of-day.mjs"
+    "analyze:time-of-day": "node --max-old-space-size=3072 scripts/analyze-time-of-day.mjs",
+    "generate:brand": "node scripts/generate-brand-assets.mjs"
   },
   "dependencies": {
     "@polymarket/clob-client": "^5.8.1",
@@ -34,6 +35,7 @@
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "sharp": "latest",
     "tailwindcss": "latest",
     "typescript": "latest",
     "vitest": "latest"

@@ -123,7 +123,7 @@ export function ResearchDialog() {
   const enabled = providers.filter((provider) => provider.enabled);
   const current = providers.find((provider) => provider.current);
   return <Dialog onOpenChange={(open) => { if (open) void loadProviders(); }}>
-    <DialogTrigger asChild><Button variant="ghost" size="sm"><BookOpen/> Research {enabled.length > 0 && <span className="size-1.5 rounded-full bg-primary"/>}</Button></DialogTrigger>
+    <DialogTrigger asChild><Button variant="ghost" size="sm"><BookOpen/><span className="hidden min-[501px]:inline">Research</span>{enabled.length > 0 && <span className="size-1.5 rounded-full bg-primary"/>}</Button></DialogTrigger>
     <DialogContent className="max-w-3xl p-0">
       <DialogHeader className="border-b p-5 pr-12">
         <div className="flex items-start justify-between gap-4"><div><DialogTitle className="flex items-center gap-2"><BrainCircuit className="size-4 text-primary"/> Research chat</DialogTitle><DialogDescription className="mt-1">Continue a grounded conversation about the latest Money Noodle snapshot.</DialogDescription></div>{messages.length > 0 && <Button variant="ghost" size="sm" onClick={clearChat} disabled={loading}><Trash2/>Clear chat</Button>}</div>
