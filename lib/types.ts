@@ -380,6 +380,21 @@ export interface EdgeBucket {
   winRate: number;
 }
 
+/** Observation-only counterfactuals for sides that were cheap/positive-edge but rejected by a policy gate. */
+export interface MissedBuyCounterfactual {
+  label: string;
+  description: string;
+  candidates: number;
+  windows: number;
+  profitableCandidates: number;
+  meanCandidateReturn: number | null;
+  standardError: number | null;
+  bestPerWindowCandidates: number;
+  bestPerWindowWins: number;
+  bestPerWindowMeanReturn: number | null;
+  bestPerWindowTotalReturn: number | null;
+}
+
 export interface PerformanceSummary {
   issued: number;
   pending: number;
@@ -399,6 +414,8 @@ export interface PerformanceSummary {
   benchmarks: BenchmarkScore[];
   edgeBuckets: EdgeBucket[];
   segments: SegmentGroup[];
+  /** Never traded: exact-contract outcomes for apparent opportunities rejected by the 55% owned-side floor. */
+  missedBuyCounterfactual: MissedBuyCounterfactual;
   /** Distinct 15-minute settlement windows resolved. Assets move together, so this is the honest
    *  independent sample unit; update counts and per-asset counts both overstate it. */
   resolvedWindows: number;

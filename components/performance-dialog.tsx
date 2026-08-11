@@ -67,6 +67,16 @@ function SegmentTable({ group }: { group: SegmentGroup }) {
  * with the signal metrics: 500 qualifying calculations produced 13 trades, so the two populations
  * differ by more than an order of magnitude.
  */
+function MissedBuyPanel({ summary }: { summary: PerformanceSummary }) {
+  const report = summary.missedBuyCounterfactual;
+  const bestPositive = (report.bestPerWindowMeanReturn ?? 0) > 0;
+  return <div className="mb-3 rounded-xl border border-amber-300/25 bg-amber-300/[.035] p-4">
+    <div className="flex flex-wrap items-start justify-between gap-2"><div><h3 className="text-xs font-semibold">Missed-good-buy monitor · observation only</h3><p className="mt-1 text-[9px] leading-relaxed text-muted-foreground">{report.description}</p></div><Badge variant="outline" className="font-mono">{report.windows} window{report.windows === 1 ? '' : 's'}</Badge></div>
+    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4"><div className="rounded-lg bg-background/40 p-2.5"><p className="text-[8px] uppercase text-muted-foreground">Rejected candidates</p><p className="mt-0.5 font-mono text-base">{report.candidates}</p></div><div className="rounded-lg bg-background/40 p-2.5"><p className="text-[8px] uppercase text-muted-foreground">Profitable after fact</p><p className="mt-0.5 font-mono text-base">{report.profitableCandidates}/{report.candidates}</p></div><div className="rounded-lg bg-background/40 p-2.5"><p className="text-[8px] uppercase text-muted-foreground">Clustered return</p><p className={cn('mt-0.5 font-mono text-base', (report.meanCandidateReturn ?? 0) > 0 ? 'text-primary' : (report.meanCandidateReturn ?? 0) < 0 ? 'text-red-400' : '')}>{report.meanCandidateReturn === null ? '—' : `${report.meanCandidateReturn >= 0 ? '+' : ''}${(report.meanCandidateReturn * 100).toFixed(1)}%`}</p></div><div className="rounded-lg bg-background/40 p-2.5"><p className="text-[8px] uppercase text-muted-foreground">Best/window</p><p className={cn('mt-0.5 font-mono text-base', bestPositive ? 'text-primary' : 'text-red-400')}>{report.bestPerWindowMeanReturn === null ? '—' : `${report.bestPerWindowMeanReturn >= 0 ? '+' : ''}${(report.bestPerWindowMeanReturn * 100).toFixed(1)}%`}</p></div></div>
+    <p className="mt-3 text-[9px] leading-relaxed text-muted-foreground">Each asset uses the snapshot nearest five minutes to settlement; “best/window” selects the largest apparent rejected edge in each correlated settlement timestamp. A later profitable outcome is hindsight, not evidence to weaken the 55% gate. Promotion requires sustained positive fee-aware return across independent windows, including unseen data.</p>
+  </div>;
+}
+
 function TradeRecordCard({ record }: { record: TradeTrackRecord }) {
   const live = record.mode === 'live';
   const credible = record.windows >= 5 && record.standardError !== null && Math.abs(record.meanRealizedReturn ?? 0) > 2 * record.standardError;
@@ -153,7 +163,7 @@ export function PerformanceDialog() {
     <DialogContent className="max-w-4xl p-0">
       <DialogHeader className="border-b p-5 pr-12"><DialogTitle>Positive-edge performance</DialogTitle><DialogDescription>Immutable qualifying calculations, grouped without excluding losses or pending outcomes.</DialogDescription></DialogHeader>
       <div className="p-5">
-        {loading && !data ? <div className="grid h-64 place-items-center"><Loader2 className="animate-spin text-muted-foreground"/></div> : error ? <p className="rounded-lg border border-red-400/20 bg-red-400/5 p-3 text-xs text-red-300">{error}</p> : data && <><SampleWarning summary={data.summary}/><CalibrationStatus summary={data.summary}/><Tabs defaultValue="breakdown">
+        {loading && !data ? <div className="grid h-64 place-items-center"><Loader2 className="animate-spin text-muted-foreground"/></div> : error ? <p className="rounded-lg border border-red-400/20 bg-red-400/5 p-3 text-xs text-red-300">{error}</p> : data && <><SampleWarning summary={data.summary}/><CalibrationStatus summary={data.summary}/><MissedBuyPanel summary={data.summary}/><Tabs defaultValue="breakdown">
           <TabsList className="h-auto w-full flex-wrap justify-start gap-0.5"><TabsTrigger value="trades">Trades</TabsTrigger><TabsTrigger value="walk-forward">Walk-forward</TabsTrigger><TabsTrigger value="maker">Maker execution</TabsTrigger><TabsTrigger value="breakdown">Signal quality</TabsTrigger><TabsTrigger value="benchmarks">Benchmarks</TabsTrigger><TabsTrigger value="segments">Segments</TabsTrigger><TabsTrigger value="regimes">Cycle regimes</TabsTrigger><TabsTrigger value="history">Signal history ({data.forecasts.length})</TabsTrigger></TabsList>
           <TabsContent value="trades">
             <p className="mb-3 text-[10px] leading-relaxed text-muted-foreground">Executed trades only, taken from the order ledger, with paper and live kept completely separate. These include real fill prices and venue fees, so they answer what the money did — not how good the forecast looked.</p>

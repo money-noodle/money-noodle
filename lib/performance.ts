@@ -1,5 +1,5 @@
-import { MIN_CALIBRATION_SAMPLE } from './prediction-policy';
-import type { BenchmarkScore, CalibrationBin, EdgeBucket, LeadTimeSlice, PerformanceSlice, PerformanceSummary, PerformanceTimelinePoint, SegmentGroup, SegmentStat, TrackedForecast } from './types';
+import { BUY_POLICY_VERSION, MIN_CALIBRATION_SAMPLE, MIN_ENTRY_PRICE, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, MIN_SELECTED_SIDE_PROBABILITY, venueFeeRate } from './prediction-policy';
+import type { BenchmarkScore, CalibrationBin, EdgeBucket, LeadTimeSlice, MissedBuyCounterfactual, PerformanceSlice, PerformanceSummary, PerformanceTimelinePoint, SegmentGroup, SegmentStat, TrackedForecast } from './types';
 
 export const MAX_PERFORMANCE_TIMELINE_POINTS = 500;
 
@@ -105,6 +105,65 @@ export const MIN_EVALUATION_WINDOWS = 20;
  * Groups resolved calculations by the edge they claimed and reports what that edge actually returned.
  * Accuracy can look fine while every trade still loses money, so this is the profitability metric.
  */
+/**
+ * Tracks apparent positive-edge sides that v11 intentionally rejects only because our independent
+ * selected-side estimate is below 55%. One issuance nearest five minutes remains per asset/window;
+ * window-level results then choose the strongest candidate to avoid treating correlated assets as
+ * independent proof. This is outcome measurement, never an authorization path.
+ */
+function missedBuyCounterfactual(forecasts: TrackedForecast[]): MissedBuyCounterfactual {
+  const label = '55% selected-side floor rejects';
+  const description = 'Exact-Kalshi fee-aware counterfactuals for sides that passed quality, price, and 5pp edge but were rejected only because independent selected-side probability was below 55%.';
+  const byAssetWindow = new Map<string, TrackedForecast[]>();
+  for (const forecast of forecasts.filter((item) => item.status === 'resolved' && item.policyVersion === BUY_POLICY_VERSION)) {
+    const outcome = forecast.venueOutcomes?.kalshi?.outcome;
+    if (!outcome || !forecast.venueContracts?.kalshi || forecast.venueOutcomes?.kalshi?.contractId !== forecast.venueContracts.kalshi.contractId) continue;
+    const key = `${forecast.symbol}:${settlementWindowKey(forecast)}`;
+    byAssetWindow.set(key, [...(byAssetWindow.get(key) ?? []), forecast]);
+  }
+  const candidates: Array<{ closesAt: string; edge: number; returnValue: number }> = [];
+  for (const snapshots of byAssetWindow.values()) {
+    const nearest = [...snapshots].sort((a, b) => {
+      const left = Math.abs((a.secondsRemaining ?? (Date.parse(a.closesAt) - Date.parse(a.issuedAt)) / 1000) - 300);
+      const right = Math.abs((b.secondsRemaining ?? (Date.parse(b.closesAt) - Date.parse(b.issuedAt)) / 1000) - 300);
+      return left - right || Date.parse(a.issuedAt) - Date.parse(b.issuedAt);
+    })[0];
+    const seconds = nearest.secondsRemaining ?? (Date.parse(nearest.closesAt) - Date.parse(nearest.issuedAt)) / 1000;
+    // Fixed five-minute snapshots avoid update-count inflation and retain the ordinary execution horizon.
+    if (Math.abs(seconds - 300) > 90 || nearest.confidence < MIN_ESTIMATE_QUALITY) continue;
+    const outcome = nearest.venueOutcomes!.kalshi!.outcome!;
+    for (const quote of nearest.actionableVenuePrices?.filter((item) => item.venue === 'kalshi') ?? []) {
+      const probability = quote.side === 'UP' ? nearest.probabilityUp : 1 - nearest.probabilityUp;
+      const fee = venueFeeRate('kalshi', quote.price);
+      const edge = probability - quote.price - fee;
+      if (quote.price < MIN_ENTRY_PRICE || quote.price > 0.97 || edge < MIN_NET_EDGE || probability >= MIN_SELECTED_SIDE_PROBABILITY) continue;
+      candidates.push({ closesAt: settlementWindowKey(nearest), edge, returnValue: (outcome === quote.side ? 1 : 0) - quote.price - fee });
+    }
+  }
+  const windowValues = new Map<string, number[]>();
+  for (const candidate of candidates) windowValues.set(candidate.closesAt, [...(windowValues.get(candidate.closesAt) ?? []), candidate.returnValue]);
+  const clustered = [...windowValues.values()].map((values) => values.reduce((sum, value) => sum + value, 0) / values.length);
+  const mean = clustered.length ? clustered.reduce((sum, value) => sum + value, 0) / clustered.length : null;
+  const standardError = mean !== null && clustered.length > 1
+    ? Math.sqrt(clustered.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (clustered.length - 1) / clustered.length)
+    : null;
+  const best = new Map<string, { edge: number; returnValue: number }>();
+  for (const candidate of candidates) {
+    const prior = best.get(candidate.closesAt);
+    if (!prior || candidate.edge > prior.edge) best.set(candidate.closesAt, candidate);
+  }
+  const bestValues = [...best.values()].map((item) => item.returnValue);
+  return {
+    label, description, candidates: candidates.length, windows: windowValues.size,
+    profitableCandidates: candidates.filter((item) => item.returnValue > 0).length,
+    meanCandidateReturn: mean, standardError,
+    bestPerWindowCandidates: bestValues.length,
+    bestPerWindowWins: bestValues.filter((value) => value > 0).length,
+    bestPerWindowMeanReturn: bestValues.length ? bestValues.reduce((sum, value) => sum + value, 0) / bestValues.length : null,
+    bestPerWindowTotalReturn: bestValues.length ? bestValues.reduce((sum, value) => sum + value, 0) : null,
+  };
+}
+
 function edgeBuckets(resolved: TrackedForecast[]): EdgeBucket[] {
   const edges = [
     { label: 'below 0', min: -Infinity, max: 0 },
@@ -297,6 +356,7 @@ export function summarizePerformance(forecasts: TrackedForecast[]): PerformanceS
     ].filter((benchmark) => benchmark.resolved > 0),
     edgeBuckets: edgeBuckets(resolved),
     segments: buildSegments(resolved),
+    missedBuyCounterfactual: missedBuyCounterfactual(forecasts),
     resolvedWindows,
     evaluationMinimumWindows: MIN_EVALUATION_WINDOWS,
     evaluationMeaningful: resolvedWindows >= MIN_EVALUATION_WINDOWS,
