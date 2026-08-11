@@ -350,9 +350,17 @@ async function buildDashboard(force = false, liveOnly = false): Promise<Dashboar
 }
 
 let dashboardQueue: Promise<void> = Promise.resolve();
+let latestDashboard: DashboardData | undefined;
 
 export function getDashboard(force = false, liveOnly = false): Promise<DashboardData> {
-  const operation = dashboardQueue.then(() => buildDashboard(force, liveOnly));
+  const operation = dashboardQueue.then(async () => {
+    const latestAge = latestDashboard ? Date.now() - Date.parse(latestDashboard.generatedAt) : Number.POSITIVE_INFINITY;
+    // Browser polling and the background collector share one fresh calculation instead of duplicating
+    // feed assembly, history scoring, persistence, and multi-megabyte serialization every 15 seconds.
+    if (!force && latestDashboard && latestAge >= 0 && latestAge < DATA_FRESHNESS.dashboardPollMs - 500) return latestDashboard;
+    latestDashboard = await buildDashboard(force, liveOnly);
+    return latestDashboard;
+  });
   dashboardQueue = operation.then(() => undefined, () => undefined);
   return operation;
 }

@@ -96,7 +96,8 @@ Standalone-exit deployment exposed shared-account interference before restart: e
 - Switch hardening requires liquidation-cost-adjusted gain plus a configurable uncertainty margin, a default 15pp replacement probability advantage (20pp for same-asset opposite-side reversal), 3 distinct snapshots spanning 30 seconds, minimum-gain hysteresis across the streak, and a configurable 180-second completed-switch cooldown. Completed switches record independent hold outcomes and combined switch-path P&L for switch-versus-hold reporting.
 - Persistence spans are measured by distinct 15-second observation buckets rather than raw scheduler milliseconds, preventing valid three-snapshot evidence from becoming stuck at 29/30 seconds while still rejecting duplicate timestamps.
 - Product branding, package metadata, runtime labels, user agents, browser storage, internal runtime symbols, client IDs, documentation, and server configuration now use **Money Noodle** / `MONEY_NOODLE_*`. Reconciliation still recognizes pre-rename exit IDs, and browser research chat migrates from its legacy key.
-- **182 unit tests across 33 files**, passing TypeScript, and passing production build.
+- Forecast storage remains exact but no longer reparses and atomically rewrites the full history every 15 seconds. A process cache loads the 200MB legacy snapshot once; new records, resolution patches, and retention tombstones append to `forecast-history.journal.jsonl`, with idempotent replay and 50MB snapshot compaction. Browser and collector requests share fresh dashboard calculations, historical aggregation is cached for one minute, chart history is bounded to 500 representative points, and performance history rows use a compact projection.
+- **185 unit tests across 34 files**, passing TypeScript, and passing production build.
 
 ## Implemented design milestones
 
@@ -164,7 +165,7 @@ Maker adverse-selection observation is now implemented. The report separates sub
 - Deployed one live maker attempt by default, with the hard two-attempt implementation retained only behind explicit server configuration for future validated use.
 - Added bounded post-DELETE order polling for Kalshi's observed read-after-delete delay; terminal status with nonzero remainder or expiry still fails closed into reconciliation.
 - Corrected live `startingCents` to configured allocation and corrected low/high entry-price buckets in both forecast and executed-trade reports.
-- Added risk-policy, retry-cap, cancellation-delay, cross-module reservation/intent, provenance, target-selection, time-alignment, and report-bucket tests. The verified suite is now **182 tests across 33 files**.
+- Added risk-policy, retry-cap, cancellation-delay, cross-module reservation/intent, provenance, target-selection, time-alignment, and report-bucket tests. The verified suite is now **185 tests across 34 files**.
 
 ## Canonical remaining roadmap
 

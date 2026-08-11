@@ -1,5 +1,14 @@
 import { MIN_CALIBRATION_SAMPLE } from './prediction-policy';
-import type { BenchmarkScore, CalibrationBin, EdgeBucket, LeadTimeSlice, PerformanceSlice, PerformanceSummary, SegmentGroup, SegmentStat, TrackedForecast } from './types';
+import type { BenchmarkScore, CalibrationBin, EdgeBucket, LeadTimeSlice, PerformanceSlice, PerformanceSummary, PerformanceTimelinePoint, SegmentGroup, SegmentStat, TrackedForecast } from './types';
+
+export const MAX_PERFORMANCE_TIMELINE_POINTS = 500;
+
+/** Preserve the complete statistics while bounding chart serialization and browser rendering cost. */
+export function downsamplePerformanceTimeline(points: PerformanceTimelinePoint[], maximum = MAX_PERFORMANCE_TIMELINE_POINTS): PerformanceTimelinePoint[] {
+  if (points.length <= maximum) return points;
+  if (maximum <= 1) return [points.at(-1)!];
+  return Array.from({ length: maximum }, (_, index) => points[Math.floor(index * (points.length - 1) / (maximum - 1))]);
+}
 
 /** Records written before all-calculation logging existed were qualifying signals by construction. */
 function isQualified(forecast: TrackedForecast): boolean {
@@ -304,7 +313,7 @@ export function summarizePerformance(forecasts: TrackedForecast[]): PerformanceS
     byDirection: slices(resolved, (forecast) => forecast.direction),
     byModelVersion: slices(resolved, (forecast) => forecast.modelVersion),
     byConfidenceBucket: slices(resolved, (forecast) => forecast.confidence >= 0.75 ? '75%+' : forecast.confidence >= 0.65 ? '65–74%' : forecast.confidence >= 0.57 ? '57–64%' : '<57%'),
-    timeline,
+    timeline: downsamplePerformanceTimeline(timeline),
     recent: [...policy].sort((a, b) => new Date(b.resolvedAt ?? b.issuedAt).getTime() - new Date(a.resolvedAt ?? a.issuedAt).getTime()).slice(0, 8),
   };
 }

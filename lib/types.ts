@@ -361,6 +361,10 @@ export interface TradeTrackRecord {
   segments: SegmentGroup[];
 }
 
+export type ForecastHistoryRow = Pick<TrackedForecast,
+  'id' | 'symbol' | 'direction' | 'directionalLikelihood' | 'issuedAt' | 'modelVersion'
+  | 'policyVersion' | 'confidence' | 'outcome' | 'status' | 'correct'>;
+
 /** Did claimed edge actually pay? The primary profitability metric. */
 export interface EdgeBucket {
   label: string;

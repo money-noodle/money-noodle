@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DATA_FRESHNESS } from '@/lib/freshness';
 import { MIN_ESTIMATE_QUALITY, MIN_NET_EDGE } from '@/lib/prediction-policy';
-import type { CyclePathReport, MakerFillReport, PerformanceSlice, PerformanceSummary, SegmentGroup, TradeTrackRecord, TrackedForecast, WalkForwardEvaluationHistory } from '@/lib/types';
+import type { CyclePathReport, ForecastHistoryRow, MakerFillReport, PerformanceSlice, PerformanceSummary, SegmentGroup, TradeTrackRecord, WalkForwardEvaluationHistory } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 /**
@@ -130,7 +130,7 @@ function SliceTable({ title, rows }: { title: string; rows: PerformanceSlice[] }
 }
 
 export function PerformanceDialog() {
-  const [data, setData] = useState<{ summary: PerformanceSummary; forecasts: TrackedForecast[]; paperRecord?: TradeTrackRecord; liveRecord?: TradeTrackRecord; cyclePaths?: CyclePathReport; makerFillReport?: MakerFillReport; modelEvaluations: WalkForwardEvaluationHistory } | null>(null);
+  const [data, setData] = useState<{ summary: PerformanceSummary; forecasts: ForecastHistoryRow[]; paperRecord?: TradeTrackRecord; liveRecord?: TradeTrackRecord; cyclePaths?: CyclePathReport; makerFillReport?: MakerFillReport; modelEvaluations: WalkForwardEvaluationHistory } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 

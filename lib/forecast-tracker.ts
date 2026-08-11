@@ -1,5 +1,5 @@
 import 'server-only';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { contractProvenanceRef } from './contract-provenance';
 import { recordContractProvenance } from './contract-provenance-store';
@@ -11,9 +11,34 @@ import type { PerformanceSummary, Prediction, TrackedForecast, TradingVenue, Ven
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const HISTORY_FILE = path.join(DATA_DIR, 'forecast-history.json');
+const JOURNAL_FILE = path.join(DATA_DIR, 'forecast-history.journal.jsonl');
+const JOURNAL_COMPACTION_BYTES = 50 * 1024 * 1024;
 /** Keeps well over 100 windows of one-minute, seven-asset calibration snapshots locally. */
 const UNQUALIFIED_RETENTION = 20_000;
 let operationQueue: Promise<void> = Promise.resolve();
+let forecastCache: Promise<TrackedForecast[]> | undefined;
+let performanceCache: { generatedAt: number; summary: PerformanceSummary } | undefined;
+// Full segment/calibration/timeline aggregation is expensive and settlement-driven; live predictions
+// remain 15-second fresh while historical metrics may intentionally lag by at most one minute.
+const PERFORMANCE_CACHE_MS = 60_000;
+
+export type ForecastJournalEvent =
+  | { op: 'upsert'; forecast: TrackedForecast }
+  | { op: 'patch'; id: string; changes: Partial<TrackedForecast> }
+  | { op: 'delete'; id: string };
+
+export function replayForecastJournal(snapshot: TrackedForecast[], events: ForecastJournalEvent[]): TrackedForecast[] {
+  const records = new Map(snapshot.map((forecast) => [forecast.id, forecast]));
+  for (const event of events) {
+    if (event.op === 'delete') records.delete(event.id);
+    else if (event.op === 'upsert' && event.forecast?.id) records.set(event.forecast.id, event.forecast);
+    else if (event.op === 'patch') {
+      const existing = records.get(event.id);
+      if (existing) records.set(event.id, { ...existing, ...event.changes });
+    }
+  }
+  return [...records.values()];
+}
 
 /**
  * Reads durable history, tolerating a truncated or partially overwritten file.
@@ -22,7 +47,7 @@ let operationQueue: Promise<void> = Promise.resolve();
  * prefix and quarantines the damaged copy rather than throwing. A corrupt record file previously took
  * down the whole performance view, which is a much worse outcome than losing the trailing entries.
  */
-async function readForecasts(): Promise<TrackedForecast[]> {
+async function readForecastSnapshot(): Promise<TrackedForecast[]> {
   let raw: string;
   try {
     raw = await readFile(HISTORY_FILE, 'utf8');
@@ -31,7 +56,8 @@ async function readForecasts(): Promise<TrackedForecast[]> {
     throw error;
   }
   try {
-    return JSON.parse(raw) as TrackedForecast[];
+    const parsed = JSON.parse(raw) as TrackedForecast[];
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
     for (let end = raw.length; end > 2; end -= 1) {
       if (raw[end - 1] !== ']') continue;
@@ -40,7 +66,7 @@ async function readForecasts(): Promise<TrackedForecast[]> {
         if (!Array.isArray(recovered)) continue;
         console.error(`Forecast history was damaged; recovered ${recovered.length} records and quarantined the original.`);
         await writeFile(`${HISTORY_FILE}.corrupt-${Date.now()}`, raw).catch(() => undefined);
-        await writeForecasts(recovered);
+        await writeForecastSnapshot(recovered);
         return recovered;
       } catch { /* Keep scanning backwards for a complete array. */ }
     }
@@ -50,11 +76,89 @@ async function readForecasts(): Promise<TrackedForecast[]> {
   }
 }
 
-async function writeForecasts(forecasts: TrackedForecast[]): Promise<void> {
+async function atomicWrite(file: string, content: string): Promise<void> {
   await mkdir(DATA_DIR, { recursive: true });
-  const temporary = `${HISTORY_FILE}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
-  await writeFile(temporary, JSON.stringify(forecasts, null, 2));
-  await rename(temporary, HISTORY_FILE);
+  const temporary = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+  await writeFile(temporary, content);
+  await rename(temporary, file);
+}
+
+async function writeForecastSnapshot(forecasts: TrackedForecast[]): Promise<void> {
+  // Compact JSON cuts the durable snapshot substantially; new observations use the append journal.
+  await atomicWrite(HISTORY_FILE, JSON.stringify(forecasts));
+}
+
+async function loadForecasts(): Promise<TrackedForecast[]> {
+  const snapshot = await readForecastSnapshot();
+  let raw = '';
+  try {
+    raw = await readFile(JOURNAL_FILE, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  const validLines: string[] = [];
+  const events: ForecastJournalEvent[] = [];
+  for (const line of raw.split('\n')) {
+    if (!line) continue;
+    let event: ForecastJournalEvent;
+    try {
+      event = JSON.parse(line) as ForecastJournalEvent;
+    } catch {
+      console.error('Forecast journal had a damaged trailing event; preserving its valid prefix and quarantining the original.');
+      await writeFile(`${JOURNAL_FILE}.corrupt-${Date.now()}`, raw).catch(() => undefined);
+      await atomicWrite(JOURNAL_FILE, validLines.length ? `${validLines.join('\n')}\n` : '');
+      break;
+    }
+    validLines.push(line);
+    events.push(event);
+  }
+  return replayForecastJournal(snapshot, events);
+}
+
+async function readForecasts(): Promise<TrackedForecast[]> {
+  forecastCache ??= loadForecasts();
+  try {
+    return await forecastCache;
+  } catch (error) {
+    forecastCache = undefined;
+    throw error;
+  }
+}
+
+function resolutionPatch(forecast: TrackedForecast): Partial<TrackedForecast> {
+  return {
+    status: forecast.status, outcome: forecast.outcome, evaluationVenue: forecast.evaluationVenue,
+    targetIntegrity: forecast.targetIntegrity, correct: forecast.correct, brierScore: forecast.brierScore,
+    logLoss: forecast.logLoss, realizedReturn: forecast.realizedReturn, resolvedAt: forecast.resolvedAt,
+    invalidReason: forecast.invalidReason, lastResolutionCheckAt: forecast.lastResolutionCheckAt,
+    venueOutcomes: forecast.venueOutcomes,
+  };
+}
+
+async function persistForecastChanges(
+  upserts: TrackedForecast[], patches: TrackedForecast[], deletedIds: string[], retained: TrackedForecast[],
+): Promise<void> {
+  const events: ForecastJournalEvent[] = [
+    ...upserts.map((forecast): ForecastJournalEvent => ({ op: 'upsert', forecast })),
+    ...patches.map((forecast): ForecastJournalEvent => ({ op: 'patch', id: forecast.id, changes: resolutionPatch(forecast) })),
+    ...deletedIds.map((id): ForecastJournalEvent => ({ op: 'delete', id })),
+  ];
+  if (!events.length) return;
+  await mkdir(DATA_DIR, { recursive: true });
+  await appendFile(JOURNAL_FILE, `${events.map((event) => JSON.stringify(event)).join('\n')}\n`);
+  const journalSize = await stat(JOURNAL_FILE).then((value) => value.size).catch(() => 0);
+  if (journalSize >= JOURNAL_COMPACTION_BYTES) {
+    // Snapshot first, then clear the journal. A crash between these steps only replays idempotent events.
+    await writeForecastSnapshot(retained);
+    await atomicWrite(JOURNAL_FILE, '');
+  }
+}
+
+function cachedPerformanceSummary(forecasts: TrackedForecast[]): PerformanceSummary {
+  if (performanceCache && Date.now() - performanceCache.generatedAt < PERFORMANCE_CACHE_MS) return performanceCache.summary;
+  const summary = summarizePerformance(forecasts);
+  performanceCache = { generatedAt: Date.now(), summary };
+  return summary;
 }
 
 function predictionCycleId(prediction: Prediction): string {
@@ -219,6 +323,8 @@ async function updateTracking(predictions: Prediction[], modelVersion: string): 
   await recordContractProvenance(predictions);
   const forecasts = await readForecasts();
   const known = new Set(forecasts.map((forecast) => forecast.id));
+  const newForecastIds = new Set<string>();
+  const patchedForecastIds = new Set<string>();
   let changed = false;
   const observedAt = Date.now();
   for (const prediction of predictions) {
@@ -229,6 +335,7 @@ async function updateTracking(predictions: Prediction[], modelVersion: string): 
     if (!known.has(candidate.id)) {
       forecasts.push(candidate);
       known.add(candidate.id);
+      newForecastIds.add(candidate.id);
       changed = true;
     }
   }
@@ -243,7 +350,10 @@ async function updateTracking(predictions: Prediction[], modelVersion: string): 
   }
   await Promise.all([...dueCycles.values()].slice(0, 20).map(async (cycleForecasts) => {
     const checkedAt = new Date().toISOString();
-    for (const forecast of cycleForecasts) forecast.lastResolutionCheckAt = checkedAt;
+    for (const forecast of cycleForecasts) {
+      forecast.lastResolutionCheckAt = checkedAt;
+      patchedForecastIds.add(forecast.id);
+    }
     changed = true;
     try {
       // Resolve each venue once per cycle. One venue's temporary delay never fabricates or substitutes
@@ -294,8 +404,21 @@ async function updateTracking(predictions: Prediction[], modelVersion: string): 
       // Resolution is retried; a temporary upstream error never invalidates a forecast.
     }
   }));
-  if (changed) await writeForecasts(pruned(forecasts));
-  return summarizePerformance(forecasts);
+  if (!changed) return cachedPerformanceSummary(forecasts);
+  const retained = pruned(forecasts);
+  const retainedIds = new Set(retained.map((forecast) => forecast.id));
+  const deletedIds = forecasts.filter((forecast) => !retainedIds.has(forecast.id)).map((forecast) => forecast.id);
+  const upserts = retained.filter((forecast) => newForecastIds.has(forecast.id));
+  const patches = retained.filter((forecast) => patchedForecastIds.has(forecast.id) && !newForecastIds.has(forecast.id));
+  try {
+    await persistForecastChanges(upserts, patches, deletedIds, retained);
+    forecastCache = Promise.resolve(retained);
+  } catch (error) {
+    // Discard mutated memory so a failed append cannot make an undurable observation appear committed.
+    forecastCache = undefined;
+    throw error;
+  }
+  return cachedPerformanceSummary(retained);
 }
 
 function pruned(forecasts: TrackedForecast[]): TrackedForecast[] {
@@ -314,7 +437,7 @@ export function trackCalculations(predictions: Prediction[], modelVersion: strin
 }
 
 export async function getPerformanceSummary(): Promise<PerformanceSummary> {
-  return summarizePerformance(await readForecasts());
+  return cachedPerformanceSummary(await readForecasts());
 }
 
 export async function getForecastHistory(): Promise<TrackedForecast[]> {

@@ -359,7 +359,7 @@ Never assume venue contracts resolve identically. A normalized market must retai
 
 Planned repository boundaries:
 - `MarketSnapshotRepository`
-- `ForecastRepository` (initial durable local implementation: `data/forecast-history.json`) 
+- `ForecastRepository` (durable local snapshot `data/forecast-history.json` plus append-only `data/forecast-history.journal.jsonl`; process-cached replay and bounded compaction avoid full-history rewrites on each observation) 
 - `NewsRepository`
 - `AccountSnapshotRepository`
 - `OrderAuditRepository`

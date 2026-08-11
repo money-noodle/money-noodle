@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { summarizePerformance } from './performance';
+import { downsamplePerformanceTimeline, summarizePerformance } from './performance';
 import type { TrackedForecast } from './types';
 
 function forecast(overrides: Partial<TrackedForecast> = {}): TrackedForecast {
@@ -12,6 +12,17 @@ function forecast(overrides: Partial<TrackedForecast> = {}): TrackedForecast {
 }
 
 describe('recommendation performance summary', () => {
+  it('bounds chart history while preserving its first and latest observations', () => {
+    const points = Array.from({ length: 1_001 }, (_, index) => ({
+      time: new Date(index * 1_000).toISOString(), resolved: index + 1,
+      cumulativeAccuracy: 0.5, rollingAccuracy: 0.5, cumulativeBrier: 0.25,
+    }));
+    const sampled = downsamplePerformanceTimeline(points, 100);
+    expect(sampled).toHaveLength(100);
+    expect(sampled[0]).toBe(points[0]);
+    expect(sampled.at(-1)).toBe(points.at(-1));
+  });
+
   it('excludes pending forecasts from accuracy and scoring', () => {
     const summary = summarizePerformance([
       forecast(),
