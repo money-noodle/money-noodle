@@ -19,7 +19,7 @@ import { advanceSignalPersistence, evaluateSignalPersistence, type SignalEligibi
 import { advanceSwitchPersistence, switchCooldownRemainingMs, switchEvidenceReady, switchEvidenceSpanMs, type SwitchPersistenceState } from './switch-hysteresis';
 import { evaluateSwitchProbabilityGate, valueSwitch } from './switch-policy';
 import { autoResumeTradingAfterReconciliation, getTradingControl, pauseTrading, reconcileTradingBudget, recordTradingReconciliationFailure, releaseTradingBudget, reserveTradingBudget, settleTradingBudget, stopTradingForLiveRisk, suspendTrading } from './trading-control';
-import type { DashboardData, ExecutionMode, ExecutionSignalReadiness, ExecutionSummary, PaperOrder, PortfolioDecisionView, PositionSide, Prediction, PublicPaperBudget, TradingControlData } from './types';
+import type { DashboardData, ExecutionMode, ExecutionSignalReadiness, ExecutionSummary, PaperOrder, PortfolioDecisionView, PositionSide, Prediction, PublicPaperBudget, PublicPaperExecutionRecord, TradingControlData } from './types';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const LEDGER_FILE = path.join(DATA_DIR, 'paper-orders.json');
@@ -1239,16 +1239,27 @@ export async function getExecutionOrders(): Promise<PaperOrder[]> {
   return (await readLedger()).orders;
 }
 
+function publicPaperExecution(order: PaperOrder): PublicPaperExecutionRecord {
+  return {
+    symbol: order.symbol, venue: order.venue, side: order.side, status: order.status,
+    createdAt: order.createdAt, closesAt: order.closesAt, askPrice: order.askPrice,
+    quantity: order.quantity, stakeCents: order.actualStakeCents ?? order.stakeCents,
+    feeCents: order.actualFeeCents ?? order.feeCents,
+    pnlCents: order.actualPnlCents ?? order.pnlCents, outcome: order.outcome,
+    noFillReason: inferredNoFillReason(order), liquidityRole: order.liquidityRole,
+  };
+}
+
 /**
- * Aggregate-only paper ledger view for the public research dashboard. Do not add live figures,
- * provider/account readiness, individual orders, symbols, timestamps, or mutation controls here.
+ * Bounded paper-only ledger view for the public research dashboard. It intentionally excludes live
+ * records, client/venue identifiers, contracts, account state, decision snapshots, and mutations.
  */
 export async function getPublicPaperBudget(): Promise<PublicPaperBudget> {
   // A serverless function cannot truthfully report the persistent worker's paper ledger.
   if (isStatelessDeployment()) return {
     durable: false, startingCents: 0, availableCents: 0, equityCents: 0, reservedCents: 0,
     proposedStakeCents: 0, running: false, depleted: false, openOrders: 0, settledOrders: 0,
-    realizedPnlCents: 0, bankrollResets: 0,
+    realizedPnlCents: 0, bankrollResets: 0, recentExecutions: [],
   };
   const ledger = await readLedger();
   const orders = ledger.orders.filter((order) => order.executionMode === 'paper');
@@ -1269,6 +1280,7 @@ export async function getPublicPaperBudget(): Promise<PublicPaperBudget> {
     settledOrders: settledOrders.length,
     realizedPnlCents: settledOrders.reduce((total, order) => total + (order.actualPnlCents ?? order.pnlCents ?? 0), 0),
     bankrollResets: ledger.paperBudget.resets ?? 0,
+    recentExecutions: groupedRecentOrders(orders).slice(0, 30).map(publicPaperExecution),
   };
 }
 

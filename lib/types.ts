@@ -620,9 +620,9 @@ export interface DashboardData {
 }
 
 /** Public research response. Private performance and provider-control metadata are never serialized here. */
-export type PublicDashboardData = Omit<DashboardData, 'tradingProviders' | 'policyManifest' | 'performance'>;
+export type PublicDashboardData = Omit<DashboardData, 'tradingProviders' | 'performance'>;
 /** A client may receive either public research data or the full signed dashboard payload. */
-export type DashboardViewData = PublicDashboardData & Partial<Pick<DashboardData, 'tradingProviders' | 'policyManifest' | 'performance'>>;
+export type DashboardViewData = PublicDashboardData & Partial<Pick<DashboardData, 'tradingProviders' | 'performance'>>;
 
 export interface ProviderInfo {
   id: string;
@@ -1002,7 +1002,25 @@ export interface MakerFillReport {
   segments: MakerExecutionSegment[];
 }
 
-/** Deliberately aggregate-only paper ledger view exposed without a signed dashboard session. */
+/** Sanitized, bounded paper-only execution row exposed without a signed dashboard session. */
+export interface PublicPaperExecutionRecord {
+  symbol: string;
+  venue: 'polymarket' | 'kalshi';
+  side: PositionSide;
+  status: PaperOrderStatus;
+  createdAt: string;
+  closesAt: string;
+  askPrice: number;
+  quantity: number;
+  stakeCents: number;
+  feeCents: number;
+  pnlCents?: number;
+  outcome?: PositionSide;
+  noFillReason?: 'post_only_race' | 'rested_no_fill' | 'ioc_no_fill';
+  liquidityRole?: 'maker' | 'taker';
+}
+
+/** Bounded paper-only ledger view exposed without a signed dashboard session. */
 export interface PublicPaperBudget {
   /** False on a stateless hosted dashboard, which cannot report the persistent worker ledger. */
   durable: boolean;
@@ -1017,6 +1035,8 @@ export interface PublicPaperBudget {
   settledOrders: number;
   realizedPnlCents: number;
   bankrollResets: number;
+  /** Newest grouped paper execution intents only; never includes live data or venue/client identifiers. */
+  recentExecutions: PublicPaperExecutionRecord[];
 }
 
 export interface ExecutionSummary {

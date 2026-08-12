@@ -15,7 +15,7 @@ import { getEnabledTradingVenues } from './trading-control';
 import { getTradingProviderConfiguration, normalizeTradingProviderConfiguration } from './trading-provider-config-store';
 import { isStatelessDeployment } from './runtime-environment';
 import { tradingProviderRegistry } from './trading-provider-registry';
-import type { ChartPoint, ContractBasis, DashboardData, Direction, Factor, MarketQuote, NewsItem, Prediction, PublicDashboardData, VenueQuote } from './types';
+import type { ChartPoint, ContractBasis, DashboardData, Direction, Factor, MarketQuote, NewsItem, PolicyManifest, Prediction, PublicDashboardData, VenueQuote } from './types';
 
 const minute = 60_000;
 export const MODEL_VERSION = 'Blend 0.4';
@@ -381,10 +381,15 @@ async function buildDashboard(force = false, liveOnly = false): Promise<Dashboar
 let dashboardQueue: Promise<void> = Promise.resolve();
 let latestDashboard: DashboardData | undefined;
 
+/** Public policy explains immutable model rules but never provider permissions or readiness. */
+function publicPolicyManifest(manifest: PolicyManifest): PolicyManifest {
+  return { ...manifest, components: manifest.components.filter((component) => component.kind !== 'provider') };
+}
+
 /** Removes every control/performance field from the unauthenticated server response. */
 export function publicDashboardData(dashboard: DashboardData): PublicDashboardData {
-  const { tradingProviders: _providers, policyManifest: _policyManifest, performance: _performance, ...publicData } = dashboard;
-  return publicData;
+  const { tradingProviders: _providers, performance: _performance, policyManifest, ...publicData } = dashboard;
+  return { ...publicData, policyManifest: publicPolicyManifest(policyManifest) };
 }
 
 export function getDashboard(force = false, liveOnly = false): Promise<DashboardData> {

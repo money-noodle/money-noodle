@@ -26,7 +26,7 @@ AUTH_SECRET=<a separate random value, at least 32 bytes>
 MONEY_NOODLE_BASE_URL=https://noodle.money
 ```
 
-The public dashboard remains available for market research and includes a read-only paper budget summary. Signing in is required for LLM research, provider management, automation controls, live budget, portfolio, execution history, and performance data; their API routes require the same signed session cookie. Add any provider or Kalshi credentials only as server-side environment variables.
+The public dashboard remains available for market research and includes a read-only paper budget plus its newest 30 sanitized simulated execution intents. Signing in is required for LLM research, provider management, automation controls, live budget, portfolio, full execution history, and performance data; their API routes require the same signed session cookie. Add any provider or Kalshi credentials only as server-side environment variables.
 
 Vercel functions do not keep the local JSON data files or the 15-second background collector alive between invocations. Money Noodle automatically treats Vercel as stateless: it does not reconcile, execute, start a collector, or write ledgers there. The hosted public paper panel explicitly reports that the persistent ledger is unavailable rather than inventing serverless results. Keep live automation and its durable ledgers on an always-on worker with persistent storage; use this deployment as the research dashboard until a shared durable store/API is added. For another stateless host, set `MONEY_NOODLE_STATELESS=true`.
 
