@@ -7,6 +7,7 @@ import { ENTRY_EXECUTION_POLICY_VERSION, entrySideProbability, evaluateEntryExec
 import { evaluateExitPolicy } from './exit-policy';
 import { isFreshCalculationTimestamp } from './freshness';
 import { isStatelessDeployment } from './runtime-environment';
+import { postgresPaperProjectionSyncEnabled, readPublicPaperBudgetFromPostgres, syncPublicPaperBudgetToPostgres } from './postgres-paper-projection';
 import { fetchKalshiReconciliationSnapshot } from './kalshi-reconciliation';
 import { entryAttemptsForLogicalOrder, makerAttemptId, makerRetryDecision, maximumLiveMakerAttempts } from './maker-retry-policy';
 import { liveBlockers, liveTradingEnabled, maxLiveOrdersPerHour, maxLiveStakeCents, placeKalshiBuy, placeKalshiSell, placeKalshiTakerBuy } from './live-orders';
@@ -78,6 +79,11 @@ async function writeLedger(ledger: Ledger): Promise<void> {
   const temporary = `${LEDGER_FILE}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
   await writeFile(temporary, JSON.stringify(ledger, null, 2));
   await rename(temporary, LEDGER_FILE);
+  // JSON remains authoritative during the replication phase; never make execution depend on Postgres.
+  if (postgresPaperProjectionSyncEnabled()) {
+    void syncPublicPaperBudgetToPostgres(publicPaperBudgetFromLedger(ledger))
+      .catch((error) => console.error('Postgres public paper projection sync failed:', error));
+  }
 }
 
 function maximumPaperStakeCents(): number {
@@ -1254,14 +1260,7 @@ function publicPaperExecution(order: PaperOrder): PublicPaperExecutionRecord {
  * Bounded paper-only ledger view for the public research dashboard. It intentionally excludes live
  * records, client/venue identifiers, contracts, account state, decision snapshots, and mutations.
  */
-export async function getPublicPaperBudget(): Promise<PublicPaperBudget> {
-  // A serverless function cannot truthfully report the persistent worker's paper ledger.
-  if (isStatelessDeployment()) return {
-    durable: false, startingCents: 0, availableCents: 0, equityCents: 0, reservedCents: 0,
-    proposedStakeCents: 0, running: false, depleted: false, openOrders: 0, settledOrders: 0,
-    realizedPnlCents: 0, bankrollResets: 0, recentExecutions: [],
-  };
-  const ledger = await readLedger();
+function publicPaperBudgetFromLedger(ledger: Ledger): PublicPaperBudget {
   const orders = ledger.orders.filter((order) => order.executionMode === 'paper');
   const openOrders = orders.filter((order) => order.status === 'open' || order.status === 'pending_reservation');
   const settledOrders = orders.filter((order) => order.status === 'won' || order.status === 'lost' || order.status === 'invalid' || order.status === 'sold');
@@ -1282,6 +1281,25 @@ export async function getPublicPaperBudget(): Promise<PublicPaperBudget> {
     bankrollResets: ledger.paperBudget.resets ?? 0,
     recentExecutions: groupedRecentOrders(orders).slice(0, 30).map(publicPaperExecution),
   };
+}
+
+export async function syncCurrentPublicPaperBudgetProjection(): Promise<void> {
+  if (!postgresPaperProjectionSyncEnabled()) return;
+  await syncPublicPaperBudgetToPostgres(publicPaperBudgetFromLedger(await readLedger()));
+}
+
+export async function getPublicPaperBudget(): Promise<PublicPaperBudget> {
+  // A hosted dashboard reads the replicated projection; it never opens a local ledger.
+  if (isStatelessDeployment()) {
+    const replicated = await readPublicPaperBudgetFromPostgres();
+    if (replicated) return replicated;
+    return {
+      durable: false, startingCents: 0, availableCents: 0, equityCents: 0, reservedCents: 0,
+      proposedStakeCents: 0, running: false, depleted: false, openOrders: 0, settledOrders: 0,
+      realizedPnlCents: 0, bankrollResets: 0, recentExecutions: [],
+    };
+  }
+  return publicPaperBudgetFromLedger(await readLedger());
 }
 
 export async function getExecutionSummaries(control: { state: string; mode: string; startingBudgetCents: number; workingEquityCents: number; availableBudgetCents: number; reservedBudgetCents: number; proposedStakeCents: number; perTradeCents: number }): Promise<{ paper: ExecutionSummary; live: ExecutionSummary; executionSignals: ExecutionSignalReadiness[]; liveAvailable: boolean; liveBlockers: string[]; maximumLiveMakerAttempts: number; portfolioConstraints: Pick<PortfolioConstraints, 'maximumPositions' | 'maximumSameWindow' | 'maximumSameGroupPerWindow'>; regimeGate: RegimeGateStatus }> {

@@ -28,7 +28,11 @@ MONEY_NOODLE_BASE_URL=https://noodle.money
 
 The public dashboard remains available for market research and includes a read-only paper budget plus its newest 30 sanitized simulated execution intents. Signing in is required for LLM research, provider management, automation controls, live budget, portfolio, full execution history, and performance data; their API routes require the same signed session cookie. Add any provider or Kalshi credentials only as server-side environment variables.
 
-Vercel functions do not keep the local JSON data files or the 15-second background collector alive between invocations. Money Noodle automatically treats Vercel as stateless: it does not reconcile, execute, start a collector, or write ledgers there. The hosted public paper panel explicitly reports that the persistent ledger is unavailable rather than inventing serverless results. Keep live automation and its durable ledgers on an always-on worker with persistent storage; use this deployment as the research dashboard until a shared durable store/API is added. For another stateless host, set `MONEY_NOODLE_STATELESS=true`.
+Vercel functions do not keep the local JSON data files or the 15-second background collector alive between invocations. Money Noodle automatically treats Vercel as stateless: it does not reconcile, execute, start a collector, or write ledgers there. Keep live automation and its durable ledgers on an always-on worker with persistent storage. For another stateless host, set `MONEY_NOODLE_STATELESS=true`.
+
+### Optional Postgres paper projection
+
+The first database integration replicates a bounded, sanitized paper-budget/execution projection from the persistent worker to managed Postgres. It lets the hosted Budget dialog display real paper results without giving Vercel execution capability. Apply [`db/migrations/001_public_paper_projection.sql`](db/migrations/001_public_paper_projection.sql) with an admin/worker role, then configure `MONEY_NOODLE_DATABASE_URL` on the worker and Vercel. Set `MONEY_NOODLE_POSTGRES_PAPER_SYNC=true` **only on the persistent worker** after verifying the projection; use a separate Vercel database role with `SELECT` access only to the two `money_noodle_public_paper_*` tables. Never put Kalshi credentials or a write-capable execution role in Vercel.
 
 ## What works
 

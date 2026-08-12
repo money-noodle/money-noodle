@@ -25,6 +25,7 @@
     "clsx": "latest",
     "lucide-react": "latest",
     "next": "latest",
+    "postgres": "^3.4.9",
     "react": "latest",
     "react-dom": "latest",
     "recharts": "latest",
