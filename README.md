@@ -1,8 +1,8 @@
 # Money Noodle
 
-<a href="https://money-blue-iota.vercel.app"><img src="public/brand/money-noodle-social.png" alt="Money Noodle — open the live research dashboard" height="260"></a>
+<a href="https://noodle.money"><img src="public/brand/money-noodle-social.png" alt="Money Noodle — open the live research dashboard" height="260"></a>
 
-A personal, self-hosted crypto prediction research and trading tool built with Next.js, TypeScript, Tailwind CSS, and shadcn/ui. **[Open the live research dashboard →](https://money-blue-iota.vercel.app)**
+A personal, self-hosted crypto prediction research and trading tool built with Next.js, TypeScript, Tailwind CSS, and shadcn/ui. **[Open the live research dashboard →](https://noodle.money)**
 
 ## Run locally
 
@@ -21,7 +21,7 @@ Set these environment variables in Vercel before deploying:
 ```text
 AUTH_PASSWORD=<a long, unique dashboard password>
 AUTH_SECRET=<a separate random value, at least 32 bytes>
-MONEY_NOODLE_BASE_URL=https://<your-vercel-domain>
+MONEY_NOODLE_BASE_URL=https://noodle.money
 ```
 
 The public dashboard remains available for market research and includes a read-only paper budget summary. Signing in is required for LLM research, provider management, automation controls, live budget, portfolio, execution history, and performance data; their API routes require the same signed session cookie. Add any provider or Kalshi credentials only as server-side environment variables.
