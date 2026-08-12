@@ -1,20 +1,20 @@
 # Money Noodle — Living Product Specification
 
-> **Status:** Draft 0.32 · **Updated:** 2026-08-09  
+> **Status:** Draft 0.33 · **Updated:** 2026-08-12
 > This is the source of truth for product scope, architecture, model behavior, and safety decisions. Update the decision log whenever a requirement changes. Current implementation progress is tracked separately in [`STATUS.md`](STATUS.md).
 
 ## 1. Product statement
 
-Money Noodle is a local-first crypto research and prediction terminal. It combines live prediction-market prices, crypto market data, historical/seasonal features, news, and optional LLM research into transparent forecasts for short- and long-horizon investing decisions.
+Money Noodle is a personal, self-hosted crypto research and prediction terminal. It combines live prediction-market prices, crypto market data, historical/seasonal features, news, and optional LLM research into transparent forecasts for short- and long-horizon investing decisions.
 
-The primary decision surface is every active crypto **15-minute Up/Down market** shown at `polymarket.com/crypto/15M`, with approximately comparable Kalshi markets alongside it. Account monitoring, continuous paper shadow trading, and explicitly armed Kalshi automation are implemented; longer horizons and live Polymarket execution remain later scope.
+The primary decision surface is active crypto **15-minute Up/Down markets** normalized across supported trading providers. Polymarket and Kalshi are implemented; Crypto.com, ForecastEx, and Robinhood are planned as read/paper-first provider integrations. Account monitoring, continuous paper shadow trading, and explicitly armed Kalshi automation are implemented; every additional provider remains live-disabled until its official API, eligibility, contract semantics, signing, funding, order lifecycle, and reconciliation behavior pass the same safety gates.
 
 ### Principles
 
 1. **Evidence before output:** every claim and factor identifies its source, timestamp, and availability.
 2. **No false precision:** unavailable data stays neutral and visibly unavailable; it is never replaced with invented history.
 3. **Model and market remain distinct:** market-implied probability, model probability, and their edge are always separately labeled.
-4. **Local first, portable later:** repository interfaces isolate filesystem cache/storage so MongoDB can replace it.
+4. **Personal by default, portable later:** the persistent worker keeps cache/storage under the operator’s control, while repository interfaces can later move it to a durable database.
 5. **Safe execution:** research is the default. Trading requires explicit credentials, limits, preview, and confirmation.
 6. **Fast to act on, easy to audit:** overview cards support scanning; drill-downs expose every input and calculation.
 
@@ -24,7 +24,7 @@ Primary user: a single local investor/researcher.
 
 Core jobs:
 - Scan all current 15-minute crypto markets in seconds.
-- See whether the model agrees with Polymarket/Kalshi and by how much.
+- See whether the model agrees with each normalized trading provider and by how much.
 - Understand which factors drive a forecast.
 - Research a market or asset with current, cited context across multiple LLM providers.
 - Compare venue price, fees, spread, liquidity, and expected value.
@@ -55,12 +55,14 @@ Global controls:
 - Last-updated timestamp and manual refresh.
 - A data-cadence dialog driven by the same runtime constants as polling, caching, recommendation buckets, smoothing, and local snapshots. It reports live collector health, distinguishes 15-second model/venue updates from slower inputs and on-demand account data, and discloses that collection continues with the local Next.js server but pauses when that server stops.
 - Ranking by signal strength by default.
-- Future filters: venue, asset, signal, confidence, liquidity, horizon.
+- Filters: execution track (`live`, `paper`, or both), trading provider, provider/model variant, asset, signal, confidence, liquidity, horizon, and policy version. Provider filters must apply consistently to current cards, open orders, decision history, and performance without combining live and paper results.
+- An always-visible active-policy badge shows the current buy-policy version and selected-side floor. Expanding it opens a Policy view with the complete active forecast, buy, execution, exit, switch, regime-gate, and provider-variant versions; exact thresholds; activation time; rationale/evidence; and whether each component is production, paper, or observation-only.
+- Policy history is immutable and chronological. It shows superseded versions, parameter diffs, activation/deactivation times, evidence reports and dataset fingerprints, operator promotion/rollback events, and linked order/performance cohorts. Viewing history cannot promote, roll back, arm, or trade.
 
 ### 3.2 Prediction detail
 
 - Full price chart and market countdown.
-- Model vs. Polymarket vs. Kalshi comparison.
+- Model versus every comparable trading-provider quote, with provider and variant identifiers visible.
 - Every factor with direction, normalized score, weight, confidence, probability-point contribution, source, timestamp, and explanation.
 - Relevant news with direct links.
 - Model version and calculation notes.
@@ -89,12 +91,20 @@ Per venue and consolidated:
 
 ### 3.5 Trading (post-initial)
 
-- Polymarket and Kalshi order previews, placement, cancellation, and status monitoring.
-- Venue quote comparison normalized for contract semantics, fees, spread, and estimated slippage.
+- Provider-normalized order previews, placement, cancellation, and status monitoring. Kalshi is the only currently live-enabled provider; Polymarket, Crypto.com, ForecastEx, and Robinhood require separate capability promotion.
+- Trading-provider quote comparison normalized for exact contract semantics, fees, spread, quantity granularity, and estimated slippage.
 - Default order type: limit.
 - Required preview displays side, contracts, limit, maximum loss, estimated fee, estimated payout, edge, expiry, and account impact.
 - Manual mode requires explicit final confirmation. A separate opt-in automated mode may submit qualified trades without per-order confirmation only while armed, funded, within all risk limits, and not paused.
 - Selling is always reduce-only: it may close owned UP/YES or DOWN/NO quantity to cash or as the first leg of a protected switch, but cannot create or reverse exposure. New DOWN/NO exposure is opened only through the separately priced binary buy path.
+
+### 3.5a Trading-provider and variant controls
+
+- Distinguish trading providers from LLM research providers in navigation and labels.
+- List Polymarket, Kalshi, Crypto.com, ForecastEx, and Robinhood with separate read health, paper capability, live capability, account readiness, environment, and last reconciliation state.
+- Allow each provider's live eligibility to be enabled or disabled independently while quiescent. Newly added providers default disabled; a visible quote, paper history, or configured credential is never sufficient to enable live.
+- List every provider/model variant with its semantic/execution version, paper status, resolved windows, return, drawdown, and promotion state. All variants run in paper; only manually promoted provider/variant combinations may become live-eligible.
+- Dashboard and history filters may select one or many providers/variants but must retain separate denominators and never merge paper and live P&L into one performance number.
 
 ### 3.6 Budget and automated-trading control
 
@@ -112,9 +122,11 @@ The trading system has an independent durable working-budget ledger. A venue acc
 
 #### Account funding
 
-- Polymarket and Kalshi can be enabled or disabled independently, but at least one venue must remain enabled.
-- Automation may resume when at least one enabled venue is trade ready. Because live execution currently supports Kalshi only, signed Kalshi available cash must cover the uncommitted live budget.
-- An enabled venue must have an authenticated/readable account connector before it can receive automated orders. Disabled or currently unready venues are never selected for new orders.
+- Every trading provider has an independent durable `liveEnabled` control. Research visibility and paper tracking remain separate controls; disabling live must not hide quotes or stop paper variants.
+- At least one provider must remain visible for research/paper operation, but zero providers may be live-enabled. Automation may resume only when at least one explicitly live-enabled provider is trade ready. Because live execution currently supports Kalshi only, signed Kalshi available cash must cover the uncommitted live budget.
+- A live-enabled provider must have an authenticated/readable account connector plus an independently verified placement, cancellation, fill, position, cash, and reconciliation path. Disabled or currently unready providers are never selected for new live orders.
+- Live enablement is fail-closed and provider-specific: adding credentials does not enable live, enabling one provider never enables another, and provider/variant changes require quiescent pause plus authoritative reconciliation.
+- Global and correlation exposure limits apply across providers. The same economic contract cannot be bought twice merely because two providers or variants expose it, and opposite exposure still requires the protected reduce-only switch path.
 - Saving a Kalshi budget verifies the total allocation against venue cash. Before each order, Kalshi must also cover the planned all-in reservation.
 - Public profile or position data alone does not count as a trade-ready connector. Signing capability, collateral/allowance state, and venue environment must be validated.
 - Funds remain at the venues; Money Noodle stores a risk allocation ledger, not custody.
@@ -129,11 +141,13 @@ The trading system has an independent durable working-budget ledger. A venue acc
 - When working equity reaches zero, automation enters `depleted`, blocks all new orders, and cannot resume until the user pauses/reconfigures with a new positive budget.
 - A global kill switch supersedes resume. Stale market/account data, failed reconciliation, venue disconnect, or a configured current-epoch/lifetime realized-loss or drawdown limit blocks new trading. Reconfiguration cannot silently erase the evidence used by lifetime safety limits.
 - Paper mode uses the same sizing, reservation, settlement, and state-machine code as production live execution while retaining a completely separate bankroll, ledger, P&L, and report.
+- Every configured provider/model variant runs continuously in paper, even when that provider is live-disabled. Variant bankroll/accounting is logically isolated so one variant cannot consume another's opportunity or conceal its return; an additional consolidated view may aggregate only after preserving provider, variant, policy, and independent-window labels.
 
 #### Paper execution engine
 
 - The 15-second background cycle settles due paper positions before evaluating new entries, including while automation is paused.
-- Entries are binary buy policy-v11 calculations generated no more than 15 seconds ago. Side-specific persistence prevents UP evidence from authorizing DOWN and vice versa; direct portfolio selection cannot hold both sides of one asset/window.
+- Entries use the active versioned buy policy and calculations generated no more than 15 seconds ago. Side-specific persistence prevents UP evidence from authorizing DOWN and vice versa; direct portfolio selection cannot hold both sides of one asset/window.
+- Paper evaluation fans each normalized market observation out to every eligible provider/model variant. Each paper order stores `providerId`, `providerVariantId`, contract-target version, forecast-model version, buy-policy version, execution-policy version, and exact provider contract provenance. Variants may share the same independent forecast inputs but must settle and score against their own exact provider contract.
 - Venue selection is limited to enabled, authenticated, funded venues and ranks the selected side's executable ask after spread and estimated fees. Missing side-specific bids/asks, asks outside 5¢ through 97¢, spreads above 10¢, entry inside the final 120 seconds, insufficient venue cash, or an inability to buy the venue's minimum quantity fail closed.
 - Paper fills mirror venue quantity granularity, including 0.01-contract Kalshi quantities, using the same explicit all-in purchase cap against a separate bankroll, conservative estimated fees, at most three concurrent positions, durable states, and idempotent budget hooks.
 - Venue outcomes settle the reserved stake to payout and realized P&L. Unsupported final outcomes return the paper stake as invalid rather than manufacturing a win or loss.
@@ -143,7 +157,7 @@ The trading system has an independent durable working-budget ledger. A venue acc
 - A separately versioned maker/taker policy evaluates execution style before submission. Production remains `maker`; every new maker intent records the shadow taker decision and eventual counterfactual separately. Taker recommendation requires at least 15pp current net edge after taker fee, 10pp three-snapshot median edge, 65% quality, spread no wider than 2¢, at least 30 comparable accepted maker samples, and at least 2pp advantage over empirically captured maker edge. `adaptive` may act only after all those and ordinary gates pass. Its taker primitive is a marketable IOC **limit** capped at the issuance-approved ask, never an uncapped market order; quote movement beyond the cap produces no submission. Maker, shadow taker, and actual taker evidence remain separately labeled.
 - Cancellation confirmation tolerates Kalshi's bounded read-after-delete consistency delay without assuming success. Poll authoritative order status after DELETE for a short bounded window and confirm terminal `canceled` status, zero remainder, absence from the complete resting-order collection, and refreshed fills. Unknown/resting status, nonzero remainder, contradictory fills/positions, or expiry of the confirmation window still fails closed and triggers full reconciliation.
 - Persist every maker attempt separately for authoritative recovery and fill-model evidence, but group live-ledger presentation by stable asset/window intent. Distinguish `post-only race` (never accepted, no spend) from `rested · no fill` (accepted, then canceled), and label an intent whose later bounded attempt filled as `recovered on retry`.
-- Every new paper/live order durably captures an immutable `entry-decision-v1` snapshot joining edge-buy evidence to execution: policy/calculation identity, UP/DOWN and selected-side probabilities, confidence breakdown, actionable bid/ask, fee, spread, net edge, persistence count/median edge, contract-basis inputs, calibration replay, settlement-average observation, and full factor explanations. Open positions expose this evidence inline. A separately loaded, paginated `/api/trading/history` view combines the same decision snapshot with attempts, fill terms, current/terminal status, outcome, and P&L without inflating the dashboard polling payload. Legacy orders reconstruct core values and are labeled when richer issuance evidence predates persistence.
+- Every new paper/live order durably captures an immutable `entry-decision-v1` snapshot joining edge-buy evidence to execution: provider/variant identity, policy/calculation identity, UP/DOWN and selected-side probabilities, confidence breakdown, actionable bid/ask, fee, spread, net edge, persistence count/median edge, contract-basis inputs, calibration replay, settlement-average observation, and full factor explanations. Open positions expose this evidence inline. A separately loaded, paginated `/api/trading/history` view combines the same decision snapshot with attempts, fill terms, current/terminal status, outcome, and P&L without inflating the dashboard polling payload. It supports execution-track, provider, variant, and policy-version filters. Legacy orders reconstruct core values and are labeled when richer issuance evidence predates persistence.
 - Raw positive-edge signals remain visible and tracked immediately, but paper/live execution uses a durable maturity gate: first 90 seconds blocked; current snapshot qualified; at least 3 qualifying snapshots spanning 30 seconds; median net edge at least 5pp; current quality at least 50%; and no new entry in the final 120 seconds. A failed current snapshot resets persistence, and repeated processing of one timestamp cannot manufacture observations. The warm-up increased from 60 to 90 seconds after the 2026-08-11 timing review found the 60–90-second live cohort materially weak; the change does not alter the model or persistence requirements.
 - Signal qualification, execution readiness, venue attempt, and actual position are separate UI states. Each current card is joined to the exact live asset/contract order so unfilled/rejected maker attempts are never presented as open positions, and the automation skip reason distinguishes absent edge from already-attempted signals.
 - Live execution has a hard startup reconciliation barrier. Before any new live order, fetch complete paginated Kalshi cash, positions, orders, fills, and resting orders; match durable client and venue IDs; cancel and confirm Money Noodle resting remainders; recover missing/partial entry and reduce-only fills; validate current position quantities; and align whole-cent local reservations without manufacturing P&L. Unknown managed orders, unrelated resting orders, malformed/incomplete history, contradictory positions, insufficient venue cash, or unconfirmed cancellation block and pause live automation.
@@ -230,7 +244,7 @@ Money Noodle must persist every calculation that passes the active buy policy an
 
 #### Issuance policy
 
-- The active policy is binary buy policy v12. A calculation qualifies only when independent `P(side)` is at least 52.5%, `P(side) − side ask − venue fees` is at least 5 percentage points, estimate quality is at least 50%, and the executable selected-side ask is from 5¢ through 97¢ on at least one live venue enabled in Budget. `P(DOWN)=1−P(UP)` and uses no venue input. This is a manually promoted narrow relaxation of v11's 55% floor; it retains all other gates and must report separately from v11 before any further expansion.
+- The active policy is binary buy policy v13. A calculation qualifies only when independent `P(side)` is at least 55%, `P(side) − side ask − venue fees` is at least 5 percentage points, estimate quality is at least 50%, and the executable selected-side ask is from 5¢ through 97¢ on at least one live venue enabled in Budget. `P(DOWN)=1−P(UP)` and uses no venue input. v13 restores the 55% floor for both paper and live after the prospectively monitored v12 52.5–55% live-fill cohort lost; all other gates remain unchanged.
 - The price gate uses the actual Polymarket outcome-token ask or Kalshi YES/NO ask for the side being purchased—not market probability, midpoint, last price, the opposite side's ask, or a disabled venue. Missing actionable side quotes fail closed.
 - Every new forecast stores the selected entry side and all actionable UP/DOWN venue prices. Historical policy-v9 observations remain immutable legacy UP entries. Reduce-only exits use the owned side's venue-independent probability and executable side bid under a separately versioned exit policy; they cannot manufacture opposite exposure.
 - Disabled venues may remain visible for research but are dimmed, excluded from qualification, excluded from tracked actionable prices, and unavailable to execution.
@@ -289,7 +303,7 @@ Venue prices have zero weight in this tradeable probability. A separate labeled 
 
 This remains a provisional production baseline rather than a validated calibrated model. Exact issuance-time replay inputs are persisted, automatic expanding-window evaluation starts at 100 independent settlement timestamps, and any production promotion is manual and versioned.
 
-The dashboard marks an entry as a **positive-edge binary buy** when independent selected-side probability is at least 52.5%, expected value after venue fees clears 5 percentage points, estimate quality clears 50%, and an enabled venue has an executable selected-side ask from 5¢ through 97¢. It may open UP/YES or DOWN/NO. Reduce-only exit recommendations for owned positions remain under the separate HOLD/EXIT/SWITCH policy above. Depth, queue priority, and slippage are not yet modelled. Cards are sorted by edge strength and execution uses additional maturity, freshness, portfolio, funding, and timing gates.
+The dashboard marks an entry as a **positive-edge binary buy** when independent selected-side probability is at least 55%, expected value after venue fees clears 5 percentage points, estimate quality clears 50%, and an enabled venue has an executable selected-side ask from 5¢ through 97¢. It may open UP/YES or DOWN/NO. Reduce-only exit recommendations for owned positions remain under the separate HOLD/EXIT/SWITCH policy above. Depth, queue priority, and slippage are not yet modelled. Cards are sorted by edge strength and execution uses additional maturity, freshness, portfolio, funding, and timing gates.
 
 ### 4.2 Required factor evolution
 
@@ -325,9 +339,23 @@ Every issued prediction should eventually be persisted with feature snapshot, mo
 | Kraken OHLC | Multi-year weekly seasonal baseline | Public | 24 hours |
 | Local price history | Supplemental long-term baseline | Local | Hourly snapshots |
 
-### Planned venue adapters
+### Trading-provider registry and variants
 
-Define a common `PredictionVenue` interface while preserving venue-specific contract semantics:
+“Provider” in trading surfaces means a prediction-market venue or broker, distinct from an LLM research provider. The registry initially contains Polymarket and Kalshi and will add **Crypto.com**, **ForecastEx**, and **Robinhood** through official, permitted APIs only. Consumer web scraping or browser automation cannot authorize live trading.
+
+Each provider exposes one or more immutable, versioned **provider/model variants**. A variant is the provider-specific interpretation and execution layer around Money Noodle's common venue-independent forecast, including:
+
+- contract discovery and normalized asset/window mapping;
+- exact rules, oracle/reference source, averaging window, timezone, and UP/YES mapping;
+- quote/book normalization, tick size, quantity granularity, fee schedule, and settlement handling;
+- execution style, fill assumptions, slippage/depth treatment, and reconciliation version;
+- comparability classification and contract-target fingerprint.
+
+Provider variants **must not blend provider prices into tradeable probability or confidence**. Prices remain benchmark and execution-cost inputs. A genuinely different forecast formula is a separate forecast-model variant and follows immutable evaluation/manual-promotion rules.
+
+All provider variants run in isolated paper tracks from the same issuance stream. At most one explicitly promoted variant per provider may be live-enabled initially. Every order and evaluation row retains `providerId`, `providerVariantId`, `forecastModelVersion`, `buyPolicyVersion`, and `executionPolicyVersion`, so variants never share outcomes or P&L accidentally.
+
+Define a common `PredictionVenue` interface while preserving provider-specific contract semantics:
 - `listMarkets(filter)`
 - `getMarket(id)` / `getOrderBook(id)`
 - `getAccount()` / `listPositions()` / `listOrders()` / `listFills()`
@@ -346,6 +374,18 @@ Private path: CLOB authentication/signing, allowance/funding checks, orders, fil
 Read path: market/event and order-book APIs.  
 Private path: signed API requests for balance, positions, orders, fills, placement, and cancellation. Environment (demo vs production) must be visually unmistakable.
 
+#### Crypto.com
+
+Planned read/paper-first adapter. Before implementation, verify the exact official product/API that exposes eligible binary or event contracts, jurisdiction/account restrictions, contract rules, fees, market-data rights, and whether authenticated order placement and complete reconciliation are supported. If no suitable official API exists, retain research-only status and do not simulate false live readiness.
+
+#### ForecastEx
+
+Planned read/paper-first adapter using official ForecastEx/authorized broker interfaces. Normalize exchange contracts separately from any introducing-broker account layer; verify participant eligibility, market-data access, settlement authority, fees, quantity/tick rules, order lifecycle, and authoritative fills/positions before live work.
+
+#### Robinhood
+
+Planned broker/provider adapter. Event-contract access, symbols, rules, fees, account eligibility, API permissions, and authoritative order/fill/position retrieval must be verified from official interfaces. Existing Robinhood equity/crypto APIs must not be assumed to support event contracts. Research/paper may proceed only from permitted data; live remains disabled until a supported trading and reconciliation API is proven.
+
 ### Contract normalization
 
 Never assume venue contracts resolve identically. A normalized market must retain:
@@ -353,6 +393,8 @@ Never assume venue contracts resolve identically. A normalized market must retai
 - YES/NO or UP/DOWN mapping.
 - Tick size, minimum order, fee model, restrictions, and settlement terms.
 - A `comparability` state: exact, approximate, or not comparable.
+- Provider and provider-variant IDs plus immutable contract-target and rules fingerprints.
+- Whether the capability is `research`, `paper`, or independently promoted `live`; unsupported capability must fail closed.
 
 ## 6. Storage
 
@@ -397,7 +439,7 @@ Replace repository implementations without changing domain/services. Add TTL ind
 - **Freshness:** every API payload includes generation/expiry and per-source status. Stale cached values are labeled. Runtime cadence constants in `lib/freshness.ts` drive both collection behavior and the in-app cadence disclosure to prevent documentation drift.
 
 Recommended future service boundaries:
-- `lib/venues/*` — Polymarket/Kalshi adapters.
+- `lib/venues/*` — normalized trading-provider registry and Polymarket/Kalshi/Crypto.com/ForecastEx/Robinhood adapters.
 - `lib/market-data/*` — spot, derivatives, historical feeds.
 - `lib/news/*` — retrieval, dedupe, entity matching, sentiment.
 - `lib/models/*` — feature generation, versions, calibration.
@@ -452,7 +494,14 @@ Recommended future service boundaries:
 - [ ] Stronger news/event pipeline and market microstructure features.
 
 ### Phase 3 — Venue/account read integrations
-- [ ] Common venue interface.
+- [x] Add the typed read-only trading-provider registry foundation with explicit market-data/paper/live capabilities, fail-closed planned providers, and immutable provider-variant identities in the dashboard payload. Durable generalized provider configuration and adapter interfaces remain below.
+- [x] Add `TradingProviderAdapter` normalized contract/quote/account/order interfaces with explicit capability checks, plus an atomic durable `data/trading-providers.json` configuration mirrored fail-closed from the legacy Budget execution authority and a distinct read-only `/api/trading/providers` route.
+- [x] Promote the provider store to `provider-registry-v1` authority through a one-time legacy migration. Provider mutations require authentication, same-origin, paused quiescent/restart-safe execution, explicit capability, exact variant identity, immutable audit, and typed confirmation for live enablement. Paper and live permissions are enforced separately; disabling live preserves paper and reduce-only lifecycle handling. The legacy Budget venue field is now a compatibility projection only.
+- [ ] Versioned provider/model variants for contract semantics, fees, quote normalization, paper fill assumptions, and execution/reconciliation behavior; provider prices remain excluded from tradeable probability.
+- [ ] Add Crypto.com read/paper-first adapter after official product/API and eligibility verification.
+- [ ] Add ForecastEx read/paper-first adapter after official exchange/broker API and eligibility verification.
+- [ ] Add Robinhood read/paper-first adapter after official event-contract API and eligibility verification.
+- [ ] Fan every configured provider variant into an isolated continuous paper track with exact provider-contract settlement and variant-specific P&L.
 - [x] Polymarket authenticated CLOB collateral-balance and open-order connector plus public position monitoring.
 - [x] Batched public Polymarket CLOB UP/DOWN books for actionable asks.
 - [x] Polymarket normalized public CLOB order-book reads.
@@ -462,12 +511,16 @@ Recommended future service boundaries:
 - [x] Kalshi read-only balance, position, and resting-order monitoring when credentials are configured.
 - [x] Initial read-only Polymarket/Kalshi account panel (public wallet positions for Polymarket).
 - [ ] Fully normalized unified portfolio, historical fills, and P&L reconciliation.
+- [ ] Dashboard filters for live/paper track, provider, provider/model variant, and policy version across signals, open orders, performance, and decision history.
+- [x] Add the initial read-only Policy surface with an always-visible v13 badge, active forecast/buy/execution/exit/switch/regime/provider-variant versions, exact thresholds, activation times, evidence links, and immutable v11–v13 buy-policy history.
+- [ ] Back the Policy surface with a durable generalized policy registry containing complete parameter diffs, dataset fingerprints, operator promotion/rollback audit events, and all pre-v11 legacy versions.
 
 ### Phase 4 — Paper then live trading
 - [x] Durable working-budget ledger with signed Kalshi total-budget verification and fixed all-in per-purchase sizing.
 - [x] Pause/resume/depleted state machine and audit events.
 - [x] Initial account-funding readiness checks for enabled venues.
 - [x] Independent Polymarket/Kalshi enablement with at-least-one validation and enabled-only execution guards.
+- [x] Generalize authoritative research/paper/live permissions to each registered trading provider, with separate Budget UI toggles and fail-closed planned providers. Current capability still permits live only on Kalshi; adding a provider capability remains a separate adapter/promotion task.
 - [x] Budget/trading control UI with explicit execution-capability status.
 - [x] Deterministic paper risk engine, actionable venue selection, idempotent order ledger, settlement, and Budget UI.
 - [x] Paper mode using durable reservation/settlement hooks and automated 15-second processing.
@@ -491,6 +544,7 @@ Recommended future service boundaries:
 - [ ] Add durable budget epochs, current-epoch/lifetime-live reporting, loss/drawdown circuit breakers, and explicit evidence gates for any stake increase.
 - [ ] Enforce same-origin/CSRF checks on every mutation and billable research route.
 - [ ] Operator fill/order/settlement alerts.
+- [~] New paper/live entry orders now store provider, provider-variant, forecast-model, buy-policy, and execution-policy identities. Remaining work adds these identities consistently to exit/switch/regime audit and evaluation records, with safe legacy migration labels.
 - [ ] Demo/sandbox venue testing where supported.
 
 ### Phase 5 — Portability
@@ -508,7 +562,7 @@ Recommended future service boundaries:
 4. Refresh updates server data and local cache; stale use is visible.
 5. An upstream partial failure degrades locally rather than producing invented values.
 6. The production build and TypeScript check pass.
-7. Every qualifying binary policy-v10 expected-value update is durably recorded at most once per contract/15-second bucket with selected entry side and side-specific actionable prices; legacy policy-v9 rows remain immutable UP entries.
+7. Every qualifying active-policy expected-value update is durably recorded at most once per provider variant/contract/15-second bucket with selected entry side and side-specific actionable prices; legacy rows remain immutable and version-labeled.
 8. Final venue outcomes resolve records without altering the original forecast snapshot.
 9. Accuracy excludes pending/invalid records and reports sample size beside every metric.
 10. A $100 total budget with a $1 all-in purchase size never spends more than $1 on principal plus fees; reservation does not change equity, and unused maker-order reserve returns without changing P&L.
@@ -518,7 +572,8 @@ Recommended future service boundaries:
 ## 12. Open decisions
 
 - Redundant fallback for the primary Kraken cycle-reference/current-price/volatility series without introducing cross-source basis offsets.
-- Exact Kalshi market set that semantically matches Polymarket 15m contracts.
+- Exact cross-provider market sets that semantically match each normalized 15-minute target, without assuming equal settlement rules.
+- Which official Crypto.com, ForecastEx, and Robinhood APIs/products permit event-contract market data, paper modeling, and eventual automated live trading for the operator's account and jurisdiction.
 - Historical backfill vendor and retention/cost target beyond the current Kraken weekly feed.
 - Whether live signing should move from file-based Kalshi RSA keys to hardware/OS-keychain custody.
 - Whether the global working budget should be explicitly split by venue or allocated dynamically per trade after per-venue funding checks.
@@ -585,6 +640,8 @@ Recommended future service boundaries:
 | 2026-08-11 | Increase the execution warm-up from 60 to 90 seconds after 34 live fills during seconds 60–90 lost 75.52¢ at −28.5% capital ROI across 30 windows. Preserve the three-snapshot/30-second persistence gate and final-120-second entry cutoff. |
 | 2026-08-11 | Promote binary buy policy v11 with a symmetric 55% independent selected-side probability floor. Full fixed-snapshot replay across 228 windows raised clustered win rate from 33.27% to 54.11% and mean fee-aware return from 2.95% to 4.68%; both chronological halves remained positive. Venue prices remain excluded from the forecast and continue to act only as execution costs. |
 | 2026-08-11 | Manual operator promotion: deploy binary buy policy v12 with a narrowly relaxed 52.5% selected-side probability floor to increase real Kalshi candidate flow. The observed 52.5–55% cohort was only 4 windows (2 wins, +23.5% descriptive mean), so this is a monitored experiment rather than statistical validation. Keep all other v11 gates, maker-only execution, stake/rate caps, and hard risk controls unchanged; report v12 separately and do not relax below 52.5% without unseen clustered evidence. |
+| 2026-08-12 | Deploy binary buy policy v13 and restore the 55% selected-side probability floor for both live and paper. Prospective v12 monitoring found 14 near-floor live intents, seven fills, one hold win, −83.38¢ actual P&L after exits, and −115.98¢ hold P&L. Preserve v12 history and retain the rejected 52.5–55% cohort for observation; future quality/timing candidates run in parallel before manual promotion. |
+| 2026-08-12 | Plan a normalized trading-provider registry adding Crypto.com, ForecastEx, and Robinhood read/paper-first. Run every versioned provider/model variant in an isolated paper track, enable live per provider only after manual capability promotion and authoritative reconciliation, add provider/live-paper dashboard filters, and expose active policy details plus immutable policy history. Provider variants may adapt contract semantics and execution but may not put venue prices into tradeable probability. |
 | 2026-08-11 | Extend authoritative hold counterfactual settlement from switches to every full standalone exit, and report standalone exit-versus-hold totals separately. Initial reconstruction found 16 exits realized +235.04¢ versus +426.27¢ from holding. Add an observation-only principal-recovery shadow that models selling only enough at the realized exit price to recover exact cost while retaining residual payout; do not change the approved strict-value or +75%-reversal behavior without independent evidence. |
 | 2026-08-11 | Retain zero Kalshi weight in tradeable probability after exact-contract replay. Positive Kalshi weights improved Brier score but all lost after actionable Kalshi ask/fee; expanding walk-forward candidates were positive in 0/5 folds and beat the independent baseline in 0/5. Observe a ≤15pp independent/Kalshi disagreement veto after a four-trade positive diagnostic, without promotion. |
 | 2026-08-11 | Add a permissive adaptive regime gate rather than fixed clock windows or raw loss streaks. A bankroll-independent exact-contract sentinel learns bounded fee-aware return by independent settlement window, warms on the current policy, soft-blocks only new exposure at strong negative evidence, and automatically reopens under a lower confidence threshold without withdrawing active operator intent. Manual pauses and hard economic stops remain non-auto-resumable. |

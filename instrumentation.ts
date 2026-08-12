@@ -1,6 +1,9 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
   if (process.env.NEXT_PHASE === 'phase-production-build') return;
+  // Vercel/serverless deployments are a stateless research dashboard only. Do not reconcile,
+  // start a timer, mutate ledgers, or create an execution path outside the persistent worker.
+  if (process.env.VERCEL === '1' || process.env.MONEY_NOODLE_STATELESS === 'true') return;
   // Reconciliation is a hard startup barrier: the collector may run paper shadow work afterward,
   // but no live order can pass until authoritative Kalshi state has been checked.
   const [{ reconcileLiveExecution }, { startBackgroundCollector }, { completeExecutionDrain, blockExecutionDrain }] = await Promise.all([

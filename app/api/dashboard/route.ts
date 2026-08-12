@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDashboard } from '@/lib/dashboard';
+import { isAuthenticatedRequest } from '@/lib/auth';
+import { getDashboard, publicDashboardData } from '@/lib/dashboard';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -8,8 +9,9 @@ export async function GET(request: NextRequest) {
   try {
     const refresh = request.nextUrl.searchParams.get('refresh');
     const force = refresh === '1' || refresh === 'live';
-    return NextResponse.json(await getDashboard(force, refresh === 'live'), {
-      headers: { 'Cache-Control': 'no-store' },
+    const dashboard = await getDashboard(force, refresh === 'live');
+    return NextResponse.json(isAuthenticatedRequest(request) ? dashboard : publicDashboardData(dashboard), {
+      headers: { 'Cache-Control': 'private, no-store' },
     });
   } catch (error) {
     console.error(error);

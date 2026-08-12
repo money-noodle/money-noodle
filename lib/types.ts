@@ -23,6 +23,88 @@ export interface Factor {
 }
 
 export type TradingVenue = 'polymarket' | 'kalshi';
+export type TradingProviderId = TradingVenue | 'crypto-com' | 'forecastex' | 'robinhood';
+export type TradingProviderImplementation = 'planned' | 'read-paper' | 'live';
+
+export interface TradingProviderVariant {
+  id: string;
+  providerId: TradingProviderId;
+  name: string;
+  status: 'planned' | 'active' | 'superseded';
+  forecastModelVersion: string;
+  description: string;
+}
+
+export interface TradingProviderControl {
+  providerId: TradingProviderId;
+  researchEnabled: boolean;
+  paperEnabled: boolean;
+  liveEnabled: boolean;
+  selectedVariantId: string;
+  updatedAt: string;
+}
+
+export interface TradingProviderAuditEvent {
+  id: string;
+  at: string;
+  providerId: TradingProviderId;
+  action: 'migrated' | 'updated';
+  reason: string;
+  previous: Pick<TradingProviderControl, 'researchEnabled' | 'paperEnabled' | 'liveEnabled' | 'selectedVariantId'>;
+  next: Pick<TradingProviderControl, 'researchEnabled' | 'paperEnabled' | 'liveEnabled' | 'selectedVariantId'>;
+}
+
+export interface TradingProviderConfiguration {
+  version: 'trading-provider-config-v1';
+  revision: number;
+  updatedAt: string;
+  executionAuthority: 'legacy-budget-v1' | 'provider-registry-v1';
+  providers: TradingProviderControl[];
+  audit: TradingProviderAuditEvent[];
+}
+
+export interface TradingProviderDescriptor {
+  id: TradingProviderId;
+  name: string;
+  implementation: TradingProviderImplementation;
+  adapterVersion: string;
+  capabilities: { marketData: boolean; paper: boolean; live: boolean };
+  researchEnabled: boolean;
+  paperEnabled: boolean;
+  liveEnabled: boolean;
+  selectedVariantId: string;
+  configurationUpdatedAt: string;
+  readiness: string;
+  variants: TradingProviderVariant[];
+}
+
+export type PolicyComponentKind = 'forecast' | 'buy' | 'execution' | 'exit' | 'switch' | 'regime' | 'provider';
+export interface PolicyManifestComponent {
+  kind: PolicyComponentKind;
+  label: string;
+  version: string;
+  status: 'production' | 'paper' | 'observation';
+  summary: string;
+  details: Array<{ label: string; value: string }>;
+}
+export interface PolicyManifestHistoryEntry {
+  version: string;
+  activatedAt: string;
+  deactivatedAt?: string;
+  status: 'active' | 'superseded' | 'rolled-back';
+  summary: string;
+  changes: string[];
+  evidence: string[];
+}
+export interface PolicyManifest {
+  version: 'policy-manifest-v1';
+  generatedAt: string;
+  activeBuyPolicyVersion: string;
+  activeBuyPolicyActivatedAt: string;
+  components: PolicyManifestComponent[];
+  history: PolicyManifestHistoryEntry[];
+}
+
 export type ContractComparability = 'exact' | 'approximate' | 'not-comparable';
 
 /** Immutable venue contract/rules record; full rules live once in the provenance registry. */
@@ -414,7 +496,7 @@ export interface PerformanceSummary {
   benchmarks: BenchmarkScore[];
   edgeBuckets: EdgeBucket[];
   segments: SegmentGroup[];
-  /** Never traded: exact-contract outcomes for apparent opportunities rejected by the 55% owned-side floor. */
+  /** Never traded: exact-contract outcomes for apparent opportunities rejected by the active owned-side floor. */
   missedBuyCounterfactual: MissedBuyCounterfactual;
   /** Distinct 15-minute settlement windows resolved. Assets move together, so this is the honest
    *  independent sample unit; update counts and per-asset counts both overstate it. */
@@ -518,6 +600,8 @@ export interface DashboardData {
   generatedAt: string;
   expiresAt: string;
   modelVersion: string;
+  tradingProviders: TradingProviderDescriptor[];
+  policyManifest: PolicyManifest;
   collector: CollectorStatus;
   sourceStatus: {
     polymarket: boolean;
@@ -534,6 +618,11 @@ export interface DashboardData {
   news: NewsItem[];
   disclaimer: string;
 }
+
+/** Public research response. Private performance and provider-control metadata are never serialized here. */
+export type PublicDashboardData = Omit<DashboardData, 'tradingProviders' | 'policyManifest' | 'performance'>;
+/** A client may receive either public research data or the full signed dashboard payload. */
+export type DashboardViewData = PublicDashboardData & Partial<Pick<DashboardData, 'tradingProviders' | 'policyManifest' | 'performance'>>;
 
 export interface ProviderInfo {
   id: string;
@@ -678,6 +767,10 @@ export type ExecutionMode = 'paper' | 'live';
 /** Immutable issuance-time evidence explaining why an order cleared the binary edge-buy gates. */
 export interface EntryDecisionSnapshot {
   version: 'entry-decision-v1';
+  providerId?: TradingProviderId;
+  providerVariantId?: string;
+  forecastModelVersion?: string;
+  executionPolicyVersion?: string;
   policyVersion: string;
   calculationAt: string;
   side: PositionSide;
@@ -704,6 +797,8 @@ export interface PaperOrder {
   id: string;
   /** Paper runs continuously as a shadow; live only runs while automation is active in live mode. */
   executionMode: ExecutionMode;
+  providerId?: TradingProviderId;
+  providerVariantId?: string;
   /** Stable asset/window intent shared by bounded maker attempts. */
   logicalOrderId?: string;
   attemptNumber?: number;
@@ -907,6 +1002,23 @@ export interface MakerFillReport {
   segments: MakerExecutionSegment[];
 }
 
+/** Deliberately aggregate-only paper ledger view exposed without a signed dashboard session. */
+export interface PublicPaperBudget {
+  /** False on a stateless hosted dashboard, which cannot report the persistent worker ledger. */
+  durable: boolean;
+  startingCents: number;
+  availableCents: number;
+  equityCents: number;
+  reservedCents: number;
+  proposedStakeCents: number;
+  running: boolean;
+  depleted: boolean;
+  openOrders: number;
+  settledOrders: number;
+  realizedPnlCents: number;
+  bankrollResets: number;
+}
+
 export interface ExecutionSummary {
   mode: ExecutionMode;
   running: boolean;
@@ -933,6 +1045,7 @@ export interface ExecutionSummary {
 
 export interface TradingControlData {
   control: BudgetControl;
+  tradingProviders?: TradingProviderDescriptor[];
   workingEquityCents: number;
   proposedStakeCents: number;
   maximumPurchasePercent: number;

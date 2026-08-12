@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { isAuthenticatedRequest } from '@/lib/auth';
+import { isStatelessDeployment, STATELESS_WORKER_MESSAGE } from '@/lib/runtime-environment';
 import { getCyclePathReport } from '@/lib/cycle-path-store';
 import { buildMakerFillReport, buildTradeRecord } from '@/lib/execution-report';
 import { getForecastHistory, getPerformanceSummary } from '@/lib/forecast-tracker';
@@ -10,7 +12,9 @@ export const dynamic = 'force-dynamic';
 
 let responseCache: { expiresAt: number; body: Record<string, unknown> } | undefined;
 
-export async function GET() {
+export async function GET(request: Request) {
+  if (!isAuthenticatedRequest(request as import('next/server').NextRequest)) return NextResponse.json({ error: 'Authentication required.' }, { status: 401 });
+  if (isStatelessDeployment()) return NextResponse.json({ error: STATELESS_WORKER_MESSAGE }, { status: 503 });
   try {
     if (responseCache && responseCache.expiresAt > Date.now()) {
       return NextResponse.json(responseCache.body, { headers: { 'Cache-Control': 'private, no-store' } });

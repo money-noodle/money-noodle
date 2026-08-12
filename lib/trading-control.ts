@@ -3,12 +3,16 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { getAccounts } from './accounts';
 import { mayAutoResumeAfterReconciliation, systemSuspensionFields } from './automation-resume-policy';
-import { DEFAULT_MAX_PURCHASE_PERCENT, isTradingVenueEnabled, MIN_PURCHASE_PERCENT, normalizeEnabledVenues, proposedStakeCents, reconcileBudgetReservations, releaseBudget, reserveBudget, settleBudget, workingEquityCents } from './budget-ledger';
+import { DEFAULT_MAX_PURCHASE_PERCENT, MIN_PURCHASE_PERCENT, normalizeEnabledVenues, proposedStakeCents, reconcileBudgetReservations, releaseBudget, reserveBudget, settleBudget, workingEquityCents } from './budget-ledger';
 import { liveBlockers, liveTradingEnabled, maxLiveStakeCents } from './live-orders';
 import { getExecutionDrainStatus } from './execution-drain-state';
 import { liveRiskLimits } from './live-risk-policy';
 import { getLiveRiskStatus } from './live-risk-store';
 import { getKalshiReconciliationStatus } from './reconciliation-state';
+import {
+  getTradingProviderConfiguration, legacyEnabledVenues, replaceImplementedProviderPermissionsFromLegacy,
+} from './trading-provider-config-store';
+import { tradingProviderRegistry } from './trading-provider-registry';
 import type { BudgetAuditEvent, BudgetControl, LiveRiskStatus, TradingControlData, TradingVenueReadiness } from './types';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
@@ -68,13 +72,16 @@ function event(control: BudgetControl, input: Omit<BudgetAuditEvent, 'id' | 'tim
 }
 
 async function readiness(stored: StoredTradingControl): Promise<TradingControlData> {
+  const providerConfiguration = await getTradingProviderConfiguration(stored.control.enabledVenues);
+  const tradingProviders = tradingProviderRegistry(providerConfiguration);
+  const enabledVenues = legacyEnabledVenues(providerConfiguration);
   const accounts = await getAccounts();
   const venues: TradingVenueReadiness[] = accounts.venues.map((account) => {
     const balanceCents = account.balance === undefined ? undefined : Math.max(0, Math.round(account.balance * 100));
     const authenticated = Boolean(account.tradeAuthenticated && account.configured && account.connected && balanceCents !== undefined);
     const funded = authenticated && (balanceCents ?? 0) > 0;
     return {
-      venue: account.venue, environment: account.environment, enabled: stored.control.enabledVenues.includes(account.venue),
+      venue: account.venue, environment: account.environment, enabled: enabledVenues.includes(account.venue),
       configured: account.configured, connected: account.connected,
       tradeReady: funded, balanceCents,
       reason: funded ? 'Authenticated account and cash balance available'
@@ -83,7 +90,8 @@ async function readiness(stored: StoredTradingControl): Promise<TradingControlDa
         : account.error ?? 'Account connector is not configured or connected',
     };
   });
-  const enabled = venues.filter((venue) => stored.control.enabledVenues.includes(venue.venue));
+  const requiredProviderIds = new Set(tradingProviders.filter((provider) => stored.control.mode === 'live' ? provider.liveEnabled : provider.paperEnabled).map((provider) => provider.id));
+  const enabled = venues.filter((venue) => requiredProviderIds.has(venue.venue));
   const totalUsableBalanceCents = enabled.filter((venue) => venue.tradeReady).reduce((sum, venue) => sum + (venue.balanceCents ?? 0), 0);
   const kalshi = enabled.find((venue) => venue.venue === 'kalshi');
   // Live orders can only go to Kalshi. Compare spendable ledger cash to venue cash; reserved stakes
@@ -97,8 +105,8 @@ async function readiness(stored: StoredTradingControl): Promise<TradingControlDa
   if (stored.control.state === 'unconfigured') blockers.push('Configure a positive working budget.');
   if (stored.control.state !== 'unconfigured' && workingEquityCents(stored.control) <= 0) blockers.push('Working budget is depleted.');
   if (proposedStakeCents(stored.control) <= 0 && stored.control.state !== 'unconfigured') blockers.push('The all-in per-purchase amount produces a zero-cent allocation.');
-  if (!enabled.length) blockers.push('Enable at least one trading venue.');
-  if (enabled.length && !enabled.some((venue) => venue.tradeReady)) blockers.push('None of the enabled venues currently has a trade-ready connector.');
+  if (!enabled.length) blockers.push(`Enable at least one ${stored.control.mode} trading provider.`);
+  if (enabled.length && !enabled.some((venue) => venue.tradeReady)) blockers.push(`None of the ${stored.control.mode}-enabled providers currently has a trade-ready connector.`);
   if (!fundingCovered) blockers.push(`Signed Kalshi available cash does not cover the uncommitted live budget ($${(stored.control.availableBudgetCents / 100).toFixed(2)}).`);
   if (!executionEngineReady) blockers.push(`Live execution unavailable: ${liveBlockers().join(' ')}`);
   const reconciliation = getKalshiReconciliationStatus();
@@ -120,7 +128,8 @@ async function readiness(stored: StoredTradingControl): Promise<TradingControlDa
     ? { ...drain, phase: drain.workingTransactions > 0 ? drain.phase : 'active' as const, reason: drain.workingTransactions > 0 ? drain.reason : 'Automation is active; request Pause to establish a restart-safe quiescent point.', restartSafe: false }
     : drain;
   return {
-    control: stored.control,
+    control: { ...stored.control, enabledVenues },
+    tradingProviders,
     workingEquityCents: workingEquityCents(stored.control),
     proposedStakeCents: proposedStakeCents(stored.control),
     maximumPurchasePercent: maximumPurchasePercent(), maximumLiveStakeCents: maxLiveStakeCents(), totalUsableBalanceCents,
@@ -137,7 +146,10 @@ function serialized<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 export function getEnabledTradingVenues(): Promise<Array<'polymarket' | 'kalshi'>> {
-  return serialized(async () => (await readStored()).control.enabledVenues);
+  return serialized(async () => {
+    const stored = await readStored();
+    return legacyEnabledVenues(await getTradingProviderConfiguration(stored.control.enabledVenues));
+  });
 }
 
 export function getTradingControl(): Promise<TradingControlData> {
@@ -157,9 +169,11 @@ export function configureTradingBudget(input: { budgetDollars: number; perTradeD
     const perTradeCents = Math.round(input.perTradeDollars * 100);
     if (!Number.isSafeInteger(perTradeCents) || perTradeCents < MIN_PER_TRADE_CENTS) throw new Error(`Per-purchase spend must be at least ${MIN_PER_TRADE_CENTS} cents so a contract plus fees can fit.`);
     if (perTradeCents > budgetCents) throw new Error('Per-purchase spend cannot exceed the total budget.');
-    const enabledVenues = normalizeEnabledVenues(input.enabledVenues);
-    if (!enabledVenues.length) throw new Error('Enable at least one trading venue.');
-    if (enabledVenues.includes('kalshi')) {
+    // Provider permissions are authoritative and must not be recombined when only budget values change.
+    const providerConfiguration = await getTradingProviderConfiguration(stored.control.enabledVenues);
+    const enabledVenues = legacyEnabledVenues(providerConfiguration);
+    if (!enabledVenues.length) throw new Error('Enable at least one provider for paper or live before configuring a budget.');
+    if (providerConfiguration.providers.find((item) => item.providerId === 'kalshi')?.liveEnabled) {
       const accounts = await getAccounts();
       const kalshi = accounts.venues.find((account) => account.venue === 'kalshi');
       const kalshiBalanceCents = kalshi?.balance === undefined ? undefined : Math.max(0, Math.round(kalshi.balance * 100));
@@ -182,12 +196,28 @@ export function configureTradingBudget(input: { budgetDollars: number; perTradeD
   });
 }
 
+export function syncLegacyVenuesFromProviderRegistry(input: Array<'polymarket' | 'kalshi'>): Promise<void> {
+  return serialized(async () => {
+    const stored = await readStored();
+    const enabledVenues = normalizeEnabledVenues(input);
+    if (JSON.stringify(stored.control.enabledVenues) === JSON.stringify(enabledVenues)) return;
+    stored.control = { ...stored.control, revision: stored.control.revision + 1, enabledVenues, updatedAt: new Date().toISOString() };
+    stored.audit.push(event(stored.control, {
+      type: 'venues_updated', reason: `Compatibility venue projection synchronized from authoritative provider registry: ${enabledVenues.join(' + ') || 'none'}.`,
+      previousState: stored.control.state, newState: stored.control.state,
+    }));
+    await writeStored(stored);
+  });
+}
+
+/** Backward-compatible combined toggle. New UI uses the independent provider-registry route. */
 export function setEnabledTradingVenues(input: Array<'polymarket' | 'kalshi'>): Promise<TradingControlData> {
   return serialized(async () => {
     const stored = await readStored();
     if (stored.control.state === 'active') throw new Error('Pause automation before changing enabled venues.');
     const enabledVenues = normalizeEnabledVenues(input);
     if (!enabledVenues.length) throw new Error('Enable at least one trading venue.');
+    await replaceImplementedProviderPermissionsFromLegacy(enabledVenues);
     const previous = stored.control.enabledVenues.join(' + ') || 'none';
     stored.control = { ...stored.control, revision: stored.control.revision + 1, enabledVenues, updatedAt: new Date().toISOString() };
     stored.audit.push(event(stored.control, { type: 'venues_updated', reason: `Enabled venues changed from ${previous} to ${enabledVenues.join(' + ')}`, previousState: stored.control.state, newState: stored.control.state }));
@@ -316,7 +346,8 @@ export function reserveTradingBudget(amountCents: number, venue: 'polymarket' | 
     const stored = await readStored();
     const previousState = stored.control.state;
     if (stored.audit.some((entry) => entry.type === 'reserved' && entry.relatedId === relatedId)) return stored.control;
-    if (!isTradingVenueEnabled(stored.control, venue)) throw new Error(`${venue} is disabled for automated trading.`);
+    const providers = tradingProviderRegistry(await getTradingProviderConfiguration(stored.control.enabledVenues));
+    if (!providers.find((provider) => provider.id === venue)?.liveEnabled) throw new Error(`${venue} is disabled for live automated trading.`);
     const status = await readiness(stored);
     const selectedVenue = status.venues.find((item) => item.venue === venue);
     if (!selectedVenue?.tradeReady) throw new Error(`${venue} is not currently trade ready.`);

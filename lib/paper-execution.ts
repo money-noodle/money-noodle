@@ -3,9 +3,10 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { beginLiveTransaction, blockExecutionDrain, completeExecutionDrain, endLiveTransaction, getExecutionDrainStatus, startExecutionDrain } from './execution-drain-state';
 import { reconcileExecutionLedger } from './execution-reconciliation';
-import { entrySideProbability, evaluateEntryExecutionPolicy, makerCohortEvidence, parseEntryExecutionMode, type EntryExecutionDecision } from './entry-execution-policy';
+import { ENTRY_EXECUTION_POLICY_VERSION, entrySideProbability, evaluateEntryExecutionPolicy, makerCohortEvidence, parseEntryExecutionMode, type EntryExecutionDecision } from './entry-execution-policy';
 import { evaluateExitPolicy } from './exit-policy';
 import { isFreshCalculationTimestamp } from './freshness';
+import { isStatelessDeployment } from './runtime-environment';
 import { fetchKalshiReconciliationSnapshot } from './kalshi-reconciliation';
 import { entryAttemptsForLogicalOrder, makerAttemptId, makerRetryDecision, maximumLiveMakerAttempts } from './maker-retry-policy';
 import { liveBlockers, liveTradingEnabled, maxLiveOrdersPerHour, maxLiveStakeCents, placeKalshiBuy, placeKalshiSell, placeKalshiTakerBuy } from './live-orders';
@@ -18,7 +19,7 @@ import { advanceSignalPersistence, evaluateSignalPersistence, type SignalEligibi
 import { advanceSwitchPersistence, switchCooldownRemainingMs, switchEvidenceReady, switchEvidenceSpanMs, type SwitchPersistenceState } from './switch-hysteresis';
 import { evaluateSwitchProbabilityGate, valueSwitch } from './switch-policy';
 import { autoResumeTradingAfterReconciliation, getTradingControl, pauseTrading, reconcileTradingBudget, recordTradingReconciliationFailure, releaseTradingBudget, reserveTradingBudget, settleTradingBudget, stopTradingForLiveRisk, suspendTrading } from './trading-control';
-import type { DashboardData, ExecutionMode, ExecutionSignalReadiness, ExecutionSummary, PaperOrder, PortfolioDecisionView, PositionSide, Prediction, TradingControlData } from './types';
+import type { DashboardData, ExecutionMode, ExecutionSignalReadiness, ExecutionSummary, PaperOrder, PortfolioDecisionView, PositionSide, Prediction, PublicPaperBudget, TradingControlData } from './types';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const LEDGER_FILE = path.join(DATA_DIR, 'paper-orders.json');
@@ -294,7 +295,7 @@ function venueQuote(prediction: Prediction, venue: 'polymarket' | 'kalshi', side
  * Builds a candidate order for one mode, applying every deterministic risk check. Returns the reason
  * when it declines, because a silently skipped order is indistinguishable from a broken engine.
  */
-function buildOrder(prediction: Prediction, side: PositionSide, status: TradingControlData, ledger: Ledger, calculationAt: string, mode: ExecutionMode, stakeLimitCents: number, venueFilter?: 'kalshi'): { order: PaperOrder } | { reason: string } {
+function buildOrder(prediction: Prediction, side: PositionSide, status: TradingControlData, ledger: Ledger, calculationAt: string, modelVersion: string, mode: ExecutionMode, stakeLimitCents: number, venueFilter?: 'kalshi'): { order: PaperOrder } | { reason: string } {
   if (stakeLimitCents <= 0) return { reason: 'Stake sizing produces zero cents. Raise the budget or purchase percentage.' };
   const rejections: string[] = [];
   const candidates = status.venues.flatMap((readiness) => {
@@ -328,12 +329,20 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
   const eligibility = executionEligibility(prediction, side, ledger);
   return { order: {
     id: orderId(prediction, mode, side, ledger), logicalOrderId: orderId(prediction, mode, side, ledger), attemptNumber: 1,
-    clientOrderId: orderId(prediction, mode, side, ledger), executionMode: mode, symbol: prediction.symbol, venue: selected.venue,
+    clientOrderId: orderId(prediction, mode, side, ledger), executionMode: mode,
+    providerId: selected.venue,
+    providerVariantId: status.tradingProviders?.find((provider) => provider.id === selected.venue)?.selectedVariantId,
+    symbol: prediction.symbol, venue: selected.venue,
     contractId: contractId(prediction, selected.venue), side, status: 'pending_reservation',
     createdAt: new Date().toISOString(), calculationAt, closesAt: selected.quote.closesAt,
     modelProbabilityUp: prediction.modelProbabilityUp, confidence: prediction.confidence,
     entryDecision: {
-      version: 'entry-decision-v1', policyVersion: BUY_POLICY_VERSION, calculationAt, side,
+      version: 'entry-decision-v1',
+      providerId: selected.venue,
+      providerVariantId: status.tradingProviders?.find((provider) => provider.id === selected.venue)?.selectedVariantId,
+      forecastModelVersion: modelVersion,
+      executionPolicyVersion: mode === 'live' ? ENTRY_EXECUTION_POLICY_VERSION : 'paper-immediate-ask-v1',
+      policyVersion: BUY_POLICY_VERSION, calculationAt, side,
       probabilityUp: prediction.modelProbabilityUp, probabilityDown: 1 - prediction.modelProbabilityUp,
       selectedSideProbability: sideProbability(prediction, side), confidence: prediction.confidence,
       confidenceBreakdown: { ...prediction.confidenceBreakdown },
@@ -400,7 +409,7 @@ function updatePortfolioDecisions(dashboard: DashboardData, status: TradingContr
       next[key] = { state: 'qualified', reason: `Standalone expected-value policy passes; execution evidence is still collecting. ${maturity.reason}`, updatedAt: now };
       continue;
     }
-    const candidate = buildOrder(prediction, side, status, ledger, dashboard.generatedAt, 'live', Math.min(status.proposedStakeCents, maxLiveStakeCents()), 'kalshi');
+    const candidate = buildOrder(prediction, side, status, ledger, dashboard.generatedAt, dashboard.modelVersion, 'live', Math.min(status.proposedStakeCents, maxLiveStakeCents()), 'kalshi');
     if ('reason' in candidate) {
       next[key] = { state: 'blocked', reason: candidate.reason, updatedAt: now };
       continue;
@@ -502,6 +511,7 @@ async function updateSoldCounterfactuals(ledger: Ledger): Promise<boolean> {
 /** Paper trading is a continuous shadow: it keeps running while live automation is paused. */
 async function runPaper(dashboard: DashboardData, status: TradingControlData, ledger: Ledger): Promise<boolean> {
   if (ledger.paperBudget.availableCents <= 0) return false;
+  const paperProviders = new Set(status.tradingProviders?.filter((provider) => provider.paperEnabled).map((provider) => provider.id) ?? status.control.enabledVenues);
   const open = ledger.orders.filter((order) => order.executionMode === 'paper' && (order.status === 'open' || order.status === 'pending_reservation'));
   if (open.length >= maximumOpenPositions()) return false;
   if (!isFreshCalculationTimestamp(dashboard.generatedAt)) return false;
@@ -514,7 +524,9 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
       if (!side || !executionEligibility(prediction, side, ledger).eligible) return [];
       if (sideWindowOrders(ledger, prediction, 'paper', side).some((order) => order.status === 'open' || order.status === 'pending_reservation')) return [];
       if (reentryCooldownRemainingMs(ledger, prediction, 'paper', side) > 0) return [];
-      const candidate = buildOrder(prediction, side, status, ledger, dashboard.generatedAt, 'paper', stakeLimit);
+      const candidate = buildOrder(prediction, side, {
+        ...status, venues: status.venues.map((readiness) => ({ ...readiness, enabled: paperProviders.has(readiness.venue) })),
+      }, ledger, dashboard.generatedAt, dashboard.modelVersion, 'paper', stakeLimit);
       return 'order' in candidate ? [{ prediction, order: candidate.order }] : [];
     });
   const selected = selectPortfolio(candidates.map(({ order }) => ({
@@ -780,7 +792,7 @@ function bestSwitch(dashboard: DashboardData, status: TradingControlData, ledger
     const side = selectedSide(prediction);
     if (!side || !prediction.market.live || existing.has(orderId(prediction, 'live', side, ledger)) || reentryCooldownRemainingMs(ledger, prediction, 'live', side, now) > 0) return [];
     if (!qualifiesVenueBuyEdge(prediction, 'kalshi', side) || !executionEligibility(prediction, side, ledger, now).eligible) return [];
-    const built = buildOrder(prediction, side, status, ledger, dashboard.generatedAt, 'live', Math.min(status.proposedStakeCents, maxLiveStakeCents()), 'kalshi');
+    const built = buildOrder(prediction, side, status, ledger, dashboard.generatedAt, dashboard.modelVersion, 'live', Math.min(status.proposedStakeCents, maxLiveStakeCents()), 'kalshi');
     return 'order' in built ? [built.order] : [];
   });
   let best: SwitchPlan | null = null;
@@ -943,6 +955,7 @@ async function executeSwitch(plan: SwitchPlan, status: TradingControlData, ledge
 async function runLive(dashboard: DashboardData, status: TradingControlData, ledger: Ledger, regimeGate: RegimeGateStatus): Promise<boolean> {
   const skip = (reason: string) => { ledger.lastLiveSkip = { reason, at: new Date().toISOString() }; return false; };
   if (!liveTradingEnabled()) return skip('Live trading is off in the environment.');
+  if (!status.tradingProviders?.find((provider) => provider.id === 'kalshi')?.liveEnabled) return skip('Kalshi is disabled for live automated trading in the provider registry.');
   const reconciliation = getKalshiReconciliationStatus();
   if (reconciliation.phase !== 'ready') return skip(`Kalshi reconciliation ${reconciliation.phase}: ${reconciliation.reason}`);
   if (status.control.state !== 'active') return skip(`Automation is ${status.control.state}.`);
@@ -1005,7 +1018,7 @@ async function runLive(dashboard: DashboardData, status: TradingControlData, led
     return skip('No new positive-edge binary buy qualifies right now.');
   }
   const side = selectedSide(prediction)!;
-  const built = buildOrder(prediction, side, status, ledger, dashboard.generatedAt, 'live', Math.min(status.proposedStakeCents, maxLiveStakeCents()), 'kalshi');
+  const built = buildOrder(prediction, side, status, ledger, dashboard.generatedAt, dashboard.modelVersion, 'live', Math.min(status.proposedStakeCents, maxLiveStakeCents()), 'kalshi');
   if ('reason' in built) return skip(`${prediction.symbol} ${side}: ${built.reason}`);
   const logicalId = orderId(prediction, 'live', side, ledger);
   const retry = makerRetryDecision(liveAttempts(ledger, prediction, side), Date.now(), prediction.market.closesAt, maximumLiveMakerAttempts());
@@ -1224,6 +1237,39 @@ function summarize(orders: PaperOrder[], mode: ExecutionMode, running: boolean, 
 /** Raw order ledger for reporting. */
 export async function getExecutionOrders(): Promise<PaperOrder[]> {
   return (await readLedger()).orders;
+}
+
+/**
+ * Aggregate-only paper ledger view for the public research dashboard. Do not add live figures,
+ * provider/account readiness, individual orders, symbols, timestamps, or mutation controls here.
+ */
+export async function getPublicPaperBudget(): Promise<PublicPaperBudget> {
+  // A serverless function cannot truthfully report the persistent worker's paper ledger.
+  if (isStatelessDeployment()) return {
+    durable: false, startingCents: 0, availableCents: 0, equityCents: 0, reservedCents: 0,
+    proposedStakeCents: 0, running: false, depleted: false, openOrders: 0, settledOrders: 0,
+    realizedPnlCents: 0, bankrollResets: 0,
+  };
+  const ledger = await readLedger();
+  const orders = ledger.orders.filter((order) => order.executionMode === 'paper');
+  const openOrders = orders.filter((order) => order.status === 'open' || order.status === 'pending_reservation');
+  const settledOrders = orders.filter((order) => order.status === 'won' || order.status === 'lost' || order.status === 'invalid' || order.status === 'sold');
+  const reservedCents = openOrders.reduce((total, order) => total + order.stakeCents, 0);
+  const availableCents = ledger.paperBudget.availableCents;
+  return {
+    durable: true,
+    startingCents: ledger.paperBudget.startingCents,
+    availableCents,
+    equityCents: availableCents + reservedCents,
+    reservedCents,
+    proposedStakeCents: availableCents > 0 ? Math.min(availableCents, maximumPaperStakeCents()) : 0,
+    running: availableCents > 0,
+    depleted: availableCents <= 0 && openOrders.length === 0,
+    openOrders: openOrders.length,
+    settledOrders: settledOrders.length,
+    realizedPnlCents: settledOrders.reduce((total, order) => total + (order.actualPnlCents ?? order.pnlCents ?? 0), 0),
+    bankrollResets: ledger.paperBudget.resets ?? 0,
+  };
 }
 
 export async function getExecutionSummaries(control: { state: string; mode: string; startingBudgetCents: number; workingEquityCents: number; availableBudgetCents: number; reservedBudgetCents: number; proposedStakeCents: number; perTradeCents: number }): Promise<{ paper: ExecutionSummary; live: ExecutionSummary; executionSignals: ExecutionSignalReadiness[]; liveAvailable: boolean; liveBlockers: string[]; maximumLiveMakerAttempts: number; portfolioConstraints: Pick<PortfolioConstraints, 'maximumPositions' | 'maximumSameWindow' | 'maximumSameGroupPerWindow'>; regimeGate: RegimeGateStatus }> {

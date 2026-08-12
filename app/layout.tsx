@@ -33,9 +33,20 @@ export const viewport: Viewport = {
   colorScheme: 'light dark',
 };
 
+const themeBootstrap = `(() => {
+  try {
+    const saved = localStorage.getItem('money-noodle-theme');
+    const dark = saved === 'dark' || (saved !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+    const root = document.documentElement;
+    root.classList.toggle('dark', dark);
+    root.classList.toggle('light', !dark && saved === 'light');
+  } catch { /* CSS still follows the system preference when browser storage is unavailable. */ }
+})();`;
+
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head><script dangerouslySetInnerHTML={{ __html: themeBootstrap }}/></head>
       <body className={`${sans.variable} ${mono.variable} antialiased`}>{children}</body>
     </html>
   );

@@ -1,8 +1,10 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { DATA_FRESHNESS } from './freshness';
+import { isStatelessDeployment } from './runtime-environment';
 
 const CACHE_DIR = path.resolve(process.cwd(), '.cache');
+const memoryCache = new Map<string, CacheEnvelope<unknown>>();
 
 interface CacheEnvelope<T> {
   savedAt: number;
@@ -10,18 +12,27 @@ interface CacheEnvelope<T> {
 }
 
 export async function readCache<T>(key: string): Promise<CacheEnvelope<T> | null> {
+  const inMemory = memoryCache.get(key) as CacheEnvelope<T> | undefined;
+  if (inMemory) return inMemory;
+  if (isStatelessDeployment()) return null;
   try {
-    return JSON.parse(await readFile(path.join(CACHE_DIR, `${key}.json`), 'utf8')) as CacheEnvelope<T>;
+    const parsed = JSON.parse(await readFile(path.join(CACHE_DIR, `${key}.json`), 'utf8')) as CacheEnvelope<T>;
+    memoryCache.set(key, parsed);
+    return parsed;
   } catch {
     return null;
   }
 }
 
 export async function writeCache<T>(key: string, value: T): Promise<void> {
+  const envelope: CacheEnvelope<T> = { savedAt: Date.now(), value };
+  memoryCache.set(key, envelope);
+  // Hosted/stateless dashboard requests retain only warm-instance cache and never write deployment files.
+  if (isStatelessDeployment()) return;
   await mkdir(CACHE_DIR, { recursive: true });
   const target = path.join(CACHE_DIR, `${key}.json`);
   const temporary = `${target}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
-  await writeFile(temporary, JSON.stringify({ savedAt: Date.now(), value }, null, 2));
+  await writeFile(temporary, JSON.stringify(envelope, null, 2));
   await rename(temporary, target);
 }
 

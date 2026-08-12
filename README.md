@@ -1,6 +1,8 @@
 # Money Noodle
 
-A local-first crypto prediction research terminal built with Next.js, TypeScript, Tailwind CSS, and shadcn/ui.
+<a href="https://money-blue-iota.vercel.app"><img src="public/brand/money-noodle-social.png" alt="Money Noodle — open the live research dashboard" height="260"></a>
+
+A personal, self-hosted crypto prediction research and trading tool built with Next.js, TypeScript, Tailwind CSS, and shadcn/ui. **[Open the live research dashboard →](https://money-blue-iota.vercel.app)**
 
 ## Run locally
 
@@ -12,13 +14,27 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
+## Vercel deployment
+
+Set these environment variables in Vercel before deploying:
+
+```text
+AUTH_PASSWORD=<a long, unique dashboard password>
+AUTH_SECRET=<a separate random value, at least 32 bytes>
+MONEY_NOODLE_BASE_URL=https://<your-vercel-domain>
+```
+
+The public dashboard remains available for market research and includes a read-only paper budget summary. Signing in is required for LLM research, provider management, automation controls, live budget, portfolio, execution history, and performance data; their API routes require the same signed session cookie. Add any provider or Kalshi credentials only as server-side environment variables.
+
+Vercel functions do not keep the local JSON data files or the 15-second background collector alive between invocations. Money Noodle automatically treats Vercel as stateless: it does not reconcile, execute, start a collector, or write ledgers there. The hosted public paper panel explicitly reports that the persistent ledger is unavailable rather than inventing serverless results. Keep live automation and its durable ledgers on an always-on worker with persistent storage; use this deployment as the research dashboard until a shared durable store/API is added. For another stateless host, set `MONEY_NOODLE_STATELESS=true`.
+
 ## What works
 
 - Discovers current Polymarket and Kalshi crypto 15-minute markets.
 - Compares venue probabilities while labeling Kalshi contracts as approximate matches because their oracle rules differ.
 - Forecasts the condition the contract actually settles on: `P(settlement ≥ cycle-open reference)`, from the live basis, realized volatility, and time remaining, computed within a single price series. The tradeable forecast deliberately contains no venue price, because edge is measured against that price.
 - Qualifies buys on expected value after venue fees rather than directional confidence, so a likely outcome at an expensive price is correctly rejected.
-- Shows top-ranked positive-edge binary buys that may select UP/YES or DOWN/NO. Calculations refresh every 15 seconds, hard-expire after 15 seconds, display calculation time/age, and require at least 52.5% venue-independent probability for the selected side plus its executable ask from 5¢ through 97¢ on a venue enabled in Budget.
+- Shows top-ranked positive-edge binary buys that may select UP/YES or DOWN/NO. Calculations refresh every 15 seconds, hard-expire after 15 seconds, display calculation time/age, and require at least 55% venue-independent probability for the selected side plus its executable ask from 5¢ through 97¢ on a venue enabled in Budget.
 - Durably records every calculation, not only qualifying signals, and stores compact issuance references into an append-only full-rules Polymarket/Kalshi contract-provenance registry. New outcomes resolve independently by venue and simulated return requires the same contract venue as its entry price; legacy or mismatched real entries cannot contribute walk-forward return. Reports accuracy, Brier/log loss, calibration bins, accuracy by time to settlement, contract-level streaks, and benchmarks against a coin flip, the basis term, Polymarket, and Kalshi. Calibration remains locked until 100 unique resolved settlement timestamps; repeated updates and correlated assets sharing a close count as one window.
 - Automatically runs a versioned five-fold expanding-window evaluation at 100 independent windows and every 25 thereafter. Venue-independent `calibration-replay-v1` snapshots preserve issuance-time basis, volatility, clock, slow-term log odds, caps, and production probability; exact replay is verified, legacy reconstruction is labeled, and candidate grids cover volatility scale and probability caps as well as weights/thresholds. It fits only on past windows, scores unseen windows after fees, feature-fingerprints and persists each run, and exposes results in the Walk-forward tab. It never changes production automatically.
 - Reports an observation-only maker funnel from submission through post-only race, acceptance, queue fill, and settlement. A strict adaptive maker/taker policy now records shadow taker recommendations and counterfactual returns while live remains maker by default. If explicitly activated later, taker entries are marketable IOC limits capped at the approved ask—not uncapped market orders—and maker, shadow-taker, and actual-taker results remain separate.
@@ -48,3 +64,7 @@ npm start
 This is research software, not financial advice. Paper shadow trading runs continuously. Live Kalshi execution is environment-gated, typed-confirmation armed, stake/rate capped, kill-switch protected, and blocked on startup until authoritative cash/position/order/fill/resting-order reconciliation passes, with the same full check repeated every five minutes by default. System safety suspensions retain separately persisted operator intent and may auto-resume only after authoritative reconciliation plus every normal readiness check; manual pauses and the kill switch never auto-resume. A user Pause drains the serialized execution queue and authoritatively reconciles before the UI reports the process restart-safe. It uses durable client IDs, managed post-only v2 selected-side limits (YES bids or signed NO-opening asks), 12-second passive repricing with progressive tick backoff, one live attempt by default (a second is hard-capped and disabled pending validation), grouped retry outcomes, bounded cancellation-confirmation polling, actual fill/fee reconciliation, automatic API resolution with retained reservations for ambiguous outcomes, all-in transaction caps, non-auto-resumable current-budget and lifetime-live loss stops, constrained same-window/correlation-group portfolio selection, no simultaneous opposite-side exposure, persistent loss-aware switching, and side-aware reduce-only standalone exits. A strict exit sells when executable cash beats optimistic model hold value; a separate profit lock arms at +75% executable profit and sells on one fresh joint Kalshi-value/model-probability reversal snapshot. Full exits clear persistence and permit uncapped same-window re-entry generations after a 60-second cooldown and fresh buy qualification. Switches require positive future wealth after costs plus a 15pp replacement probability advantage, increased to 20pp for same-asset UP↔DOWN reversals. Polymarket live placement is not implemented.
 
 See [`SPEC.md`](SPEC.md) for the living product/architecture specification and [`STATUS.md`](STATUS.md) for the current implementation summary. Both documents are updated as the app evolves.
+
+## License
+
+[MIT](LICENSE) © 2026 Rai Phairow.

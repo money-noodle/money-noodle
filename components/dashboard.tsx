@@ -10,6 +10,8 @@ import { AccountDialog } from '@/components/account-dialog';
 import { DataFreshnessDialog } from '@/components/data-freshness-dialog';
 import { MarketChart } from '@/components/market-chart';
 import { PerformanceDialog } from '@/components/performance-dialog';
+import { PaperBudgetPanel } from '@/components/paper-budget-panel';
+import { PolicyDialog } from '@/components/policy-dialog';
 import { ResearchDialog } from '@/components/research-dialog';
 import { TradingControlDialog } from '@/components/trading-control-dialog';
 import { ThemeToggle } from '@/components/theme-toggle';
@@ -24,7 +26,7 @@ import { AutomationStatus } from '@/components/automation-status';
 import { DATA_FRESHNESS, isFreshCalculationTimestamp } from '@/lib/freshness';
 import { cn } from '@/lib/utils';
 import { bestEntry, edgeStrength, hasTradableEdge, MAX_ENTRY_PRICE, MIN_ENTRY_PRICE, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, MIN_SELECTED_SIDE_PROBABILITY, qualifiesAsBuyEdge, sideProbability, venueEntryOptions } from '@/lib/prediction-policy';
-import type { DashboardData, Direction, ExecutionSignalReadiness, Factor, Prediction, TradeTrackRecord } from '@/lib/types';
+import type { DashboardData, DashboardViewData, Direction, ExecutionSignalReadiness, Factor, Prediction, TradeTrackRecord } from '@/lib/types';
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 const compactMoney = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 1 });
@@ -361,7 +363,7 @@ function LoadingState() {
   return <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{Array.from({ length: 7 }).map((_, index) => <Card key={index}><CardHeader><Skeleton className="h-8 w-28"/></CardHeader><CardContent><Skeleton className="h-10 w-32"/><Skeleton className="mt-6 h-16 w-full"/><Skeleton className="mt-5 h-10 w-full"/></CardContent></Card>)}</div>;
 }
 
-export function Dashboard({ initialData }: { initialData: DashboardData | null }) {
+export function Dashboard({ initialData, authenticated }: { initialData: DashboardViewData | null; authenticated: boolean }) {
   const [data, setData] = useState(initialData);
   const [error, setError] = useState('');
   const [isPending, startTransition] = useTransition();
@@ -382,7 +384,7 @@ export function Dashboard({ initialData }: { initialData: DashboardData | null }
       try {
         const response = await fetch('/api/dashboard');
         if (!response.ok) return;
-        const body = await response.json() as DashboardData;
+        const body = await response.json() as DashboardViewData;
         setData((current) => !current || Date.parse(body.generatedAt) >= Date.parse(current.generatedAt) ? body : current);
       } catch { /* Keep the previous verified snapshot on a transient polling failure. */ }
     }, DATA_FRESHNESS.dashboardPollMs);
@@ -409,11 +411,11 @@ export function Dashboard({ initialData }: { initialData: DashboardData | null }
       <div className="mx-auto flex h-16 max-w-[1500px] items-center justify-between px-4 sm:px-6">
         <div className="flex items-center gap-8">
           <a href="#" className="flex items-center gap-2.5" aria-label="Money Noodle home"><img src="/brand/money-noodle-icon-64.png" width="40" height="40" alt="" className="size-10 object-contain drop-shadow-[0_0_10px_rgba(53,169,75,.18)]"/><span className="flex flex-col"><span className="text-sm font-semibold leading-none tracking-tight"><span className="text-primary">Money</span> <span className="text-brand-green">Noodle</span></span><span className="mt-1 hidden text-[8px] font-medium uppercase leading-none tracking-[.16em] text-primary lg:block">Multiply your noodles.</span></span></a>
-          <nav className="hidden items-center gap-1 lg:flex"><Button variant="secondary" size="sm"><BarChart3/> Predictions</Button><ResearchDialog/><AccountDialog/><TradingControlDialog/></nav>
+          <nav className="hidden items-center gap-1 lg:flex"><Button variant="secondary" size="sm"><BarChart3/> Predictions</Button>{authenticated && <ResearchDialog/>}{authenticated && <AccountDialog/>}{authenticated && <TradingControlDialog/>}</nav>
         </div>
         <div className="flex items-center gap-1 min-[450px]:gap-2">
-          <div className="relative min-[450px]:hidden"><Button variant="outline" size="icon" onClick={() => setMobileMenuOpen((open) => !open)} aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}>{mobileMenuOpen ? <X/> : <Menu/>}</Button>{mobileMenuOpen && <div className="absolute right-0 top-11 z-50 w-56 space-y-1 rounded-lg border bg-popover p-2 shadow-xl [&_.hidden]:inline [&_button]:w-full [&_button]:justify-start"><ResearchDialog/><AccountDialog/><TradingControlDialog/>{data && <DataFreshnessDialog data={data}/>}</div>}</div>
-          <div className="hidden min-[450px]:block lg:hidden"><ResearchDialog/></div><div className="hidden min-[450px]:block lg:hidden"><TradingControlDialog/></div><div className="hidden min-[450px]:block">{data && <DataFreshnessDialog data={data}/>}</div><ThemeToggle/><Button variant="outline" size="sm" onClick={refresh} disabled={isPending}><RefreshCw className={cn(isPending && 'animate-spin')}/><span className="hidden sm:inline">Refresh</span></Button>
+          <div className="relative min-[450px]:hidden"><Button variant="outline" size="icon" onClick={() => setMobileMenuOpen((open) => !open)} aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}>{mobileMenuOpen ? <X/> : <Menu/>}</Button>{mobileMenuOpen && <div className="absolute right-0 top-11 z-50 w-56 space-y-1 rounded-lg border bg-popover p-2 shadow-xl [&_.hidden]:inline [&_button]:w-full [&_button]:justify-start">{authenticated && <ResearchDialog/>}{authenticated && <AccountDialog/>}{authenticated && <TradingControlDialog/>}{data && <DataFreshnessDialog data={data}/>}</div>}</div>
+          <div className="hidden min-[450px]:block lg:hidden">{authenticated && <ResearchDialog/>}</div>{authenticated && <div className="hidden min-[450px]:block lg:hidden"><TradingControlDialog/></div>}{authenticated && data?.policyManifest && data.tradingProviders && <PolicyDialog manifest={data.policyManifest} providers={data.tradingProviders} compact/>}<div className="hidden min-[450px]:block">{data && <DataFreshnessDialog data={data}/>}</div><ThemeToggle/>{authenticated ? <form action="/api/auth/logout" method="post"><Button variant="outline" size="sm" type="submit">Sign out</Button></form> : <Button asChild variant="outline" size="sm"><a href="/login">Sign in</a></Button>}<Button variant="outline" size="sm" onClick={refresh} disabled={isPending}><RefreshCw className={cn(isPending && 'animate-spin')}/><span className="hidden sm:inline">Refresh</span></Button>
         </div>
       </div>
     </header>
@@ -421,7 +423,7 @@ export function Dashboard({ initialData }: { initialData: DashboardData | null }
     <div className="relative mx-auto max-w-[1500px] px-4 py-8 sm:px-6 sm:py-12">
       <section className="mb-8 flex flex-col justify-between gap-6 lg:flex-row lg:items-end">
         <div className="max-w-2xl">
-          <div className="mb-3 flex items-center gap-2"><Badge variant="outline" className="gap-1.5 border-primary/20 bg-primary/5 text-primary"><Sparkles/> {data?.modelVersion ?? 'Blend 0.2'}</Badge><span className="text-[10px] text-muted-foreground">15-minute crypto markets</span></div>
+          <div className="mb-3 flex flex-wrap items-center gap-2"><Badge variant="outline" className="gap-1.5 border-primary/20 bg-primary/5 text-primary"><Sparkles/> {data?.modelVersion ?? 'Blend 0.2'}</Badge>{authenticated && data?.policyManifest && <Badge variant="outline" className="font-mono text-[8px] text-muted-foreground">{data.policyManifest.activeBuyPolicyVersion}</Badge>}<span className="text-[10px] text-muted-foreground">15-minute crypto markets</span></div>
           <h1 className="text-3xl font-semibold tracking-[-.04em] text-primary sm:text-4xl">See the signal.<br/><span className="text-brand-green">Inspect the evidence.</span></h1>
           <p className="mt-4 max-w-xl text-sm leading-relaxed text-secondary-foreground">A transparent model layered over prediction-market prices, trend regimes, seasonal history, and breaking crypto news.</p>
         </div>
@@ -431,9 +433,10 @@ export function Dashboard({ initialData }: { initialData: DashboardData | null }
         </div>
       </section>
 
-      <AutomationStatus/>
-      {data && <PositiveEdgeBuys predictions={data.predictions} updatedAt={data.generatedAt}/>} 
-      {data && <PerformancePanel performance={data.performance}/>} 
+      {authenticated && <AutomationStatus/>}
+      {authenticated && data && <PositiveEdgeBuys predictions={data.predictions} updatedAt={data.generatedAt}/>}
+      {authenticated && data?.performance && <PerformancePanel performance={data.performance}/>}
+      {!authenticated && <PaperBudgetPanel/>}
 
       <section>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">

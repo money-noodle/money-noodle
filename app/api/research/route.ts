@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { isAuthenticatedRequest } from '@/lib/auth';
 import { getDashboard } from '@/lib/dashboard';
+import { isStatelessDeployment, STATELESS_WORKER_MESSAGE } from '@/lib/runtime-environment';
 import { runResearch } from '@/lib/llm';
 
 export const runtime = 'nodejs';
@@ -10,6 +12,8 @@ interface IncomingMessage {
 }
 
 export async function POST(request: NextRequest) {
+  if (!isAuthenticatedRequest(request)) return NextResponse.json({ error: 'Authentication required.' }, { status: 401 });
+  if (isStatelessDeployment()) return NextResponse.json({ error: STATELESS_WORKER_MESSAGE }, { status: 503 });
   try {
     const body = await request.json() as { query?: string; messages?: IncomingMessage[]; providerId?: string; model?: string };
     const messages = Array.isArray(body.messages)

@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Progress } from '@/components/ui/progress';
-import type { TradingControlData } from '@/lib/types';
+import type { TradingControlData, TradingProviderDescriptor } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
@@ -68,8 +68,30 @@ export function TradingControlDialog() {
     if (await action('mode', { mode, confirmation: mode === 'live' ? liveConfirm : undefined })) setLiveConfirm('');
   }
 
-  function toggleVenue(venue: 'polymarket' | 'kalshi') {
-    setEnabledVenues((current) => current.includes(venue) ? current.filter((item) => item !== venue) : [...current, venue]);
+  async function updateTradingProvider(provider: TradingProviderDescriptor, field: 'researchEnabled' | 'paperEnabled' | 'liveEnabled', value: boolean) {
+    const requiredConfirmation = `ENABLE LIVE ${provider.id.toUpperCase()}`;
+    const confirmation = field === 'liveEnabled' && value
+      ? window.prompt(`Type ${requiredConfirmation} exactly to enable real-money execution for ${provider.name}.`) ?? ''
+      : undefined;
+    if (field === 'liveEnabled' && value && confirmation !== requiredConfirmation) {
+      setError(`${provider.name} live enablement was not confirmed.`);
+      return;
+    }
+    setLoading(true); setError('');
+    try {
+      const response = await fetch('/api/trading/providers', {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          providerId: provider.id, [field]: value, selectedVariantId: provider.selectedVariantId,
+          confirmation,
+          reason: `${field} ${value ? 'enabled' : 'disabled'} by operator in Budget.`,
+        }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || 'Provider update failed');
+      await load();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Provider update failed'); }
+    finally { setLoading(false); }
   }
 
   const kalshiReadiness = data?.venues.find((venue) => venue.venue === 'kalshi');
@@ -119,10 +141,12 @@ export function TradingControlDialog() {
               <label className="mt-3 block text-[9px] uppercase tracking-wider text-muted-foreground">All-in amount per purchase</label>
               <div className="mt-1 flex h-10 items-center rounded-md border bg-background px-3"><span className="text-sm text-muted-foreground">$</span><input type="number" min="0.02" max={budget || undefined} step="0.01" value={perTrade} onChange={(event) => setPerTrade(event.target.value)} className="min-w-0 flex-1 bg-transparent px-2 font-mono text-sm outline-none"/></div>
               <p className="mt-1.5 text-[9px] leading-relaxed text-muted-foreground">Includes contract principal and Kalshi fees. Kalshi quantity is sized in 0.01-contract increments so principal + estimated fee fits. Effective live cap: the lower of this value and the server safety ceiling ({dollars(data?.maximumLiveStakeCents ?? 25)}).</p>
-              <label className="mt-3 block text-[9px] uppercase tracking-wider text-muted-foreground">Enabled trading venues</label>
-              <div className="mt-1 grid grid-cols-2 gap-2">{(['polymarket', 'kalshi'] as const).map((venue) => { const enabled = enabledVenues.includes(venue); return <button type="button" key={venue} onClick={() => toggleVenue(venue)} disabled={data?.control.state === 'active'} className={cn('rounded-md border p-2.5 text-left transition disabled:opacity-50', enabled ? 'border-primary/25 bg-primary/5' : 'bg-background')}><div className="flex items-center justify-between"><span className="text-[10px] font-medium capitalize">{venue}</span><span className={cn('size-2 rounded-full', enabled ? 'bg-primary' : 'bg-muted-foreground/40')}/></div><p className="mt-1 text-[8px] text-muted-foreground">{enabled ? 'Eligible for new trades' : 'No new trades'}</p></button>; })}</div>
-              {!enabledVenues.length && <p className="mt-1 text-[9px] text-red-300">Enable at least one venue.</p>}
-              <div className="mt-3 grid grid-cols-2 gap-2"><Button variant="outline" onClick={() => void action('venues')} disabled={loading || data?.control.state === 'active' || !enabledVenues.length}>Apply venues only</Button><Button onClick={() => void action('configure')} disabled={loading || data?.control.state === 'active' || Boolean(data?.control.reservedBudgetCents) || !enabledVenues.length || !(Number(budget) > 0) || !(Number(perTrade) >= 0.02) || Number(perTrade) > Number(budget)}>{loading ? <Loader2 className="animate-spin"/> : <Save/>}Save budget</Button></div>
+              <label className="mt-3 block text-[9px] uppercase tracking-wider text-muted-foreground">Trading providers</label>
+              <p className="mt-1 text-[8px] leading-relaxed text-muted-foreground">Research, paper, and live permissions are independent. Changes require a paused, quiescent execution engine. Planned providers fail closed.</p>
+              <div className="mt-2 space-y-2">{data?.tradingProviders?.map((provider) => <div key={provider.id} className="rounded-lg border bg-background/40 p-2.5"><div className="flex items-start justify-between gap-2"><div><p className="text-[10px] font-medium">{provider.name}</p><p className="mt-0.5 font-mono text-[7px] text-muted-foreground">{provider.selectedVariantId}</p></div><Badge variant="outline" className="text-[8px]">{provider.implementation}</Badge></div><p className="mt-1 text-[8px] leading-relaxed text-muted-foreground">{provider.readiness}</p><div className="mt-2 grid grid-cols-3 gap-1">{([
+                ['researchEnabled', 'Research', provider.capabilities.marketData], ['paperEnabled', 'Paper', provider.capabilities.paper], ['liveEnabled', 'Live', provider.capabilities.live],
+              ] as const).map(([field, label, supported]) => { const enabled = provider[field]; return <button type="button" key={field} disabled={loading || data.control.state === 'active' || !data.executionDrain?.restartSafe || !supported} onClick={() => void updateTradingProvider(provider, field, !enabled)} className={cn('rounded border px-1.5 py-1.5 text-[8px] transition disabled:cursor-not-allowed disabled:opacity-40', enabled ? field === 'liveEnabled' ? 'border-red-400/35 bg-red-400/[.06] text-red-300' : 'border-primary/25 bg-primary/[.05] text-primary' : 'text-muted-foreground')}>{label} · {supported ? enabled ? 'on' : 'off' : 'unavailable'}</button>; })}</div></div>)}</div>
+              <div className="mt-3"><Button className="w-full" onClick={() => void action('configure')} disabled={loading || data?.control.state === 'active' || Boolean(data?.control.reservedBudgetCents) || !(Number(budget) > 0) || !(Number(perTrade) >= 0.02) || Number(perTrade) > Number(budget)}>{loading ? <Loader2 className="animate-spin"/> : <Save/>}Save budget</Button></div>
             </div>
 
             <div className="rounded-xl border p-4">

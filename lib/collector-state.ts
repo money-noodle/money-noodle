@@ -13,7 +13,7 @@ declare global {
 export function collectorRuntime(): CollectorRuntime {
   if (!globalThis.__moneyNoodleCollector) {
     globalThis.__moneyNoodleCollector = {
-      enabled: process.env.MONEY_NOODLE_BACKGROUND_INGESTION !== 'false',
+      enabled: process.env.MONEY_NOODLE_BACKGROUND_INGESTION !== 'false' && process.env.VERCEL !== '1' && process.env.MONEY_NOODLE_STATELESS !== 'true',
       running: false,
       inFlight: false,
       intervalMs: DATA_FRESHNESS.dashboardPollMs,

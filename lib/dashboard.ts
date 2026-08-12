@@ -8,10 +8,14 @@ import { DATA_FRESHNESS } from './freshness';
 import { trackCalculations } from './forecast-tracker';
 import { estimateMakerTouch } from './maker-fill-model';
 import { summarizePerformance } from './performance';
+import { activePolicyManifest } from './policy-manifest';
 import { bestEntry, edgeStrength, qualifiesAsBuyEdge } from './prediction-policy';
 import { estimateSettlementAverage } from './settlement-average';
 import { getEnabledTradingVenues } from './trading-control';
-import type { ChartPoint, ContractBasis, DashboardData, Direction, Factor, MarketQuote, NewsItem, Prediction, VenueQuote } from './types';
+import { getTradingProviderConfiguration, normalizeTradingProviderConfiguration } from './trading-provider-config-store';
+import { isStatelessDeployment } from './runtime-environment';
+import { tradingProviderRegistry } from './trading-provider-registry';
+import type { ChartPoint, ContractBasis, DashboardData, Direction, Factor, MarketQuote, NewsItem, Prediction, PublicDashboardData, VenueQuote } from './types';
 
 const minute = 60_000;
 export const MODEL_VERSION = 'Blend 0.4';
@@ -328,18 +332,29 @@ async function buildDashboard(force = false, liveOnly = false): Promise<Dashboar
       kalshiAskUp: Object.fromEntries(Object.entries(alignedKalshi).map(([symbol, quote]) => [symbol, quote.askUp])),
     },
   );
-  const enabledTradingVenues = await getEnabledTradingVenues().catch(() => ['polymarket', 'kalshi'] as Array<'polymarket' | 'kalshi'>);
+  const stateless = isStatelessDeployment();
+  // The hosted dashboard can research public markets but has no durable provider-control store.
+  // Never migrate/write local permissions from a serverless request.
+  const enabledTradingVenues = stateless
+    ? ['polymarket', 'kalshi'] as Array<'polymarket' | 'kalshi'>
+    : await getEnabledTradingVenues().catch(() => ['polymarket', 'kalshi'] as Array<'polymarket' | 'kalshi'>);
+  const providerConfiguration = stateless
+    ? normalizeTradingProviderConfiguration({ executionAuthority: 'provider-registry-v1' })
+    : await getTradingProviderConfiguration(enabledTradingVenues);
+  const tradingProviders = tradingProviderRegistry(providerConfiguration);
   const predictions = coinsResult.value
     .map((coin) => buildPrediction(coin, marketResult.value[coin.symbol], newsResult.value, history, seasonalResult.value[coin.symbol] ?? [], alignedKalshi[coin.symbol], venueHistory, enabledTradingVenues, referenceResult.value[coin.symbol], minuteResult.value[coin.symbol] ?? [], oracleHistory))
     .sort((a, b) => edgeStrength(b) - edgeStrength(a));
   // Persist regime diagnostics separately and attach the current path prefix for later outcome
   // analysis. Nothing below reads these features into probability, confidence, ranking, or gates.
-  const cycleRegimes = await recordCyclePathObservations(predictions, oracleHistory).catch((error) => {
-    console.error('Cycle path tracking failed:', error);
-    return {} as Record<string, NonNullable<Prediction['cycleRegime']>>;
-  });
+  const cycleRegimes = stateless ? {} as Record<string, NonNullable<Prediction['cycleRegime']>>
+    : await recordCyclePathObservations(predictions, oracleHistory).catch((error) => {
+      console.error('Cycle path tracking failed:', error);
+      return {} as Record<string, NonNullable<Prediction['cycleRegime']>>;
+    });
   for (const prediction of predictions) prediction.cycleRegime = cycleRegimes[prediction.symbol];
-  const performance = await trackCalculations(predictions, MODEL_VERSION).catch((error) => {
+  // Forecast and performance persistence belongs exclusively to the durable worker.
+  const performance = stateless ? summarizePerformance([]) : await trackCalculations(predictions, MODEL_VERSION).catch((error) => {
     console.error('Forecast tracking failed:', error);
     return summarizePerformance([]);
   });
@@ -347,6 +362,8 @@ async function buildDashboard(force = false, liveOnly = false): Promise<Dashboar
   return {
     generatedAt: generatedAt.toISOString(), expiresAt: new Date(generatedAt.getTime() + minute).toISOString(),
     modelVersion: MODEL_VERSION,
+    tradingProviders,
+    policyManifest: activePolicyManifest(tradingProviders, MODEL_VERSION),
     collector: collectorStatus(),
     sourceStatus: {
       polymarket: Object.values(marketResult.value).some((quote) => quote.live),
@@ -363,6 +380,12 @@ async function buildDashboard(force = false, liveOnly = false): Promise<Dashboar
 
 let dashboardQueue: Promise<void> = Promise.resolve();
 let latestDashboard: DashboardData | undefined;
+
+/** Removes every control/performance field from the unauthenticated server response. */
+export function publicDashboardData(dashboard: DashboardData): PublicDashboardData {
+  const { tradingProviders: _providers, policyManifest: _policyManifest, performance: _performance, ...publicData } = dashboard;
+  return publicData;
+}
 
 export function getDashboard(force = false, liveOnly = false): Promise<DashboardData> {
   const operation = dashboardQueue.then(async () => {

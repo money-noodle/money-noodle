@@ -13,3 +13,4 @@ data/*.tmp
 npm-debug.log*
 data/archive/
 data/*.corrupt-*
+.vercel

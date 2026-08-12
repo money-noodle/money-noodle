@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { isAuthenticatedRequest } from '@/lib/auth';
+import { isStatelessDeployment, STATELESS_WORKER_MESSAGE } from '@/lib/runtime-environment';
 import { configureTradingBudget, getTradingControl, resumeTrading, setEnabledTradingVenues, setTradingMode } from '@/lib/trading-control';
 import { getExecutionSummaries, pauseAndDrainLiveExecution, reconcileLiveExecution, resetPaperBudget } from '@/lib/paper-execution';
 import type { TradingControlData } from '@/lib/types';
@@ -22,7 +24,9 @@ async function withExecution(data: Promise<TradingControlData>): Promise<Trading
   };
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  if (!isAuthenticatedRequest(request)) return NextResponse.json({ error: 'Authentication required.' }, { status: 401 });
+  if (isStatelessDeployment()) return NextResponse.json({ error: STATELESS_WORKER_MESSAGE }, { status: 503 });
   try {
     return NextResponse.json(await withExecution(getTradingControl()), { headers: { 'Cache-Control': 'private, no-store' } });
   } catch (error) {
@@ -32,6 +36,8 @@ export async function GET() {
 }
 
 export async function PATCH(request: NextRequest) {
+  if (!isAuthenticatedRequest(request)) return NextResponse.json({ error: 'Authentication required.' }, { status: 401 });
+  if (isStatelessDeployment()) return NextResponse.json({ error: STATELESS_WORKER_MESSAGE }, { status: 503 });
   try {
     const origin = request.headers.get('origin');
     if (!origin || origin !== request.nextUrl.origin) return NextResponse.json({ error: 'Invalid request origin.' }, { status: 403 });

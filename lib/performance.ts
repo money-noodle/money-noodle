@@ -106,14 +106,15 @@ export const MIN_EVALUATION_WINDOWS = 20;
  * Accuracy can look fine while every trade still loses money, so this is the profitability metric.
  */
 /**
- * Tracks apparent positive-edge sides that v11 intentionally rejects only because our independent
- * selected-side estimate is below 55%. One issuance nearest five minutes remains per asset/window;
+ * Tracks apparent positive-edge sides that the active policy rejects only because our independent
+ * selected-side estimate is below its floor. One issuance nearest five minutes remains per asset/window;
  * window-level results then choose the strongest candidate to avoid treating correlated assets as
  * independent proof. This is outcome measurement, never an authorization path.
  */
 function missedBuyCounterfactual(forecasts: TrackedForecast[]): MissedBuyCounterfactual {
-  const label = '55% selected-side floor rejects';
-  const description = 'Exact-Kalshi fee-aware counterfactuals for sides that passed quality, price, and 5pp edge but were rejected only because independent selected-side probability was below 55%.';
+  const floorPercent = `${MIN_SELECTED_SIDE_PROBABILITY * 100}%`;
+  const label = `${floorPercent} selected-side floor rejects`;
+  const description = `Exact-Kalshi fee-aware counterfactuals for sides that passed quality, price, and 5pp edge but were rejected only because independent selected-side probability was below ${floorPercent}.`;
   const byAssetWindow = new Map<string, TrackedForecast[]>();
   for (const forecast of forecasts.filter((item) => item.status === 'resolved' && item.policyVersion === BUY_POLICY_VERSION)) {
     const outcome = forecast.venueOutcomes?.kalshi?.outcome;

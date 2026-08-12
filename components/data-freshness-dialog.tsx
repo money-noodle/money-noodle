@@ -29,7 +29,9 @@ const CRITICAL_SOURCES: Array<{ key: keyof DashboardData['sourceStatus']; label:
   { key: 'coinGecko', label: 'CoinGecko' },
 ];
 
-export function DataFreshnessDialog({ data }: { data: DashboardData }) {
+type DataFreshnessData = Pick<DashboardData, 'generatedAt' | 'collector' | 'sourceStatus'>;
+
+export function DataFreshnessDialog({ data }: { data: DataFreshnessData }) {
   // The health dot lives on the control that explains it, instead of a separate header label that
   // duplicated this state and read as though it described trading rather than data.
   const degraded = CRITICAL_SOURCES.filter((source) => !data.sourceStatus[source.key]).map((source) => source.label);
