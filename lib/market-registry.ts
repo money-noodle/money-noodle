@@ -68,11 +68,11 @@ const CAPABILITIES: ProviderMarketCapability[] = [
   },
   {
     providerId: 'crypto-com', marketId: 'crypto-spot', marketData: true, paper: false, live: false,
-    readiness: 'Public Exchange v1 instruments, tickers, and order-book reads need no credentials. Paper and live withheld until a directional model exists; the zero-drift forecast produces no spot signal.',
+    readiness: 'Verified 2026-08-13. Public Exchange v1 reads need no credentials at all: 930 instruments (577 spot pairs, 343 perpetuals) with real order-book depth and a $0.01 BTC spread. Signed account reads also verified. Paper and live withheld until a directional model exists; the zero-drift forecast produces no spot signal.',
   },
   {
     providerId: 'robinhood', marketId: 'crypto-spot', marketData: true, paper: false, live: false,
-    readiness: 'Crypto Trading API is documented but every endpoint including quotes is account-authenticated, so nothing can be read without operator API-key and Ed25519 credentials. Paper and live withheld for the same reason as Crypto.com.',
+    readiness: 'Verified 2026-08-13. Signed account and holdings reads work, but quotes are spread-inclusive with no order book: best_bid_ask reports a ~0.95% spread each way, roughly 1.9% round trip. Usable as an account source, unusable as a price reference or execution venue. Every endpoint including quotes requires operator credentials. Paper and live withheld.',
   },
   {
     providerId: 'forecastex', marketId: 'crypto-15m', marketData: false, paper: false, live: false,
