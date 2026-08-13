@@ -13,6 +13,24 @@ import type { ExecutionMode, PositionSide, Prediction } from './types';
 
 /** Minimum expected value per $1 of payout, after fees, before a buy qualifies. */
 export const MIN_NET_EDGE = 0.05;
+/**
+ * Upper bound on claimed edge, above which the claim is treated as model failure rather than opportunity.
+ *
+ * Across 37,943 resolved forecasts, calibration is sound or conservative in every edge bucket below this
+ * line — the traded band realizes 75.8% against 67.3% predicted. Above it the model inverts: edge of 35pp
+ * or more predicts 64.0% and realizes 37.6%, a -26.4pp gap holding at -26.7pp clustered over 218 windows.
+ * Those trades also returned -100% in the live book.
+ *
+ * A 35-point disagreement with a liquid venue is not an edge that large; it is the model being wrong
+ * loudly, and it concentrates at cheap prices where it disagrees most. Restrictive only: this can refuse
+ * a trade, never authorize one. Set MONEY_NOODLE_MAX_NET_EDGE to change or 1 to disable.
+ */
+export const MAX_NET_EDGE = 0.35;
+
+export function maximumNetEdge(): number {
+  const configured = Number(process.env.MONEY_NOODLE_MAX_NET_EDGE);
+  return Number.isFinite(configured) && configured > 0 ? Math.min(1, configured) : MAX_NET_EDGE;
+}
 /** Minimum confidence in our own estimate. Deliberately independent of agreement with the market. */
 export const MIN_ESTIMATE_QUALITY = 0.5;
 /**
@@ -33,7 +51,7 @@ export const MIN_SELECTED_SIDE_PROBABILITY = 0.55;
  */
 export const MIN_ENTRY_PRICE = 0.05;
 export const MAX_ENTRY_PRICE = 0.97;
-export const BUY_POLICY_VERSION = 'buy-binary-edge-net5-quality50-owned55-price5to97-uponly-v14';
+export const BUY_POLICY_VERSION = 'buy-binary-edge-net5to35-quality50-owned55-price5to97-uponly-v15';
 /** Minimum unique resolved 15-minute settlement timestamps, never updates or per-asset cycles. */
 export const MIN_CALIBRATION_SAMPLE = 100;
 
@@ -112,6 +130,7 @@ export function downEntryEnabled(mode: ExecutionMode = 'live'): boolean {
 
 const admissibleEntry = (option: VenueEntryOption, mode: ExecutionMode = 'live') => option.price >= MIN_ENTRY_PRICE && option.price <= MAX_ENTRY_PRICE
   && option.probability >= MIN_SELECTED_SIDE_PROBABILITY
+  && option.netEdge < maximumNetEdge()
   && (option.side === 'UP' || downEntryEnabled(mode));
 
 export function bestEntry(prediction: EntryCandidate, mode: ExecutionMode = 'live'): VenueEntryOption | undefined {
@@ -142,7 +161,7 @@ export function qualifiesVenueBuyEdge(prediction: EntryCandidate & Pick<Predicti
   // conditions inline, so omitting it here would leave an entry path the suspension does not cover.
   return prediction.confidence >= MIN_ESTIMATE_QUALITY && Boolean(entry
     && (entry.side === 'UP' || downEntryEnabled(mode))
-    && entry.netEdge >= MIN_NET_EDGE && entry.price >= MIN_ENTRY_PRICE && entry.price <= MAX_ENTRY_PRICE
+    && entry.netEdge >= MIN_NET_EDGE && entry.netEdge < maximumNetEdge() && entry.price >= MIN_ENTRY_PRICE && entry.price <= MAX_ENTRY_PRICE
     && sideProbability(prediction, entry.side) >= MIN_SELECTED_SIDE_PROBABILITY);
 }
 

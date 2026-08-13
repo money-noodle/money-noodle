@@ -5,10 +5,11 @@ vi.mock('server-only', () => ({}));
 import { bestEntry, bestEntryForSide, downEntryEnabled, qualifiesVenueBuyEdge, venueEntryOptions } from './prediction-policy';
 
 /** A market where DOWN is clearly the better expected value, so the suspension is what decides. */
+// Edge kept inside the 35pp ceiling: this fixture tests the DOWN gate, not the edge bound.
 const bearish = {
-  modelProbabilityUp: 0.2, confidence: 0.7, enabledTradingVenues: ['kalshi' as const],
+  modelProbabilityUp: 0.35, confidence: 0.7, enabledTradingVenues: ['kalshi' as const],
   market: { live: false } as never,
-  kalshi: { live: true, askUp: 0.6, askDown: 0.3 } as never,
+  kalshi: { live: true, askUp: 0.62, askDown: 0.45 } as never,
 };
 
 afterEach(() => { delete process.env.MONEY_NOODLE_ALLOW_DOWN_ENTRY_LIVE;
@@ -39,7 +40,7 @@ describe('DOWN entry suspension', () => {
   });
 
   it('leaves UP entry untouched', () => {
-    const bullish = { ...bearish, modelProbabilityUp: 0.8, kalshi: { live: true, askUp: 0.3, askDown: 0.6 } as never };
+    const bullish = { ...bearish, modelProbabilityUp: 0.65, kalshi: { live: true, askUp: 0.45, askDown: 0.62 } as never };
     expect(bestEntry(bullish)?.side).toBe('UP');
     expect(qualifiesVenueBuyEdge(bullish, 'kalshi', 'UP')).toBe(true);
   });

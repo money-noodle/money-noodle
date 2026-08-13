@@ -95,8 +95,9 @@ describe('binary buy policy v13', () => {
 
   it('buys DOWN only from its own actionable ask and probability', () => {
     process.env.MONEY_NOODLE_ALLOW_DOWN_ENTRY_LIVE = 'true';
-    const bearish = candidate({ modelProbabilityUp: 0.2, market: { ...market, askUp: 0.7, askDown: 0.3 } });
-    expect(bestEntry(bearish)).toMatchObject({ side: 'DOWN', price: 0.3 });
+    // Edge held inside the 35pp ceiling so this case tests side selection, not the edge bound.
+    const bearish = candidate({ modelProbabilityUp: 0.35, market: { ...market, askUp: 0.7, askDown: 0.45 } });
+    expect(bestEntry(bearish)).toMatchObject({ side: 'DOWN', price: 0.45 });
     expect(qualifiesAsBuyEdge(bearish)).toBe(true);
     expect(qualifiesVenueBuyEdge(bearish, 'polymarket', 'DOWN')).toBe(true);
     expect(qualifiesVenueBuyEdge(bearish, 'polymarket', 'UP')).toBe(false);
