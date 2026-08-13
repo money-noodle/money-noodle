@@ -135,10 +135,20 @@ export async function readPublicPaperPerformanceFromPostgres(): Promise<PublicPa
       limit 1
     `;
     if (!row?.payload || typeof row.payload !== 'object') return null;
-    const payload = row.payload as Omit<PublicPaperPerformance, 'durable' | 'generatedAt'>;
+    const payload = row.payload as Partial<PublicPaperPerformance>;
     // A projection missing its scored halves is a failed or partial replication, not an empty record.
     if (!payload.summary || !payload.paperRecord) return null;
-    return { ...payload, durable: true, generatedAt: timestamp(row.source_updated_at) };
+    // Rebuilt field by field, never spread. A stored snapshot is whatever an older worker published, so
+    // spreading it would keep serving a field after it was deliberately withdrawn from the public
+    // surface — the withdrawal would silently depend on the worker having replicated since.
+    return {
+      durable: true,
+      generatedAt: timestamp(row.source_updated_at),
+      summary: payload.summary,
+      paperRecord: payload.paperRecord,
+      forecasts: payload.forecasts ?? [],
+      cyclePaths: payload.cyclePaths,
+    };
   } catch (error) {
     console.error('Postgres public paper performance read failed:', error);
     return null;
