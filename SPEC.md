@@ -110,11 +110,30 @@ Per venue and consolidated:
 
 The trading system has an independent durable working-budget ledger. A venue account balance never silently increases this budget; the user explicitly allocates the amount that automation may risk.
 
+#### Markets and keying rules
+
+A **market** is an instrument class plus a horizon and settlement semantics — currently one: `crypto-15m`, the 15-minute Up/Down contract settling against the cycle-open reference. Every budget, order, policy row, and reported summary carries an explicit `marketId`, so a second market is additive rather than a migration.
+
+Four things vary along four different axes, and each is keyed to what it actually depends on:
+
+| Concern | Keyed by | Why |
+| --- | --- | --- |
+| Budget | provider, allocated by percentage across that provider's enabled markets | Cash is not fungible across providers. Funds physically sit in a provider account and cannot fund an order elsewhere, so a combined spendable pool would authorize trades that cannot settle. |
+| Forecast model and calibration | market | The diffusion engine takes threshold, horizon, and volatility as parameters and is shared, but fitted parameters, drift assumptions, and settlement corrections are horizon-specific. Every provider in a market reports the **identical** probability, which is what makes one probability against several prices a meaningful comparison. |
+| Policy — entry thresholds, sizing, execution style | provider × market | These depend on that venue's fees, tick/quantity rules, and market structure. |
+| Position and correlation caps | market, global across providers | Risk is exposure to the underlying, not to a venue. Keying these per provider would let each provider hold a full allowance of the same correlated window, silently multiplying intended exposure. |
+
+Market allocations are a percentage of **current provider equity** (available plus reserved plus realized P&L), so a market's cap compounds with wins and contracts in drawdown without manual edits. Allocations are hard caps, must sum to no more than 100% of a provider's enabled markets, and any unallocated remainder stays uncommitted. A market's spendable amount is its own cap minus its own reservations, never the provider's total available cash.
+
+Provider capability is declared per **(provider, market)** pair. A single capability triple per provider cannot express a provider that supports live trading on one market and nothing on another, which is the normal case rather than the exception.
+
+Live candidate selection treats funding as a feasibility filter and price as the objective, in this order: shared forecast; per-provider policy gates; per-provider hard readiness gates; per-(provider, market) funding; global exposure caps; then rank surviving candidates by expected dollar contribution **at the size each provider can actually fill**. Narrowing to a single best-priced venue before the funding check would forfeit trades another provider could have taken, and comparing edge per contract rather than expected profit at fundable size prefers a fatter edge on a stake that cannot be placed. Provider reliability is a hard gate, never a ranking weight; an explicit cents margin expresses venue preference so a negligible price difference cannot flip venues on noise.
+
 #### Budget model
 
 - Store configured budget and conservative reservations as integer cents; retain venue-authoritative principal, fee, fill-price, quantity, and P&L fields at exact fractional-cent precision. UI may display dollars.
-- Track starting budget, available budget, reserved/open-trade budget, realized P&L, and current working equity.
-- The user configures a **total live budget** and a fixed **all-in amount per purchase**. The purchase amount includes contract principal and venue fees and never exceeds available budget or environment stake limits.
+- Track starting budget, available budget, reserved/open-trade budget, realized P&L, and current working equity **per provider**, and report each market's allocated cap and its own reservations within that provider.
+- The user configures a **live budget per provider**, a **percentage allocation per enabled market** within that provider, and a fixed **all-in amount per purchase**. The purchase amount includes contract principal and venue fees and never exceeds the market's allocated cap, the provider's available budget, or environment stake limits.
 - When Kalshi is enabled, saving verifies the total live budget against the signed available Kalshi cash balance.
 - Execution chooses the largest supported quantity whose principal plus conservative fee reserve fits under the per-purchase cap. Kalshi v2 uses 0.01-contract increments; Polymarket remains whole-contract only. Venue-reported fill prices and fees replace estimates, and unused reserve is released without artificial P&L.
 - Order placement reserves planned all-in spend; settlement releases payout and applies `payout − actual stake` to realized P&L.
@@ -376,7 +395,17 @@ Private path: signed API requests for balance, positions, orders, fills, placeme
 
 #### Crypto.com
 
-Planned read/paper-first adapter. Before implementation, verify the exact official product/API that exposes eligible binary or event contracts, jurisdiction/account restrictions, contract rules, fees, market-data rights, and whether authenticated order placement and complete reconciliation are supported. If no suitable official API exists, retain research-only status and do not simulate false live readiness.
+**Verified 2026-08-13: not viable for `crypto-15m`. Retains research-only status; capabilities stay false.**
+
+The binary product is **Strike Options**, offered by Crypto.com | Derivatives North America (CDNA) under CFTC oversight, US only. Durations are 5 minutes, 20 minutes, 2 hours, daily, and weekly — there is no 15-minute contract. Three findings independently block integration:
+
+1. **No programmatic access.** The Exchange API v1 covers spot, margin, perpetual swaps, and standard futures. Strike Options and Up/Down are not tradeable through it, and the Predictions API exposes data only with execution restricted on event-based elements. CDNA is a separate entity from Crypto.com Exchange. Scraping or browser automation cannot authorize live trading, so there is no path.
+2. **No order book, and the venue is the counterparty.** Orders are market orders with protection on an immediate-or-cancel basis against a platform-quoted price; the trader sees an indicative amount and may fill anywhere within a slippage tolerance. Money Noodle's live edge is managed post-only maker placement, which cannot exist here, and no two-sided book means no observable spread from which to derive implied volatility. The counterparty sets the price knowing its own index.
+3. **Not comparable.** Settlement uses CDNA's own indicative index price, taken from BID/ASK midpoints once per second, against a predetermined strike rather than a cycle-open reference, with a fixed US$10 payout. Under contract normalization this is `not comparable` to the 15-minute target, so it could not serve even as a benchmark price.
+
+Even treated as its own market, the gap is structural rather than a recalibration: a dealer-quoted IOC binary needs a different execution model entirely — slippage tolerance, indicative-versus-fill reconciliation, no maker path, and no cancellation lifecycle.
+
+What the API *does* support — spot, margin, perpetual swaps, futures — maps onto a **future** market rather than this one. Perpetual funding rates are an observable drift signal, unlike the current zero-drift model, so that work is gated behind directional-alpha research and not adapter plumbing. Before reversing this finding, confirm with CDNA or Crypto.com institutional support whether Strike Options market data and order placement are available programmatically; absence of public documentation is not proof that no interface exists.
 
 #### ForecastEx
 
@@ -498,7 +527,7 @@ Recommended future service boundaries:
 - [x] Add `TradingProviderAdapter` normalized contract/quote/account/order interfaces with explicit capability checks, plus an atomic durable `data/trading-providers.json` configuration mirrored fail-closed from the legacy Budget execution authority and a distinct read-only `/api/trading/providers` route.
 - [x] Promote the provider store to `provider-registry-v1` authority through a one-time legacy migration. Provider mutations require authentication, same-origin, paused quiescent/restart-safe execution, explicit capability, exact variant identity, immutable audit, and typed confirmation for live enablement. Paper and live permissions are enforced separately; disabling live preserves paper and reduce-only lifecycle handling. The legacy Budget venue field is now a compatibility projection only.
 - [ ] Versioned provider/model variants for contract semantics, fees, quote normalization, paper fill assumptions, and execution/reconciliation behavior; provider prices remain excluded from tradeable probability.
-- [ ] Add Crypto.com read/paper-first adapter after official product/API and eligibility verification.
+- [~] Crypto.com event-contract adapter is **not viable** and is withdrawn from this phase: Strike Options has no programmatic interface, no order book, and non-comparable settlement. See §5 Crypto.com. A spot/perpetual adapter belongs to a future market, not to `crypto-15m`.
 - [ ] Add ForecastEx read/paper-first adapter after official exchange/broker API and eligibility verification.
 - [ ] Add Robinhood read/paper-first adapter after official event-contract API and eligibility verification.
 - [ ] Fan every configured provider variant into an isolated continuous paper track with exact provider-contract settlement and variant-specific P&L.
@@ -573,10 +602,10 @@ Recommended future service boundaries:
 
 - Redundant fallback for the primary Kraken cycle-reference/current-price/volatility series without introducing cross-source basis offsets.
 - Exact cross-provider market sets that semantically match each normalized 15-minute target, without assuming equal settlement rules.
-- Which official Crypto.com, ForecastEx, and Robinhood APIs/products permit event-contract market data, paper modeling, and eventual automated live trading for the operator's account and jurisdiction.
+- Which official ForecastEx and Robinhood APIs/products permit event-contract market data, paper modeling, and eventual automated live trading for the operator's account and jurisdiction. *(Crypto.com resolved 2026-08-13: not viable for event contracts — see §5.)*
 - Historical backfill vendor and retention/cost target beyond the current Kraken weekly feed.
 - Whether live signing should move from file-based Kalshi RSA keys to hardware/OS-keychain custody.
-- Whether the global working budget should be explicitly split by venue or allocated dynamically per trade after per-venue funding checks.
+- Whether a market-wide dollar exposure ceiling across providers should complement the existing position and correlation caps, or whether per-trade sizing plus those caps remain sufficient. *(Deferred: unnecessary while one live provider exists.)*
 - Alert channels (in-app, desktop, email, SMS/Telegram).
 - Manual model-promotion criteria after the automatic 100-window walk-forward evaluation.
 
@@ -647,3 +676,9 @@ Recommended future service boundaries:
 | 2026-08-11 | Add a permissive adaptive regime gate rather than fixed clock windows or raw loss streaks. A bankroll-independent exact-contract sentinel learns bounded fee-aware return by independent settlement window, warms on the current policy, soft-blocks only new exposure at strong negative evidence, and automatically reopens under a lower confidence threshold without withdrawing active operator intent. Manual pauses and hard economic stops remain non-auto-resumable. |
 | 2026-08-11 | Rename the application to Money Noodle and rename all server configuration variables from `SIGNAL_DESK_*` to `MONEY_NOODLE_*`. Preserve pre-rename durable order/client IDs and migrate browser-local research chat so the brand change cannot orphan reconciliation state or user history. |
 | 2026-08-11 | Add a guarded maker/taker execution-style policy after 442 maker attempts showed 53.0% accepted-order fills but −9.49% ask-side counterfactual return for accepted non-fills. Keep live maker execution unchanged initially; record strict taker recommendations and resolved counterfactuals. Any later adaptive taker must be a price-capped IOC limit and clear 15pp current edge, 10pp persistent median edge, 65% quality, 2¢ spread, 30 comparable maker samples, and 2pp captured-value advantage. |
+| 2026-08-13 | Split the working budget by provider rather than allocating dynamically per trade, resolving the prior open decision. Cash is not fungible across providers: funds sit in a provider account and cannot fund an order elsewhere, so a combined spendable pool would authorize trades that cannot settle, would be non-binding whenever balances are uneven, and would block a well-funded provider once another consumed the shared pool. Each provider holds its own budget and allocates a percentage of current provider equity to each enabled market as a hard cap; a market may spend its own cap less its own reservations, never the provider's total available cash. |
+| 2026-08-13 | Key the forecast model and its calibration by market, never by provider. One diffusion engine is shared because threshold, horizon, and volatility are already parameters; fitted parameters, drift assumptions, and settlement corrections are horizon-specific and belong to the market. Every provider in a market therefore reports the identical probability, which is precisely what allows one probability to be compared against several venue prices — divergent per-provider probabilities would make a price difference and a model difference indistinguishable. Per-provider variants remain an A/B lever running a candidate model version in an isolated paper track, not a permanently divergent forecast. |
+| 2026-08-13 | Key entry thresholds, sizing, and execution style by provider and market together, since they depend on that venue's fees, tick and quantity rules, and market structure. Keep position, same-window, and correlation-group caps global across providers within a market, because risk is exposure to the underlying rather than to a venue; keying them per provider would grant each provider a full allowance of the same correlated window and silently multiply intended exposure. |
+| 2026-08-13 | Declare provider capability per (provider, market) pair rather than per provider, and carry an explicit `marketId` on every budget, order, policy row, and reported summary while only `crypto-15m` exists. A single capability triple per provider cannot express live support on one market and none on another, which Crypto.com demonstrates concretely: its API supports spot and perpetuals but no event contracts. |
+| 2026-08-13 | Order live candidate selection as feasibility-then-objective: shared forecast, per-provider policy gates, hard readiness gates, per-(provider, market) funding, global exposure caps, then rank survivors by expected dollar contribution at the size each provider can actually fill. Narrowing to a single best-priced venue before funding forfeits trades another provider could take, and ranking edge per contract prefers a fatter edge on an unplaceable stake. Reliability stays a hard gate rather than a ranking weight, with venue preference expressed as an explicit cents margin so a negligible price difference cannot flip venues on noise. |
+| 2026-08-13 | Withdraw the Crypto.com event-contract adapter as not viable after verifying the official product. Strike Options is a CDNA dealer-quoted IOC binary with no programmatic interface, no order book, 5/20-minute rather than 15-minute durations, a predetermined strike, and settlement on CDNA's own per-second index — non-comparable, and structurally incompatible with managed post-only maker execution. Its Exchange API supports spot, margin, perpetuals, and futures, which belong to a future market gated behind directional-alpha research rather than to `crypto-15m`. |
