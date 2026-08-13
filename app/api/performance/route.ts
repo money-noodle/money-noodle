@@ -5,6 +5,7 @@ import { getCyclePathReport } from '@/lib/cycle-path-store';
 import { buildMakerFillReport, buildProviderTradeRecords, buildTradeRecord } from '@/lib/execution-report';
 import { epochResults, lifetimeRealizedPnlCents } from '@/lib/budget-epoch';
 import { evaluateStakeExpansion } from '@/lib/stake-expansion-policy';
+import { buildMakerShadow } from '@/lib/maker-shadow';
 import { getTradingControl } from '@/lib/trading-control';
 import { getForecastHistory, getPerformanceSummary } from '@/lib/forecast-tracker';
 import { getExecutionOrders } from '@/lib/paper-execution';
@@ -49,6 +50,9 @@ export async function GET(request: Request) {
       // Evaluation only. Raising the cap stays a manual, audited act; this states whether the stated
       // criteria are met and what a qualifying expansion would be.
       stakeExpansion: evaluateStakeExpansion(control.control, orders),
+      // Observation only: what paper would have returned under maker execution instead of its
+      // immediate-ask fill, separating price improvement from fill risk.
+      paperMakerShadow: buildMakerShadow(orders, 'paper'),
       cyclePaths,
       makerFillReport: buildMakerFillReport(orders, forecasts),
       modelEvaluations,
