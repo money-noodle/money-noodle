@@ -1,3 +1,5 @@
+export const REGIME_GATE_POLICY_VERSION = 'adaptive-fee-edge-window-v1';
+
 export type RegimeGatePhase = 'disabled' | 'warming' | 'open' | 'closed';
 
 export interface RegimeGateObservation {

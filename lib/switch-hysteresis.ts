@@ -1,5 +1,9 @@
 import { observationBucket } from './observation-window';
 
+/** Switch evidence is required to persist on its own terms, independently of entry persistence. */
+export const REQUIRED_SWITCH_SNAPSHOTS = 3;
+export const REQUIRED_SWITCH_SPAN_MS = 30_000;
+
 export interface SwitchPersistenceState {
   incumbentId: string;
   replacementId: string;

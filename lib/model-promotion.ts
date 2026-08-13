@@ -1,4 +1,4 @@
-import type { WalkForwardEvaluationRun, WalkForwardParameters } from './types';
+import type { ModelPromotionAction, ModelPromotionEntry, WalkForwardEvaluationRun, WalkForwardParameters } from './types';
 
 /**
  * Manual, immutable model promotion.
@@ -20,30 +20,9 @@ export const PROMOTION_MIN_MEAN_WINDOW_RETURN_GAP = 0.02;
 /** Replay must be near-exact, or the candidate was scored on reconstructed inputs it never saw. */
 export const PROMOTION_MAX_REPLAY_ERROR = 0.005;
 
-export type ModelPromotionAction = 'promoted' | 'rolled-back';
-
-export interface ModelPromotionEntry {
-  id: string;
-  at: string;
-  action: ModelPromotionAction;
-  modelVersion: string;
-  parameters: WalkForwardParameters;
-  /** Operator-supplied justification. Required: an unexplained promotion is not auditable. */
-  reason: string;
-  /** Walk-forward run the decision cited, retained so the evidence cannot drift from the decision. */
-  evidenceRunId?: string;
-  evidence?: {
-    checkpointWindows: number;
-    candidateMeanWindowReturn: number;
-    baselineMeanWindowReturn: number;
-    candidateTrades: number;
-    positiveCandidateFolds: number;
-    candidateBeatBaselineFolds: number;
-    maximumBaselineReplayError: number;
-  };
-  /** Entry this one supersedes, set on a rollback so the chain is explicit. */
-  supersedesId?: string;
-}
+// The record shape lives in types.ts so the published policy manifest and this module cannot
+// describe a promotion differently.
+export type { ModelPromotionAction, ModelPromotionEntry, ModelPromotionEvidence } from './types';
 
 export interface PromotionEligibility {
   eligible: boolean;

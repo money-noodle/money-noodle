@@ -116,7 +116,7 @@ export interface TradingProviderDescriptor {
   variants: TradingProviderVariant[];
 }
 
-export type PolicyComponentKind = 'forecast' | 'buy' | 'execution' | 'exit' | 'switch' | 'regime' | 'provider';
+export type PolicyComponentKind = 'forecast' | 'buy' | 'eligibility' | 'execution' | 'exit' | 'switch' | 'regime' | 'provider';
 export interface PolicyManifestComponent {
   kind: PolicyComponentKind;
   label: string;
@@ -134,6 +134,39 @@ export interface PolicyManifestHistoryEntry {
   changes: string[];
   evidence: string[];
 }
+export type ModelPromotionAction = 'promoted' | 'rolled-back';
+/** Held-out evidence copied out of the cited run, so it cannot drift away from the decision. */
+export interface ModelPromotionEvidence {
+  checkpointWindows: number;
+  candidateMeanWindowReturn: number;
+  baselineMeanWindowReturn: number;
+  candidateTrades: number;
+  positiveCandidateFolds: number;
+  candidateBeatBaselineFolds: number;
+  maximumBaselineReplayError: number;
+}
+export interface ModelPromotionEntry {
+  id: string;
+  at: string;
+  action: ModelPromotionAction;
+  modelVersion: string;
+  parameters: WalkForwardParameters;
+  /** Operator-supplied justification. Required: an unexplained promotion is not auditable. */
+  reason: string;
+  /** Walk-forward run the decision cited, retained so the evidence cannot drift from the decision. */
+  evidenceRunId?: string;
+  evidence?: ModelPromotionEvidence;
+  /** Entry this one supersedes, set on a rollback so the chain is explicit. */
+  supersedesId?: string;
+}
+/** What production is running, against what the promotion ledger can actually account for. */
+export interface PolicyManifestModel {
+  productionVersion: string;
+  currentPromotion?: ModelPromotionEntry;
+  /** True when production runs a version no promotion record explains. */
+  unrecorded: boolean;
+  history: ModelPromotionEntry[];
+}
 export interface PolicyManifest {
   version: 'policy-manifest-v1';
   generatedAt: string;
@@ -141,6 +174,8 @@ export interface PolicyManifest {
   activeBuyPolicyActivatedAt: string;
   components: PolicyManifestComponent[];
   history: PolicyManifestHistoryEntry[];
+  /** Promotion provenance is track-record-derived, so it is withheld from the public payload. */
+  model?: PolicyManifestModel;
 }
 
 export type ContractComparability = 'exact' | 'approximate' | 'not-comparable';

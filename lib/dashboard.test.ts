@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { PRODUCTION_REPLAY_PARAMETERS, replayCalibrationProbability } from './calibration-replay';
-import { alignedKalshiQuote, buildPrediction } from './dashboard';
+import { alignedKalshiQuote, buildPrediction, publicDashboardData } from './dashboard';
+import { activePolicyManifest } from './policy-manifest';
+import { normalizeTradingProviderConfiguration } from './trading-provider-config-store';
+import { tradingProviderRegistry } from './trading-provider-registry';
 import type { CoinSnapshot, ContractReference } from './feeds';
 import { MIN_ESTIMATE_QUALITY } from './prediction-policy';
-import type { ChartPoint, MarketQuote, VenueQuote } from './types';
+import type { ChartPoint, DashboardData, MarketQuote, VenueQuote } from './types';
 
 const coin: CoinSnapshot = {
   symbol: 'BTC', name: 'Bitcoin', price: 100, high24h: 103, low24h: 98, volume: 1_000_000,
@@ -136,5 +139,28 @@ describe('Blend 0.3', () => {
     const factor = build(undefined, 100).factors.find((item) => item.id === 'market');
     expect(factor?.available).toBe(false);
     expect(factor?.score).toBe(0);
+  });
+});
+
+describe('public dashboard payload', () => {
+  const dashboard = () => ({
+    tradingProviders: [], performance: {},
+    policyManifest: activePolicyManifest(tradingProviderRegistry(normalizeTradingProviderConfiguration({ executionAuthority: 'provider-registry-v1' })), 'Blend 0.4', []),
+    predictions: [],
+  } as unknown as DashboardData);
+
+  it('withholds provider permissions and the model promotion record from unauthenticated callers', () => {
+    const signed = dashboard();
+    expect(signed.policyManifest.model).toBeDefined();
+    expect(signed.policyManifest.components.some((component) => component.kind === 'provider')).toBe(true);
+
+    const published = publicDashboardData(signed);
+    expect(published.policyManifest.model).toBeUndefined();
+    expect(published.policyManifest.components.some((component) => component.kind === 'provider')).toBe(false);
+    // The rules themselves stay public: withholding provenance must not withhold the policy.
+    expect(published.policyManifest.components.some((component) => component.kind === 'eligibility')).toBe(true);
+    expect(published.policyManifest.activeBuyPolicyVersion).toBe(signed.policyManifest.activeBuyPolicyVersion);
+    expect('tradingProviders' in published).toBe(false);
+    expect('performance' in published).toBe(false);
   });
 });

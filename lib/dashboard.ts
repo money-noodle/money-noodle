@@ -7,6 +7,7 @@ import { fetchCoinSnapshots, fetchCryptoNews, fetchKalshiQuotes, fetchPolymarket
 import { DATA_FRESHNESS } from './freshness';
 import { trackCalculations } from './forecast-tracker';
 import { estimateMakerTouch } from './maker-fill-model';
+import { readPromotionLedger } from './model-promotion-store';
 import { summarizePerformance } from './performance';
 import { activePolicyManifest } from './policy-manifest';
 import { bestEntry, edgeStrength, qualifiesAsBuyEdge } from './prediction-policy';
@@ -342,6 +343,12 @@ async function buildDashboard(force = false, liveOnly = false): Promise<Dashboar
     ? normalizeTradingProviderConfiguration({ executionAuthority: 'provider-registry-v1' })
     : await getTradingProviderConfiguration(enabledTradingVenues);
   const tradingProviders = tradingProviderRegistry(providerConfiguration);
+  // A missing or unreadable ledger must not fail the dashboard: an empty ledger is reported as an
+  // unrecorded production model, which is exactly what an unreadable one means for the operator.
+  const promotions = stateless ? [] : await readPromotionLedger().catch((error) => {
+    console.error('Model promotion ledger read failed:', error);
+    return [];
+  });
   const predictions = coinsResult.value
     .map((coin) => buildPrediction(coin, marketResult.value[coin.symbol], newsResult.value, history, seasonalResult.value[coin.symbol] ?? [], alignedKalshi[coin.symbol], venueHistory, enabledTradingVenues, referenceResult.value[coin.symbol], minuteResult.value[coin.symbol] ?? [], oracleHistory))
     .sort((a, b) => edgeStrength(b) - edgeStrength(a));
@@ -363,7 +370,7 @@ async function buildDashboard(force = false, liveOnly = false): Promise<Dashboar
     generatedAt: generatedAt.toISOString(), expiresAt: new Date(generatedAt.getTime() + minute).toISOString(),
     modelVersion: MODEL_VERSION,
     tradingProviders,
-    policyManifest: activePolicyManifest(tradingProviders, MODEL_VERSION),
+    policyManifest: activePolicyManifest(tradingProviders, MODEL_VERSION, promotions),
     collector: collectorStatus(),
     sourceStatus: {
       polymarket: Object.values(marketResult.value).some((quote) => quote.live),
@@ -381,9 +388,13 @@ async function buildDashboard(force = false, liveOnly = false): Promise<Dashboar
 let dashboardQueue: Promise<void> = Promise.resolve();
 let latestDashboard: DashboardData | undefined;
 
-/** Public policy explains immutable model rules but never provider permissions or readiness. */
+/**
+ * Public policy explains immutable model rules but never provider permissions or readiness, and never
+ * the promotion record: its reasons and held-out evidence are derived from the private track record.
+ */
 function publicPolicyManifest(manifest: PolicyManifest): PolicyManifest {
-  return { ...manifest, components: manifest.components.filter((component) => component.kind !== 'provider') };
+  const { model: _model, ...publicManifest } = manifest;
+  return { ...publicManifest, components: manifest.components.filter((component) => component.kind !== 'provider') };
 }
 
 /** Removes every control/performance field from the unauthenticated server response. */

@@ -2,6 +2,10 @@ import type { PositionSide } from './types';
 
 export const PROFIT_REVERSAL_ARM_PERCENT = 0.75;
 export const STRICT_EXIT_MIN_GAIN_CENTS = 1;
+/** The two standalone exit policies, named exactly as they are stamped onto each exit order. */
+export const STANDALONE_EXIT_POLICY_VERSION = 'strict-value-v1 + profit-reversal-75-v1';
+/** After an exit, the same side must wait this long and re-earn persistence before it can be re-entered. */
+export const POST_EXIT_REENTRY_COOLDOWN_MS = 60_000;
 
 export interface ExitObservationState {
   profitLockArmedAt?: string;

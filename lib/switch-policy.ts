@@ -5,6 +5,39 @@
  * P&L reporting, but switching is rational only when cash available after selling plus the new trade's
  * expected profit exceeds the expected payout from continuing to hold.
  */
+export const SWITCH_POLICY_VERSION = 'future-wealth-side-gap-v1';
+
+/** Defaults remain deliberately conservative and can only be tightened/adjusted server-side. */
+const DEFAULT_MIN_SWITCH_GAIN_CENTS = 1;
+const DEFAULT_SWITCH_UNCERTAINTY_MARGIN_CENTS = 1;
+const DEFAULT_SWITCH_COOLDOWN_SECONDS = 180;
+/** A replacement must be materially more likely to pay than the side already owned. */
+const DEFAULT_MIN_SWITCH_PROBABILITY_ADVANTAGE = 0.15;
+/** Reversing the same asset is especially vulnerable to noise and spread churn. */
+const DEFAULT_MIN_OPPOSITE_SIDE_ADVANTAGE = 0.20;
+
+export interface SwitchPolicySettings {
+  minimumGainCents: number;
+  uncertaintyMarginCents: number;
+  cooldownSeconds: number;
+  minimumProbabilityAdvantage: number;
+  minimumOppositeSideAdvantage: number;
+}
+
+/** The single reader for switch configuration, so execution and the published policy cannot disagree. */
+export function switchPolicySettings(environment: NodeJS.ProcessEnv = process.env): SwitchPolicySettings {
+  const bounded = (name: string, fallback: number, maximum: number) => {
+    const value = Number(environment[name] ?? fallback);
+    return Number.isFinite(value) && value >= 0 ? Math.min(maximum, value) : fallback;
+  };
+  return {
+    minimumGainCents: bounded('MONEY_NOODLE_MIN_SWITCH_GAIN_CENTS', DEFAULT_MIN_SWITCH_GAIN_CENTS, 100),
+    uncertaintyMarginCents: bounded('MONEY_NOODLE_SWITCH_UNCERTAINTY_MARGIN_CENTS', DEFAULT_SWITCH_UNCERTAINTY_MARGIN_CENTS, 100),
+    cooldownSeconds: bounded('MONEY_NOODLE_SWITCH_COOLDOWN_SECONDS', DEFAULT_SWITCH_COOLDOWN_SECONDS, 3_600),
+    minimumProbabilityAdvantage: bounded('MONEY_NOODLE_MIN_SWITCH_PROBABILITY_ADVANTAGE', DEFAULT_MIN_SWITCH_PROBABILITY_ADVANTAGE, 0.5),
+    minimumOppositeSideAdvantage: bounded('MONEY_NOODLE_MIN_OPPOSITE_SIDE_ADVANTAGE', DEFAULT_MIN_OPPOSITE_SIDE_ADVANTAGE, 0.5),
+  };
+}
 export interface SwitchValueInput {
   incumbentQuantity: number;
   incumbentProbability: number;

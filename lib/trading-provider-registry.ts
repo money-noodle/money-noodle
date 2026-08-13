@@ -1,6 +1,8 @@
 import { productionMarketCapability, providerMarketCapabilities } from './market-registry';
 import type { TradingProviderConfiguration, TradingProviderDescriptor, TradingProviderId, TradingProviderVariant } from './types';
 
+export const TRADING_PROVIDER_REGISTRY_VERSION = 'trading-provider-registry-v1';
+
 const variant = (
   id: string,
   providerId: TradingProviderId,

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { beginLiveTransaction, blockExecutionDrain, completeExecutionDrain, endLiveTransaction, getExecutionDrainStatus, startExecutionDrain } from './execution-drain-state';
 import { reconcileExecutionLedger } from './execution-reconciliation';
 import { ENTRY_EXECUTION_POLICY_VERSION, entrySideProbability, evaluateEntryExecutionPolicy, makerCohortEvidence, parseEntryExecutionMode, type EntryExecutionDecision } from './entry-execution-policy';
-import { evaluateExitPolicy } from './exit-policy';
+import { POST_EXIT_REENTRY_COOLDOWN_MS, evaluateExitPolicy } from './exit-policy';
 import { isFreshCalculationTimestamp } from './freshness';
 import { orderMarketId, orderProviderId } from './execution-report';
 import { assetAdmitted } from './asset-exclusion';
@@ -23,8 +23,8 @@ import { bestEntry, bestVenueEntry, BUY_POLICY_VERSION, edgeStrength, MIN_ESTIMA
 import { getKalshiReconciliationStatus, serializedReconciliation, setKalshiReconciliationStatus, type KalshiReconciliationStatus } from './reconciliation-state';
 import { getRegimeGateStatus, updateRegimeGate, type RegimeGateStatus, type RegimeSentinelCandidate } from './regime-gate-store';
 import { advanceSignalPersistence, evaluateSignalPersistence, type SignalEligibility, type SignalPersistenceState } from './signal-persistence';
-import { advanceSwitchPersistence, switchCooldownRemainingMs, switchEvidenceReady, switchEvidenceSpanMs, type SwitchPersistenceState } from './switch-hysteresis';
-import { evaluateSwitchProbabilityGate, valueSwitch } from './switch-policy';
+import { REQUIRED_SWITCH_SNAPSHOTS, REQUIRED_SWITCH_SPAN_MS, advanceSwitchPersistence, switchCooldownRemainingMs, switchEvidenceReady, switchEvidenceSpanMs, type SwitchPersistenceState } from './switch-hysteresis';
+import { evaluateSwitchProbabilityGate, switchPolicySettings, valueSwitch } from './switch-policy';
 import { autoResumeTradingAfterReconciliation, getTradingControl, pauseTrading, reconcileTradingBudget, recordTradingReconciliationFailure, releaseTradingBudget, reserveTradingBudget, settleTradingBudget, stopTradingForLiveRisk, suspendTrading } from './trading-control';
 import type { DashboardData, ExecutionMode, ExecutionSignalReadiness, ExecutionSummary, MarketFunding, MarketId, PaperOrder, PortfolioDecisionView, PositionSide, Prediction, ProviderBudgetConfiguration, PublicPaperBudget, PublicPaperExecutionRecord, TradingControlData, TradingProviderId } from './types';
 
@@ -33,17 +33,6 @@ const LEDGER_FILE = path.join(DATA_DIR, 'paper-orders.json');
 const MIN_TIME_TO_CLOSE_MS = 30_000;
 const MAX_SPREAD = 0.10;
 const MIN_SWITCH_SECONDS = 120;
-/** Defaults remain deliberately conservative and can only be tightened/adjusted server-side. */
-const DEFAULT_MIN_SWITCH_GAIN_CENTS = 1;
-const DEFAULT_SWITCH_UNCERTAINTY_MARGIN_CENTS = 1;
-const DEFAULT_SWITCH_COOLDOWN_SECONDS = 180;
-/** A replacement must be materially more likely to pay than the side already owned. */
-const DEFAULT_MIN_SWITCH_PROBABILITY_ADVANTAGE = 0.15;
-/** Reversing the same asset is especially vulnerable to noise and spread churn. */
-const DEFAULT_MIN_OPPOSITE_SIDE_ADVANTAGE = 0.20;
-const REQUIRED_SWITCH_SNAPSHOTS = 3;
-const REQUIRED_SWITCH_SPAN_MS = 30_000;
-const REENTRY_COOLDOWN_MS = 60_000;
 const DEFAULT_PAPER_BANKROLL_CENTS = 10_000;
 /**
  * Deliberately tight while the desk is validating whether it can trade venue disagreement profitably.
@@ -95,20 +84,6 @@ async function writeLedger(ledger: Ledger): Promise<void> {
 function maximumPaperStakeCents(): number {
   const value = Number(process.env.MONEY_NOODLE_MAX_PAPER_STAKE_CENTS ?? DEFAULT_MAX_PAPER_STAKE_CENTS);
   return Number.isSafeInteger(value) && value > 0 ? value : DEFAULT_MAX_PAPER_STAKE_CENTS;
-}
-
-function switchPolicySettings(): { minimumGainCents: number; uncertaintyMarginCents: number; cooldownSeconds: number; minimumProbabilityAdvantage: number; minimumOppositeSideAdvantage: number } {
-  const bounded = (name: string, fallback: number, maximum: number) => {
-    const value = Number(process.env[name] ?? fallback);
-    return Number.isFinite(value) && value >= 0 ? Math.min(maximum, value) : fallback;
-  };
-  return {
-    minimumGainCents: bounded('MONEY_NOODLE_MIN_SWITCH_GAIN_CENTS', DEFAULT_MIN_SWITCH_GAIN_CENTS, 100),
-    uncertaintyMarginCents: bounded('MONEY_NOODLE_SWITCH_UNCERTAINTY_MARGIN_CENTS', DEFAULT_SWITCH_UNCERTAINTY_MARGIN_CENTS, 100),
-    cooldownSeconds: bounded('MONEY_NOODLE_SWITCH_COOLDOWN_SECONDS', DEFAULT_SWITCH_COOLDOWN_SECONDS, 3_600),
-    minimumProbabilityAdvantage: bounded('MONEY_NOODLE_MIN_SWITCH_PROBABILITY_ADVANTAGE', DEFAULT_MIN_SWITCH_PROBABILITY_ADVANTAGE, 0.5),
-    minimumOppositeSideAdvantage: bounded('MONEY_NOODLE_MIN_OPPOSITE_SIDE_ADVANTAGE', DEFAULT_MIN_OPPOSITE_SIDE_ADVANTAGE, 0.5),
-  };
 }
 
 function entryExecutionSettings() {
@@ -197,7 +172,7 @@ const orderId = (prediction: Prediction, mode: ExecutionMode, side: PositionSide
 const liveAttempts = (ledger: Ledger, prediction: Prediction, side: PositionSide) => entryAttemptsForLogicalOrder(ledger.orders, orderId(prediction, 'live', side, ledger));
 const reentryCooldownRemainingMs = (ledger: Ledger, prediction: Prediction, mode: ExecutionMode, side: PositionSide, nowMs = Date.now()) => {
   const sold = sideWindowOrders(ledger, prediction, mode, side).filter((order) => order.status === 'sold' && order.settledAt).at(-1);
-  return sold ? Math.max(0, Date.parse(sold.settledAt!) + REENTRY_COOLDOWN_MS - nowMs) : 0;
+  return sold ? Math.max(0, Date.parse(sold.settledAt!) + POST_EXIT_REENTRY_COOLDOWN_MS - nowMs) : 0;
 };
 const persistenceKey = (prediction: Prediction, side: PositionSide) => `${prediction.symbol}:${side}:${prediction.market.closesAt}`;
 const selectedSide = (prediction: Prediction, mode: ExecutionMode = 'live'): PositionSide | undefined => bestEntry(prediction, mode)?.side;

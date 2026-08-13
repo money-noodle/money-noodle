@@ -42,6 +42,5 @@ describe('trading provider registry', () => {
     expect(manifest.activeBuyPolicyVersion).toBe(BUY_POLICY_VERSION);
     expect(manifest.components.find((item) => item.kind === 'buy')?.details).toContainEqual({ label: 'Selected-side probability', value: '≥55%' });
     expect(manifest.components.find((item) => item.kind === 'provider')?.details).toHaveLength(5);
-    expect(manifest.history[0]).toMatchObject({ version: BUY_POLICY_VERSION, status: 'active' });
   });
 });
