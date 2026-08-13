@@ -4,6 +4,7 @@ import { isStatelessDeployment, STATELESS_WORKER_MESSAGE } from '@/lib/runtime-e
 import { getCyclePathReport } from '@/lib/cycle-path-store';
 import { buildMakerFillReport, buildProviderTradeRecords, buildTradeRecord } from '@/lib/execution-report';
 import { epochResults, lifetimeRealizedPnlCents } from '@/lib/budget-epoch';
+import { evaluateStakeExpansion } from '@/lib/stake-expansion-policy';
 import { getTradingControl } from '@/lib/trading-control';
 import { getForecastHistory, getPerformanceSummary } from '@/lib/forecast-tracker';
 import { getExecutionOrders } from '@/lib/paper-execution';
@@ -45,6 +46,9 @@ export async function GET(request: Request) {
       // without erasing what earlier epochs actually did.
       liveEpochs: epochResults(orders, 'live', control.control.epochId),
       liveLifetimePnlCents: lifetimeRealizedPnlCents(orders, 'live'),
+      // Evaluation only. Raising the cap stays a manual, audited act; this states whether the stated
+      // criteria are met and what a qualifying expansion would be.
+      stakeExpansion: evaluateStakeExpansion(control.control, orders),
       cyclePaths,
       makerFillReport: buildMakerFillReport(orders, forecasts),
       modelEvaluations,
