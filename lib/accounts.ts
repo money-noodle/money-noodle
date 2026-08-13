@@ -2,6 +2,8 @@ import 'server-only';
 import type { SignatureType as PolymarketSignatureType } from '@polymarket/clob-client';
 import { kalshiConfigured, kalshiEnvironment, kalshiRequest } from './kalshi-api';
 import type { AccountsData, AccountPosition, VenueAccount } from './types';
+import { getCryptoComAccount } from './cryptocom-api';
+import { getRobinhoodAccount } from './robinhood-api';
 
 // Signing and base-URL resolution live in one place so account reads and order placement can never
 // diverge onto different environments or credentials.
@@ -98,6 +100,8 @@ async function getPolymarketAccount(): Promise<VenueAccount> {
 }
 
 export async function getAccounts(): Promise<AccountsData> {
-  const venues = await Promise.all([getPolymarketAccount(), getKalshiAccount()]);
+  // Read-only for every configured provider. An account read is not an execution route: trading-control
+  // filters this list down to venues that actually have one.
+  const venues = await Promise.all([getPolymarketAccount(), getKalshiAccount(), getCryptoComAccount(), getRobinhoodAccount()]);
   return { generatedAt: new Date().toISOString(), tradingEnabled: false, venues };
 }

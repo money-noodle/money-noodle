@@ -693,7 +693,7 @@ export interface ResearchResponse {
 }
 
 export interface AccountPosition {
-  venue: 'polymarket' | 'kalshi';
+  venue: TradingProviderId;
   id: string;
   title: string;
   side: string;
@@ -705,7 +705,8 @@ export interface AccountPosition {
 }
 
 export interface VenueAccount {
-  venue: 'polymarket' | 'kalshi';
+  /** Any provider, not only the two original venues: an account is a provider-level relationship. */
+  venue: TradingProviderId;
   configured: boolean;
   environment?: 'demo' | 'production';
   connected: boolean;

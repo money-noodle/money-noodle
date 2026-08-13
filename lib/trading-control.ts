@@ -76,7 +76,12 @@ async function readiness(stored: StoredTradingControl): Promise<TradingControlDa
   const tradingProviders = tradingProviderRegistry(providerConfiguration);
   const enabledVenues = legacyEnabledVenues(providerConfiguration);
   const accounts = await getAccounts();
-  const venues: TradingVenueReadiness[] = accounts.venues.map((account) => {
+  // Execution readiness stays restricted to the two trading venues on purpose. Accounts are read for
+  // every configured provider, but a provider without a crypto-15m execution path must never appear as
+  // a venue the engine could arm — read access is not trading capability.
+  const venues: TradingVenueReadiness[] = accounts.venues
+    .filter((account): account is typeof account & { venue: 'polymarket' | 'kalshi' } => account.venue === 'polymarket' || account.venue === 'kalshi')
+    .map((account) => {
     const balanceCents = account.balance === undefined ? undefined : Math.max(0, Math.round(account.balance * 100));
     const authenticated = Boolean(account.tradeAuthenticated && account.configured && account.connected && balanceCents !== undefined);
     const funded = authenticated && (balanceCents ?? 0) > 0;
