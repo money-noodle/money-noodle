@@ -746,6 +746,53 @@ export interface BudgetControl {
   updatedAt: string;
 }
 
+/** Share of a provider's equity that one market may commit. Hard cap, never a target. */
+export interface MarketAllocation {
+  marketId: MarketId;
+  percent: number;
+}
+
+/**
+ * Operator-configured budget for one provider. `liveLimitCents` and `paperLimitCents` are ceilings on
+ * the equity this provider may put to work, not a second cash ledger: cash accounting stays single-source
+ * in the legacy control and paper ledger until a second live provider is funded and per-provider balances
+ * can be reconciled against real venue cash.
+ */
+export interface ProviderBudget {
+  providerId: TradingProviderId;
+  /** 0 means no provider-specific ceiling beyond the configured working budget. */
+  liveLimitCents: number;
+  paperLimitCents: number;
+  allocations: MarketAllocation[];
+  updatedAt: string;
+}
+
+export interface ProviderBudgetConfiguration {
+  version: 'provider-budget-v1';
+  revision: number;
+  updatedAt: string;
+  /** Records the legacy control this configuration was seeded from, for audit. */
+  seededFrom?: string;
+  providers: ProviderBudget[];
+}
+
+/** What a single (provider, market) pair may commit right now, after its own reservations. */
+export interface MarketFunding {
+  providerId: TradingProviderId;
+  marketId: MarketId;
+  mode: ExecutionMode;
+  /** Provider equity the allocation is computed against. */
+  providerEquityCents: number;
+  percent: number;
+  /** percent × provider equity, floored to whole cents. */
+  capCents: number;
+  /** This pair's own open commitments, which its own cap must cover. */
+  reservedCents: number;
+  /** cap − own reservations, further bounded by cash actually available. */
+  spendableCents: number;
+  reason: string;
+}
+
 export interface LiveRiskStatus {
   allowed: boolean;
   currentEpochDrawdownCents: number;

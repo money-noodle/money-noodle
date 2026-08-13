@@ -6,7 +6,10 @@ import { reconcileExecutionLedger } from './execution-reconciliation';
 import { ENTRY_EXECUTION_POLICY_VERSION, entrySideProbability, evaluateEntryExecutionPolicy, makerCohortEvidence, parseEntryExecutionMode, type EntryExecutionDecision } from './entry-execution-policy';
 import { evaluateExitPolicy } from './exit-policy';
 import { isFreshCalculationTimestamp } from './freshness';
+import { orderMarketId, orderProviderId } from './execution-report';
 import { DEFAULT_MARKET_ID } from './market-registry';
+import { marketFunding } from './provider-budget-policy';
+import { getProviderBudgets, providerBudget } from './provider-budget-store';
 import { isStatelessDeployment } from './runtime-environment';
 import { postgresPaperProjectionSyncEnabled, readPublicPaperBudgetFromPostgres, syncPublicPaperBudgetToPostgres } from './postgres-paper-projection';
 import { fetchKalshiReconciliationSnapshot } from './kalshi-reconciliation';
@@ -21,7 +24,7 @@ import { advanceSignalPersistence, evaluateSignalPersistence, type SignalEligibi
 import { advanceSwitchPersistence, switchCooldownRemainingMs, switchEvidenceReady, switchEvidenceSpanMs, type SwitchPersistenceState } from './switch-hysteresis';
 import { evaluateSwitchProbabilityGate, valueSwitch } from './switch-policy';
 import { autoResumeTradingAfterReconciliation, getTradingControl, pauseTrading, reconcileTradingBudget, recordTradingReconciliationFailure, releaseTradingBudget, reserveTradingBudget, settleTradingBudget, stopTradingForLiveRisk, suspendTrading } from './trading-control';
-import type { DashboardData, ExecutionMode, ExecutionSignalReadiness, ExecutionSummary, PaperOrder, PortfolioDecisionView, PositionSide, Prediction, PublicPaperBudget, PublicPaperExecutionRecord, TradingControlData } from './types';
+import type { DashboardData, ExecutionMode, ExecutionSignalReadiness, ExecutionSummary, MarketFunding, MarketId, PaperOrder, PortfolioDecisionView, PositionSide, Prediction, ProviderBudgetConfiguration, PublicPaperBudget, PublicPaperExecutionRecord, TradingControlData, TradingProviderId } from './types';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const LEDGER_FILE = path.join(DATA_DIR, 'paper-orders.json');
@@ -516,8 +519,32 @@ async function updateSoldCounterfactuals(ledger: Ledger): Promise<boolean> {
   return changed;
 }
 
+/**
+ * Allocation headroom for one (provider, market) pair. Reservations are counted from this pair's own open
+ * orders only: charging it the provider total would let one market's positions block a market that has
+ * its own headroom, and charging it nothing would let two markets each spend the whole provider.
+ */
+function marketFundingFor(
+  budgets: ProviderBudgetConfiguration,
+  mode: ExecutionMode,
+  providerId: TradingProviderId,
+  marketId: MarketId,
+  ledger: Ledger,
+  modeEquityCents: number,
+  availableCents: number,
+): MarketFunding {
+  const reservedCents = ledger.orders
+    .filter((order) => order.executionMode === mode && orderProviderId(order) === providerId
+      && orderMarketId(order) === marketId && (order.status === 'open' || order.status === 'pending_reservation'))
+    .reduce((sum, order) => sum + order.stakeCents, 0);
+  return marketFunding({
+    providerId, marketId, mode, budget: providerBudget(budgets, providerId),
+    modeEquityCents, availableCents, reservedCents,
+  });
+}
+
 /** Paper trading is a continuous shadow: it keeps running while live automation is paused. */
-async function runPaper(dashboard: DashboardData, status: TradingControlData, ledger: Ledger): Promise<boolean> {
+async function runPaper(dashboard: DashboardData, status: TradingControlData, ledger: Ledger, budgets: ProviderBudgetConfiguration): Promise<boolean> {
   if (ledger.paperBudget.availableCents <= 0) return false;
   const paperProviders = new Set(status.tradingProviders?.filter((provider) => provider.paperEnabled).map((provider) => provider.id) ?? status.control.enabledVenues);
   const open = ledger.orders.filter((order) => order.executionMode === 'paper' && (order.status === 'open' || order.status === 'pending_reservation'));
@@ -536,7 +563,11 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
         ...status, venues: status.venues.map((readiness) => ({ ...readiness, enabled: paperProviders.has(readiness.venue) })),
       }, ledger, dashboard.generatedAt, dashboard.modelVersion, 'paper', stakeLimit);
       return 'order' in candidate ? [{ prediction, order: candidate.order }] : [];
-    });
+    })
+    // Funding is a feasibility filter applied after candidates exist, so a pair without allocation
+    // headroom drops out while another provider's candidate for the same window survives.
+    .filter(({ order }) => order.stakeCents <= marketFundingFor(budgets, 'paper', orderProviderId(order),
+      orderMarketId(order), ledger, equity, ledger.paperBudget.availableCents).spendableCents);
   const selected = selectPortfolio(candidates.map(({ order }) => ({
     id: order.id, symbol: order.symbol, closesAt: order.closesAt, expectedProfitCents: expectedProfitCents(order),
   })), open.map((order) => ({ symbol: order.symbol, closesAt: order.closesAt })), portfolioConstraints())
@@ -960,7 +991,7 @@ async function executeSwitch(plan: SwitchPlan, status: TradingControlData, ledge
 }
 
 /** Live trading is gated by automation state, live mode, the environment switch, and rate limits. */
-async function runLive(dashboard: DashboardData, status: TradingControlData, ledger: Ledger, regimeGate: RegimeGateStatus): Promise<boolean> {
+async function runLive(dashboard: DashboardData, status: TradingControlData, ledger: Ledger, regimeGate: RegimeGateStatus, budgets: ProviderBudgetConfiguration): Promise<boolean> {
   const skip = (reason: string) => { ledger.lastLiveSkip = { reason, at: new Date().toISOString() }; return false; };
   if (!liveTradingEnabled()) return skip('Live trading is off in the environment.');
   if (!status.tradingProviders?.find((provider) => provider.id === 'kalshi')?.liveEnabled) return skip('Kalshi is disabled for live automated trading in the provider registry.');
@@ -1026,8 +1057,17 @@ async function runLive(dashboard: DashboardData, status: TradingControlData, led
     return skip('No new positive-edge binary buy qualifies right now.');
   }
   const side = selectedSide(prediction)!;
-  const built = buildOrder(prediction, side, status, ledger, dashboard.generatedAt, dashboard.modelVersion, 'live', Math.min(status.proposedStakeCents, maxLiveStakeCents()), 'kalshi');
+  // Allocation bounds the stake before the order is built, so a pair with partial headroom sizes down
+  // rather than being rejected after the fact.
+  const liveFunding = marketFundingFor(budgets, 'live', 'kalshi', DEFAULT_MARKET_ID, ledger,
+    status.workingEquityCents, status.control.availableBudgetCents);
+  const liveStakeCeiling = Math.min(status.proposedStakeCents, maxLiveStakeCents(), liveFunding.spendableCents);
+  if (liveStakeCeiling <= 0) return skip(liveFunding.reason);
+  const built = buildOrder(prediction, side, status, ledger, dashboard.generatedAt, dashboard.modelVersion, 'live', liveStakeCeiling, 'kalshi');
   if ('reason' in built) return skip(`${prediction.symbol} ${side}: ${built.reason}`);
+  // Defence in depth: sizing already respected the ceiling, so a stake above it means a rounding or
+  // fee-reserve path put real money outside the operator's allocation.
+  if (built.order.stakeCents > liveFunding.spendableCents) return skip(liveFunding.reason);
   const logicalId = orderId(prediction, 'live', side, ledger);
   const retry = makerRetryDecision(liveAttempts(ledger, prediction, side), Date.now(), prediction.market.closesAt, maximumLiveMakerAttempts());
   if (!retry.allowed) return skip(`${prediction.symbol}: ${retry.reason}`);
@@ -1055,8 +1095,10 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
   changed = await observeAndExecuteStandaloneExits(dashboard, status, ledger) || changed;
   changed = updatePortfolioDecisions(dashboard, status, ledger) || changed;
   const previousSkip = ledger.lastLiveSkip?.reason;
-  changed = await runPaper(dashboard, status, ledger) || changed;
-  changed = await runLive(dashboard, status, ledger, regimeGate) || changed;
+  // Read once per cycle: a ceiling that changed mid-cycle would size one order against the old value.
+  const budgets = await getProviderBudgets({ revision: status.control.revision });
+  changed = await runPaper(dashboard, status, ledger, budgets) || changed;
+  changed = await runLive(dashboard, status, ledger, regimeGate, budgets) || changed;
   if (changed || ledger.lastLiveSkip?.reason !== previousSkip) await writeLedger(ledger);
 }
 
