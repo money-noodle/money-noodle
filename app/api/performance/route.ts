@@ -6,6 +6,8 @@ import { buildMakerFillReport, buildProviderTradeRecords, buildTradeRecord } fro
 import { epochResults, lifetimeRealizedPnlCents } from '@/lib/budget-epoch';
 import { evaluateStakeExpansion } from '@/lib/stake-expansion-policy';
 import { buildMakerShadow } from '@/lib/maker-shadow';
+import { evaluatePromotionEligibility } from '@/lib/model-promotion';
+import { readPromotionLedger } from '@/lib/model-promotion-store';
 import { getTradingControl } from '@/lib/trading-control';
 import { getForecastHistory, getPerformanceSummary } from '@/lib/forecast-tracker';
 import { getExecutionOrders } from '@/lib/paper-execution';
@@ -27,6 +29,7 @@ export async function GET(request: Request) {
       getForecastHistory(), getPerformanceSummary(), getExecutionOrders(), getCyclePathReport(), getTradingControl(),
     ]);
     const modelEvaluations = await getWalkForwardEvaluationHistory(summary.calibrationWindows);
+    const promotionLedger = await readPromotionLedger();
     // Signal quality comes from the calculation log; executed money comes from the order ledger, kept
     // separate per mode so a paper shadow can never be mistaken for a live result.
     const body = {
@@ -53,6 +56,10 @@ export async function GET(request: Request) {
       // Observation only: what paper would have returned under maker execution instead of its
       // immediate-ask fill, separating price improvement from fill risk.
       paperMakerShadow: buildMakerShadow(orders, 'paper'),
+      // Promotion stays manual. This reports whether the newest run may be cited, and the immutable
+      // record of what has actually been promoted or rolled back.
+      promotionEligibility: evaluatePromotionEligibility(modelEvaluations.runs.at(-1)),
+      promotionLedger,
       cyclePaths,
       makerFillReport: buildMakerFillReport(orders, forecasts),
       modelEvaluations,
