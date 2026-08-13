@@ -18,3 +18,9 @@ data/*.corrupt-*
 # Private signing key that was committed by mistake; it now lives outside the repo.
 Trading App.txt
 *.pem
+
+# Never let a credential backup or key file into the tree again.
+.env*.bak*
+*.key
+*.p8
+id_rsa*
