@@ -1,7 +1,7 @@
 import 'server-only';
 
 import postgres, { type Sql } from 'postgres';
-import type { PublicPaperBudget, PublicPaperExecutionRecord } from './types';
+import type { PublicPaperBudget, PublicPaperExecutionRecord, PublicPaperPerformance } from './types';
 
 const DATABASE_URL = 'MONEY_NOODLE_DATABASE_URL';
 
@@ -112,6 +112,55 @@ export async function readPublicPaperBudgetFromPostgres(): Promise<PublicPaperBu
     console.error('Postgres public paper projection read failed:', error);
     return null;
   }
+}
+
+interface PerformanceRow {
+  payload: unknown;
+  source_updated_at: Date | string;
+}
+
+/**
+ * Vercel reads this projection to serve the public paper track record. The payload is stored as one
+ * document, so `durable` and `generatedAt` are re-derived here from the replication timestamp rather
+ * than trusted from the stored copy.
+ */
+export async function readPublicPaperPerformanceFromPostgres(): Promise<PublicPaperPerformance | null> {
+  const connection = sql();
+  if (!connection) return null;
+  try {
+    const [row] = await connection<PerformanceRow[]>`
+      select payload, source_updated_at
+      from money_noodle_public_paper_performance
+      where singleton = true
+      limit 1
+    `;
+    if (!row?.payload || typeof row.payload !== 'object') return null;
+    const payload = row.payload as Omit<PublicPaperPerformance, 'durable' | 'generatedAt'>;
+    // A projection missing its scored halves is a failed or partial replication, not an empty record.
+    if (!payload.summary || !payload.paperRecord) return null;
+    return { ...payload, durable: true, generatedAt: timestamp(row.source_updated_at) };
+  } catch (error) {
+    console.error('Postgres public paper performance read failed:', error);
+    return null;
+  }
+}
+
+/**
+ * Replicates the public track record. Throttled because scoring the whole forecast log is far more
+ * expensive than the budget aggregate, and a ledger write can happen every few seconds.
+ */
+export async function syncPublicPaperPerformanceToPostgres(payload: Omit<PublicPaperPerformance, 'durable' | 'generatedAt'>): Promise<void> {
+  if (!postgresPaperProjectionSyncEnabled()) return;
+  const connection = sql();
+  if (!connection) return;
+  const now = new Date().toISOString();
+  await connection`
+    insert into money_noodle_public_paper_performance (singleton, payload, source_updated_at)
+    values (true, ${JSON.stringify(payload)}::jsonb, ${now})
+    on conflict (singleton) do update set
+      payload = excluded.payload,
+      source_updated_at = excluded.source_updated_at
+  `;
 }
 
 /**

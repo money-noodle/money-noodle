@@ -10,7 +10,7 @@ import type { PublicPaperBudget, PublicPaperPerformance } from '@/lib/types';
  * failure keeps the last verified payload rather than blanking a panel, which would read as automation
  * having stopped.
  */
-function usePublicPaperData<T>(path: string, active: boolean): { data: T | null; loading: boolean } {
+function usePublicPaperData<T>(path: string, active: boolean, intervalMs: number): { data: T | null; loading: boolean } {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -28,21 +28,25 @@ function usePublicPaperData<T>(path: string, active: boolean): { data: T | null;
       finally { if (!cancelled) setLoading(false); }
     }
     void load();
-    const timer = window.setInterval(() => void load(), DATA_FRESHNESS.dashboardPollMs);
+    const timer = window.setInterval(() => void load(), intervalMs);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [path, active]);
+  }, [path, active, intervalMs]);
 
   return { data, loading };
 }
 
+/** The track record is a few hundred kilobytes and only moves when a 15-minute window settles, so it is
+ *  polled well below the dashboard cadence rather than re-downloaded every cycle by every visitor. */
+const TRACK_RECORD_POLL_MS = 60_000;
+
 /** Paper bankroll aggregate and the newest sanitized simulated intents. */
 export function usePublicPaperBudget(active = true): { budget: PublicPaperBudget | null; loading: boolean } {
-  const { data, loading } = usePublicPaperData<PublicPaperBudget>('/api/paper-budget', active);
+  const { data, loading } = usePublicPaperData<PublicPaperBudget>('/api/paper-budget', active, DATA_FRESHNESS.dashboardPollMs);
   return { budget: data, loading };
 }
 
-/** Signal quality plus the paper-only executed-money record. */
+/** Full forecast scoring plus the paper-only executed-money record. */
 export function usePublicPaperPerformance(active = true): { performance: PublicPaperPerformance | null; loading: boolean } {
-  const { data, loading } = usePublicPaperData<PublicPaperPerformance>('/api/paper-performance', active);
+  const { data, loading } = usePublicPaperData<PublicPaperPerformance>('/api/paper-performance', active, TRACK_RECORD_POLL_MS);
   return { performance: data, loading };
 }

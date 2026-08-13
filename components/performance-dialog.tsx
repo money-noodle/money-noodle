@@ -29,6 +29,20 @@ function SampleWarning({ summary }: { summary: PerformanceSummary }) {
   </div>;
 }
 
+/**
+ * Shown only when a hosted dashboard has no replicated snapshot to serve. It states what is missing and
+ * who publishes it, rather than implying the paper track record does not exist.
+ */
+export function StaleProjectionNotice() {
+  return <div className="mb-4 flex items-start gap-3 rounded-lg border border-amber-300/25 bg-amber-300/5 p-3">
+    <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-200"/>
+    <div>
+      <p className="text-xs font-medium text-amber-100">Waiting for the worker&rsquo;s first published snapshot</p>
+      <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">The paper track record is scored on the persistent Money Noodle worker and replicated here for reading. This dashboard has not received a snapshot yet, so the figures below are empty rather than zero.</p>
+    </div>
+  </div>;
+}
+
 function CalibrationStatus({ summary }: { summary: PerformanceSummary }) {
   return <div className={cn('mb-4 rounded-lg border p-3', summary.calibrationReady ? 'border-primary/20 bg-primary/[.03]' : 'border-amber-300/20 bg-amber-300/[.03]')}>
     <div className="flex items-center justify-between gap-3"><p className="text-[10px] font-medium">Production calibration {summary.calibrationReady ? 'eligible for held-out evaluation' : 'locked'}</p><span className="font-mono text-[10px]">{summary.calibrationWindows}/{summary.calibrationMinimum} independent windows</span></div>
@@ -142,15 +156,22 @@ function SliceTable({ title, rows }: { title: string; rows: PerformanceSlice[] }
   return <div className="overflow-hidden rounded-lg border"><div className="border-b bg-background/50 px-3 py-2 text-[10px] font-medium">{title}</div>{rows.length ? <div className="divide-y">{rows.map((row) => <div key={row.label} className="grid grid-cols-[1fr_auto_auto] items-center gap-4 px-3 py-2.5 text-[10px]"><span>{row.label}</span><span className="font-mono text-muted-foreground">{row.correct}/{row.resolved}</span><span className={cn('w-12 text-right font-mono', row.accuracy >= 0.6 ? 'text-primary' : row.accuracy < 0.5 ? 'text-red-400' : '')}>{(row.accuracy * 100).toFixed(0)}%</span></div>)}</div> : <p className="p-4 text-center text-[10px] text-muted-foreground">Waiting for resolved outcomes</p>}</div>;
 }
 
-export function PerformanceDialog() {
-  const [data, setData] = useState<{ summary: PerformanceSummary; forecasts: ForecastHistoryRow[]; paperRecord?: TradeTrackRecord; liveRecord?: TradeTrackRecord; cyclePaths?: CyclePathReport; makerFillReport?: MakerFillReport; modelEvaluations: WalkForwardEvaluationHistory } | null>(null);
+/**
+ * One dialog for both audiences. The public payload is the signed one minus its two live surfaces, so
+ * `publicView` changes the endpoint and drops the live trade record and the maker-execution tab, which
+ * is built exclusively from live Kalshi orders. Everything else — calibration, benchmarks, segments,
+ * cycle regimes, walk-forward evaluations, and the full signal history — scores the forecast rather than
+ * real money and is identical for both.
+ */
+export function PerformanceDialog({ publicView = false }: { publicView?: boolean }) {
+  const [data, setData] = useState<{ summary: PerformanceSummary; forecasts: ForecastHistoryRow[]; paperRecord?: TradeTrackRecord; liveRecord?: TradeTrackRecord; cyclePaths?: CyclePathReport; makerFillReport?: MakerFillReport; modelEvaluations: WalkForwardEvaluationHistory; durable?: boolean } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   async function load() {
     setLoading(true); setError('');
     try {
-      const response = await fetch('/api/performance', { cache: 'no-store' });
+      const response = await fetch(publicView ? '/api/paper-performance' : '/api/performance', { cache: 'no-store' });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error || 'Unable to load history');
       setData(body);
@@ -161,12 +182,12 @@ export function PerformanceDialog() {
   return <Dialog onOpenChange={(open) => { if (open) void load(); }}>
     <DialogTrigger asChild><Button variant="outline" size="sm"><BarChart3/> Full track record</Button></DialogTrigger>
     <DialogContent className="max-w-4xl p-0">
-      <DialogHeader className="border-b p-5 pr-12"><DialogTitle>Positive-edge performance</DialogTitle><DialogDescription>Immutable qualifying calculations, grouped without excluding losses or pending outcomes.</DialogDescription></DialogHeader>
+      <DialogHeader className="border-b p-5 pr-12"><DialogTitle>Positive-edge performance</DialogTitle><DialogDescription>{publicView ? 'Immutable qualifying calculations and the simulated paper track, grouped without excluding losses or pending outcomes. Live results require sign-in.' : 'Immutable qualifying calculations, grouped without excluding losses or pending outcomes.'}</DialogDescription></DialogHeader>
       <div className="p-5">
-        {loading && !data ? <div className="grid h-64 place-items-center"><Loader2 className="animate-spin text-muted-foreground"/></div> : error ? <p className="rounded-lg border border-red-400/20 bg-red-400/5 p-3 text-xs text-red-300">{error}</p> : data && <><SampleWarning summary={data.summary}/><CalibrationStatus summary={data.summary}/><MissedBuyPanel summary={data.summary}/><Tabs defaultValue="breakdown">
-          <TabsList className="h-auto w-full flex-wrap justify-start gap-0.5"><TabsTrigger value="trades">Trades</TabsTrigger><TabsTrigger value="walk-forward">Walk-forward</TabsTrigger><TabsTrigger value="maker">Maker execution</TabsTrigger><TabsTrigger value="breakdown">Signal quality</TabsTrigger><TabsTrigger value="benchmarks">Benchmarks</TabsTrigger><TabsTrigger value="segments">Segments</TabsTrigger><TabsTrigger value="regimes">Cycle regimes</TabsTrigger><TabsTrigger value="history">Signal history ({data.forecasts.length})</TabsTrigger></TabsList>
+        {loading && !data ? <div className="grid h-64 place-items-center"><Loader2 className="animate-spin text-muted-foreground"/></div> : error ? <p className="rounded-lg border border-red-400/20 bg-red-400/5 p-3 text-xs text-red-300">{error}</p> : data && <>{publicView && data.durable === false && <StaleProjectionNotice/>}<SampleWarning summary={data.summary}/><CalibrationStatus summary={data.summary}/><MissedBuyPanel summary={data.summary}/><Tabs defaultValue="breakdown">
+          <TabsList className="h-auto w-full flex-wrap justify-start gap-0.5"><TabsTrigger value="trades">Trades</TabsTrigger><TabsTrigger value="walk-forward">Walk-forward</TabsTrigger>{!publicView && <TabsTrigger value="maker">Maker execution</TabsTrigger>}<TabsTrigger value="breakdown">Signal quality</TabsTrigger><TabsTrigger value="benchmarks">Benchmarks</TabsTrigger><TabsTrigger value="segments">Segments</TabsTrigger><TabsTrigger value="regimes">Cycle regimes</TabsTrigger><TabsTrigger value="history">Signal history ({data.forecasts.length})</TabsTrigger></TabsList>
           <TabsContent value="trades">
-            <p className="mb-3 text-[10px] leading-relaxed text-muted-foreground">Executed trades only, taken from the order ledger, with paper and live kept completely separate. These include real fill prices and venue fees, so they answer what the money did — not how good the forecast looked.</p>
+            <p className="mb-3 text-[10px] leading-relaxed text-muted-foreground">{publicView ? 'Executed simulated trades only, taken from the paper order ledger. These include modelled fill prices and venue fees, so they answer what the shadow bankroll did — not how good the forecast looked.' : 'Executed trades only, taken from the order ledger, with paper and live kept completely separate. These include real fill prices and venue fees, so they answer what the money did — not how good the forecast looked.'}</p>
             <div className="space-y-3">{data.liveRecord && <TradeRecordCard record={data.liveRecord}/>}{data.paperRecord && <TradeRecordCard record={data.paperRecord}/>}</div>
           </TabsContent>
           <TabsContent value="breakdown">
@@ -217,7 +238,7 @@ export function PerformanceDialog() {
             {data.cyclePaths ? <><div className="mb-3 grid grid-cols-3 gap-2"><div className="rounded-lg border p-3"><p className="text-[8px] uppercase text-muted-foreground">Cycles recorded</p><p className="mt-1 font-mono text-xl">{data.cyclePaths.totalCycles}</p></div><div className="rounded-lg border p-3"><p className="text-[8px] uppercase text-muted-foreground">Completed</p><p className="mt-1 font-mono text-xl">{data.cyclePaths.completedCycles}</p></div><div className="rounded-lg border p-3"><p className="text-[8px] uppercase text-muted-foreground">Path points</p><p className="mt-1 font-mono text-xl">{data.cyclePaths.totalPoints}</p></div></div><div className="overflow-hidden rounded-lg border"><div className="grid grid-cols-[58px_1fr_54px_54px_54px_62px] gap-2 border-b bg-background/60 px-3 py-2 font-mono text-[8px] uppercase text-muted-foreground"><span>Asset</span><span>Regime</span><span className="text-right">points</span><span className="text-right">flips</span><span className="text-right">eff.</span><span className="text-right">σ15m</span></div><div className="divide-y">{data.cyclePaths.latestByAsset.map((item) => <div key={item.symbol} className="grid grid-cols-[58px_1fr_54px_54px_54px_62px] gap-2 px-3 py-2 text-[10px]"><span className="font-semibold">{item.symbol}</span><span className="text-muted-foreground">{item.features.regime}</span><span className="text-right font-mono">{item.features.observationCount}</span><span className="text-right font-mono">{item.features.signFlipRate === null ? '—' : item.features.signFlipRate.toFixed(2)}</span><span className="text-right font-mono">{item.features.trendEfficiency === null ? '—' : item.features.trendEfficiency.toFixed(2)}</span><span className="text-right font-mono">{item.features.localVolatility15mPercent === null ? '—' : `${item.features.localVolatility15mPercent.toFixed(2)}%`}</span></div>)}</div></div><p className="mt-2 font-mono text-[8px] text-muted-foreground">Policy {data.cyclePaths.policyVersion}</p></> : <div className="grid h-32 place-items-center rounded-lg border border-dashed text-[10px] text-muted-foreground">Waiting for aligned path observations.</div>}
 
           </TabsContent>
-          <TabsContent value="maker">{data.makerFillReport ? <MakerExecutionPanel report={data.makerFillReport}/> : <div className="grid h-32 place-items-center rounded-lg border border-dashed text-[10px] text-muted-foreground">Waiting for live maker attempts.</div>}</TabsContent>
+          {!publicView && <TabsContent value="maker">{data.makerFillReport ? <MakerExecutionPanel report={data.makerFillReport}/> : <div className="grid h-32 place-items-center rounded-lg border border-dashed text-[10px] text-muted-foreground">Waiting for live maker attempts.</div>}</TabsContent>}
           <TabsContent value="walk-forward"><WalkForwardPanel history={data.modelEvaluations}/></TabsContent>
           <TabsContent value="history"><div className="max-h-[55vh] overflow-y-auto rounded-lg border">{data.forecasts.length ? <div className="divide-y">{data.forecasts.map((forecast) => <div key={forecast.id} className="grid gap-3 p-3.5 sm:grid-cols-[1fr_auto_auto_auto] sm:items-center"><div className="min-w-0"><div className="flex items-center gap-2"><span className="text-xs font-semibold">{forecast.symbol}</span><Badge variant="outline" className="font-mono">{forecast.direction}</Badge><span className="font-mono text-[10px] text-muted-foreground">{Math.round(forecast.directionalLikelihood * 100)}%</span></div><p className="mt-1 truncate text-[9px] text-muted-foreground">Issued {new Date(forecast.issuedAt).toLocaleString()} · {forecast.modelVersion} · {forecast.policyVersion}</p></div><div className="text-left sm:text-right"><p className="text-[9px] text-muted-foreground">Confidence</p><p className="font-mono text-xs">{Math.round(forecast.confidence * 100)}%</p></div><div className="text-left sm:text-right"><p className="text-[9px] text-muted-foreground">Outcome</p><p className="font-mono text-xs">{forecast.outcome ?? 'Pending'}</p></div><div>{forecast.status === 'pending' ? <Badge variant="secondary" className="gap-1"><Clock3/> pending</Badge> : forecast.correct ? <Badge className="gap-1 border-primary/20 bg-primary/10 text-primary"><CheckCircle2/> correct</Badge> : forecast.status === 'invalid' ? <Badge variant="outline">invalid</Badge> : <Badge className="gap-1 border-red-400/20 bg-red-400/10 text-red-400"><XCircle/> incorrect</Badge>}</div></div>)}</div> : <div className="grid h-44 place-items-center text-center"><div><BarChart3 className="mx-auto size-5 text-muted-foreground"/><p className="mt-2 text-xs">No positive-edge buys yet</p><p className="mt-1 text-[10px] text-muted-foreground">History begins when a {DATA_FRESHNESS.observationBucketMs / 1000}-second update clears the {Math.round(MIN_NET_EDGE * 100)}pp net-of-fees edge and {Math.round(MIN_ESTIMATE_QUALITY * 100)}% estimate-quality thresholds.</p></div></div>}</div></TabsContent>
         </Tabs></>}

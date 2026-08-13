@@ -27,7 +27,7 @@ import { usePublicPaperPerformance } from '@/components/use-public-paper';
 import { DATA_FRESHNESS, isFreshCalculationTimestamp } from '@/lib/freshness';
 import { cn } from '@/lib/utils';
 import { bestEntry, edgeStrength, hasTradableEdge, MAX_ENTRY_PRICE, MIN_ENTRY_PRICE, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, MIN_SELECTED_SIDE_PROBABILITY, qualifiesAsBuyEdge, sideProbability, venueEntryOptions } from '@/lib/prediction-policy';
-import type { DashboardData, DashboardViewData, Direction, ExecutionSignalReadiness, Factor, Prediction, PublicPaperTradeRecord, PublicSignalQuality, TradeTrackRecord } from '@/lib/types';
+import type { DashboardData, DashboardViewData, Direction, ExecutionSignalReadiness, Factor, PerformanceSummary, Prediction, TradeTrackRecord } from '@/lib/types';
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 const compactMoney = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 1 });
@@ -305,7 +305,7 @@ function PositiveEdgeBuys({ predictions, updatedAt, publicView = false }: { pred
  * One row per execution track. Signal quality above measures the forecast; these measure the money,
  * and the two modes are reported separately because they trade different bankrolls at different sizes.
  */
-function TradeRecordRow({ record, label }: { record: PublicPaperTradeRecord | undefined; label: string }) {
+function TradeRecordRow({ record, label }: { record: TradeTrackRecord | undefined; label: string }) {
   const isLive = label === 'Live';
   const cash = (cents: number) => `${cents >= 0 ? '+' : '−'}$${Math.abs(cents / 100).toFixed(2)}`;
   const settled = record?.settled ?? 0;
@@ -323,11 +323,18 @@ function TradeRecordRow({ record, label }: { record: PublicPaperTradeRecord | un
   </div>;
 }
 
+/** Only the scoring figures these two panels read, so both the signed summary and its public projection
+ *  (which narrows `recent`) satisfy it. */
+type SignalFigures = Pick<PerformanceSummary,
+  'issued' | 'cycles' | 'resolved' | 'resolvedCycles' | 'accuracy' | 'cycleBalancedAccuracy'
+  | 'brierScore' | 'currentCycleStreak' | 'calibrationWindows' | 'calibrationMinimum'
+  | 'calibrationProgress' | 'calibrationReady'>;
+
 /**
  * Scoring of the calculation rather than of the money, so it is identical for a signed operator and a
  * public visitor and is rendered from one component for both.
  */
-function SignalQualityTiles({ signal }: { signal: PublicSignalQuality }) {
+function SignalQualityTiles({ signal }: { signal: SignalFigures }) {
   const percent = (value: number | null) => value === null ? '—' : `${(value * 100).toFixed(1)}%`;
   return <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
     <div className="rounded-lg border bg-background/40 px-3 py-2"><p className="text-[9px] uppercase tracking-wider text-muted-foreground">Updates tracked</p><p className="mt-1 font-mono text-lg">{signal.issued}<span className="ml-1 text-[9px] text-muted-foreground">· {signal.cycles} cycles</span></p></div>
@@ -339,14 +346,14 @@ function SignalQualityTiles({ signal }: { signal: PublicSignalQuality }) {
 }
 
 /** Shared by both track-record panels: how much independent evidence the calibration lock still wants. */
-function CalibrationEvidence({ signal }: { signal: PublicSignalQuality }) {
+function CalibrationEvidence({ signal }: { signal: SignalFigures }) {
   return <div><div className="mb-1.5 flex items-center justify-between text-[9px] text-muted-foreground"><span>Calibration evidence</span><span className="font-mono">{signal.calibrationWindows}/{signal.calibrationMinimum} independent windows</span></div><Progress value={signal.calibrationProgress * 100} className="h-1"/><p className="mt-1.5 text-[9px] text-muted-foreground">{signal.calibrationReady ? 'Enough independent settlement windows to evaluate a held-out calibration candidate.' : `Live model adjustment is locked; ${signal.resolvedCycles} resolved asset-cycles do not substitute for independent windows.`}</p></div>;
 }
 
 /**
- * Public counterpart to the signed track record. Signal quality is mode-independent, but only the paper
- * row is shown: the live record is never fetched, so a visitor cannot mistake a shadow result for real
- * money, and there is no full history dialog to open.
+ * Public counterpart to the signed track record, identical except that the executed-money half is the
+ * paper track alone: the live record is never fetched, so a visitor cannot mistake a shadow result for
+ * real money. The full-history dialog is offered too, in its paper-only mode.
  */
 function PublicPaperPerformancePanel() {
   const { performance } = usePublicPaperPerformance();
@@ -356,17 +363,17 @@ function PublicPaperPerformancePanel() {
       <div className="flex min-w-52 items-center gap-3"><div className="grid size-9 place-items-center rounded-lg bg-secondary text-muted-foreground"><Target className="size-4"/></div><div><h2 className="text-xs font-semibold">Positive-edge track record</h2><p className="mt-0.5 text-[9px] text-muted-foreground">Signal quality below; executed money is the simulated paper track only</p></div></div>
       <div className="flex-1">
         <p className="mb-1.5 text-[9px] uppercase tracking-wider text-muted-foreground">Signal quality · every qualifying calculation, whether or not it was traded</p>
-        <SignalQualityTiles signal={performance.signal}/>
+        <SignalQualityTiles signal={performance.summary}/>
       </div>
     </div>
     <div className="mt-3 space-y-2 border-t pt-3">
       <p className="text-[9px] uppercase tracking-wider text-muted-foreground">Executed trades · simulated fills and fees against the paper bankroll</p>
       <TradeRecordRow record={performance.paperRecord} label="Paper"/>
-      {!performance.durable && <p className="text-[9px] leading-relaxed text-muted-foreground">This hosted dashboard is stateless, so it cannot score the continuously collected forecast log or paper ledger. Figures appear once the persistent worker publishes them.</p>}
+      {!performance.durable && <p className="text-[9px] leading-relaxed text-muted-foreground">The paper track record is scored on the persistent worker and replicated here for reading; this dashboard has not received a snapshot yet.</p>}
     </div>
     <div className="mt-4 grid gap-4 border-t pt-4 lg:grid-cols-[1fr_auto] lg:items-center">
-      <CalibrationEvidence signal={performance.signal}/>
-      {performance.recent.length > 0 && <div className="scrollbar-none flex max-w-full gap-1.5 overflow-x-auto lg:max-w-sm lg:justify-end"><span className="flex items-center gap-1 pr-1 text-[9px] text-muted-foreground"><History className="size-3"/>Recent</span>{performance.recent.slice(0, 4).map((forecast, index) => <Badge key={`${forecast.symbol}:${forecast.direction}:${index}`} variant="outline" className={cn('shrink-0 gap-1 font-mono', forecast.status === 'pending' ? 'text-muted-foreground' : forecast.correct ? 'border-primary/20 text-primary' : 'border-red-400/20 text-red-400')}>{forecast.symbol} {forecast.direction} · {forecast.status === 'pending' ? 'pending' : forecast.correct ? '✓' : '×'}</Badge>)}</div>}
+      <CalibrationEvidence signal={performance.summary}/>
+      <div className="flex flex-wrap items-center justify-end gap-2">{performance.summary.recent.length > 0 && <div className="scrollbar-none flex max-w-full gap-1.5 overflow-x-auto lg:max-w-sm"><span className="flex items-center gap-1 pr-1 text-[9px] text-muted-foreground"><History className="size-3"/>Recent</span>{performance.summary.recent.slice(0, 4).map((forecast) => <Badge key={forecast.id} variant="outline" className={cn('shrink-0 gap-1 font-mono', forecast.status === 'pending' ? 'text-muted-foreground' : forecast.correct ? 'border-primary/20 text-primary' : 'border-red-400/20 text-red-400')}>{forecast.symbol} {forecast.direction} · {forecast.status === 'pending' ? 'pending' : forecast.correct ? '✓' : '×'}</Badge>)}</div>}<PerformanceDialog publicView/></div>
     </div>
   </section>;
 }

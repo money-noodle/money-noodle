@@ -4,42 +4,46 @@ vi.mock('server-only', () => ({}));
 
 const stateless = vi.fn(() => false);
 const performanceSummary = vi.fn();
+const forecastHistory = vi.fn();
 const executionOrders = vi.fn();
+const cyclePaths = vi.fn();
+const walkForward = vi.fn();
+const syncEnabled = vi.fn(() => false);
+const readProjection = vi.fn();
+const writeProjection = vi.fn();
 
 vi.mock('./runtime-environment', () => ({
   isStatelessDeployment: () => stateless(),
   STATELESS_WORKER_MESSAGE: 'stateless',
 }));
-vi.mock('./forecast-tracker', () => ({ getPerformanceSummary: () => performanceSummary() }));
+vi.mock('./forecast-tracker', () => ({
+  getPerformanceSummary: () => performanceSummary(),
+  getForecastHistory: () => forecastHistory(),
+}));
 vi.mock('./paper-execution', () => ({ getExecutionOrders: () => executionOrders() }));
+vi.mock('./cycle-path-store', () => ({ getCyclePathReport: () => cyclePaths() }));
+vi.mock('./model-evaluation-store', () => ({ getWalkForwardEvaluationHistory: () => walkForward() }));
+vi.mock('./postgres-paper-projection', () => ({
+  postgresPaperProjectionSyncEnabled: () => syncEnabled(),
+  readPublicPaperPerformanceFromPostgres: () => readProjection(),
+  syncPublicPaperPerformanceToPostgres: (payload: unknown) => writeProjection(payload),
+}));
 
-import { getPublicPaperPerformance } from './public-paper-performance';
-import type { PaperOrder, PerformanceSummary, TrackedForecast } from './types';
+import { getPublicPaperPerformance, replicatePublicPaperPerformance } from './public-paper-performance';
+import { summarizePerformance } from './performance';
+import type { PaperOrder, TrackedForecast } from './types';
 
-/** Only the fields the projection reads, plus private extras that must never reach a public reader. */
-function summary(): PerformanceSummary {
-  return {
-    issued: 40, pending: 4, resolved: 36, cycles: 12, resolvedCycles: 10,
-    cycleBalancedAccuracy: 0.6, correct: 22, invalid: 0, accuracy: 0.61, brierScore: 0.21,
-    logLoss: 0.6, currentStreak: 2, currentCycleStreak: 1, observedCalculations: 80,
-    resolvedCalculations: 70, benchmarks: [{ id: 'coinflip' }], edgeBuckets: [{ id: 'bucket' }],
-    segments: [{ id: 'segment' }], missedBuyCounterfactual: { evaluated: 3 },
-    resolvedWindows: 9, evaluationMinimumWindows: 30, evaluationMeaningful: false,
-    realizedEdgeTrades: 6, meanPredictedEdge: 0.07, meanRealizedReturn: 0.02,
-    byLeadTime: [], calibrationBins: [{ bin: 0.5 }], calibrationWindows: 9,
-    calibrationMinimum: 30, calibrationProgress: 0.3, calibrationReady: false,
-    byAsset: [], byDirection: [], byModelVersion: [], byConfidenceBucket: [], timeline: [],
-    recent: [forecast('paper-1'), forecast('paper-2')],
-  } as unknown as PerformanceSummary;
-}
-
-function forecast(id: string): TrackedForecast {
+function forecast(id: string, overrides: Partial<TrackedForecast> = {}): TrackedForecast {
   return {
     id, symbol: 'BTC', marketUrl: 'https://example.com/btc', issuedAt: '2026-08-11T00:00:00Z',
     closesAt: '2026-08-11T00:15:00Z', direction: 'UP', probabilityUp: 0.62,
     directionalLikelihood: 0.62, confidence: 0.7, modelVersion: 'test', policyVersion: 'test',
-    polymarketProbabilityUp: 0.55, factors: [], status: 'resolved', correct: true,
-  };
+    polymarketProbabilityUp: 0.55, status: 'resolved', outcome: 'UP', correct: true,
+    // Private per-forecast detail that must never reach a public reader.
+    factors: [{ id: 'trend', label: 'Trend', score: 0.4, weight: 0.3, contribution: 0.12, confidence: 0.8, available: true }],
+    venueContracts: { kalshi: { contractId: 'KX-SECRET', capturedAt: '2026-08-11T00:00:00Z' } },
+    ...overrides,
+  } as TrackedForecast;
 }
 
 /** A settled winner whose realized P&L is unmistakable in the aggregate. */
@@ -54,41 +58,51 @@ function order(id: string, executionMode: PaperOrder['executionMode'], pnlCents:
   };
 }
 
+const EVALUATIONS = { policyVersion: 'test', activationWindows: 100, checkpointEveryWindows: 25, currentWindows: 9, nextCheckpointWindows: 25, runs: [] };
+const PATHS = { policyVersion: 'test', totalCycles: 4, completedCycles: 3, totalPoints: 40, latestByAsset: [] };
+
 describe('public paper performance projection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     stateless.mockReturnValue(false);
-    performanceSummary.mockResolvedValue(summary());
+    syncEnabled.mockReturnValue(false);
+    performanceSummary.mockImplementation(() => summarizePerformance([forecast('scored-1'), forecast('scored-2')]));
+    forecastHistory.mockResolvedValue([forecast('history-1')]);
     executionOrders.mockResolvedValue([]);
+    cyclePaths.mockResolvedValue(PATHS);
+    walkForward.mockResolvedValue(EVALUATIONS);
   });
 
-  it('exposes only allow-listed signal and paper-record fields', async () => {
-    const projection = await getPublicPaperPerformance();
-    expect(Object.keys(projection).sort()).toEqual(['durable', 'generatedAt', 'paperRecord', 'recent', 'signal']);
-    expect(Object.keys(projection.signal).sort()).toEqual([
-      'accuracy', 'brierScore', 'calibrationMinimum', 'calibrationProgress', 'calibrationReady',
-      'calibrationWindows', 'currentCycleStreak', 'cycleBalancedAccuracy', 'cycles', 'issued',
-      'resolved', 'resolvedCycles',
-    ]);
-    expect(Object.keys(projection.paperRecord).sort()).toEqual([
-      'losses', 'meanPredictedEdge', 'meanRealizedReturn', 'pending', 'realizedPnlCents',
-      'roi', 'settled', 'stakedCents', 'winRate', 'windows', 'wins',
-    ]);
-  });
-
-  it('omits private summary detail that upstream scoring carries', async () => {
-    const projection = await getPublicPaperPerformance();
-    const serialized = JSON.stringify(projection);
-    for (const leak of ['benchmarks', 'segments', 'missedBuyCounterfactual', 'calibrationBins', 'logLoss', 'edgeBuckets']) {
-      expect(serialized).not.toContain(leak);
+  it('serves the full forecast scoring, not a narrowed subset', async () => {
+    const { summary } = await getPublicPaperPerformance();
+    for (const field of ['calibrationBins', 'benchmarks', 'edgeBuckets', 'segments', 'byLeadTime',
+      'byAsset', 'byDirection', 'byConfidenceBucket', 'timeline', 'missedBuyCounterfactual', 'logLoss']) {
+      expect(summary).toHaveProperty(field);
     }
   });
 
-  it('drops the internal forecast identifier from recent calculations', async () => {
-    const { recent } = await getPublicPaperPerformance();
-    expect(recent).toEqual([
-      { symbol: 'BTC', direction: 'UP', status: 'resolved', correct: true },
-      { symbol: 'BTC', direction: 'UP', status: 'resolved', correct: true },
+  it('includes cycle paths and walk-forward evaluations for the public dialog tabs', async () => {
+    const projection = await getPublicPaperPerformance();
+    expect(projection.cyclePaths).toEqual(PATHS);
+    expect(projection.modelEvaluations).toEqual(EVALUATIONS);
+  });
+
+  it('never carries a live record or the live-only maker report', async () => {
+    const projection = await getPublicPaperPerformance();
+    expect(projection).not.toHaveProperty('liveRecord');
+    expect(projection).not.toHaveProperty('makerFillReport');
+    expect(projection.paperRecord.mode).toBe('paper');
+  });
+
+  it('compacts recent and historical forecasts to rows without factors or contract provenance', async () => {
+    const { summary, forecasts } = await getPublicPaperPerformance();
+    const serialized = JSON.stringify({ recent: summary.recent, forecasts });
+    expect(serialized).not.toContain('KX-SECRET');
+    expect(serialized).not.toContain('factors');
+    expect(serialized).not.toContain('venueContracts');
+    expect(Object.keys(forecasts[0]).sort()).toEqual([
+      'confidence', 'correct', 'direction', 'directionalLikelihood', 'id', 'issuedAt',
+      'modelVersion', 'outcome', 'policyVersion', 'status', 'symbol',
     ]);
   });
 
@@ -102,13 +116,67 @@ describe('public paper performance projection', () => {
     expect(paperRecord.realizedPnlCents).toBe(250);
   });
 
-  it('reports a stateless hosted dashboard as non-durable instead of inventing figures', async () => {
+  it('reads the replicated projection on a hosted dashboard instead of the local ledger', async () => {
     stateless.mockReturnValue(true);
+    readProjection.mockResolvedValue({ durable: true, generatedAt: 'replicated', summary: { recent: [] }, paperRecord: { mode: 'paper' } });
+    const projection = await getPublicPaperPerformance();
+    expect(projection.durable).toBe(true);
+    expect(projection.generatedAt).toBe('replicated');
+    expect(performanceSummary).not.toHaveBeenCalled();
+    expect(executionOrders).not.toHaveBeenCalled();
+  });
+
+  it('reports a hosted dashboard with no snapshot as non-durable instead of inventing figures', async () => {
+    stateless.mockReturnValue(true);
+    readProjection.mockResolvedValue(null);
     const projection = await getPublicPaperPerformance();
     expect(projection.durable).toBe(false);
-    expect(projection.signal.issued).toBe(0);
+    expect(projection.summary.issued).toBe(0);
     expect(projection.paperRecord.settled).toBe(0);
-    expect(projection.recent).toEqual([]);
+    expect(projection.forecasts).toEqual([]);
+  });
+});
+
+describe('public paper performance replication', () => {
+  /** The throttle is module state, so each case gets its own instance rather than inheriting a cooldown. */
+  async function freshReplicate() {
+    vi.resetModules();
+    return (await import('./public-paper-performance')).replicatePublicPaperPerformance;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    stateless.mockReturnValue(false);
+    syncEnabled.mockReturnValue(true);
+    performanceSummary.mockImplementation(() => summarizePerformance([forecast('scored-1')]));
+    forecastHistory.mockResolvedValue([forecast('history-1')]);
+    executionOrders.mockResolvedValue([]);
+    cyclePaths.mockResolvedValue(PATHS);
+    walkForward.mockResolvedValue(EVALUATIONS);
+  });
+
+  it('publishes a payload without the read-time durable and generatedAt fields', async () => {
+    await (await freshReplicate())();
+    expect(writeProjection).toHaveBeenCalledTimes(1);
+    const payload = writeProjection.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty('durable');
+    expect(payload).not.toHaveProperty('generatedAt');
+    expect(payload).toHaveProperty('summary');
+    expect(payload).toHaveProperty('paperRecord');
+  });
+
+  it('throttles below the collector cadence so scoring cannot run every cycle', async () => {
+    const replicate = await freshReplicate();
+    await replicate();
+    await replicate();
+    await replicate();
+    expect(writeProjection).toHaveBeenCalledTimes(1);
+  });
+
+  it('does nothing at all when replication is not configured', async () => {
+    syncEnabled.mockReturnValue(false);
+    await (await freshReplicate())();
+    expect(writeProjection).not.toHaveBeenCalled();
     expect(performanceSummary).not.toHaveBeenCalled();
   });
 });

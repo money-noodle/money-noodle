@@ -4,6 +4,7 @@ import { getDashboard } from './dashboard';
 import { processPaperTradingCycle } from './paper-execution';
 import { maybeRunPeriodicReconciliation } from './periodic-reconciliation';
 import { maybeRunWalkForwardEvaluation } from './model-evaluation-store';
+import { replicatePublicPaperPerformance } from './public-paper-performance';
 
 async function collect(): Promise<void> {
   const state = collectorRuntime();
@@ -14,6 +15,9 @@ async function collect(): Promise<void> {
     // Regular cache policy is intentional: market TTLs are shorter than this loop, while slower inputs retain theirs.
     const dashboard = await getDashboard(false, false);
     await processPaperTradingCycle(dashboard);
+    // Best effort and never awaited: hosted-dashboard freshness must not delay reconciliation or a cycle.
+    void replicatePublicPaperPerformance()
+      .catch((error) => console.error('Postgres public paper performance sync failed:', error));
     await maybeRunPeriodicReconciliation();
     if (dashboard.performance.calibrationReady) {
       await maybeRunWalkForwardEvaluation(dashboard.performance.calibrationWindows)
