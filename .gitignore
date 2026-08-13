@@ -14,3 +14,7 @@ npm-debug.log*
 data/archive/
 data/*.corrupt-*
 .vercel
+
+# Private signing key that was committed by mistake; it now lives outside the repo.
+Trading App.txt
+*.pem
