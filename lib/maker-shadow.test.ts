@@ -74,3 +74,56 @@ describe('maker-execution shadow', () => {
     expect(buildMakerShadow([order({ id: 'x:exit:1' })], 'paper').settled).toBe(0);
   });
 });
+
+describe('shadow cohorts, tail concentration, and segments', () => {
+  const win = (n: number, pnlCents: number, symbol = 'BTC') => order({
+    id: `w${n}-${symbol}`, symbol, closesAt: `2026-08-13T${String(n).padStart(2, '0')}:00:00Z`,
+    status: pnlCents >= 0 ? 'won' : 'lost', pnlCents, payoutCents: 500 + pnlCents,
+    outcome: pnlCents >= 0 ? 'UP' : 'DOWN',
+  });
+
+  it('splits cohorts chronologically, so a decaying edge is visible', () => {
+    const report = buildMakerShadow([win(1, 500), win(2, 500), win(3, -500), win(4, -500)], 'paper');
+    expect(report.cohorts.map((c) => c.label)).toEqual(['earlier half', 'recent half']);
+    expect(report.cohorts[0].askReturn!).toBeGreaterThan(report.cohorts[1].askReturn!);
+  });
+
+  it('withholds cohorts when there are too few windows to split meaningfully', () => {
+    expect(buildMakerShadow([win(1, 500), win(2, 500)], 'paper').cohorts).toEqual([]);
+  });
+
+  it('exposes a book carried by a few windows', () => {
+    // One large winner against many small losers: the total is the outlier.
+    const rows = [win(1, 5_000), ...Array.from({ length: 9 }, (_, i) => win(i + 2, -100))];
+    const { tail } = buildMakerShadow(rows, 'paper');
+    expect(tail.topWindowShare!).toBeGreaterThan(0.5);
+    expect(tail.withoutTopThree).toBeLessThan(0);
+    expect(tail.topWindowContribution).toBeGreaterThan(0);
+  });
+
+  it('reports a book that does not depend on its best windows differently', () => {
+    const rows = Array.from({ length: 10 }, (_, i) => win(i + 1, 100));
+    const { tail } = buildMakerShadow(rows, 'paper');
+    expect(tail.topThreeShare!).toBeLessThan(0.5);
+    expect(tail.withoutTopThree).toBeGreaterThan(0);
+  });
+
+  it('withholds a share of a losing book, which would read as the opposite of its meaning', () => {
+    // One outsized winner against many losers: the book is negative overall but the top window is
+    // what keeps it from being far worse. Needs enough windows that "top three" is not most of them.
+    const losing = [win(1, 2_500), ...Array.from({ length: 9 }, (_, i) => win(i + 2, -500))];
+    const { tail } = buildMakerShadow(losing, 'paper');
+    expect(tail.totalWindowReturn).toBeLessThan(0);
+    expect(tail.topWindowShare).toBeNull();
+    expect(tail.topThreeShare).toBeNull();
+    // The absolute figures still say what carried the book.
+    expect(tail.topWindowContribution).toBeGreaterThan(0);
+    expect(tail.withoutTopThree).toBeLessThan(tail.totalWindowReturn);
+  });
+
+  it('segments by symbol, ranked so the worst asset is visible', () => {
+    const report = buildMakerShadow([win(1, 500, 'BTC'), win(2, 500, 'BTC'), win(3, -500, 'SOL'), win(4, -500, 'SOL')], 'paper');
+    expect(report.bySymbol.map((s) => s.symbol)).toEqual(['BTC', 'SOL']);
+    expect(report.bySymbol.at(-1)!.expectedMakerReturn!).toBeLessThan(report.bySymbol[0].expectedMakerReturn!);
+  });
+});

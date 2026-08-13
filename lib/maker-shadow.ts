@@ -29,6 +29,28 @@ export interface MakerShadowRow {
   expectedMakerReturn: number | null;
 }
 
+export interface ShadowCohort {
+  label: string;
+  windows: number;
+  askReturn: number | null;
+  expectedMakerReturn: number | null;
+}
+
+export interface TailConcentration {
+  totalWindowReturn: number;
+  /** Absolute contribution of the best window and the best three, always meaningful. */
+  topWindowContribution: number;
+  topThreeContribution: number;
+  /**
+   * Share of the total carried by the best window / best three. Null when the total is not positive,
+   * because a share of a negative total inverts its sign and reads as the opposite of what it means.
+   */
+  topWindowShare: number | null;
+  topThreeShare: number | null;
+  /** What remains after removing the best three. Below the total means those windows carried the book. */
+  withoutTopThree: number;
+}
+
 export interface MakerShadowReport {
   mode: ExecutionMode;
   settled: number;
@@ -42,6 +64,10 @@ export interface MakerShadowReport {
   windows: number;
   clusteredAskReturn: number | null;
   clusteredExpectedMakerReturn: number | null;
+  /** Recent versus earlier halves, so a decaying edge is visible rather than averaged away. */
+  cohorts: ShadowCohort[];
+  tail: TailConcentration;
+  bySymbol: Array<ShadowCohort & { symbol: string }>;
   rows: MakerShadowRow[];
 }
 
@@ -68,7 +94,9 @@ function makerReturnFor(order: PaperOrder): number | null {
 export function buildMakerShadow(orders: PaperOrder[], mode: ExecutionMode): MakerShadowReport {
   const settled = orders.filter((order) => order.executionMode === mode && settledStatuses.has(order.status)
     && !order.id.includes(':exit:'));
+  const symbolOf = new Map<string, string>();
   const rows: MakerShadowRow[] = settled.map((order) => {
+    symbolOf.set(order.id, order.symbol);
     const askReturn = pnl(order) / Math.max(1, stake(order));
     const makerReturn = makerReturnFor(order);
     const fillProbability = order.makerFillEstimate?.probability ?? null;
@@ -86,6 +114,41 @@ export function buildMakerShadow(orders: PaperOrder[], mode: ExecutionMode): Mak
     expected: mean(group.map((row) => row.expectedMakerReturn!)) ?? 0,
   }));
 
+  // Windows in chronological order, so cohorts split on time rather than on outcome.
+  const orderedWindows = [...byWindow.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  const cohortOf = (entries: typeof orderedWindows, label: string): ShadowCohort => ({
+    label, windows: entries.length,
+    askReturn: mean(entries.map(([, group]) => mean(group.map((row) => row.askReturn)) ?? 0)),
+    expectedMakerReturn: mean(entries.map(([, group]) => mean(group.map((row) => row.expectedMakerReturn!)) ?? 0)),
+  });
+  const half = Math.floor(orderedWindows.length / 2);
+  const cohorts = orderedWindows.length >= 4
+    ? [cohortOf(orderedWindows.slice(0, half), 'earlier half'), cohortOf(orderedWindows.slice(half), 'recent half')]
+    : [];
+
+  // Tail concentration on the ask-return series, which is what actually happened rather than a model.
+  const windowTotals = orderedWindows.map(([, group]) => mean(group.map((row) => row.askReturn)) ?? 0);
+  const totalWindowReturn = windowTotals.reduce((sum, value) => sum + value, 0);
+  const ranked = [...windowTotals].sort((a, b) => b - a);
+  const contribution = (count: number) => ranked.slice(0, count).reduce((sum, value) => sum + value, 0);
+  const share = (count: number) => totalWindowReturn > 0 ? contribution(count) / totalWindowReturn : null;
+  const tail: TailConcentration = {
+    totalWindowReturn,
+    topWindowContribution: contribution(1),
+    topThreeContribution: contribution(3),
+    topWindowShare: share(1),
+    topThreeShare: share(3),
+    withoutTopThree: totalWindowReturn - contribution(3),
+  };
+
+  const symbols = [...new Set(rows.map((row) => symbolOf.get(row.id)!).filter(Boolean))];
+  const bySymbol = symbols.map((symbol) => {
+    const own = modelledRows.filter((row) => symbolOf.get(row.id) === symbol);
+    const ownWindows = new Map<string, MakerShadowRow[]>();
+    for (const row of own) ownWindows.set(row.closesAt, [...(ownWindows.get(row.closesAt) ?? []), row]);
+    return { symbol, ...cohortOf([...ownWindows.entries()], symbol) };
+  }).sort((a, b) => (b.expectedMakerReturn ?? 0) - (a.expectedMakerReturn ?? 0));
+
   return {
     mode, settled: rows.length, modelled: modelledRows.length,
     meanAskReturn: mean(rows.map((row) => row.askReturn)),
@@ -95,6 +158,7 @@ export function buildMakerShadow(orders: PaperOrder[], mode: ExecutionMode): Mak
     windows: windowPairs.length,
     clusteredAskReturn: mean(windowPairs.map((pair) => pair.ask)),
     clusteredExpectedMakerReturn: mean(windowPairs.map((pair) => pair.expected)),
+    cohorts, tail, bySymbol,
     rows,
   };
 }
