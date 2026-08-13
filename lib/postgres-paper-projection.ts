@@ -1,6 +1,6 @@
 import 'server-only';
 
-import postgres, { type Sql } from 'postgres';
+import postgres, { type JSONValue, type Sql } from 'postgres';
 import type { PublicPaperBudget, PublicPaperExecutionRecord, PublicPaperPerformance } from './types';
 
 const DATABASE_URL = 'MONEY_NOODLE_DATABASE_URL';
@@ -154,9 +154,14 @@ export async function syncPublicPaperPerformanceToPostgres(payload: Omit<PublicP
   const connection = sql();
   if (!connection) return;
   const now = new Date().toISOString();
+  // The driver's JSONValue demands index signatures a precise interface cannot satisfy; the payload is
+  // plain serializable JSON by construction, having just been assembled from scored numbers and strings.
+  const document = payload as unknown as JSONValue;
   await connection`
     insert into money_noodle_public_paper_performance (singleton, payload, source_updated_at)
-    values (true, ${JSON.stringify(payload)}::jsonb, ${now})
+    -- json() and not JSON.stringify(): the driver serializes parameters itself, so passing pre-encoded
+    -- text stores a JSON string scalar rather than the object, and every read then fails its shape check.
+    values (true, ${connection.json(document)}, ${now})
     on conflict (singleton) do update set
       payload = excluded.payload,
       source_updated_at = excluded.source_updated_at
