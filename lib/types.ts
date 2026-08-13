@@ -26,6 +26,39 @@ export type TradingVenue = 'polymarket' | 'kalshi';
 export type TradingProviderId = TradingVenue | 'crypto-com' | 'forecastex' | 'robinhood';
 export type TradingProviderImplementation = 'planned' | 'read-paper' | 'live';
 
+/**
+ * A market is an instrument class plus a horizon and settlement semantics. Only one exists today, but
+ * budgets, orders, and reported summaries carry it explicitly so a second market is additive rather
+ * than a migration of every historical record.
+ */
+export type MarketId = 'crypto-15m';
+
+export interface MarketDescriptor {
+  id: MarketId;
+  name: string;
+  /** Instrument class, kept separate from horizon so a future spot or equity market is not a binary. */
+  instrument: 'binary-event-contract';
+  horizonSeconds: number;
+  /** What the contract settles against, which is why two venues' contracts may not be comparable. */
+  settlementBasis: string;
+  description: string;
+}
+
+/**
+ * Declared per (provider, market) pair rather than per provider: a provider may support live trading on
+ * one market and nothing at all on another. Crypto.com is the concrete case — its API trades spot and
+ * perpetuals but no event contracts.
+ */
+export interface ProviderMarketCapability {
+  providerId: TradingProviderId;
+  marketId: MarketId;
+  marketData: boolean;
+  paper: boolean;
+  live: boolean;
+  /** Why the pair is limited, shown verbatim so a disabled control is never unexplained. */
+  readiness: string;
+}
+
 export interface TradingProviderVariant {
   id: string;
   providerId: TradingProviderId;
@@ -68,7 +101,12 @@ export interface TradingProviderDescriptor {
   name: string;
   implementation: TradingProviderImplementation;
   adapterVersion: string;
+  /**
+   * Union across this provider's markets, retained so existing callers keep working. Per-market
+   * decisions must read `marketCapabilities`: a provider live on one market is not live on all.
+   */
   capabilities: { marketData: boolean; paper: boolean; live: boolean };
+  marketCapabilities: ProviderMarketCapability[];
   researchEnabled: boolean;
   paperEnabled: boolean;
   liveEnabled: boolean;
@@ -449,6 +487,17 @@ export interface TradeTrackRecord {
   segments: SegmentGroup[];
 }
 
+/**
+ * One track record per (provider, market) within an execution mode, so a venue's fills, unfilled maker
+ * attempts, and rejections are never averaged into another's. Attempts and failures matter as much as
+ * wins here: a provider that rejects half its orders is not comparable to one that fills them.
+ */
+export interface ProviderTradeRecord {
+  providerId: TradingProviderId;
+  marketId: MarketId;
+  record: TradeTrackRecord;
+}
+
 export type ForecastHistoryRow = Pick<TrackedForecast,
   'id' | 'symbol' | 'direction' | 'directionalLikelihood' | 'issuedAt' | 'modelVersion'
   | 'policyVersion' | 'confidence' | 'outcome' | 'status' | 'correct'>;
@@ -797,6 +846,8 @@ export interface PaperOrder {
   id: string;
   /** Paper runs continuously as a shadow; live only runs while automation is active in live mode. */
   executionMode: ExecutionMode;
+  /** Absent on records written before markets were explicit; those belong to `crypto-15m`. */
+  marketId?: MarketId;
   providerId?: TradingProviderId;
   providerVariantId?: string;
   /** Stable asset/window intent shared by bounded maker attempts. */
@@ -1062,6 +1113,8 @@ export interface PublicPaperPerformance {
   summary: PublicPerformanceSummary;
   /** Complete paper record, including segment breakdowns and switch/exit counterfactuals. */
   paperRecord: TradeTrackRecord;
+  /** Paper split per provider. The live split is never published. */
+  paperProviderRecords: ProviderTradeRecord[];
   forecasts: ForecastHistoryRow[];
   cyclePaths?: CyclePathReport;
 }

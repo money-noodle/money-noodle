@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DATA_FRESHNESS } from '@/lib/freshness';
 import { MIN_ESTIMATE_QUALITY, MIN_NET_EDGE } from '@/lib/prediction-policy';
-import type { CyclePathReport, ForecastHistoryRow, MakerFillReport, PerformanceSlice, PerformanceSummary, SegmentGroup, TradeTrackRecord, WalkForwardEvaluationHistory } from '@/lib/types';
+import type { CyclePathReport, ForecastHistoryRow, MakerFillReport, PerformanceSlice, PerformanceSummary, ProviderTradeRecord, SegmentGroup, TradeTrackRecord, WalkForwardEvaluationHistory } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 /**
@@ -91,6 +91,32 @@ function MissedBuyPanel({ summary }: { summary: PerformanceSummary }) {
   </div>;
 }
 
+/**
+ * One compact row per (provider, market) within a mode. Attempts and failures sit beside the P&L on
+ * purpose: a provider that rejects or fails to fill much of what it is sent is not comparable to one
+ * that fills it, and a combined record hides exactly that difference.
+ */
+function ProviderRecordRows({ records, label }: { records: ProviderTradeRecord[]; label: string }) {
+  if (!records.length) return null;
+  return <div className="mt-3 overflow-hidden rounded-lg border">
+    <div className="border-b bg-background/60 px-3 py-2"><p className="text-[10px] font-medium">{label} by provider</p><p className="text-[9px] text-muted-foreground">Fills, unfilled maker attempts, and rejections kept separate per provider and market. Records written before provider identity existed are attributed to their venue.</p></div>
+    <div className="grid grid-cols-[1fr_58px_56px_62px_70px] gap-2 border-b px-3 py-1.5 font-mono text-[8px] uppercase tracking-wider text-muted-foreground"><span>Provider · market</span><span className="text-right">settled</span><span className="text-right">win</span><span className="text-right">attempts</span><span className="text-right">P&amp;L</span></div>
+    <div className="divide-y">{records.map(({ providerId, marketId, record }) => (
+      <div key={`${providerId}:${marketId}`} className="grid grid-cols-[1fr_58px_56px_62px_70px] items-center gap-2 px-3 py-2 text-[10px]">
+        <div><span className="font-semibold">{providerId}</span><span className="ml-1.5 font-mono text-[8px] text-muted-foreground">{marketId}</span></div>
+        <span className="text-right font-mono">{record.settled}<span className="ml-0.5 text-[8px] text-muted-foreground">/{record.windows}w</span></span>
+        <span className="text-right font-mono">{record.winRate === null ? '—' : `${(record.winRate * 100).toFixed(0)}%`}</span>
+        <span className="text-right font-mono text-[9px]" title={`${record.unfilled} unfilled · ${record.rejected} rejected · ${record.sold} sold · ${record.pending} open`}>
+          {record.unfilled || record.rejected
+            ? <span className="text-amber-200">{record.unfilled}u {record.rejected}r</span>
+            : <span className="text-muted-foreground">clean</span>}
+        </span>
+        <span className={cn('text-right font-mono', record.realizedPnlCents > 0 ? 'text-primary' : record.realizedPnlCents < 0 ? 'text-red-400' : '')}>{usd.format(record.realizedPnlCents / 100)}</span>
+      </div>
+    ))}</div>
+  </div>;
+}
+
 function TradeRecordCard({ record }: { record: TradeTrackRecord }) {
   const live = record.mode === 'live';
   const credible = record.windows >= 5 && record.standardError !== null && Math.abs(record.meanRealizedReturn ?? 0) > 2 * record.standardError;
@@ -164,7 +190,7 @@ function SliceTable({ title, rows }: { title: string; rows: PerformanceSlice[] }
  * real money and is identical for both.
  */
 export function PerformanceDialog({ publicView = false }: { publicView?: boolean }) {
-  const [data, setData] = useState<{ summary: PerformanceSummary; forecasts: ForecastHistoryRow[]; paperRecord?: TradeTrackRecord; liveRecord?: TradeTrackRecord; cyclePaths?: CyclePathReport; makerFillReport?: MakerFillReport; modelEvaluations?: WalkForwardEvaluationHistory; durable?: boolean } | null>(null);
+  const [data, setData] = useState<{ summary: PerformanceSummary; forecasts: ForecastHistoryRow[]; paperRecord?: TradeTrackRecord; liveRecord?: TradeTrackRecord; cyclePaths?: CyclePathReport; makerFillReport?: MakerFillReport; modelEvaluations?: WalkForwardEvaluationHistory; paperProviderRecords?: ProviderTradeRecord[]; liveProviderRecords?: ProviderTradeRecord[]; durable?: boolean } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -188,7 +214,10 @@ export function PerformanceDialog({ publicView = false }: { publicView?: boolean
           <TabsList className="h-auto w-full flex-wrap justify-start gap-0.5"><TabsTrigger value="trades">Trades</TabsTrigger>{!publicView && <><TabsTrigger value="walk-forward">Walk-forward</TabsTrigger><TabsTrigger value="maker">Maker execution</TabsTrigger></>}<TabsTrigger value="breakdown">Signal quality</TabsTrigger><TabsTrigger value="benchmarks">Benchmarks</TabsTrigger><TabsTrigger value="segments">Segments</TabsTrigger><TabsTrigger value="regimes">Cycle regimes</TabsTrigger><TabsTrigger value="history">Signal history ({data.forecasts.length})</TabsTrigger></TabsList>
           <TabsContent value="trades">
             <p className="mb-3 text-[10px] leading-relaxed text-muted-foreground">{publicView ? 'Executed simulated trades only, taken from the paper order ledger. These include modelled fill prices and venue fees, so they answer what the shadow bankroll did — not how good the forecast looked.' : 'Executed trades only, taken from the order ledger, with paper and live kept completely separate. These include real fill prices and venue fees, so they answer what the money did — not how good the forecast looked.'}</p>
-            <div className="space-y-3">{data.liveRecord && <TradeRecordCard record={data.liveRecord}/>}{data.paperRecord && <TradeRecordCard record={data.paperRecord}/>}</div>
+            <div className="space-y-3">
+              {data.liveRecord && <div><TradeRecordCard record={data.liveRecord}/><ProviderRecordRows records={data.liveProviderRecords ?? []} label="Live"/></div>}
+              {data.paperRecord && <div><TradeRecordCard record={data.paperRecord}/><ProviderRecordRows records={data.paperProviderRecords ?? []} label="Paper"/></div>}
+            </div>
           </TabsContent>
           <TabsContent value="breakdown">
             <p className="mb-2 text-[10px] leading-relaxed text-muted-foreground">Forecast quality across every qualifying calculation, independent of whether it became a trade. Use the Trades tab for realized money.</p>

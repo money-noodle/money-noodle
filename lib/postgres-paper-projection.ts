@@ -146,6 +146,7 @@ export async function readPublicPaperPerformanceFromPostgres(): Promise<PublicPa
       generatedAt: timestamp(row.source_updated_at),
       summary: payload.summary,
       paperRecord: payload.paperRecord,
+      paperProviderRecords: payload.paperProviderRecords ?? [],
       forecasts: payload.forecasts ?? [],
       cyclePaths: payload.cyclePaths,
     };

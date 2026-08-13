@@ -1,6 +1,7 @@
 import 'server-only';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { providerCapabilityUnion } from './market-registry';
 import type {
   TradingProviderAuditEvent, TradingProviderConfiguration, TradingProviderControl, TradingProviderId,
 } from './types';
@@ -16,13 +17,15 @@ export const DEFAULT_PROVIDER_VARIANTS: Record<TradingProviderId, string> = {
   forecastex: 'forecastex-contract-v1',
   robinhood: 'robinhood-event-contract-v1',
 };
-const CAPABILITIES: Record<TradingProviderId, { research: boolean; paper: boolean; live: boolean }> = {
-  polymarket: { research: true, paper: true, live: false },
-  kalshi: { research: true, paper: true, live: true },
-  'crypto-com': { research: false, paper: false, live: false },
-  forecastex: { research: false, paper: false, live: false },
-  robinhood: { research: false, paper: false, live: false },
-};
+/**
+ * Derived from the market registry rather than restated. A second capability table drifts from the first,
+ * and the failure mode is a provider enabled here that the registry considers incapable.
+ */
+const CAPABILITIES: Record<TradingProviderId, { research: boolean; paper: boolean; live: boolean }> =
+  Object.fromEntries(TRADING_PROVIDER_IDS.map((id) => {
+    const union = providerCapabilityUnion(id);
+    return [id, { research: union.marketData, paper: union.paper, live: union.live }];
+  })) as Record<TradingProviderId, { research: boolean; paper: boolean; live: boolean }>;
 let operationQueue: Promise<void> = Promise.resolve();
 
 const snapshot = (item: TradingProviderControl) => ({

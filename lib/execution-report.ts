@@ -1,4 +1,5 @@
-import type { ExecutionMode, MakerExecutionSegment, MakerFillReport, PaperOrder, SegmentGroup, SegmentStat, TrackedForecast, TradeTrackRecord } from './types';
+import { normalizeMarketId } from './market-registry';
+import type { ExecutionMode, MakerExecutionSegment, MakerFillReport, MarketId, PaperOrder, ProviderTradeRecord, SegmentGroup, SegmentStat, TrackedForecast, TradeTrackRecord, TradingProviderId } from './types';
 
 const settledStatuses = new Set(['won', 'lost', 'invalid', 'sold']);
 
@@ -244,6 +245,39 @@ export function buildMakerFillReport(orders: PaperOrder[], forecasts: TrackedFor
     pairedReturnGap: pairedReturns.mean, pairedReturnGapStandardError: pairedReturns.standardError,
     segments,
   };
+}
+
+/**
+ * Provider identity for an order, including the 1,394 records written before `providerId` existed. Those
+ * always used the venue as the provider, so the venue is the correct answer rather than a guess — which
+ * is what lets historical results be split per provider without losing them.
+ */
+export function orderProviderId(order: PaperOrder): TradingProviderId {
+  return order.providerId ?? order.venue;
+}
+
+/** Market an order belongs to, defaulting to the only market that existed when it was written. */
+export function orderMarketId(order: PaperOrder): MarketId {
+  return normalizeMarketId(order.marketId);
+}
+
+/**
+ * Splits a mode's orders into one record per (provider, market). Ordered by settled count so the
+ * provider with the most evidence reads first, with provider id as a stable tiebreak.
+ */
+export function buildProviderTradeRecords(orders: PaperOrder[], mode: ExecutionMode): ProviderTradeRecord[] {
+  const groups = new Map<string, { providerId: TradingProviderId; marketId: MarketId; orders: PaperOrder[] }>();
+  for (const order of orders.filter((item) => item.executionMode === mode)) {
+    const providerId = orderProviderId(order);
+    const marketId = orderMarketId(order);
+    const key = `${providerId}:${marketId}`;
+    const group = groups.get(key) ?? { providerId, marketId, orders: [] };
+    group.orders.push(order);
+    groups.set(key, group);
+  }
+  return [...groups.values()]
+    .map((group) => ({ providerId: group.providerId, marketId: group.marketId, record: buildTradeRecord(group.orders, mode) }))
+    .sort((a, b) => b.record.settled - a.record.settled || a.providerId.localeCompare(b.providerId));
 }
 
 export function buildTradeRecord(orders: PaperOrder[], mode: ExecutionMode): TradeTrackRecord {

@@ -6,6 +6,7 @@ import { reconcileExecutionLedger } from './execution-reconciliation';
 import { ENTRY_EXECUTION_POLICY_VERSION, entrySideProbability, evaluateEntryExecutionPolicy, makerCohortEvidence, parseEntryExecutionMode, type EntryExecutionDecision } from './entry-execution-policy';
 import { evaluateExitPolicy } from './exit-policy';
 import { isFreshCalculationTimestamp } from './freshness';
+import { DEFAULT_MARKET_ID } from './market-registry';
 import { isStatelessDeployment } from './runtime-environment';
 import { postgresPaperProjectionSyncEnabled, readPublicPaperBudgetFromPostgres, syncPublicPaperBudgetToPostgres } from './postgres-paper-projection';
 import { fetchKalshiReconciliationSnapshot } from './kalshi-reconciliation';
@@ -336,6 +337,7 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
   return { order: {
     id: orderId(prediction, mode, side, ledger), logicalOrderId: orderId(prediction, mode, side, ledger), attemptNumber: 1,
     clientOrderId: orderId(prediction, mode, side, ledger), executionMode: mode,
+    marketId: DEFAULT_MARKET_ID,
     providerId: selected.venue,
     providerVariantId: status.tradingProviders?.find((provider) => provider.id === selected.venue)?.selectedVariantId,
     symbol: prediction.symbol, venue: selected.venue,

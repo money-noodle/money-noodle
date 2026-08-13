@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { getCyclePathReport } from './cycle-path-store';
-import { buildTradeRecord } from './execution-report';
+import { buildProviderTradeRecords, buildTradeRecord } from './execution-report';
 import { getForecastHistory, getPerformanceSummary } from './forecast-tracker';
 import { getExecutionOrders } from './paper-execution';
 import { summarizePerformance } from './performance';
@@ -43,6 +43,7 @@ function emptyPerformance(generatedAt: string): PublicPaperPerformance {
     durable: false, generatedAt,
     summary: { ...summary, recent: [] },
     paperRecord: buildTradeRecord([], 'paper'),
+    paperProviderRecords: [],
     forecasts: [],
   };
 }
@@ -65,6 +66,7 @@ export async function getPublicPaperPerformance(): Promise<PublicPaperPerformanc
     durable: true, generatedAt,
     summary: { ...summary, recent: summary.recent.map(historyRow) },
     paperRecord: buildTradeRecord(orders, 'paper'),
+    paperProviderRecords: buildProviderTradeRecords(orders, 'paper'),
     forecasts: forecasts.filter((forecast) => forecast.qualified !== false).slice(0, FORECAST_LIMIT).map(historyRow),
     cyclePaths,
   };

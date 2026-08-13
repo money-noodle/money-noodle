@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { isAuthenticatedRequest } from '@/lib/auth';
 import { isStatelessDeployment, STATELESS_WORKER_MESSAGE } from '@/lib/runtime-environment';
 import { getCyclePathReport } from '@/lib/cycle-path-store';
-import { buildMakerFillReport, buildTradeRecord } from '@/lib/execution-report';
+import { buildMakerFillReport, buildProviderTradeRecords, buildTradeRecord } from '@/lib/execution-report';
 import { getForecastHistory, getPerformanceSummary } from '@/lib/forecast-tracker';
 import { getExecutionOrders } from '@/lib/paper-execution';
 import { getWalkForwardEvaluationHistory } from '@/lib/model-evaluation-store';
@@ -36,6 +36,9 @@ export async function GET(request: Request) {
       })),
       paperRecord: buildTradeRecord(orders, 'paper'),
       liveRecord: buildTradeRecord(orders, 'live'),
+      // Same orders split per provider, so fills, unfilled maker attempts, and rejections stay separable.
+      paperProviderRecords: buildProviderTradeRecords(orders, 'paper'),
+      liveProviderRecords: buildProviderTradeRecords(orders, 'live'),
       cyclePaths,
       makerFillReport: buildMakerFillReport(orders, forecasts),
       modelEvaluations,
