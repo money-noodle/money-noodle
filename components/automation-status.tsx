@@ -238,7 +238,9 @@ export function PublicAutomationStatus() {
         <span className="text-xs font-semibold">{budget.depleted ? 'Paper automation stopped — bankroll depleted' : budget.running ? 'Paper automation active' : 'Paper automation idle'}</span>
         <span className="text-[10px] text-muted-foreground">simulated shadow · every {DATA_FRESHNESS.dashboardPollMs / 1000}s</span>
       </div>
-      <span className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">no real money at risk</span>
+      {/* Scoped to this track on purpose. The signed panel reports whether live money is at risk; saying
+          so here would either state something untrue or disclose the live state to a public reader. */}
+      <span className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">simulated funds only</span>
     </div>
     <div className="flex flex-col gap-3 p-3">
       <TrackPanel track={track} title="Paper" subtitle="Simulated shadow · always on" equityLabel="Shadow bankroll"/>
