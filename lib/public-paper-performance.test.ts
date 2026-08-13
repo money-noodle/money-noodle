@@ -81,17 +81,26 @@ describe('public paper performance projection', () => {
     }
   });
 
-  it('includes cycle paths and walk-forward evaluations for the public dialog tabs', async () => {
-    const projection = await getPublicPaperPerformance();
-    expect(projection.cyclePaths).toEqual(PATHS);
-    expect(projection.modelEvaluations).toEqual(EVALUATIONS);
+  it('includes cycle paths for the public regimes tab', async () => {
+    expect((await getPublicPaperPerformance()).cyclePaths).toEqual(PATHS);
   });
 
-  it('never carries a live record or the live-only maker report', async () => {
+  it('never carries a live record, the live-only maker report, or the fitted model', async () => {
     const projection = await getPublicPaperPerformance();
     expect(projection).not.toHaveProperty('liveRecord');
     expect(projection).not.toHaveProperty('makerFillReport');
+    expect(projection).not.toHaveProperty('modelEvaluations');
     expect(projection.paperRecord.mode).toBe('paper');
+    // Publishing results must not read the walk-forward store at all, so fitted weights cannot leak.
+    expect(walkForward).not.toHaveBeenCalled();
+  });
+
+  it('omits fitted model parameters from the serialized payload', async () => {
+    const serialized = JSON.stringify(await getPublicPaperPerformance());
+    for (const weight of ['basisWeight', 'temperature', 'volatilityScale', 'slowTiltScale',
+      'probabilityCap', 'selectedParameters', 'recommendedParameters', 'datasetFingerprint']) {
+      expect(serialized).not.toContain(weight);
+    }
   });
 
   it('compacts recent and historical forecasts to rows without factors or contract provenance', async () => {

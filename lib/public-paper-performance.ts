@@ -3,7 +3,6 @@ import 'server-only';
 import { getCyclePathReport } from './cycle-path-store';
 import { buildTradeRecord } from './execution-report';
 import { getForecastHistory, getPerformanceSummary } from './forecast-tracker';
-import { getWalkForwardEvaluationHistory } from './model-evaluation-store';
 import { getExecutionOrders } from './paper-execution';
 import { summarizePerformance } from './performance';
 import { postgresPaperProjectionSyncEnabled, readPublicPaperPerformanceFromPostgres, syncPublicPaperPerformanceToPostgres } from './postgres-paper-projection';
@@ -45,7 +44,6 @@ function emptyPerformance(generatedAt: string): PublicPaperPerformance {
     summary: { ...summary, recent: [] },
     paperRecord: buildTradeRecord([], 'paper'),
     forecasts: [],
-    modelEvaluations: { policyVersion: '', activationWindows: 0, checkpointEveryWindows: 0, currentWindows: 0, nextCheckpointWindows: 0, runs: [] },
   };
 }
 
@@ -63,13 +61,12 @@ export async function getPublicPaperPerformance(): Promise<PublicPaperPerformanc
   const [summary, forecasts, orders, cyclePaths] = await Promise.all([
     getPerformanceSummary(), getForecastHistory(), getExecutionOrders(), getCyclePathReport(),
   ]);
-  const modelEvaluations = await getWalkForwardEvaluationHistory(summary.calibrationWindows);
   return {
     durable: true, generatedAt,
     summary: { ...summary, recent: summary.recent.map(historyRow) },
     paperRecord: buildTradeRecord(orders, 'paper'),
     forecasts: forecasts.filter((forecast) => forecast.qualified !== false).slice(0, FORECAST_LIMIT).map(historyRow),
-    cyclePaths, modelEvaluations,
+    cyclePaths,
   };
 }
 

@@ -1049,9 +1049,11 @@ export type PublicPerformanceSummary = Omit<PerformanceSummary, 'recent'> & { re
 
 /**
  * Paper-only track record exposed without a signed dashboard session. This is the signed performance
- * payload minus the two live surfaces: `liveRecord`, and the maker-fill report, which is built
- * exclusively from live Kalshi orders. Everything present here describes simulated money or the
- * forecast itself, so there is no real-money figure to redact.
+ * payload minus three surfaces: `liveRecord`; the maker-fill report, which is built exclusively from
+ * live Kalshi orders; and the walk-forward evaluation history, which carries the fitted model
+ * parameters. Results are published, the model that produced them is not — unlike the buy thresholds,
+ * which the public policy version already states, weights such as basis weight, temperature, and
+ * volatility scale appear nowhere else and have no reader value.
  */
 export interface PublicPaperPerformance {
   /** False when neither a local ledger nor a replicated projection is available to report. */
@@ -1062,7 +1064,6 @@ export interface PublicPaperPerformance {
   paperRecord: TradeTrackRecord;
   forecasts: ForecastHistoryRow[];
   cyclePaths?: CyclePathReport;
-  modelEvaluations: WalkForwardEvaluationHistory;
 }
 
 export interface ExecutionSummary {

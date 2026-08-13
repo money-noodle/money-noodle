@@ -112,7 +112,8 @@ export const MIN_EVALUATION_WINDOWS = 20;
  * independent proof. This is outcome measurement, never an authorization path.
  */
 function missedBuyCounterfactual(forecasts: TrackedForecast[]): MissedBuyCounterfactual {
-  const floorPercent = `${MIN_SELECTED_SIDE_PROBABILITY * 100}%`;
+  // Rounded because the float product renders as 55.00000000000001% in the label and description.
+  const floorPercent = `${Number((MIN_SELECTED_SIDE_PROBABILITY * 100).toFixed(2))}%`;
   const label = `${floorPercent} selected-side floor rejects`;
   const description = `Exact-Kalshi fee-aware counterfactuals for sides that passed quality, price, and 5pp edge but were rejected only because independent selected-side probability was below ${floorPercent}.`;
   const byAssetWindow = new Map<string, TrackedForecast[]>();
