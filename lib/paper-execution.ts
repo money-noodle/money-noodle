@@ -7,6 +7,7 @@ import { ENTRY_EXECUTION_POLICY_VERSION, entrySideProbability, evaluateEntryExec
 import { evaluateExitPolicy } from './exit-policy';
 import { isFreshCalculationTimestamp } from './freshness';
 import { orderMarketId, orderProviderId } from './execution-report';
+import { assetAdmitted } from './asset-exclusion';
 import { cycleRegimeFor } from './cycle-path-store';
 import { DEFAULT_MARKET_ID } from './market-registry';
 import { marketFunding } from './provider-budget-policy';
@@ -572,7 +573,7 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
   const equity = ledger.paperBudget.availableCents;
   const stakeLimit = Math.min(status.control.perTradeCents, maximumPaperStakeCents(), equity);
   const candidates = dashboard.predictions
-    .filter((item) => qualifiesAsBuyEdge(item, 'paper') && item.market.live)
+    .filter((item) => qualifiesAsBuyEdge(item, 'paper') && item.market.live && assetAdmitted(item.symbol, 'paper'))
     .flatMap((prediction) => {
       const side = selectedSide(prediction, 'paper');
       if (!side || !executionEligibility(prediction, side, ledger).eligible) return [];
@@ -1065,7 +1066,9 @@ async function runLive(dashboard: DashboardData, status: TradingControlData, led
   // aside for the next one instead of skipping the cycle entirely.
   const regimeByCandidate = new Map(await Promise.all(allQualified.map(async (item) =>
     [item.symbol, (await cycleRegimeFor(item.symbol, item.market.closesAt))?.regime] as const)));
-  const regimeAllowed = allQualified.filter((item) => regimeAdmits(regimeByCandidate.get(item.symbol)));
+  const regimeAllowed = allQualified
+    .filter((item) => assetAdmitted(item.symbol, 'live'))
+    .filter((item) => regimeAdmits(regimeByCandidate.get(item.symbol)));
   if (allQualified.length && !regimeAllowed.length) {
     return skip(`No qualifying window has a characterised 15-second path yet (${allQualified.map((i) => `${i.symbol}:${regimeByCandidate.get(i.symbol) ?? 'unobserved'}`).join(', ')}).`);
   }
