@@ -33,7 +33,7 @@ export const MIN_SELECTED_SIDE_PROBABILITY = 0.55;
  */
 export const MIN_ENTRY_PRICE = 0.05;
 export const MAX_ENTRY_PRICE = 0.97;
-export const BUY_POLICY_VERSION = 'buy-binary-edge-net5-quality50-owned55-price5to97-v13';
+export const BUY_POLICY_VERSION = 'buy-binary-edge-net5-quality50-owned55-price5to97-uponly-v14';
 /** Minimum unique resolved 15-minute settlement timestamps, never updates or per-asset cycles. */
 export const MIN_CALIBRATION_SAMPLE = 100;
 
@@ -90,8 +90,25 @@ export function venueEntryOptions(prediction: EntryCandidate): VenueEntryOption[
 }
 
 /** The entry with the highest expected value, which may be either side of the binary contract. */
+/**
+ * DOWN/NO entry is suspended pending recalibration.
+ *
+ * Measured over 44 independent settlement windows, DOWN returned -58.0% +/-14.7 per window and accounted
+ * for -$17.86 of a -$18.62 lifetime live result, while UP was indistinguishable from zero (+2.9% +/-13.1
+ * over 162 windows). Regime does not explain it: 60.9% of traded asset-windows resolved DOWN, a
+ * favourable base rate, yet windows where DOWN was selected resolved DOWN only 11.6% of the time — worse
+ * than random in an environment tilted its way. Set MONEY_NOODLE_ALLOW_DOWN_ENTRY=true to re-enable.
+ *
+ * Exits, reduce-only sells, and settlement of existing DOWN positions are unaffected: this gates new
+ * entries only, exactly like the regime gate.
+ */
+export function downEntryEnabled(): boolean {
+  return process.env.MONEY_NOODLE_ALLOW_DOWN_ENTRY === 'true';
+}
+
 const admissibleEntry = (option: VenueEntryOption) => option.price >= MIN_ENTRY_PRICE && option.price <= MAX_ENTRY_PRICE
-  && option.probability >= MIN_SELECTED_SIDE_PROBABILITY;
+  && option.probability >= MIN_SELECTED_SIDE_PROBABILITY
+  && (option.side === 'UP' || downEntryEnabled());
 
 export function bestEntry(prediction: EntryCandidate): VenueEntryOption | undefined {
   return venueEntryOptions(prediction).find(admissibleEntry);
@@ -117,7 +134,10 @@ export function edgeStrength(prediction: EntryCandidate & Pick<Prediction, 'conf
 
 export function qualifiesVenueBuyEdge(prediction: EntryCandidate & Pick<Prediction, 'confidence'>, venue: 'polymarket' | 'kalshi', side?: PositionSide): boolean {
   const entry = bestVenueEntry(prediction, venue, side);
+  // Repeats the DOWN suspension rather than relying on admissibleEntry: this function checks its
+  // conditions inline, so omitting it here would leave an entry path the suspension does not cover.
   return prediction.confidence >= MIN_ESTIMATE_QUALITY && Boolean(entry
+    && (entry.side === 'UP' || downEntryEnabled())
     && entry.netEdge >= MIN_NET_EDGE && entry.price >= MIN_ENTRY_PRICE && entry.price <= MAX_ENTRY_PRICE
     && sideProbability(prediction, entry.side) >= MIN_SELECTED_SIDE_PROBABILITY);
 }
