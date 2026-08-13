@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, useTransition } from 'react';
 import {
-  ArrowDownRight, ArrowUpRight, BarChart3, BrainCircuit, CheckCircle2,
+  ArrowDownRight, ArrowUpRight, BrainCircuit, CheckCircle2,
   ChevronDown, ChevronRight, CircleDot, Clock3, ExternalLink, History, Info, Menu, RefreshCw, Search, ShieldCheck, Sparkles, Target, WalletCards, X, Zap,
   FlaskConical, ShieldAlert,
 } from 'lucide-react';
@@ -26,7 +26,8 @@ import { AutomationStatus, PublicAutomationStatus } from '@/components/automatio
 import { usePublicPaperPerformance } from '@/components/use-public-paper';
 import { DATA_FRESHNESS, isFreshCalculationTimestamp } from '@/lib/freshness';
 import { cn } from '@/lib/utils';
-import { bestEntry, edgeStrength, hasTradableEdge, MAX_ENTRY_PRICE, MIN_ENTRY_PRICE, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, MIN_SELECTED_SIDE_PROBABILITY, qualifiesAsBuyEdge, sideProbability, venueEntryOptions } from '@/lib/prediction-policy';
+import { bestEntry, edgeStrength, hasTradableEdge, MAX_ENTRY_PRICE, MAX_NET_EDGE, MIN_ENTRY_PRICE, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, MIN_SELECTED_SIDE_PROBABILITY, qualifiesAsBuyEdge, sideProbability, venueEntryOptions } from '@/lib/prediction-policy';
+import { EXECUTION_LATE_CUTOFF_MS, EXECUTION_WARMUP_MS, REQUIRED_OBSERVATION_SPAN_MS, REQUIRED_QUALIFYING_SNAPSHOTS } from '@/lib/signal-persistence';
 import type { DashboardData, DashboardViewData, Direction, ExecutionSignalReadiness, Factor, PerformanceSummary, Prediction, TradeTrackRecord } from '@/lib/types';
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
@@ -218,7 +219,7 @@ function liveSignalDisplay(readiness: ExecutionSignalReadiness | undefined): { l
  * signed session, so `publicView` skips that fetch and omits the per-candidate execution badges rather
  * than leaving every card stuck on an indefinite "checking execution".
  */
-function PositiveEdgeBuys({ predictions, updatedAt, publicView = false }: { predictions: Prediction[]; updatedAt: string; publicView?: boolean }) {
+function PositiveEdgeBuys({ predictions, updatedAt, publicView = false, onRefresh, refreshing = false }: { predictions: Prediction[]; updatedAt: string; publicView?: boolean; onRefresh?: () => void; refreshing?: boolean }) {
   const [now, setNow] = useState(() => Date.parse(updatedAt));
   const [executionSignals, setExecutionSignals] = useState<ExecutionSignalReadiness[]>([]);
   useEffect(() => {
@@ -243,8 +244,11 @@ function PositiveEdgeBuys({ predictions, updatedAt, publicView = false }: { pred
     .sort((a, b) => edgeStrength(b) - edgeStrength(a));
   return <section className="mb-8 overflow-hidden rounded-xl border bg-card/80 shadow-[0_20px_70px_rgba(0,0,0,.18)]">
     <div className="flex flex-col justify-between gap-2 border-b px-4 py-3 sm:flex-row sm:items-center">
-      <div className="flex items-center gap-2"><div className="grid size-7 place-items-center rounded-md bg-primary/10 text-primary"><Zap className="size-4"/></div><div><h2 className="text-xs font-semibold">Positive-edge buys</h2><p className="text-[9px] text-muted-foreground">Signal qualification: ≥{Math.round(MIN_NET_EDGE * 100)}pp net edge and ≥{Math.round(MIN_ESTIMATE_QUALITY * 100)}% quality. Execution additionally waits 60s, requires 3 persistent snapshots over 30s, and stops entries in the final 120s.</p></div></div>
-      <div className={cn('flex items-center gap-2 font-mono text-[9px]', stale ? 'text-amber-300' : 'text-muted-foreground')} title={Number.isFinite(calculatedAt) ? new Date(calculatedAt).toLocaleString() : 'Invalid calculation timestamp'}><span className="relative flex size-2">{!stale && <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-50"/>}<span className={cn('relative inline-flex size-2 rounded-full', stale ? 'bg-amber-300' : 'bg-primary')}/></span>{stale ? 'Expired' : `Calculated ${new Date(calculatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} · ${Math.floor(calculationAgeMs / 1_000)}s ago`}</div>
+      <div className="flex items-center gap-2"><div className="grid size-7 place-items-center rounded-md bg-primary/10 text-primary"><Zap className="size-4"/></div><div><h2 className="text-xs font-semibold">Positive-edge buys</h2><p className="text-[9px] text-muted-foreground">Signal qualification: {Math.round(MIN_NET_EDGE * 100)}–{Math.round(MAX_NET_EDGE * 100)}pp net edge and ≥{Math.round(MIN_ESTIMATE_QUALITY * 100)}% quality. Execution additionally waits {EXECUTION_WARMUP_MS / 1000}s, requires {REQUIRED_QUALIFYING_SNAPSHOTS} persistent snapshots over {REQUIRED_OBSERVATION_SPAN_MS / 1000}s, and stops entries in the final {EXECUTION_LATE_CUTOFF_MS / 1000}s.</p></div></div>
+      <div className={cn('flex items-center gap-2 font-mono text-[9px]', stale ? 'text-amber-300' : 'text-muted-foreground')} title={Number.isFinite(calculatedAt) ? new Date(calculatedAt).toLocaleString() : 'Invalid calculation timestamp'}><span className="relative flex size-2">{!stale && <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-50"/>}<span className={cn('relative inline-flex size-2 rounded-full', stale ? 'bg-amber-300' : 'bg-primary')}/></span>{stale ? 'Expired' : `Calculated ${new Date(calculatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} · ${Math.floor(calculationAgeMs / 1_000)}s ago`}
+        {/* The manual fetch belongs with the staleness it answers: polling already keeps this current,
+            so this exists for when polling or the collector has stopped. */}
+        {onRefresh && <Button variant="ghost" size="icon" className="size-6" onClick={onRefresh} disabled={refreshing} title="Re-fetch live venue quotes and the oracle reference now" aria-label="Refresh market data"><RefreshCw className={cn('size-3', refreshing && 'animate-spin')}/></Button>}</div>
     </div>
     {ranked.length ? <div className="grid [grid-template-columns:repeat(auto-fit,minmax(280px,1fr))]">
       {ranked.map((prediction, index) => {
@@ -271,7 +275,7 @@ function PositiveEdgeBuys({ predictions, updatedAt, publicView = false }: { pred
           <div className="mt-3 flex items-center justify-between gap-2 border-t pt-2 text-[9px] text-muted-foreground"><span className="flex items-center gap-1"><Clock3 className="size-2.5"/>closes in <Countdown closesAt={prediction.market.closesAt}/></span><span className="font-mono">calc {new Date(calculatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span></div>
         </div>;
       })}
-    </div> : <div className="flex min-h-28 items-center justify-center p-6 text-center"><div><ShieldCheck className="mx-auto size-5 text-muted-foreground"/><p className="mt-2 text-xs font-medium">{stale ? 'Calculation window expired' : 'No positive-edge buy right now'}</p><p className="mt-1 text-[10px] text-muted-foreground">{stale ? `The prior calculation exceeded ${DATA_FRESHNESS.observationBucketMs / 1_000} seconds and was cleared while fresh actionable data is requested.` : 'Every current market is priced at or above our estimate once fees are included, so there is no edge to buy.'}</p>{stale && Number.isFinite(calculatedAt) && <p className="mt-1 font-mono text-[9px] text-amber-300">Last calculated {new Date(calculatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} · {Math.floor(calculationAgeMs / 1_000)}s ago</p>}</div></div>}
+    </div> : <div className="flex min-h-28 items-center justify-center p-6 text-center"><div><ShieldCheck className="mx-auto size-5 text-muted-foreground"/><p className="mt-2 text-xs font-medium">{stale ? 'Calculation window expired' : 'No positive-edge buy right now'}</p><p className="mt-1 text-[10px] text-muted-foreground">{stale ? `The prior calculation exceeded ${DATA_FRESHNESS.observationBucketMs / 1_000} seconds and was cleared while fresh actionable data is requested.` : 'Every current market is priced at or above our estimate once fees are included, so there is no edge to buy.'}</p>{stale && Number.isFinite(calculatedAt) && <p className="mt-1 font-mono text-[9px] text-amber-300">Last calculated {new Date(calculatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} · {Math.floor(calculationAgeMs / 1_000)}s ago</p>}{stale && onRefresh && <Button variant="outline" size="sm" className="mt-3" onClick={onRefresh} disabled={refreshing}><RefreshCw className={cn(refreshing && 'animate-spin')}/>Refresh now</Button>}</div></div>}
     {!stale && <details className="group border-t bg-background/20">
       <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-[10px] text-muted-foreground transition hover:bg-secondary/30 hover:text-foreground [&::-webkit-details-marker]:hidden"><span className="flex items-center gap-2"><Info className="size-3.5"/>Debug edge calculations for all {predictions.length} markets</span><ChevronDown className="size-3.5 transition-transform group-open:rotate-180"/></summary>
       <div className="border-t p-3">
@@ -295,7 +299,7 @@ function PositiveEdgeBuys({ predictions, updatedAt, publicView = false }: { pred
             <div className="sm:text-right"><p className="font-mono text-sm">{(edgeStrength(prediction) * 100).toFixed(2)}</p><p className="mt-0.5 text-[8px] text-muted-foreground">net edge × quality</p><div className="mt-2 flex gap-1 sm:justify-end"><span className={cn('size-1.5 rounded-full', edgeGap >= 0 ? 'bg-primary' : 'bg-red-400')}/><span className={cn('size-1.5 rounded-full', confidenceGap >= 0 ? 'bg-primary' : 'bg-red-400')}/><span className={cn('size-1.5 rounded-full', priceRoom ? 'bg-primary' : 'bg-red-400')}/></div></div>
           </div>;
         })}</div>
-        <p className="mt-3 px-1 text-[9px] leading-relaxed text-muted-foreground">Confidence is clamped to 25–86%. “Live” is a source-availability bonus, not the 15% prediction-market factor weight. Venue probabilities are shown for research, while the binary buy gate uses the actionable ask for the selected UP/YES or DOWN/NO side on venues enabled in Budget. Disabled venues are dimmed and cannot qualify the calculation. The tradeable P(UP), and therefore P(DOWN)=1−P(UP), is computed without venue input because prices are execution costs rather than forecast features. Qualification requires expected value after venue fees plus at least {Math.round(MIN_SELECTED_SIDE_PROBABILITY * 100)}% independent probability for the selected side. Entries remain restricted to the {Math.round(MIN_ENTRY_PRICE * 100)}–{Math.round(MAX_ENTRY_PRICE * 100)}¢ range. Selling remains reduce-only and is never treated as an implicit opposite-side entry.</p>
+        <p className="mt-3 px-1 text-[9px] leading-relaxed text-muted-foreground">Confidence is clamped to 25–86%. “Live” is a four-point source-availability bonus to confidence, not the prediction-market factor’s forecast weight. Venue probabilities are shown for research, while the binary buy gate uses the actionable ask for the selected UP/YES or DOWN/NO side on venues enabled in Budget. Disabled venues are dimmed and cannot qualify the calculation. The tradeable P(UP), and therefore P(DOWN)=1−P(UP), is computed without venue input because prices are execution costs rather than forecast features. Qualification requires expected value after venue fees plus at least {Math.round(MIN_SELECTED_SIDE_PROBABILITY * 100)}% independent probability for the selected side. Entries remain restricted to the {Math.round(MIN_ENTRY_PRICE * 100)}–{Math.round(MAX_ENTRY_PRICE * 100)}¢ range, and a claimed edge of {Math.round(MAX_NET_EDGE * 100)}pp or more is refused as model failure rather than opportunity. This table applies the strict defaults for withheld sides and assets; the Policy dialog reports what each track is actually running. Selling remains reduce-only and is never treated as an implicit opposite-side entry.</p>
       </div>
     </details>}
   </section>;
@@ -449,11 +453,15 @@ export function Dashboard({ initialData, authenticated }: { initialData: Dashboa
 
   const predictions = useMemo(() => data?.predictions.filter((item) => `${item.symbol} ${item.name}`.toLowerCase().includes(query.toLowerCase())) ?? [], [data, query]);
 
+  /**
+   * Forces the live venue quotes and the oracle reference only. CoinGecko and news keep their TTLs:
+   * they move slowly, and defeating their caches on demand is what puts the desk near a rate limit.
+   */
   function refresh() {
     setError('');
     startTransition(async () => {
       try {
-        const response = await fetch('/api/dashboard?refresh=1');
+        const response = await fetch('/api/dashboard?refresh=live');
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || 'Refresh failed');
         setData((current) => !current || Date.parse(body.generatedAt) >= Date.parse(current.generatedAt) ? body : current);
@@ -467,11 +475,14 @@ export function Dashboard({ initialData, authenticated }: { initialData: Dashboa
       <div className="mx-auto flex h-16 max-w-[1500px] items-center justify-between px-4 sm:px-6">
         <div className="flex items-center gap-8">
           <a href="#" className="flex items-center gap-2.5" aria-label="Money Noodle home"><img src="/brand/money-noodle-icon-64.png" width="40" height="40" alt="" className="size-10 object-contain drop-shadow-[0_0_10px_rgba(53,169,75,.18)]"/><span className="flex flex-col"><span className="text-sm font-semibold leading-none tracking-tight"><span className="text-primary">Money</span> <span className="text-brand-green">Noodle</span></span><span className="mt-1 hidden text-[8px] font-medium uppercase leading-none tracking-[.16em] text-primary lg:block">Multiply your noodles.</span></span></a>
-          <nav className="hidden items-center gap-1 lg:flex"><Button variant="secondary" size="sm"><BarChart3/> Predictions</Button>{authenticated && <ResearchDialog/>}{authenticated && <AccountDialog/>}{authenticated ? <TradingControlDialog/> : <PaperBudgetDialog/>}</nav>
+          <nav className="hidden items-center gap-1 min-[800px]:flex">{authenticated && <ResearchDialog/>}{authenticated && <AccountDialog/>}{authenticated ? <TradingControlDialog/> : <PaperBudgetDialog/>}</nav>
         </div>
+        {/* One collapse point, at the same width the nav appears, so no destination is reachable at
+            some widths and missing at others. Policy and data freshness are reference surfaces and
+            live in the status row below, not here. */}
         <div className="flex items-center gap-1 min-[450px]:gap-2">
-          <div className="relative min-[450px]:hidden"><Button variant="outline" size="icon" onClick={() => setMobileMenuOpen((open) => !open)} aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}>{mobileMenuOpen ? <X/> : <Menu/>}</Button>{mobileMenuOpen && <div className="absolute right-0 top-11 z-50 w-56 space-y-1 rounded-lg border bg-popover p-2 shadow-xl [&_.hidden]:inline [&_button]:w-full [&_button]:justify-start">{authenticated && <ResearchDialog/>}{authenticated && <AccountDialog/>}{authenticated ? <TradingControlDialog/> : <PaperBudgetDialog/>}{data && <DataFreshnessDialog data={data}/>}</div>}</div>
-          <div className="hidden min-[450px]:block lg:hidden">{authenticated && <ResearchDialog/>}</div><div className="hidden min-[450px]:block lg:hidden">{authenticated ? <TradingControlDialog/> : <PaperBudgetDialog/>}</div>{data?.policyManifest && <PolicyDialog manifest={data.policyManifest} providers={authenticated ? data.tradingProviders : undefined} compact/>}<div className="hidden min-[450px]:block">{data && <DataFreshnessDialog data={data}/>}</div><ThemeToggle/>{authenticated ? <form action="/api/auth/logout" method="post"><Button variant="outline" size="sm" type="submit">Sign out</Button></form> : <Button asChild variant="outline" size="sm"><a href="/login">Sign in</a></Button>}<Button variant="outline" size="sm" onClick={refresh} disabled={isPending}><RefreshCw className={cn(isPending && 'animate-spin')}/><span className="hidden sm:inline">Refresh</span></Button>
+          <div className="relative min-[800px]:hidden"><Button variant="outline" size="icon" onClick={() => setMobileMenuOpen((open) => !open)} aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}>{mobileMenuOpen ? <X/> : <Menu/>}</Button>{mobileMenuOpen && <div className="absolute right-0 top-11 z-50 w-56 space-y-1 rounded-lg border bg-popover p-2 shadow-xl [&_.hidden]:inline [&_button]:w-full [&_button]:justify-start">{authenticated && <ResearchDialog/>}{authenticated && <AccountDialog/>}{authenticated ? <TradingControlDialog/> : <PaperBudgetDialog/>}</div>}</div>
+          <ThemeToggle/>{authenticated ? <form action="/api/auth/logout" method="post"><Button variant="outline" size="sm" type="submit">Sign out</Button></form> : <Button asChild variant="outline" size="sm"><a href="/login">Sign in</a></Button>}
         </div>
       </div>
     </header>
@@ -479,7 +490,7 @@ export function Dashboard({ initialData, authenticated }: { initialData: Dashboa
     <div className="relative mx-auto max-w-[1500px] px-4 py-8 sm:px-6 sm:py-12">
       <section className="mb-8 flex flex-col justify-between gap-6 lg:flex-row lg:items-end">
         <div className="max-w-2xl">
-          <div className="mb-3 flex flex-wrap items-center gap-2"><Badge variant="outline" className="gap-1.5 border-primary/20 bg-primary/5 text-primary"><Sparkles/> {data?.modelVersion ?? 'Blend 0.2'}</Badge>{data?.policyManifest && <Badge variant="outline" className="font-mono text-[8px] text-muted-foreground">{data.policyManifest.activeBuyPolicyVersion}</Badge>}<span className="text-[10px] text-muted-foreground">15-minute crypto markets</span></div>
+          <div className="mb-3 flex flex-wrap items-center gap-2"><Badge variant="outline" className="gap-1.5 border-primary/20 bg-primary/5 text-primary"><Sparkles/> {data?.modelVersion ?? 'Blend 0.2'}</Badge>{data?.policyManifest && <PolicyDialog manifest={data.policyManifest} providers={authenticated ? data.tradingProviders : undefined} variant="badge"/>}{data && <DataFreshnessDialog data={data} variant="badge"/>}<span className="text-[10px] text-muted-foreground">15-minute crypto markets</span></div>
           <h1 className="text-3xl font-semibold tracking-[-.04em] text-primary sm:text-4xl">See the signal.<br/><span className="text-brand-green">Inspect the evidence.</span></h1>
           <p className="mt-4 max-w-xl text-sm leading-relaxed text-secondary-foreground">A transparent model layered over prediction-market prices, trend regimes, seasonal history, and breaking crypto news.</p>
         </div>
@@ -490,7 +501,7 @@ export function Dashboard({ initialData, authenticated }: { initialData: Dashboa
       </section>
 
       {authenticated ? <AutomationStatus/> : <PublicAutomationStatus/>}
-      {data && <PositiveEdgeBuys predictions={data.predictions} updatedAt={data.generatedAt} publicView={!authenticated}/>}
+      {data && <PositiveEdgeBuys predictions={data.predictions} updatedAt={data.generatedAt} publicView={!authenticated} onRefresh={refresh} refreshing={isPending}/>}
       {authenticated
         ? data?.performance && <PerformancePanel performance={data.performance}/>
         : <PublicPaperPerformancePanel/>}

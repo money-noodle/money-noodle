@@ -1,7 +1,7 @@
 'use client';
 
-import { Clock3, Database, Info, MonitorDot } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
+import { ChevronDown, Clock3, Database, Info, MonitorDot } from 'lucide-react';
+import { Badge, inlineTrigger } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { DATA_CADENCE, DATA_FRESHNESS } from '@/lib/freshness';
@@ -31,7 +31,7 @@ const CRITICAL_SOURCES: Array<{ key: keyof DashboardData['sourceStatus']; label:
 
 type DataFreshnessData = Pick<DashboardData, 'generatedAt' | 'collector' | 'sourceStatus'>;
 
-export function DataFreshnessDialog({ data }: { data: DataFreshnessData }) {
+export function DataFreshnessDialog({ data, variant = 'button' }: { data: DataFreshnessData; variant?: 'button' | 'badge' }) {
   // The health dot lives on the control that explains it, instead of a separate header label that
   // duplicated this state and read as though it described trading rather than data.
   const degraded = CRITICAL_SOURCES.filter((source) => !data.sourceStatus[source.key]).map((source) => source.label);
@@ -41,7 +41,14 @@ export function DataFreshnessDialog({ data }: { data: DataFreshnessData }) {
     ? 'All data sources live and collecting'
     : [degraded.length ? `Degraded: ${degraded.join(', ')}` : null, collectorDown ? 'Background collector not running' : null].filter(Boolean).join(' · ');
   return <Dialog>
-    <DialogTrigger asChild><Button variant="ghost" size="sm" className="text-muted-foreground" title={`Data freshness and collection cadence — ${summary}`}><span className="relative flex size-1.5"><span className={cn('inline-flex size-1.5 rounded-full', healthy ? 'bg-primary' : 'bg-amber-300')}/></span><Clock3/><span className="hidden lg:inline">Data</span></Button></DialogTrigger>
+    <DialogTrigger asChild>
+      {variant === 'badge'
+        ? <button type="button" title={`Data freshness and collection cadence — ${summary}`} className={cn(inlineTrigger, 'text-[9px]')}>
+            <span className={cn('inline-flex size-1.5 shrink-0 rounded-full', healthy ? 'bg-primary' : 'bg-amber-300')}/>
+            data {healthy ? 'live' : 'degraded'}<ChevronDown className="size-2.5 shrink-0"/>
+          </button>
+        : <Button variant="ghost" size="sm" className="text-muted-foreground" title={`Data freshness and collection cadence — ${summary}`}><span className="relative flex size-1.5"><span className={cn('inline-flex size-1.5 rounded-full', healthy ? 'bg-primary' : 'bg-amber-300')}/></span><Clock3/><span className="hidden lg:inline">Data</span></Button>}
+    </DialogTrigger>
     <DialogContent className="max-w-3xl p-0">
       <DialogHeader className="border-b p-5 pr-12"><DialogTitle className="flex items-center gap-2"><Database className="size-4 text-primary"/> Data freshness and collection</DialogTitle><DialogDescription>Runtime values used by the application—not documentation-only estimates.</DialogDescription></DialogHeader>
       <div className="p-5">
