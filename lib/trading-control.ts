@@ -6,6 +6,7 @@ import { mayAutoResumeAfterReconciliation, systemSuspensionFields } from './auto
 import { DEFAULT_MAX_PURCHASE_PERCENT, MIN_PURCHASE_PERCENT, normalizeEnabledVenues, proposedStakeCents, reconcileBudgetReservations, releaseBudget, reserveBudget, settleBudget, workingEquityCents } from './budget-ledger';
 import { liveBlockers, liveTradingEnabled, maxLiveStakeCents } from './live-orders';
 import { getExecutionDrainStatus } from './execution-drain-state';
+import { nextBudgetEpoch } from './budget-epoch';
 import { liveRiskLimits } from './live-risk-policy';
 import { getLiveRiskStatus } from './live-risk-store';
 import { getKalshiReconciliationStatus } from './reconciliation-state';
@@ -187,10 +188,15 @@ export function configureTradingBudget(input: { budgetDollars: number; perTradeD
     }
     const previousState = stored.control.state;
     const now = new Date().toISOString();
+    // A reconfiguration rebases funded capital and restarts current-epoch P&L, so it opens a new epoch.
+    // Peak equity resets with it: carrying the previous peak would measure drawdown against capital this
+    // budget never held. Earlier epochs stay attributable through the epoch id stamped on their orders.
+    const epoch = nextBudgetEpoch(stored.control, now);
     stored.control = {
       ...stored.control, revision: stored.control.revision + 1, state: 'paused', mode: 'paper',
       startingBudgetCents: budgetCents, availableBudgetCents: budgetCents, reservedBudgetCents: 0,
-      realizedPnlCents: 0, perTradeCents, purchasePercent: stored.control.purchasePercent, enabledVenues,
+      realizedPnlCents: 0, peakEquityCents: budgetCents, ...epoch,
+      perTradeCents, purchasePercent: stored.control.purchasePercent, enabledVenues,
       operatorIntent: 'paused', pauseOrigin: 'configuration', autoResumeEligible: false,
       pauseReason: 'Configured; explicit resume and trade-ready connectors required',
       createdAt: stored.control.createdAt ?? now, updatedAt: now,

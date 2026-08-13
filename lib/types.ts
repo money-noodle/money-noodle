@@ -739,6 +739,15 @@ export interface BudgetControl {
    * starting budget, which reproduces the previous behaviour exactly.
    */
   peakEquityCents?: number;
+  /**
+   * Identity of the current budget configuration. Reconfiguring rebases funded capital and restarts
+   * current-epoch P&L, so without this an earlier epoch's trades are silently unattributable — which is
+   * why reconstructed history did not reconcile with the control record. Absent on records written
+   * before epochs existed; those belong to `LEGACY_BUDGET_EPOCH_ID`.
+   */
+  epochId?: string;
+  epochSequence?: number;
+  epochStartedAt?: string;
   /** All-in spend cap for a single purchase, inclusive of venue fees. */
   perTradeCents: number;
   /** Retained for historical records; sizing is now an explicit per-trade amount. */
@@ -902,6 +911,8 @@ export interface PaperOrder {
   executionMode: ExecutionMode;
   /** Absent on records written before markets were explicit; those belong to `crypto-15m`. */
   marketId?: MarketId;
+  /** Budget epoch this order was placed under, so a later reconfiguration cannot reattribute its P&L. */
+  budgetEpochId?: string;
   /**
    * Path-regime label at the moment of entry, recorded so cohort analysis does not require rejoining a
    * 210MB forecast snapshot. Observation-only for live; paper additionally refuses unclassified windows.

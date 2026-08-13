@@ -342,6 +342,8 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
     id: orderId(prediction, mode, side, ledger), logicalOrderId: orderId(prediction, mode, side, ledger), attemptNumber: 1,
     clientOrderId: orderId(prediction, mode, side, ledger), executionMode: mode,
     marketId: DEFAULT_MARKET_ID,
+    // Stamped at creation so a later reconfiguration cannot reattribute this order's P&L.
+    budgetEpochId: status.control.epochId,
     providerId: selected.venue,
     providerVariantId: status.tradingProviders?.find((provider) => provider.id === selected.venue)?.selectedVariantId,
     symbol: prediction.symbol, venue: selected.venue,

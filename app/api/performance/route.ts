@@ -3,6 +3,8 @@ import { isAuthenticatedRequest } from '@/lib/auth';
 import { isStatelessDeployment, STATELESS_WORKER_MESSAGE } from '@/lib/runtime-environment';
 import { getCyclePathReport } from '@/lib/cycle-path-store';
 import { buildMakerFillReport, buildProviderTradeRecords, buildTradeRecord } from '@/lib/execution-report';
+import { epochResults, lifetimeRealizedPnlCents } from '@/lib/budget-epoch';
+import { getTradingControl } from '@/lib/trading-control';
 import { getForecastHistory, getPerformanceSummary } from '@/lib/forecast-tracker';
 import { getExecutionOrders } from '@/lib/paper-execution';
 import { getWalkForwardEvaluationHistory } from '@/lib/model-evaluation-store';
@@ -19,8 +21,8 @@ export async function GET(request: Request) {
     if (responseCache && responseCache.expiresAt > Date.now()) {
       return NextResponse.json(responseCache.body, { headers: { 'Cache-Control': 'private, no-store' } });
     }
-    const [forecasts, summary, orders, cyclePaths] = await Promise.all([
-      getForecastHistory(), getPerformanceSummary(), getExecutionOrders(), getCyclePathReport(),
+    const [forecasts, summary, orders, cyclePaths, control] = await Promise.all([
+      getForecastHistory(), getPerformanceSummary(), getExecutionOrders(), getCyclePathReport(), getTradingControl(),
     ]);
     const modelEvaluations = await getWalkForwardEvaluationHistory(summary.calibrationWindows);
     // Signal quality comes from the calculation log; executed money comes from the order ledger, kept
@@ -39,6 +41,10 @@ export async function GET(request: Request) {
       // Same orders split per provider, so fills, unfilled maker attempts, and rejections stay separable.
       paperProviderRecords: buildProviderTradeRecords(orders, 'paper'),
       liveProviderRecords: buildProviderTradeRecords(orders, 'live'),
+      // Per-epoch results plus a lifetime total, so reconfiguring the budget restarts current-epoch P&L
+      // without erasing what earlier epochs actually did.
+      liveEpochs: epochResults(orders, 'live', control.control.epochId),
+      liveLifetimePnlCents: lifetimeRealizedPnlCents(orders, 'live'),
       cyclePaths,
       makerFillReport: buildMakerFillReport(orders, forecasts),
       modelEvaluations,
