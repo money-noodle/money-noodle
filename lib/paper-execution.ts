@@ -7,6 +7,7 @@ import { ENTRY_EXECUTION_POLICY_VERSION, entrySideProbability, evaluateEntryExec
 import { evaluateExitPolicy } from './exit-policy';
 import { isFreshCalculationTimestamp } from './freshness';
 import { orderMarketId, orderProviderId } from './execution-report';
+import { cycleRegimeFor } from './cycle-path-store';
 import { DEFAULT_MARKET_ID } from './market-registry';
 import { marketFunding } from './provider-budget-policy';
 import { getProviderBudgets, providerBudget } from './provider-budget-store';
@@ -520,6 +521,22 @@ async function updateSoldCounterfactuals(ledger: Ledger): Promise<boolean> {
 }
 
 /**
+ * Windows whose 15-second path the classifier could not characterise are refused entry.
+ *
+ * In-sample counterfactual over 321 settled live orders: trading only classified windows turns
+ * -$14.98 into +$1.13, and the excluded `insufficient` cohort carried -$16.11 at -28.4% ROI. Every
+ * live DOWN entry to date fell in that cohort. Clustered by settlement window neither side clears two
+ * standard errors (+11.1% ±18.7 kept, -20.3% ±14.0 removed), so this is a restrictive bet on a
+ * plausible mechanism rather than a proven filter — it can only remove trades, never add exposure.
+ * MONEY_NOODLE_REQUIRE_CLASSIFIED_REGIME=false disables it.
+ */
+export function classifiedRegimeRequired(): boolean {
+  return process.env.MONEY_NOODLE_REQUIRE_CLASSIFIED_REGIME !== 'false';
+}
+
+const regimeAdmits = (regime: string | undefined) => !classifiedRegimeRequired() || Boolean(regime && regime !== 'insufficient');
+
+/**
  * Allocation headroom for one (provider, market) pair. Reservations are counted from this pair's own open
  * orders only: charging it the provider total would let one market's positions block a market that has
  * its own headroom, and charging it nothing would let two markets each spend the whole provider.
@@ -568,11 +585,21 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
     // headroom drops out while another provider's candidate for the same window survives.
     .filter(({ order }) => order.stakeCents <= marketFundingFor(budgets, 'paper', orderProviderId(order),
       orderMarketId(order), ledger, equity, ledger.paperBudget.availableCents).spendableCents);
-  const selected = selectPortfolio(candidates.map(({ order }) => ({
+
+  // Paper-only: refuse windows whose path the classifier could not characterise. Every live DOWN entry
+  // to date fell in `insufficient`, and the `insufficient` UP cohort won 22% against 28-33% for
+  // classified windows. Paper carries the experiment so live sizing and behaviour are untouched;
+  // MONEY_NOODLE_REQUIRE_CLASSIFIED_REGIME=false disables it.
+  const withRegime = await Promise.all(candidates.map(async (item) => ({
+    ...item, regime: (await cycleRegimeFor(item.order.symbol, item.order.closesAt))?.regime,
+  })));
+  for (const item of withRegime) item.order.entryCycleRegime = item.regime;
+  const eligible = withRegime.filter((item) => regimeAdmits(item.regime));
+  const selected = selectPortfolio(eligible.map(({ order }) => ({
     id: order.id, symbol: order.symbol, closesAt: order.closesAt, expectedProfitCents: expectedProfitCents(order),
   })), open.map((order) => ({ symbol: order.symbol, closesAt: order.closesAt })), portfolioConstraints())
     .filter((item) => item.selected).sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99))[0];
-  const built = selected ? candidates.find(({ order }) => order.id === selected.id) : undefined;
+  const built = selected ? eligible.find(({ order }) => order.id === selected.id) : undefined;
   if (!built) return false;
   ledger.paperBudget.availableCents -= built.order.stakeCents;
   built.order.status = 'open';
@@ -1032,7 +1059,15 @@ async function runLive(dashboard: DashboardData, status: TradingControlData, led
   const allQualified = [...dashboard.predictions]
     .filter((item) => qualifiesAsBuyEdge(item) && item.market.live && Boolean(selectedSide(item)))
     .sort((a, b) => edgeStrength(b) - edgeStrength(a));
-  const qualified = allQualified.filter((item) => {
+  // Applied to the candidate list rather than the chosen order, so an unclassified top candidate steps
+  // aside for the next one instead of skipping the cycle entirely.
+  const regimeByCandidate = new Map(await Promise.all(allQualified.map(async (item) =>
+    [item.symbol, (await cycleRegimeFor(item.symbol, item.market.closesAt))?.regime] as const)));
+  const regimeAllowed = allQualified.filter((item) => regimeAdmits(regimeByCandidate.get(item.symbol)));
+  if (allQualified.length && !regimeAllowed.length) {
+    return skip(`No qualifying window has a characterised 15-second path yet (${allQualified.map((i) => `${i.symbol}:${regimeByCandidate.get(i.symbol) ?? 'unobserved'}`).join(', ')}).`);
+  }
+  const qualified = regimeAllowed.filter((item) => {
     const side = selectedSide(item)!;
     if (reentryCooldownRemainingMs(ledger, item, 'live', side) > 0) return false;
     return makerRetryDecision(liveAttempts(ledger, item, side), Date.now(), item.market.closesAt, maximumLiveMakerAttempts()).allowed;
@@ -1077,6 +1112,9 @@ async function runLive(dashboard: DashboardData, status: TradingControlData, led
   built.order.id = makerAttemptId(logicalId, retry.attemptNumber);
   built.order.clientOrderId = built.order.id;
   built.order.entryExecutionDecision = entryExecutionDecision(prediction, side, built.order, ledger);
+  // Observation only on live: recorded for cohort analysis, never gating. The classified-regime
+  // requirement is deliberately paper-only until it has evidence of its own.
+  built.order.entryCycleRegime = (await cycleRegimeFor(prediction.symbol, prediction.market.closesAt))?.regime;
   built.order.shadowTakerAllInCents = built.order.stakeCents;
   built.order.shadowTakerQuantity = built.order.quantity;
   ledger.lastLiveSkip = undefined;

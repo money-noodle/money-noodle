@@ -896,6 +896,11 @@ export interface PaperOrder {
   executionMode: ExecutionMode;
   /** Absent on records written before markets were explicit; those belong to `crypto-15m`. */
   marketId?: MarketId;
+  /**
+   * Path-regime label at the moment of entry, recorded so cohort analysis does not require rejoining a
+   * 210MB forecast snapshot. Observation-only for live; paper additionally refuses unclassified windows.
+   */
+  entryCycleRegime?: CycleRegimeLabel;
   providerId?: TradingProviderId;
   providerVariantId?: string;
   /** Stable asset/window intent shared by bounded maker attempts. */

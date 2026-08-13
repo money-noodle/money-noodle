@@ -101,6 +101,16 @@ export async function getCyclePathReport(nowMs = Date.now()): Promise<CyclePathR
   };
 }
 
+/**
+ * Regime features for one asset/window, or undefined when that cycle has not been observed. Exposed so
+ * an entry decision can record what the path looked like at the moment it was taken, rather than
+ * reconstructing it later from a 210MB forecast snapshot.
+ */
+export async function cycleRegimeFor(symbol: string, closesAt: string): Promise<CycleRegimeFeatures | undefined> {
+  const store = await readStore();
+  return store.cycles.find((cycle) => cycle.id === cycleId(symbol, closesAt))?.features;
+}
+
 export async function getCyclePaths(): Promise<CyclePathRecord[]> {
   await pathQueue;
   return (await readStore()).cycles;
