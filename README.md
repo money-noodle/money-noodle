@@ -4,7 +4,7 @@
   <a href="https://noodle.money"><img src="public/brand/money-noodle-social.png" alt="Money Noodle — open the live research dashboard" height="260"></a>
 </p>
 
-A personal, self-hosted crypto prediction research and trading tool built with Next.js, TypeScript, Tailwind CSS, and shadcn/ui. **[Open the live research dashboard →](https://noodle.money)**
+A personal crypto prediction research and trading tool built with Next.js, TypeScript, Tailwind CSS, and shadcn/ui. **[Open the live research dashboard →](https://noodle.money)**
 
 ## Run locally
 

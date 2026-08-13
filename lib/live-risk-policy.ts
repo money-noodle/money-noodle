@@ -1,3 +1,4 @@
+import { drawdownReferenceCents } from './budget-ledger';
 import type { BudgetControl, LiveRiskStatus, PaperOrder } from './types';
 
 export const DEFAULT_MAX_CURRENT_EPOCH_DRAWDOWN_PERCENT = 25;
@@ -43,7 +44,11 @@ export function lifetimeLiveRealizedPnlCents(orders: PaperOrder[]): number {
 export function evaluateLiveRisk(control: BudgetControl, orders: PaperOrder[], environment: NodeJS.ProcessEnv = process.env): LiveRiskStatus {
   const limits = liveRiskLimits(control.startingBudgetCents, environment);
   const currentEquityCents = control.availableBudgetCents + control.reservedBudgetCents;
-  const currentEpochDrawdownCents = Math.max(0, control.startingBudgetCents - currentEquityCents);
+  // Measured from the epoch's peak equity, not the funded amount. Measuring from `starting` meant a run-up
+  // masked a subsequent fall: fund 2000c, reach 3000c, drop to 2200c, and the old figure was 0 while the
+  // real drawdown was 800c — so the stop could not fire after a gain, which is when the most is at risk.
+  // The reference never goes below `startingBudgetCents`, so this can only tighten the stop, never loosen it.
+  const currentEpochDrawdownCents = Math.max(0, drawdownReferenceCents(control) - currentEquityCents);
   const lifetimeRealizedPnlCents = lifetimeLiveRealizedPnlCents(orders);
   const lifetimeLossCents = Math.max(0, -lifetimeRealizedPnlCents);
   const reasons: string[] = [];

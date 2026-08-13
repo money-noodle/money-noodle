@@ -733,6 +733,12 @@ export interface BudgetControl {
   availableBudgetCents: number;
   reservedBudgetCents: number;
   realizedPnlCents: number;
+  /**
+   * Highest working equity observed in this budget epoch, so drawdown is measured from the peak rather
+   * than from the funded amount. Absent on records written before peak tracking; those fall back to the
+   * starting budget, which reproduces the previous behaviour exactly.
+   */
+  peakEquityCents?: number;
   /** All-in spend cap for a single purchase, inclusive of venue fees. */
   perTradeCents: number;
   /** Retained for historical records; sizing is now an explicit per-trade amount. */

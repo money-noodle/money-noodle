@@ -30,6 +30,22 @@ export function proposedStakeCents(control: BudgetControl): number {
   return Math.max(0, Math.min(control.availableBudgetCents, perTrade));
 }
 
+/**
+ * Highest working equity seen in this epoch. Reservations and releases move money between available and
+ * reserved without changing equity, so only settlement can raise it — but this is applied on every
+ * transition so a peak cannot be missed if that ever stops being true.
+ */
+export function withPeakEquity(control: BudgetControl): BudgetControl {
+  const equity = workingEquityCents(control);
+  const peak = Math.max(control.peakEquityCents ?? control.startingBudgetCents, equity);
+  return peak === control.peakEquityCents ? control : { ...control, peakEquityCents: peak };
+}
+
+/** Peak to measure drawdown against, never below the funded amount so the stop cannot loosen. */
+export function drawdownReferenceCents(control: BudgetControl): number {
+  return Math.max(control.peakEquityCents ?? 0, control.startingBudgetCents);
+}
+
 export function reserveBudget(control: BudgetControl, amountCents: number): BudgetControl {
   if (control.state !== 'active') throw new Error('Automation must be active before reserving budget.');
   if (!Number.isInteger(amountCents) || amountCents <= 0) throw new Error('Reservation must be a positive whole-cent amount.');
@@ -86,5 +102,5 @@ export function settleBudget(control: BudgetControl, stakeCents: number, payoutC
     next.state = 'depleted';
     next.pauseReason = 'Working budget depleted';
   }
-  return next;
+  return withPeakEquity(next);
 }
