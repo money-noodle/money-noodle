@@ -43,7 +43,7 @@ describe('binary buy policy v13', () => {
 
     // The favoured-DOWN half needs the suspension lifted; the underdog rejection above is decided by the
     // probability floor and holds either way.
-    process.env.MONEY_NOODLE_ALLOW_DOWN_ENTRY = 'true';
+    process.env.MONEY_NOODLE_ALLOW_DOWN_ENTRY_LIVE = 'true';
     const favoredDown = candidate({
       modelProbabilityUp: 0.4,
       market: { ...market, askUp: 0.95, askDown: 0.40 },
@@ -90,10 +90,11 @@ describe('binary buy policy v13', () => {
   // DOWN entry is suspended by default pending recalibration, so these cases enable it explicitly. The
   // selection and pricing logic must stay correct and covered for when the suspension is lifted; see
   // down-entry-suspension.test.ts for the suspension behaviour itself.
-  afterEach(() => { delete process.env.MONEY_NOODLE_ALLOW_DOWN_ENTRY; });
+  afterEach(() => { delete process.env.MONEY_NOODLE_ALLOW_DOWN_ENTRY_LIVE;
+  delete process.env.MONEY_NOODLE_ALLOW_DOWN_ENTRY_PAPER; });
 
   it('buys DOWN only from its own actionable ask and probability', () => {
-    process.env.MONEY_NOODLE_ALLOW_DOWN_ENTRY = 'true';
+    process.env.MONEY_NOODLE_ALLOW_DOWN_ENTRY_LIVE = 'true';
     const bearish = candidate({ modelProbabilityUp: 0.2, market: { ...market, askUp: 0.7, askDown: 0.3 } });
     expect(bestEntry(bearish)).toMatchObject({ side: 'DOWN', price: 0.3 });
     expect(qualifiesAsBuyEdge(bearish)).toBe(true);

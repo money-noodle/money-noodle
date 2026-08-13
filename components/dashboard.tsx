@@ -239,7 +239,7 @@ function PositiveEdgeBuys({ predictions, updatedAt, publicView = false }: { pred
   const calculationAgeMs = Number.isFinite(calculatedAt) ? freshnessNow - calculatedAt : Number.POSITIVE_INFINITY;
   const stale = !isFreshCalculationTimestamp(updatedAt, freshnessNow);
   const ranked = stale ? [] : [...predictions]
-    .filter(qualifiesAsBuyEdge)
+    .filter((prediction) => qualifiesAsBuyEdge(prediction))
     .sort((a, b) => edgeStrength(b) - edgeStrength(a));
   return <section className="mb-8 overflow-hidden rounded-xl border bg-card/80 shadow-[0_20px_70px_rgba(0,0,0,.18)]">
     <div className="flex flex-col justify-between gap-2 border-b px-4 py-3 sm:flex-row sm:items-center">

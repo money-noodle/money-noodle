@@ -1,4 +1,4 @@
-import type { PositionSide, Prediction } from './types';
+import type { ExecutionMode, PositionSide, Prediction } from './types';
 
 /**
  * Binary buy policy v13.
@@ -102,28 +102,32 @@ export function venueEntryOptions(prediction: EntryCandidate): VenueEntryOption[
  * Exits, reduce-only sells, and settlement of existing DOWN positions are unaffected: this gates new
  * entries only, exactly like the regime gate.
  */
-export function downEntryEnabled(): boolean {
-  return process.env.MONEY_NOODLE_ALLOW_DOWN_ENTRY === 'true';
+export function downEntryEnabled(mode: ExecutionMode = 'live'): boolean {
+  // Per track, and defaulting to the strict track. Every caller that does not state a mode — the
+  // dashboard, ranking helpers, anything added later — therefore gets live's answer, so forgetting to
+  // pass a mode can only ever be more restrictive than intended, never less.
+  const scoped = mode === 'paper' ? 'MONEY_NOODLE_ALLOW_DOWN_ENTRY_PAPER' : 'MONEY_NOODLE_ALLOW_DOWN_ENTRY_LIVE';
+  return process.env[scoped] === 'true';
 }
 
-const admissibleEntry = (option: VenueEntryOption) => option.price >= MIN_ENTRY_PRICE && option.price <= MAX_ENTRY_PRICE
+const admissibleEntry = (option: VenueEntryOption, mode: ExecutionMode = 'live') => option.price >= MIN_ENTRY_PRICE && option.price <= MAX_ENTRY_PRICE
   && option.probability >= MIN_SELECTED_SIDE_PROBABILITY
-  && (option.side === 'UP' || downEntryEnabled());
+  && (option.side === 'UP' || downEntryEnabled(mode));
 
-export function bestEntry(prediction: EntryCandidate): VenueEntryOption | undefined {
-  return venueEntryOptions(prediction).find(admissibleEntry);
+export function bestEntry(prediction: EntryCandidate, mode: ExecutionMode = 'live'): VenueEntryOption | undefined {
+  return venueEntryOptions(prediction).find((option) => admissibleEntry(option, mode));
 }
 
-export function bestEntryForSide(prediction: EntryCandidate, side: PositionSide): VenueEntryOption | undefined {
-  return venueEntryOptions(prediction).find((option) => option.side === side && admissibleEntry(option));
+export function bestEntryForSide(prediction: EntryCandidate, side: PositionSide, mode: ExecutionMode = 'live'): VenueEntryOption | undefined {
+  return venueEntryOptions(prediction).find((option) => option.side === side && admissibleEntry(option, mode));
 }
 
-export function bestVenueEntry(prediction: EntryCandidate, venue: 'polymarket' | 'kalshi', side?: PositionSide): VenueEntryOption | undefined {
-  return venueEntryOptions(prediction).find((option) => option.venue === venue && (!side || option.side === side) && admissibleEntry(option));
+export function bestVenueEntry(prediction: EntryCandidate, venue: 'polymarket' | 'kalshi', side?: PositionSide, mode: ExecutionMode = 'live'): VenueEntryOption | undefined {
+  return venueEntryOptions(prediction).find((option) => option.venue === venue && (!side || option.side === side) && admissibleEntry(option, mode));
 }
 
-export function hasTradableEdge(prediction: EntryCandidate): boolean {
-  const entry = bestEntry(prediction);
+export function hasTradableEdge(prediction: EntryCandidate, mode: ExecutionMode = 'live'): boolean {
+  const entry = bestEntry(prediction, mode);
   return Boolean(entry && entry.netEdge >= MIN_NET_EDGE);
 }
 
@@ -132,16 +136,16 @@ export function edgeStrength(prediction: EntryCandidate & Pick<Prediction, 'conf
   return Math.max(0, bestEntry(prediction)?.netEdge ?? 0) * prediction.confidence;
 }
 
-export function qualifiesVenueBuyEdge(prediction: EntryCandidate & Pick<Prediction, 'confidence'>, venue: 'polymarket' | 'kalshi', side?: PositionSide): boolean {
-  const entry = bestVenueEntry(prediction, venue, side);
+export function qualifiesVenueBuyEdge(prediction: EntryCandidate & Pick<Prediction, 'confidence'>, venue: 'polymarket' | 'kalshi', side?: PositionSide, mode: ExecutionMode = 'live'): boolean {
+  const entry = bestVenueEntry(prediction, venue, side, mode);
   // Repeats the DOWN suspension rather than relying on admissibleEntry: this function checks its
   // conditions inline, so omitting it here would leave an entry path the suspension does not cover.
   return prediction.confidence >= MIN_ESTIMATE_QUALITY && Boolean(entry
-    && (entry.side === 'UP' || downEntryEnabled())
+    && (entry.side === 'UP' || downEntryEnabled(mode))
     && entry.netEdge >= MIN_NET_EDGE && entry.price >= MIN_ENTRY_PRICE && entry.price <= MAX_ENTRY_PRICE
     && sideProbability(prediction, entry.side) >= MIN_SELECTED_SIDE_PROBABILITY);
 }
 
-export function qualifiesAsBuyEdge(prediction: EntryCandidate & Pick<Prediction, 'confidence'>): boolean {
-  return prediction.confidence >= MIN_ESTIMATE_QUALITY && hasTradableEdge(prediction);
+export function qualifiesAsBuyEdge(prediction: EntryCandidate & Pick<Prediction, 'confidence'>, mode: ExecutionMode = 'live'): boolean {
+  return prediction.confidence >= MIN_ESTIMATE_QUALITY && hasTradableEdge(prediction, mode);
 }

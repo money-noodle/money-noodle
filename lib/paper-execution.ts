@@ -199,7 +199,7 @@ const reentryCooldownRemainingMs = (ledger: Ledger, prediction: Prediction, mode
   return sold ? Math.max(0, Date.parse(sold.settledAt!) + REENTRY_COOLDOWN_MS - nowMs) : 0;
 };
 const persistenceKey = (prediction: Prediction, side: PositionSide) => `${prediction.symbol}:${side}:${prediction.market.closesAt}`;
-const selectedSide = (prediction: Prediction): PositionSide | undefined => bestEntry(prediction)?.side;
+const selectedSide = (prediction: Prediction, mode: ExecutionMode = 'live'): PositionSide | undefined => bestEntry(prediction, mode)?.side;
 
 /** Updates raw signal evidence once per distinct dashboard calculation; it never changes qualification. */
 function updateSignalPersistence(dashboard: DashboardData, ledger: Ledger): boolean {
@@ -313,8 +313,8 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
     if (!readiness.enabled || !readiness.tradeReady) return [];
     if (venueFilter && readiness.venue !== venueFilter) return [];
     const quote = venueQuote(prediction, readiness.venue, side);
-    const entry = bestVenueEntry(prediction, readiness.venue, side);
-    if (!entry || !qualifiesVenueBuyEdge(prediction, readiness.venue, side)) return [];
+    const entry = bestVenueEntry(prediction, readiness.venue, side, mode);
+    if (!entry || !qualifiesVenueBuyEdge(prediction, readiness.venue, side, mode)) return [];
     if (!quote || quote.ask > MAX_FILLABLE_ASK || quote.ask <= 0 || quote.bid <= 0 || quote.bid > quote.ask) return [];
     const spread = quote.ask - quote.bid;
     if (spread > MAX_SPREAD) { rejections.push(`${readiness.venue} spread ${(spread * 100).toFixed(1)}c exceeds the ${MAX_SPREAD * 100}c limit`); return []; }
@@ -570,9 +570,9 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
   const equity = ledger.paperBudget.availableCents;
   const stakeLimit = Math.min(status.control.perTradeCents, maximumPaperStakeCents(), equity);
   const candidates = dashboard.predictions
-    .filter((item) => qualifiesAsBuyEdge(item) && item.market.live)
+    .filter((item) => qualifiesAsBuyEdge(item, 'paper') && item.market.live)
     .flatMap((prediction) => {
-      const side = selectedSide(prediction);
+      const side = selectedSide(prediction, 'paper');
       if (!side || !executionEligibility(prediction, side, ledger).eligible) return [];
       if (sideWindowOrders(ledger, prediction, 'paper', side).some((order) => order.status === 'open' || order.status === 'pending_reservation')) return [];
       if (reentryCooldownRemainingMs(ledger, prediction, 'paper', side) > 0) return [];
