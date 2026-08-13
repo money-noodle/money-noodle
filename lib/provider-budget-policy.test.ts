@@ -24,7 +24,7 @@ describe('market allocations', () => {
 
   it('rejects duplicate and unknown markets rather than silently merging them', () => {
     expect(allocationsValid([{ marketId: CRYPTO_15M, percent: 50 }, { marketId: CRYPTO_15M, percent: 50 }])).toBe(false);
-    expect(allocationsValid([{ marketId: 'crypto-spot' as never, percent: 50 }])).toBe(false);
+    expect(allocationsValid([{ marketId: 'us-equities-daily' as never, percent: 50 }])).toBe(false);
   });
 
   it('tolerates decimal percentages that sum just past 100 through float error', () => {

@@ -1,4 +1,4 @@
-import { providerCapabilityUnion, providerMarketCapabilities } from './market-registry';
+import { productionMarketCapability, providerMarketCapabilities } from './market-registry';
 import type { TradingProviderConfiguration, TradingProviderDescriptor, TradingProviderId, TradingProviderVariant } from './types';
 
 const variant = (
@@ -56,10 +56,10 @@ export function tradingProviderRegistry(configuration: TradingProviderConfigurat
     const state = configured.get(provider.id);
     const selectedVariantId = provider.variants.some((item) => item.id === state?.selectedVariantId)
       ? state!.selectedVariantId : provider.variants[0].id;
-    // The provider-level toggles are gated by the union across this provider's markets, which is the
-    // right question for a provider-level control. Anything acting on a single market must intersect
-    // with that pair's capability in `marketCapabilities` instead.
-    const capabilities = providerCapabilityUnion(provider.id);
+    // Gated by the production market, not a union: every consumer of these provider-level flags operates
+    // on crypto-15m, so a capability earned on another market must not unlock them here. Per-market
+    // decisions read `marketCapabilities`.
+    const capabilities = productionMarketCapability(provider.id);
     return {
       ...provider,
       capabilities,

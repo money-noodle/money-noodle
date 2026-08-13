@@ -1,7 +1,7 @@
 import 'server-only';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { providerCapabilityUnion } from './market-registry';
+import { productionMarketCapability } from './market-registry';
 import type {
   TradingProviderAuditEvent, TradingProviderConfiguration, TradingProviderControl, TradingProviderId,
 } from './types';
@@ -23,8 +23,8 @@ export const DEFAULT_PROVIDER_VARIANTS: Record<TradingProviderId, string> = {
  */
 const CAPABILITIES: Record<TradingProviderId, { research: boolean; paper: boolean; live: boolean }> =
   Object.fromEntries(TRADING_PROVIDER_IDS.map((id) => {
-    const union = providerCapabilityUnion(id);
-    return [id, { research: union.marketData, paper: union.paper, live: union.live }];
+    const capability = productionMarketCapability(id);
+    return [id, { research: capability.marketData, paper: capability.paper, live: capability.live }];
   })) as Record<TradingProviderId, { research: boolean; paper: boolean; live: boolean }>;
 let operationQueue: Promise<void> = Promise.resolve();
 

@@ -31,13 +31,13 @@ export type TradingProviderImplementation = 'planned' | 'read-paper' | 'live';
  * budgets, orders, and reported summaries carry it explicitly so a second market is additive rather
  * than a migration of every historical record.
  */
-export type MarketId = 'crypto-15m';
+export type MarketId = 'crypto-15m' | 'crypto-spot';
 
 export interface MarketDescriptor {
   id: MarketId;
   name: string;
   /** Instrument class, kept separate from horizon so a future spot or equity market is not a binary. */
-  instrument: 'binary-event-contract';
+  instrument: 'binary-event-contract' | 'spot';
   horizonSeconds: number;
   /** What the contract settles against, which is why two venues' contracts may not be comparable. */
   settlementBasis: string;

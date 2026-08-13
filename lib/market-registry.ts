@@ -9,6 +9,8 @@ export const CRYPTO_15M: MarketId = 'crypto-15m';
 /** Default carried by records written before markets were explicit, and by every current write. */
 export const DEFAULT_MARKET_ID: MarketId = CRYPTO_15M;
 
+export const CRYPTO_SPOT: MarketId = 'crypto-spot';
+
 export const MARKETS: MarketDescriptor[] = [
   {
     id: 'crypto-15m',
@@ -17,6 +19,16 @@ export const MARKETS: MarketDescriptor[] = [
     horizonSeconds: 900,
     settlementBasis: 'Settlement price versus the cycle-open reference for the same asset and window.',
     description: 'Binary Up/Down contracts on 15-minute crypto windows, compared across providers only when contract rules are exactly or approximately comparable.',
+  },
+  {
+    id: 'crypto-spot',
+    name: 'Crypto spot',
+    instrument: 'spot',
+    // Continuous rather than expiring: there is no settlement horizon, so a threshold probability is not
+    // the quantity a decision needs. Zero for now, and meaningful only once a holding period is defined.
+    horizonSeconds: 0,
+    settlementBasis: 'None. Positions are continuous and marked at the venue quote rather than settled against a reference.',
+    description: 'Research-only spot crypto market data. Paper and live are withheld: the venue-independent forecast assumes zero drift, so it produces no directional expectation to size a continuous-payoff position from.',
   },
 ];
 
@@ -52,7 +64,15 @@ const CAPABILITIES: ProviderMarketCapability[] = [
   },
   {
     providerId: 'crypto-com', marketId: 'crypto-15m', marketData: false, paper: false, live: false,
-    readiness: 'Not viable: Strike Options has no programmatic interface, no order book, 5/20-minute rather than 15-minute durations, and settles on CDNA’s own index against a predetermined strike. Its API trades spot and perpetuals, which belong to a future market.',
+    readiness: 'Not viable: Strike Options has no programmatic interface, no order book, 5/20-minute rather than 15-minute durations, and settles on CDNA’s own index against a predetermined strike. Its API trades spot and perpetuals, declared under crypto-spot instead.',
+  },
+  {
+    providerId: 'crypto-com', marketId: 'crypto-spot', marketData: true, paper: false, live: false,
+    readiness: 'Public Exchange v1 instruments, tickers, and order-book reads need no credentials. Paper and live withheld until a directional model exists; the zero-drift forecast produces no spot signal.',
+  },
+  {
+    providerId: 'robinhood', marketId: 'crypto-spot', marketData: true, paper: false, live: false,
+    readiness: 'Crypto Trading API is documented but every endpoint including quotes is account-authenticated, so nothing can be read without operator API-key and Ed25519 credentials. Paper and live withheld for the same reason as Crypto.com.',
   },
   {
     providerId: 'forecastex', marketId: 'crypto-15m', marketData: false, paper: false, live: false,
@@ -60,7 +80,7 @@ const CAPABILITIES: ProviderMarketCapability[] = [
   },
   {
     providerId: 'robinhood', marketId: 'crypto-15m', marketData: false, paper: false, live: false,
-    readiness: 'Awaiting an official event-contract API with authoritative order, fill, position, and account support.',
+    readiness: 'Not viable: the only official interface is a crypto-only Trading API with no event-contract endpoints, and Robinhood prediction markets are reported to route to Kalshi, which is already traded directly. Its crypto API is declared under crypto-spot instead.',
   },
 ];
 
@@ -79,14 +99,15 @@ export function marketProviders(marketId: MarketId): TradingProviderId[] {
 }
 
 /**
- * Union across a provider's markets. Convenience for provider-level display only; a funding, paper, or
- * live decision must consult the specific (provider, market) pair instead.
+ * Capability for the production market, which is what the provider-level toggles and every consumer
+ * written before markets existed actually mean.
+ *
+ * Deliberately not a union across markets: a union would report Crypto.com as research-capable because
+ * of `crypto-spot`, and a `crypto-15m` surface reading the provider-level flag would then treat it as a
+ * research provider for contracts it cannot see. Any consumer that genuinely spans markets must ask for
+ * the specific (provider, market) pair instead.
  */
-export function providerCapabilityUnion(providerId: TradingProviderId): { marketData: boolean; paper: boolean; live: boolean } {
-  const own = CAPABILITIES.filter((item) => item.providerId === providerId);
-  return {
-    marketData: own.some((item) => item.marketData),
-    paper: own.some((item) => item.paper),
-    live: own.some((item) => item.live),
-  };
+export function productionMarketCapability(providerId: TradingProviderId): { marketData: boolean; paper: boolean; live: boolean } {
+  const own = providerMarketCapability(providerId, DEFAULT_MARKET_ID);
+  return { marketData: own?.marketData ?? false, paper: own?.paper ?? false, live: own?.live ?? false };
 }

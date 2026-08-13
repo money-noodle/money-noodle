@@ -4,7 +4,7 @@ vi.mock('server-only', () => ({}));
 
 import {
   CRYPTO_15M, DEFAULT_MARKET_ID, MARKETS, isMarketId, marketDescriptor, marketProviders,
-  normalizeMarketId, providerCapabilityUnion, providerMarketCapability, providerMarketCapabilities,
+  normalizeMarketId, productionMarketCapability, providerMarketCapability, providerMarketCapabilities,
 } from './market-registry';
 import { tradingProviderRegistry } from './trading-provider-registry';
 import { TRADING_PROVIDER_IDS } from './trading-provider-config-store';
@@ -23,8 +23,8 @@ function configuration(overrides: Partial<TradingProviderConfiguration['provider
 }
 
 describe('market registry', () => {
-  it('declares exactly one market today, and names it rather than implying it', () => {
-    expect(MARKETS.map((market) => market.id)).toEqual([CRYPTO_15M]);
+  it('names each market rather than implying it, with crypto-15m as production', () => {
+    expect(MARKETS.map((market) => market.id)).toEqual([CRYPTO_15M, 'crypto-spot']);
     expect(DEFAULT_MARKET_ID).toBe(CRYPTO_15M);
     expect(marketDescriptor(CRYPTO_15M).horizonSeconds).toBe(900);
   });
@@ -33,13 +33,14 @@ describe('market registry', () => {
     expect(normalizeMarketId(undefined)).toBe(CRYPTO_15M);
     expect(normalizeMarketId('not-a-market')).toBe(CRYPTO_15M);
     expect(normalizeMarketId(CRYPTO_15M)).toBe(CRYPTO_15M);
-    expect(isMarketId('crypto-spot')).toBe(false);
+    expect(isMarketId('crypto-spot')).toBe(true);
+    expect(isMarketId('us-equities-daily')).toBe(false);
   });
 
   it('declares capability per provider and market pair, not per provider', () => {
     expect(providerMarketCapability('kalshi', CRYPTO_15M)).toMatchObject({ marketData: true, paper: true, live: true });
     expect(providerMarketCapability('polymarket', CRYPTO_15M)).toMatchObject({ paper: true, live: false });
-    expect(marketProviders(CRYPTO_15M)).toEqual(TRADING_PROVIDER_IDS);
+    expect(marketProviders(CRYPTO_15M).sort()).toEqual([...TRADING_PROVIDER_IDS].sort());
   });
 
   it('keeps Crypto.com incapable on crypto-15m and explains why', () => {
@@ -57,10 +58,18 @@ describe('market registry', () => {
 });
 
 describe('provider registry capability derivation', () => {
+  it('gates provider-level flags on the production market, never a union across markets', () => {
+    // crypto-com and robinhood are market-data capable on crypto-spot. That must not make them
+    // research-capable at the provider level, which crypto-15m surfaces read.
+    expect(productionMarketCapability('crypto-com')).toEqual({ marketData: false, paper: false, live: false });
+    expect(productionMarketCapability('robinhood')).toEqual({ marketData: false, paper: false, live: false });
+    expect(providerMarketCapability('crypto-com', 'crypto-spot')!.marketData).toBe(true);
+  });
+
   it('derives provider capability from the market registry instead of a second table', () => {
     const registry = tradingProviderRegistry(configuration());
     for (const provider of registry) {
-      expect(provider.capabilities).toEqual(providerCapabilityUnion(provider.id));
+      expect(provider.capabilities).toEqual(productionMarketCapability(provider.id));
       expect(provider.marketCapabilities).toEqual(providerMarketCapabilities(provider.id));
     }
   });
