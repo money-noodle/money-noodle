@@ -5,19 +5,28 @@ import { AlertTriangle, ChevronDown, FlaskConical, Pause, Radio, ShieldAlert } f
 import { OrderDecisionDetails } from '@/components/order-decision-details';
 import { TradeHistoryDialog } from '@/components/trade-history-dialog';
 import { Badge } from '@/components/ui/badge';
+import { usePublicPaperBudget, usePublicPaperPerformance } from '@/components/use-public-paper';
 import { DATA_FRESHNESS } from '@/lib/freshness';
-import type { ExecutionSummary, PaperOrder, TradingControlData } from '@/lib/types';
+import type { ExecutionSummary, PaperOrder, PaperOrderStatus, PublicPaperExecutionRecord, TradingControlData } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const dollars = (cents: number) => usd.format(cents / 100);
 
 /**
+ * Aggregates only. The public paper projection has no order-level detail, so the panel is typed to what
+ * it actually reads and outcome counts are optional: a track whose W/L is unknown omits the cluster
+ * instead of reporting 0W 0L beside a non-zero settled count.
+ */
+type TrackFigures = Pick<ExecutionSummary, 'mode' | 'running' | 'depleted' | 'realizedPnlCents' | 'equityCents' | 'openOrders' | 'settledOrders'>
+  & Partial<Pick<ExecutionSummary, 'wins' | 'losses' | 'blockedReason'>>;
+
+/**
  * One self-contained panel per execution track. Paper and live are deliberately given separate
  * surfaces, colours, and labels: the two report different money, and a shared row of figures made it
  * too easy to read a simulated result as a real one.
  */
-function TrackPanel({ track, title, subtitle, equityLabel }: { track: ExecutionSummary | undefined; title: string; subtitle: string; equityLabel: string }) {
+function TrackPanel({ track, title, subtitle, equityLabel }: { track: TrackFigures | undefined; title: string; subtitle: string; equityLabel: string }) {
   const isLive = track?.mode === 'live';
   const running = Boolean(track?.running);
   const pnl = track?.realizedPnlCents ?? 0;
@@ -54,9 +63,10 @@ function TrackPanel({ track, title, subtitle, equityLabel }: { track: ExecutionS
 
     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t pt-2 font-mono text-[9px] text-muted-foreground">
       <span>{track?.openOrders ?? 0} open</span><span>·</span>
-      <span>{track?.settledOrders ?? 0} settled</span><span>·</span>
-      <span className={cn((track?.wins ?? 0) > (track?.losses ?? 0) && 'text-primary')}>{track?.wins ?? 0}W</span>
-      <span className={cn((track?.losses ?? 0) > 0 && 'text-red-400')}>{track?.losses ?? 0}L</span>
+      <span>{track?.settledOrders ?? 0} settled</span>
+      {track?.wins !== undefined && <><span>·</span>
+        <span className={cn(track.wins > (track.losses ?? 0) && 'text-primary')}>{track.wins}W</span>
+        <span className={cn((track.losses ?? 0) > 0 && 'text-red-400')}>{track.losses ?? 0}L</span></>}
     </div>
 
     {track?.depleted && <p className="mt-2 flex items-start gap-1.5 text-[9px] leading-relaxed text-amber-200/90"><AlertTriangle className="mt-px size-3 shrink-0"/>Bankroll depleted — reset in Budget to resume.</p>}
@@ -170,5 +180,86 @@ export function AutomationStatus() {
     <OpenOrdersPanel live={data.live} paper={data.paper}/>
     {regimeGate && regimeGate.phase !== 'disabled' && <div className={cn('flex items-start gap-2 border-t px-4 py-2.5 text-[9px]', regimeCooling ? 'bg-amber-300/[.04] text-amber-200' : regimeGate.phase === 'warming' ? 'text-muted-foreground' : 'text-primary')}><ShieldAlert className="mt-px size-3 shrink-0"/><span><strong className="uppercase">Adaptive regime gate {regimeGate.phase}</strong> · {regimeGate.reason}{regimeGate.weightedMeanEdge === null ? '' : ` · recent edge ${(regimeGate.weightedMeanEdge * 100).toFixed(1)}pp`}{regimeGate.negativeReturnConfidence === null ? '' : ` · negative confidence ${(regimeGate.negativeReturnConfidence * 100).toFixed(1)}%`} · {regimeGate.resolvedWindows}/{regimeGate.configured.minimumPolicyWindows} policy windows{regimeGate.pendingWindows ? ` · ${regimeGate.pendingWindows} pending` : ''}</span></div>}
     {data.reconciliation && <div className={cn('flex items-start gap-2 border-t px-4 py-2.5 text-[9px]', data.reconciliation.phase === 'ready' ? 'text-primary' : 'text-amber-200')}><ShieldAlert className="mt-px size-3 shrink-0"/><span><strong className="uppercase">Kalshi reconciliation {data.reconciliation.phase}</strong> · {data.reconciliation.reason}{data.reconciliation.nextScheduledAt ? ` · next periodic ${new Date(data.reconciliation.nextScheduledAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}{data.reconciliation.consecutivePeriodicFailures ? ` · ${data.reconciliation.consecutivePeriodicFailures} periodic failure` : ''}</span></div>}
+  </section>;
+}
+
+/**
+ * One sanitized simulated intent. The public projection carries no contract, decision snapshot, or
+ * venue identifier, so this row deliberately reports less than its signed counterpart above.
+ */
+function PublicOpenOrderRow({ record }: { record: PublicPaperExecutionRecord }) {
+  return <div className="rounded-md border bg-background/45 px-3 py-2">
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex items-center gap-1.5">
+        <Badge variant="outline" className="h-4 border-primary/25 px-1.5 font-mono text-[8px] text-primary">paper</Badge>
+        <span className="text-[10px] font-semibold">{record.symbol} {record.side}</span>
+        <span className="font-mono text-[8px] uppercase text-muted-foreground">{record.venue}</span>
+      </div>
+      <Badge variant="outline" className={cn('h-4 px-1.5 font-mono text-[8px]', record.status === 'pending_reservation' || record.status === 'uncertain' ? 'border-amber-300/30 text-amber-200' : 'text-muted-foreground')}>{record.status === 'pending_reservation' ? 'entry pending' : record.status}</Badge>
+    </div>
+    <div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[9px] sm:grid-cols-4">
+      <span><span className="text-muted-foreground">qty </span>{record.quantity.toFixed(2)}</span>
+      <span><span className="text-muted-foreground">cost </span>{record.stakeCents.toFixed(2)}¢</span>
+      <span><span className="text-muted-foreground">entry </span>{(record.askPrice * 100).toFixed(1)}¢</span>
+      <span><span className="text-muted-foreground">fee </span>{record.feeCents.toFixed(2)}¢</span>
+      <span className="col-span-2 sm:col-span-4"><span className="text-muted-foreground">closes </span>{new Date(record.closesAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+    </div>
+  </div>;
+}
+
+/**
+ * Paper counterpart to the signed automation panel. Everything here is simulated: there is no live track
+ * to report, no venue arming state, and no controls, so the panel says so rather than leaving a visitor
+ * to assume the empty half is a real-money result.
+ */
+export function PublicAutomationStatus() {
+  const { budget } = usePublicPaperBudget();
+  const { performance } = usePublicPaperPerformance();
+
+  if (!budget) return null;
+  const openStatuses = new Set<PaperOrderStatus>(['pending_reservation', 'uncertain', 'open']);
+  const openRecords = budget.recentExecutions.filter((record) => openStatuses.has(record.status));
+  // Outcome counts come from the paper track record; without it the W/L cluster is omitted rather than
+  // reported as 0W 0L against a non-zero settled count.
+  const paperRecord = performance?.durable ? performance.paperRecord : undefined;
+  const track = {
+    mode: 'paper' as const, running: budget.running, depleted: budget.depleted,
+    realizedPnlCents: budget.realizedPnlCents, equityCents: budget.equityCents,
+    openOrders: budget.openOrders, settledOrders: budget.settledOrders,
+    wins: paperRecord?.wins, losses: paperRecord?.losses,
+  };
+
+  return <section className="mb-6 overflow-hidden rounded-xl border bg-card/60">
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2.5">
+      <div className="flex items-center gap-2">
+        <div className={cn('grid size-6 place-items-center rounded-md', budget.running ? 'bg-primary/12 text-primary' : 'bg-secondary text-muted-foreground')}>
+          {budget.running ? <Radio className="size-3.5"/> : <Pause className="size-3.5"/>}
+        </div>
+        <span className="text-xs font-semibold">{budget.depleted ? 'Paper automation stopped — bankroll depleted' : budget.running ? 'Paper automation active' : 'Paper automation idle'}</span>
+        <span className="text-[10px] text-muted-foreground">simulated shadow · every {DATA_FRESHNESS.dashboardPollMs / 1000}s</span>
+      </div>
+      <span className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">no real money at risk</span>
+    </div>
+    <div className="flex flex-col gap-3 p-3">
+      <TrackPanel track={track} title="Paper" subtitle="Simulated shadow · always on" equityLabel="Shadow bankroll"/>
+      {!budget.durable && <p className="px-1 text-[9px] leading-relaxed text-muted-foreground">This hosted dashboard is stateless, so it cannot report the continuously collected paper ledger. Figures appear once the persistent worker publishes its projection.</p>}
+    </div>
+    <details className="group border-t">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-2.5 marker:content-none hover:bg-secondary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-semibold">Open simulated positions</span>
+          <Badge variant="outline" className="h-4 min-w-4 justify-center px-1 font-mono text-[8px]">{openRecords.length}</Badge>
+        </div>
+        <ChevronDown className="size-3.5 text-muted-foreground transition-transform group-open:rotate-180"/>
+      </summary>
+      <div className="space-y-3 border-t bg-background/20 p-3">
+        {openRecords.length ? <div>
+          <p className="mb-1.5 text-[8px] font-semibold uppercase tracking-wider text-primary">Paper · simulated shadow</p>
+          <div className="grid gap-2 lg:grid-cols-2">
+            {openRecords.map((record) => <PublicOpenOrderRow key={`${record.createdAt}:${record.symbol}:${record.side}:${record.venue}`} record={record}/>)}
+          </div>
+        </div> : <p className="py-2 text-center text-[9px] text-muted-foreground">No open simulated positions or unresolved order intents.</p>}
+      </div>
+    </details>
   </section>;
 }

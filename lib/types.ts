@@ -1039,6 +1039,32 @@ export interface PublicPaperBudget {
   recentExecutions: PublicPaperExecutionRecord[];
 }
 
+/** Paper-only executed-money figures. Deliberately a subset: no segment breakdowns, no switch or exit
+ *  counterfactuals, and no live counterpart, so a public reader cannot infer real-money results. */
+export type PublicPaperTradeRecord = Pick<TradeTrackRecord,
+  'settled' | 'pending' | 'windows' | 'wins' | 'losses' | 'winRate' | 'roi' | 'stakedCents'
+  | 'realizedPnlCents' | 'meanPredictedEdge' | 'meanRealizedReturn'>;
+
+/** Forecast scoring a public reader may see. It measures the calculation, not the money, and excludes
+ *  benchmarks, segments, the missed-buy counterfactual, calibration bins, and model evaluations. */
+export type PublicSignalQuality = Pick<PerformanceSummary,
+  'issued' | 'cycles' | 'resolved' | 'resolvedCycles' | 'accuracy' | 'cycleBalancedAccuracy'
+  | 'brierScore' | 'currentCycleStreak' | 'calibrationWindows' | 'calibrationMinimum'
+  | 'calibrationProgress' | 'calibrationReady'>;
+
+/** Newest qualifying calculations without the internal forecast identifier or any entry pricing. */
+export type PublicRecentForecast = Pick<TrackedForecast, 'symbol' | 'direction' | 'status' | 'correct'>;
+
+/** Bounded paper-only track record exposed without a signed dashboard session. */
+export interface PublicPaperPerformance {
+  /** False on a stateless hosted dashboard, which cannot report the persistent worker ledger. */
+  durable: boolean;
+  generatedAt: string;
+  signal: PublicSignalQuality;
+  paperRecord: PublicPaperTradeRecord;
+  recent: PublicRecentForecast[];
+}
+
 export interface ExecutionSummary {
   mode: ExecutionMode;
   running: boolean;

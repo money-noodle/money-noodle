@@ -10,7 +10,7 @@ import { AccountDialog } from '@/components/account-dialog';
 import { DataFreshnessDialog } from '@/components/data-freshness-dialog';
 import { MarketChart } from '@/components/market-chart';
 import { PerformanceDialog } from '@/components/performance-dialog';
-import { PaperBudgetDialog, PaperBudgetPanel } from '@/components/paper-budget-panel';
+import { PaperBudgetDialog } from '@/components/paper-budget-panel';
 import { PolicyDialog } from '@/components/policy-dialog';
 import { ResearchDialog } from '@/components/research-dialog';
 import { TradingControlDialog } from '@/components/trading-control-dialog';
@@ -22,11 +22,12 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { AutomationStatus } from '@/components/automation-status';
+import { AutomationStatus, PublicAutomationStatus } from '@/components/automation-status';
+import { usePublicPaperPerformance } from '@/components/use-public-paper';
 import { DATA_FRESHNESS, isFreshCalculationTimestamp } from '@/lib/freshness';
 import { cn } from '@/lib/utils';
 import { bestEntry, edgeStrength, hasTradableEdge, MAX_ENTRY_PRICE, MIN_ENTRY_PRICE, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, MIN_SELECTED_SIDE_PROBABILITY, qualifiesAsBuyEdge, sideProbability, venueEntryOptions } from '@/lib/prediction-policy';
-import type { DashboardData, DashboardViewData, Direction, ExecutionSignalReadiness, Factor, Prediction, TradeTrackRecord } from '@/lib/types';
+import type { DashboardData, DashboardViewData, Direction, ExecutionSignalReadiness, Factor, Prediction, PublicPaperTradeRecord, PublicSignalQuality, TradeTrackRecord } from '@/lib/types';
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 const compactMoney = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 1 });
@@ -211,7 +212,13 @@ function liveSignalDisplay(readiness: ExecutionSignalReadiness | undefined): { l
   return { label: 'checking execution', detail: 'Waiting for the execution ledger to refresh.', className: 'border-muted-foreground/30 text-muted-foreground' };
 }
 
-function PositiveEdgeBuys({ predictions, updatedAt }: { predictions: Prediction[]; updatedAt: string }) {
+/**
+ * The edge calculation itself is public research: it is derived on the client from public predictions and
+ * fixed policy thresholds. Live execution and portfolio readiness are not, and their endpoint requires a
+ * signed session, so `publicView` skips that fetch and omits the per-candidate execution badges rather
+ * than leaving every card stuck on an indefinite "checking execution".
+ */
+function PositiveEdgeBuys({ predictions, updatedAt, publicView = false }: { predictions: Prediction[]; updatedAt: string; publicView?: boolean }) {
   const [now, setNow] = useState(() => Date.parse(updatedAt));
   const [executionSignals, setExecutionSignals] = useState<ExecutionSignalReadiness[]>([]);
   useEffect(() => {
@@ -219,13 +226,14 @@ function PositiveEdgeBuys({ predictions, updatedAt }: { predictions: Prediction[
     return () => window.clearInterval(timer);
   }, []);
   useEffect(() => {
+    if (publicView) return;
     let cancelled = false;
     fetch('/api/trading/control', { cache: 'no-store' })
       .then((response) => response.ok ? response.json() : null)
       .then((body) => { if (!cancelled && body?.executionSignals) setExecutionSignals(body.executionSignals); })
       .catch(() => undefined);
     return () => { cancelled = true; };
-  }, [updatedAt]);
+  }, [updatedAt, publicView]);
   const calculatedAt = Date.parse(updatedAt);
   const freshnessNow = Number.isFinite(calculatedAt) ? Math.max(now, calculatedAt) : now;
   const calculationAgeMs = Number.isFinite(calculatedAt) ? freshnessNow - calculatedAt : Number.POSITIVE_INFINITY;
@@ -235,7 +243,7 @@ function PositiveEdgeBuys({ predictions, updatedAt }: { predictions: Prediction[
     .sort((a, b) => edgeStrength(b) - edgeStrength(a));
   return <section className="mb-8 overflow-hidden rounded-xl border bg-card/80 shadow-[0_20px_70px_rgba(0,0,0,.18)]">
     <div className="flex flex-col justify-between gap-2 border-b px-4 py-3 sm:flex-row sm:items-center">
-      <div className="flex items-center gap-2"><div className="grid size-7 place-items-center rounded-md bg-primary/10 text-primary"><Zap className="size-4"/></div><div><h2 className="text-xs font-semibold">Positive-edge buys</h2><p className="text-[9px] text-muted-foreground">Signal qualification: ≥{Math.round(MIN_NET_EDGE * 100)}pp net edge and ≥{Math.round(MIN_ESTIMATE_QUALITY * 100)}% quality. Execution additionally waits 60s, requires 3 persistent snapshots over 30s, and stops entries in the final 120s.</p></div></div>
+      <div className="flex items-center gap-2"><div className="grid size-7 place-items-center rounded-md bg-primary/10 text-primary"><Zap className="size-4"/></div><div><h2 className="text-xs font-semibold">Positive-edge buys</h2><p className="text-[9px] text-muted-foreground">Signal qualification: ≥{Math.round(MIN_NET_EDGE * 100)}pp net edge and ≥{Math.round(MIN_ESTIMATE_QUALITY * 100)}% quality. Execution additionally waits 60s, requires 3 persistent snapshots over 30s, and stops entries in the final 120s.{publicView ? ' The simulated paper track acts on these; per-candidate live execution and portfolio state require sign-in.' : ''}</p></div></div>
       <div className={cn('flex items-center gap-2 font-mono text-[9px]', stale ? 'text-amber-300' : 'text-muted-foreground')} title={Number.isFinite(calculatedAt) ? new Date(calculatedAt).toLocaleString() : 'Invalid calculation timestamp'}><span className="relative flex size-2">{!stale && <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-50"/>}<span className={cn('relative inline-flex size-2 rounded-full', stale ? 'bg-amber-300' : 'bg-primary')}/></span>{stale ? 'Expired' : `Calculated ${new Date(calculatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} · ${Math.floor(calculationAgeMs / 1_000)}s ago`}</div>
     </div>
     {ranked.length ? <div className="grid [grid-template-columns:repeat(auto-fit,minmax(280px,1fr))]">
@@ -252,12 +260,12 @@ function PositiveEdgeBuys({ predictions, updatedAt }: { predictions: Prediction[
           : portfolio?.state === 'blocked' ? 'portfolio blocked'
           : 'portfolio checking';
         return <div key={prediction.symbol} className="border-b border-r p-4">
-          <div className="flex items-center justify-between gap-2"><span className="font-mono text-[9px] text-muted-foreground">#{index + 1} strongest buy</span><div className="flex flex-wrap justify-end gap-1"><Badge variant="outline" className={cn('font-mono text-[8px]', portfolio?.state === 'portfolio-selected' ? 'border-primary/25 text-primary' : portfolio?.state === 'switch-candidate' ? 'border-violet-400/30 text-violet-300' : portfolio?.state === 'blocked' ? 'border-red-400/25 text-red-300' : 'border-amber-300/25 text-amber-200')} title={portfolio?.reason}>{portfolioLabel}</Badge><Badge variant="outline" className={cn('font-mono text-[8px]', execution.className)} title={execution.detail}>{execution.label}</Badge><Badge className={cn('border font-mono text-[9px]', isUp ? 'border-primary/20 bg-primary/10 text-primary' : 'border-red-400/20 bg-red-400/10 text-red-400')}>{isUp ? 'UP' : 'DOWN'}</Badge></div></div>
+          <div className="flex items-center justify-between gap-2"><span className="font-mono text-[9px] text-muted-foreground">#{index + 1} strongest buy</span><div className="flex flex-wrap justify-end gap-1">{!publicView && <><Badge variant="outline" className={cn('font-mono text-[8px]', portfolio?.state === 'portfolio-selected' ? 'border-primary/25 text-primary' : portfolio?.state === 'switch-candidate' ? 'border-violet-400/30 text-violet-300' : portfolio?.state === 'blocked' ? 'border-red-400/25 text-red-300' : 'border-amber-300/25 text-amber-200')} title={portfolio?.reason}>{portfolioLabel}</Badge><Badge variant="outline" className={cn('font-mono text-[8px]', execution.className)} title={execution.detail}>{execution.label}</Badge></>}<Badge className={cn('border font-mono text-[9px]', isUp ? 'border-primary/20 bg-primary/10 text-primary' : 'border-red-400/20 bg-red-400/10 text-red-400')}>{isUp ? 'UP' : 'DOWN'}</Badge></div></div>
           <div className="mt-3 flex items-center gap-2">{prediction.iconUrl && <img src={prediction.iconUrl} alt="" className="size-5 rounded-full"/>}<span className="text-sm font-semibold">{prediction.symbol}</span></div>
           <div className="mt-3 grid grid-cols-3 gap-1.5"><ProbabilityCell label="Money Noodle" probabilityUp={prediction.modelProbabilityUp} model/><ProbabilityCell label="Polymarket" probabilityUp={prediction.market.live ? prediction.market.probabilityUp : undefined} askUp={prediction.market.askUp} askDown={prediction.market.askDown} enabled={prediction.enabledTradingVenues.includes('polymarket')}/><ProbabilityCell label="Kalshi" probabilityUp={prediction.kalshi?.live ? prediction.kalshi.probabilityUp : undefined} askUp={prediction.kalshi?.askUp} askDown={prediction.kalshi?.askDown} enabled={prediction.enabledTradingVenues.includes('kalshi')} approximate/></div>
           {bestVenue && <p className="mt-2 font-mono text-[8px] text-primary">{bestVenue.venue === 'kalshi' ? 'Kalshi' : 'Polymarket'} {bestVenue.side} {(bestVenue.price * 100).toFixed(1)}¢ + {(bestVenue.feeRate * 100).toFixed(1)}¢ fee · expected value {bestVenue.netEdge >= 0 ? '+' : ''}{(bestVenue.netEdge * 100).toFixed(1)}pp</p>}
-          <p className="mt-1 text-[8px] leading-relaxed text-muted-foreground"><span className="font-semibold text-foreground">Portfolio:</span> {portfolio?.reason ?? 'Waiting for constrained portfolio evaluation.'}</p>
-          <p className="mt-1 text-[8px] leading-relaxed text-muted-foreground"><span className="font-semibold text-foreground">Live execution:</span> {execution.detail}</p>
+          {!publicView && <p className="mt-1 text-[8px] leading-relaxed text-muted-foreground"><span className="font-semibold text-foreground">Portfolio:</span> {portfolio?.reason ?? 'Waiting for constrained portfolio evaluation.'}</p>}
+          {!publicView && <p className="mt-1 text-[8px] leading-relaxed text-muted-foreground"><span className="font-semibold text-foreground">Live execution:</span> {execution.detail}</p>}
           <div className="mt-3 flex items-center justify-between text-[9px]"><span className="text-muted-foreground">Model confidence</span><span className="font-mono font-semibold text-foreground">{Math.round(prediction.confidence * 100)}%</span></div>
           <Progress value={prediction.confidence * 100} className="mt-1.5 h-1"/>
           <div className="mt-3 flex items-center justify-between gap-2 border-t pt-2 text-[9px] text-muted-foreground"><span className="flex items-center gap-1"><Clock3 className="size-2.5"/>closes in <Countdown closesAt={prediction.market.closesAt}/></span><span className="font-mono">calc {new Date(calculatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span></div>
@@ -297,7 +305,7 @@ function PositiveEdgeBuys({ predictions, updatedAt }: { predictions: Prediction[
  * One row per execution track. Signal quality above measures the forecast; these measure the money,
  * and the two modes are reported separately because they trade different bankrolls at different sizes.
  */
-function TradeRecordRow({ record, label }: { record: TradeTrackRecord | undefined; label: string }) {
+function TradeRecordRow({ record, label }: { record: PublicPaperTradeRecord | undefined; label: string }) {
   const isLive = label === 'Live';
   const cash = (cents: number) => `${cents >= 0 ? '+' : '−'}$${Math.abs(cents / 100).toFixed(2)}`;
   const settled = record?.settled ?? 0;
@@ -315,8 +323,55 @@ function TradeRecordRow({ record, label }: { record: TradeTrackRecord | undefine
   </div>;
 }
 
-function PerformancePanel({ performance }: { performance: DashboardData['performance'] }) {
+/**
+ * Scoring of the calculation rather than of the money, so it is identical for a signed operator and a
+ * public visitor and is rendered from one component for both.
+ */
+function SignalQualityTiles({ signal }: { signal: PublicSignalQuality }) {
   const percent = (value: number | null) => value === null ? '—' : `${(value * 100).toFixed(1)}%`;
+  return <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+    <div className="rounded-lg border bg-background/40 px-3 py-2"><p className="text-[9px] uppercase tracking-wider text-muted-foreground">Updates tracked</p><p className="mt-1 font-mono text-lg">{signal.issued}<span className="ml-1 text-[9px] text-muted-foreground">· {signal.cycles} cycles</span></p></div>
+    <div className="rounded-lg border bg-background/40 px-3 py-2"><p className="text-[9px] uppercase tracking-wider text-muted-foreground">Update accuracy</p><p className="mt-1 font-mono text-lg">{percent(signal.accuracy)}<span className="ml-1 text-[9px] text-muted-foreground">n={signal.resolved}</span></p></div>
+    <div className="rounded-lg border bg-background/40 px-3 py-2"><p className="text-[9px] uppercase tracking-wider text-muted-foreground">Cycle-balanced</p><p className="mt-1 font-mono text-lg">{percent(signal.cycleBalancedAccuracy)}<span className="ml-1 text-[9px] text-muted-foreground">n={signal.resolvedCycles}</span></p></div>
+    <div className="rounded-lg border bg-background/40 px-3 py-2"><p className="text-[9px] uppercase tracking-wider text-muted-foreground">Brier score</p><p className="mt-1 font-mono text-lg">{signal.brierScore === null ? '—' : signal.brierScore.toFixed(3)}<span className="ml-1 text-[9px] text-muted-foreground">lower is better</span></p></div>
+    <div className="rounded-lg border bg-background/40 px-3 py-2"><p className="text-[9px] uppercase tracking-wider text-muted-foreground">Cycle streak</p><p className={cn('mt-1 font-mono text-lg', signal.currentCycleStreak > 0 ? 'text-primary' : signal.currentCycleStreak < 0 ? 'text-red-400' : '')}>{signal.currentCycleStreak > 0 ? `W${signal.currentCycleStreak}` : signal.currentCycleStreak < 0 ? `L${Math.abs(signal.currentCycleStreak)}` : '—'}<span className="ml-1 text-[9px] text-muted-foreground">forecast direction</span></p></div>
+  </div>;
+}
+
+/** Shared by both track-record panels: how much independent evidence the calibration lock still wants. */
+function CalibrationEvidence({ signal }: { signal: PublicSignalQuality }) {
+  return <div><div className="mb-1.5 flex items-center justify-between text-[9px] text-muted-foreground"><span>Calibration evidence</span><span className="font-mono">{signal.calibrationWindows}/{signal.calibrationMinimum} independent windows</span></div><Progress value={signal.calibrationProgress * 100} className="h-1"/><p className="mt-1.5 text-[9px] text-muted-foreground">{signal.calibrationReady ? 'Enough independent settlement windows to evaluate a held-out calibration candidate.' : `Live model adjustment is locked; ${signal.resolvedCycles} resolved asset-cycles do not substitute for independent windows.`}</p></div>;
+}
+
+/**
+ * Public counterpart to the signed track record. Signal quality is mode-independent, but only the paper
+ * row is shown: the live record is never fetched, so a visitor cannot mistake a shadow result for real
+ * money, and there is no full history dialog to open.
+ */
+function PublicPaperPerformancePanel() {
+  const { performance } = usePublicPaperPerformance();
+  if (!performance) return null;
+  return <section className="mb-8 rounded-xl border bg-card/60 p-4">
+    <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
+      <div className="flex min-w-52 items-center gap-3"><div className="grid size-9 place-items-center rounded-lg bg-secondary text-muted-foreground"><Target className="size-4"/></div><div><h2 className="text-xs font-semibold">Positive-edge track record</h2><p className="mt-0.5 text-[9px] text-muted-foreground">Signal quality below; executed money is the simulated paper track only</p></div></div>
+      <div className="flex-1">
+        <p className="mb-1.5 text-[9px] uppercase tracking-wider text-muted-foreground">Signal quality · every qualifying calculation, whether or not it was traded</p>
+        <SignalQualityTiles signal={performance.signal}/>
+      </div>
+    </div>
+    <div className="mt-3 space-y-2 border-t pt-3">
+      <p className="text-[9px] uppercase tracking-wider text-muted-foreground">Executed trades · simulated fills and fees against the paper bankroll</p>
+      <TradeRecordRow record={performance.paperRecord} label="Paper"/>
+      {!performance.durable && <p className="text-[9px] leading-relaxed text-muted-foreground">This hosted dashboard is stateless, so it cannot score the continuously collected forecast log or paper ledger. Figures appear once the persistent worker publishes them.</p>}
+    </div>
+    <div className="mt-4 grid gap-4 border-t pt-4 lg:grid-cols-[1fr_auto] lg:items-center">
+      <CalibrationEvidence signal={performance.signal}/>
+      {performance.recent.length > 0 && <div className="scrollbar-none flex max-w-full gap-1.5 overflow-x-auto lg:max-w-sm lg:justify-end"><span className="flex items-center gap-1 pr-1 text-[9px] text-muted-foreground"><History className="size-3"/>Recent</span>{performance.recent.slice(0, 4).map((forecast, index) => <Badge key={`${forecast.symbol}:${forecast.direction}:${index}`} variant="outline" className={cn('shrink-0 gap-1 font-mono', forecast.status === 'pending' ? 'text-muted-foreground' : forecast.correct ? 'border-primary/20 text-primary' : 'border-red-400/20 text-red-400')}>{forecast.symbol} {forecast.direction} · {forecast.status === 'pending' ? 'pending' : forecast.correct ? '✓' : '×'}</Badge>)}</div>}
+    </div>
+  </section>;
+}
+
+function PerformancePanel({ performance }: { performance: DashboardData['performance'] }) {
   const [records, setRecords] = useState<{ paperRecord?: TradeTrackRecord; liveRecord?: TradeTrackRecord }>({});
 
   useEffect(() => {
@@ -337,14 +392,8 @@ function PerformancePanel({ performance }: { performance: DashboardData['perform
     <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
       <div className="flex min-w-52 items-center gap-3"><div className="grid size-9 place-items-center rounded-lg bg-secondary text-muted-foreground"><Target className="size-4"/></div><div><h2 className="text-xs font-semibold">Positive-edge track record</h2><p className="mt-0.5 text-[9px] text-muted-foreground">Signal quality below; executed money split by mode</p></div></div>
       <div className="flex-1">
-      <p className="mb-1.5 text-[9px] uppercase tracking-wider text-muted-foreground">Signal quality · every qualifying calculation, whether or not it was traded</p>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-        <div className="rounded-lg border bg-background/40 px-3 py-2"><p className="text-[9px] uppercase tracking-wider text-muted-foreground">Updates tracked</p><p className="mt-1 font-mono text-lg">{performance.issued}<span className="ml-1 text-[9px] text-muted-foreground">· {performance.cycles} cycles</span></p></div>
-        <div className="rounded-lg border bg-background/40 px-3 py-2"><p className="text-[9px] uppercase tracking-wider text-muted-foreground">Update accuracy</p><p className="mt-1 font-mono text-lg">{percent(performance.accuracy)}<span className="ml-1 text-[9px] text-muted-foreground">n={performance.resolved}</span></p></div>
-        <div className="rounded-lg border bg-background/40 px-3 py-2"><p className="text-[9px] uppercase tracking-wider text-muted-foreground">Cycle-balanced</p><p className="mt-1 font-mono text-lg">{percent(performance.cycleBalancedAccuracy)}<span className="ml-1 text-[9px] text-muted-foreground">n={performance.resolvedCycles}</span></p></div>
-        <div className="rounded-lg border bg-background/40 px-3 py-2"><p className="text-[9px] uppercase tracking-wider text-muted-foreground">Brier score</p><p className="mt-1 font-mono text-lg">{performance.brierScore === null ? '—' : performance.brierScore.toFixed(3)}<span className="ml-1 text-[9px] text-muted-foreground">lower is better</span></p></div>
-        <div className="rounded-lg border bg-background/40 px-3 py-2"><p className="text-[9px] uppercase tracking-wider text-muted-foreground">Cycle streak</p><p className={cn('mt-1 font-mono text-lg', performance.currentCycleStreak > 0 ? 'text-primary' : performance.currentCycleStreak < 0 ? 'text-red-400' : '')}>{performance.currentCycleStreak > 0 ? `W${performance.currentCycleStreak}` : performance.currentCycleStreak < 0 ? `L${Math.abs(performance.currentCycleStreak)}` : '—'}<span className="ml-1 text-[9px] text-muted-foreground">forecast direction</span></p></div>
-      </div>
+        <p className="mb-1.5 text-[9px] uppercase tracking-wider text-muted-foreground">Signal quality · every qualifying calculation, whether or not it was traded</p>
+        <SignalQualityTiles signal={performance}/>
       </div>
     </div>
     <div className="mt-3 space-y-2 border-t pt-3">
@@ -353,7 +402,7 @@ function PerformancePanel({ performance }: { performance: DashboardData['perform
       <TradeRecordRow record={records.paperRecord} label="Paper"/>
     </div>
     <div className="mt-4 grid gap-4 border-t pt-4 lg:grid-cols-[1fr_auto] lg:items-center">
-      <div><div className="mb-1.5 flex items-center justify-between text-[9px] text-muted-foreground"><span>Calibration evidence</span><span className="font-mono">{performance.calibrationWindows}/{performance.calibrationMinimum} independent windows</span></div><Progress value={performance.calibrationProgress * 100} className="h-1"/><p className="mt-1.5 text-[9px] text-muted-foreground">{performance.calibrationReady ? 'Enough independent settlement windows to evaluate a held-out calibration candidate.' : `Live model adjustment is locked; ${performance.resolvedCycles} resolved asset-cycles do not substitute for independent windows.`}</p></div>
+      <CalibrationEvidence signal={performance}/>
       <div className="flex flex-wrap items-center justify-end gap-2">{performance.recent.length > 0 && <div className="scrollbar-none flex max-w-full gap-1.5 overflow-x-auto lg:max-w-sm"><span className="flex items-center gap-1 pr-1 text-[9px] text-muted-foreground"><History className="size-3"/>Recent</span>{performance.recent.slice(0, 4).map((forecast) => <Badge key={forecast.id} variant="outline" className={cn('shrink-0 gap-1 font-mono', forecast.status === 'pending' ? 'text-muted-foreground' : forecast.correct ? 'border-primary/20 text-primary' : 'border-red-400/20 text-red-400')}>{forecast.symbol} {forecast.direction} · {forecast.status === 'pending' ? 'pending' : forecast.correct ? '✓' : '×'}</Badge>)}</div>}<PerformanceDialog/></div>
     </div>
   </section>;
@@ -433,10 +482,11 @@ export function Dashboard({ initialData, authenticated }: { initialData: Dashboa
         </div>
       </section>
 
-      {authenticated && <AutomationStatus/>}
-      {authenticated && data && <PositiveEdgeBuys predictions={data.predictions} updatedAt={data.generatedAt}/>}
-      {authenticated && data?.performance && <PerformancePanel performance={data.performance}/>}
-      {!authenticated && <PaperBudgetPanel/>}
+      {authenticated ? <AutomationStatus/> : <PublicAutomationStatus/>}
+      {data && <PositiveEdgeBuys predictions={data.predictions} updatedAt={data.generatedAt} publicView={!authenticated}/>}
+      {authenticated
+        ? data?.performance && <PerformancePanel performance={data.performance}/>
+        : <PublicPaperPerformancePanel/>}
 
       <section>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
