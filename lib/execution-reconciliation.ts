@@ -34,6 +34,29 @@ function fillTotals(fills: KalshiFillRecord[], side: PaperOrder['side']): { coun
 
 const isTerminal = (status: PaperOrder['status']) => status === 'won' || status === 'lost' || status === 'invalid' || status === 'sold';
 
+function realizedEntryPortion(order: PaperOrder, orders: PaperOrder[]): {
+  quantity: number; purchaseCents: number; feeCents: number; stakeCents: number;
+  exitGrossProceedsCents: number; exitFeeCents: number;
+} {
+  return orders
+    .filter((item) => item.id.startsWith(`${order.id}:exit:`) && item.status === 'sold' && item.executionMode === order.executionMode && item.venue === order.venue)
+    .reduce((sum, item) => {
+      const feeCents = item.actualFeeCents ?? item.feeCents ?? 0;
+      const stakeCents = item.actualStakeCents ?? item.stakeCents;
+      const purchaseCents = item.actualPurchaseCents ?? Math.max(0, stakeCents - feeCents);
+      const exitFeeCents = item.exitFeeCents ?? 0;
+      const exitGrossProceedsCents = (item.saleProceedsCents ?? item.payoutCents ?? 0) + exitFeeCents;
+      return {
+        quantity: sum.quantity + item.quantity,
+        purchaseCents: sum.purchaseCents + purchaseCents,
+        feeCents: sum.feeCents + feeCents,
+        stakeCents: sum.stakeCents + stakeCents,
+        exitGrossProceedsCents: sum.exitGrossProceedsCents + exitGrossProceedsCents,
+        exitFeeCents: sum.exitFeeCents + exitFeeCents,
+      };
+    }, { quantity: 0, purchaseCents: 0, feeCents: 0, stakeCents: 0, exitGrossProceedsCents: 0, exitFeeCents: 0 });
+}
+
 /** Pure local/venue matcher. No ambiguous state is repaired silently: issues block startup. */
 export function reconcileExecutionLedger(localOrders: PaperOrder[], snapshot: KalshiReconciliationSnapshot, nowMs = Date.now()): ExecutionReconciliationResult {
   const orders = structuredClone(localOrders);
@@ -57,21 +80,30 @@ export function reconcileExecutionLedger(localOrders: PaperOrder[], snapshot: Ka
     const totals = fillTotals(buyFills, order.side);
 
     if (!isTerminal(order.status) && totals.count > 1e-8) {
-      if (totals.count > order.quantity + 0.011) issues.push(`${order.id}: venue buy fills ${totals.count.toFixed(2)} exceed local requested quantity ${order.quantity.toFixed(2)}.`);
-      const wasMissing = !order.venueOrderId || (order.filledCount ?? 0) + 1e-8 < totals.count || order.status !== 'open';
+      const realizedEntry = realizedEntryPortion(order, orders);
+      const localAcquiredQuantity = order.quantity + realizedEntry.quantity;
+      const acquiredQuantityLimit = Math.max(order.requestedQuantity ?? 0, order.shadowTakerQuantity ?? 0, localAcquiredQuantity);
+      if (totals.count > acquiredQuantityLimit + 0.011) issues.push(`${order.id}: venue buy fills ${totals.count.toFixed(2)} exceed local requested quantity ${acquiredQuantityLimit.toFixed(2)}.`);
+      const remainingCount = Math.max(0, totals.count - realizedEntry.quantity);
+      const wasMissing = !order.venueOrderId || localAcquiredQuantity + 1e-8 < totals.count || order.status !== 'open';
       const accountedStakeCents = Math.ceil(totals.purchaseCents + totals.feeCents - 1e-9);
-      if (accountedStakeCents > order.stakeCents) issues.push(`${order.id}: recovered fill cost ${accountedStakeCents}c exceeds its ${order.stakeCents}c reservation.`);
+      const localAcquiredStakeCents = (order.actualStakeCents ?? order.stakeCents) + realizedEntry.stakeCents;
+      const acquiredStakeLimitCents = Math.max(order.shadowTakerAllInCents ?? 0, Math.ceil(localAcquiredStakeCents - 1e-9));
+      if (accountedStakeCents > acquiredStakeLimitCents) issues.push(`${order.id}: recovered fill cost ${accountedStakeCents}c exceeds its ${acquiredStakeLimitCents}c reservation.`);
       const filledVenueOrder = venueOrders.find((item) => buyFills.some((fill) => fill.orderId === item.orderId)) ?? venueOrders[0];
+      const remainingPurchaseCents = Math.max(0, totals.purchaseCents - realizedEntry.purchaseCents);
+      const remainingFeeCents = Math.max(0, totals.feeCents - realizedEntry.feeCents);
+      const remainingStakeCents = remainingPurchaseCents + remainingFeeCents;
       order.venueOrderId = filledVenueOrder?.orderId ?? order.venueOrderId;
-      order.filledCount = Number(totals.count.toFixed(2));
-      order.quantity = Number(totals.count.toFixed(2));
+      order.filledCount = Number(remainingCount.toFixed(2));
+      order.quantity = Number(remainingCount.toFixed(2));
       order.authoritativeFillPrice = totals.averagePriceCents / 100;
-      order.feeCents = totals.feeCents;
-      order.actualPurchaseCents = totals.purchaseCents;
-      order.actualFeeCents = totals.feeCents;
-      order.actualStakeCents = totals.purchaseCents + totals.feeCents;
-      order.stakeCents = accountedStakeCents;
-      order.potentialPayoutCents = Math.round(totals.count * 100);
+      order.feeCents = remainingFeeCents;
+      order.actualPurchaseCents = remainingPurchaseCents;
+      order.actualFeeCents = remainingFeeCents;
+      order.actualStakeCents = remainingStakeCents;
+      order.stakeCents = Math.ceil(remainingStakeCents - 1e-9);
+      order.potentialPayoutCents = Math.round(remainingCount * 100);
       order.liquidityRole = buyFills.some((fill) => fill.isTaker) ? 'taker' : 'maker';
       order.status = 'open';
       order.reason = wasMissing ? 'Recovered and verified from authoritative Kalshi order and fill history during startup reconciliation.' : order.reason;
@@ -116,14 +148,23 @@ export function reconcileExecutionLedger(localOrders: PaperOrder[], snapshot: Ka
           order.reason = exitOrders.length ? 'Reconciliation confirmed the reduce-only exit received no fill; incumbent retained.' : 'Reconciliation found no accepted reduce-only exit after the consistency window; incumbent retained.';
         }
       } else if (exit.count > 1e-8 && order.status === 'open') {
+        const realizedExit = realizedEntryPortion(order, orders);
+        const unappliedExitCount = Math.max(0, exit.count - realizedExit.quantity);
+        if (unappliedExitCount <= 1e-8) {
+          order.exitPending = false;
+          order.exitVenueOrderId = exitOrders.find((item) => exitFills.some((fill) => fill.orderId === item.orderId))?.orderId ?? order.exitVenueOrderId;
+          order.reason = order.reason ?? 'Reconciliation confirmed the reduce-only exit was already reflected in the partial-exit ledger.';
+          continue;
+        }
         const originalQuantity = order.quantity;
-        if (exit.count > originalQuantity + 0.011) issues.push(`${order.id}: reduce-only fills ${exit.count.toFixed(2)} exceed local position ${originalQuantity.toFixed(2)}.`);
-        const grossProceedsCents = exit.purchaseCents;
-        const netProceedsCents = grossProceedsCents - exit.feeCents;
+        if (unappliedExitCount > originalQuantity + 0.011) issues.push(`${order.id}: reduce-only fills ${exit.count.toFixed(2)} exceed local position ${(originalQuantity + realizedExit.quantity).toFixed(2)}.`);
+        const grossProceedsCents = Math.max(0, exit.purchaseCents - realizedExit.exitGrossProceedsCents);
+        const unappliedExitFeeCents = Math.max(0, exit.feeCents - realizedExit.exitFeeCents);
+        const netProceedsCents = grossProceedsCents - unappliedExitFeeCents;
         const exitVenueOrder = exitOrders.find((item) => exitFills.some((fill) => fill.orderId === item.orderId));
-        if (exit.count + 1e-8 >= originalQuantity) {
+        if (unappliedExitCount + 1e-8 >= originalQuantity) {
           order.status = 'sold'; order.exitPending = false; order.exitVenueOrderId = exitVenueOrder?.orderId ?? order.exitVenueOrderId;
-          order.exitPrice = exit.averagePriceCents / 100; order.exitFeeCents = exit.feeCents;
+          order.exitPrice = exit.averagePriceCents / 100; order.exitFeeCents = unappliedExitFeeCents;
           order.saleProceedsCents = netProceedsCents; order.payoutCents = netProceedsCents;
           order.pnlCents = Math.floor(netProceedsCents + 1e-9) - order.stakeCents;
           order.actualPnlCents = netProceedsCents - (order.actualStakeCents ?? order.stakeCents);
@@ -132,24 +173,24 @@ export function reconcileExecutionLedger(localOrders: PaperOrder[], snapshot: Ka
           settlements.push({ stakeCents: order.stakeCents, payoutCents: Math.max(0, Math.floor(netProceedsCents + 1e-9)), relatedId: `${order.id}:switch-exit` });
           recoveredFills += 1;
         } else {
-          const soldRatio = exit.count / originalQuantity;
+          const soldRatio = unappliedExitCount / originalQuantity;
           const soldStake = (order.actualStakeCents ?? order.stakeCents) * soldRatio;
           const remainingActualStake = (order.actualStakeCents ?? order.stakeCents) - soldStake;
           const remainingReserved = Math.ceil(remainingActualStake - 1e-9);
           const releasedStake = Math.max(0, order.stakeCents - remainingReserved);
           const partialId = `${order.id}:exit:${exitVenueOrder?.orderId ?? order.exitVenueOrderId}`;
           if (!orders.some((item) => item.id === partialId)) orders.push({
-            ...order, id: partialId, status: 'sold', quantity: Number(exit.count.toFixed(2)), filledCount: Number(exit.count.toFixed(2)),
+            ...order, id: partialId, status: 'sold', quantity: Number(unappliedExitCount.toFixed(2)), filledCount: Number(unappliedExitCount.toFixed(2)),
             stakeCents: releasedStake, actualStakeCents: soldStake,
             actualPurchaseCents: (order.actualPurchaseCents ?? (order.authoritativeFillPrice ?? order.askPrice) * originalQuantity * 100) * soldRatio,
             actualFeeCents: (order.actualFeeCents ?? order.feeCents) * soldRatio,
-            potentialPayoutCents: Math.round(exit.count * 100), exitPending: false,
+            potentialPayoutCents: Math.round(unappliedExitCount * 100), exitPending: false,
             exitVenueOrderId: exitVenueOrder?.orderId ?? order.exitVenueOrderId, exitPrice: exit.averagePriceCents / 100,
-            exitFeeCents: exit.feeCents, saleProceedsCents: netProceedsCents, payoutCents: netProceedsCents,
+            exitFeeCents: unappliedExitFeeCents, saleProceedsCents: netProceedsCents, payoutCents: netProceedsCents,
             pnlCents: Math.floor(netProceedsCents + 1e-9) - releasedStake, actualPnlCents: netProceedsCents - soldStake,
             settledAt: new Date(nowMs).toISOString(), reason: 'Recovered partial reduce-only exit during startup reconciliation; replacement withheld.',
           });
-          order.quantity = Number((originalQuantity - exit.count).toFixed(2)); order.filledCount = order.quantity;
+          order.quantity = Number((originalQuantity - unappliedExitCount).toFixed(2)); order.filledCount = order.quantity;
           order.actualPurchaseCents = (order.actualPurchaseCents ?? (order.authoritativeFillPrice ?? order.askPrice) * originalQuantity * 100) * (1 - soldRatio);
           order.actualFeeCents = (order.actualFeeCents ?? order.feeCents) * (1 - soldRatio);
           order.actualStakeCents = remainingActualStake; order.stakeCents = remainingReserved;

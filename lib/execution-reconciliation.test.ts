@@ -123,6 +123,35 @@ describe('Kalshi execution ledger reconciliation', () => {
     expect(result.settlements).toEqual([{ stakeCents: 3, payoutCents: 2, relatedId: `${incumbent.id}:exit:exit-partial:partial-switch-exit` }]);
   });
 
+  it('reconciles entry fills against the acquired position after a prior partial exit', () => {
+    const incumbent = local({
+      status: 'open', venueOrderId: 'venue-1', exitVenueOrderId: 'exit-partial',
+      quantity: 0.2, filledCount: 0.2, requestedQuantity: 0.3, stakeCents: 6,
+      actualPurchaseCents: 5.8, actualFeeCents: 0, actualStakeCents: 5.8,
+    });
+    const partial = local({
+      ...incumbent,
+      id: `${incumbent.id}:exit:exit-partial`,
+      status: 'sold', quantity: 0.1, filledCount: 0.1, stakeCents: 3,
+      actualPurchaseCents: 2.9, actualFeeCents: 0, actualStakeCents: 2.9,
+      potentialPayoutCents: 10, exitVenueOrderId: 'exit-partial',
+      exitPrice: 0.2, exitFeeCents: 0, saleProceedsCents: 2, payoutCents: 2,
+      pnlCents: -1, actualPnlCents: -0.9, settledAt: '2026-01-01T00:04:00.000Z',
+    });
+    const result = reconcileExecutionLedger([incumbent, partial], snapshot({
+      orders: [venueOrder, { ...venueOrder, orderId: 'exit-partial', clientOrderId: 'money-noodle-exit:partial', action: 'sell', fillCount: 0.1 }],
+      fills: [venueFill, { ...venueFill, orderId: 'exit-partial', fillId: 'exit-partial-fill', action: 'sell', count: 0.1, yesPriceDollars: 0.2 }],
+      positions: [{ ticker: 'KXBTC-TEST', quantity: 0.2, exposureDollars: 0.058 }],
+    }), now);
+
+    expect(result.issues).toEqual([]);
+    const reconciled = result.orders.find((order) => order.id === incumbent.id)!;
+    expect(reconciled).toMatchObject({ status: 'open', quantity: 0.2, stakeCents: 6 });
+    expect(reconciled.actualStakeCents).toBeCloseTo(5.8);
+    expect(result.orders.find((order) => order.id === partial.id)).toMatchObject({ status: 'sold', quantity: 0.1, stakeCents: 3 });
+    expect(result.targetReservedCents).toBe(6);
+  });
+
   it('recovers a full DOWN reduce-only exit from a YES buy', () => {
     const incumbent = local({ side: 'DOWN', status: 'open', venueOrderId: 'venue-1', filledCount: 0.3, actualPurchaseCents: 8.7, actualFeeCents: 0, actualStakeCents: 8.7, stakeCents: 9, exitPending: true, exitClientOrderId: 'money-noodle-exit:down' });
     const entryOrder = { ...venueOrder, action: 'sell' };
