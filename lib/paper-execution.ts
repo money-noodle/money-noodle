@@ -175,7 +175,7 @@ const reentryCooldownRemainingMs = (ledger: Ledger, prediction: Prediction, mode
   return sold ? Math.max(0, Date.parse(sold.settledAt!) + POST_EXIT_REENTRY_COOLDOWN_MS - nowMs) : 0;
 };
 const persistenceKey = (prediction: Prediction, side: PositionSide) => `${prediction.symbol}:${side}:${prediction.market.closesAt}`;
-const selectedSide = (prediction: Prediction, mode: ExecutionMode = 'live'): PositionSide | undefined => bestEntry(prediction, mode)?.side;
+const selectedSide = (prediction: Prediction): PositionSide | undefined => bestEntry(prediction)?.side;
 
 /** Updates raw signal evidence once per distinct dashboard calculation; it never changes qualification. */
 function updateSignalPersistence(dashboard: DashboardData, ledger: Ledger): boolean {
@@ -289,8 +289,8 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
     if (!readiness.enabled || !readiness.tradeReady) return [];
     if (venueFilter && readiness.venue !== venueFilter) return [];
     const quote = venueQuote(prediction, readiness.venue, side);
-    const entry = bestVenueEntry(prediction, readiness.venue, side, mode);
-    if (!entry || !qualifiesVenueBuyEdge(prediction, readiness.venue, side, mode)) return [];
+    const entry = bestVenueEntry(prediction, readiness.venue, side);
+    if (!entry || !qualifiesVenueBuyEdge(prediction, readiness.venue, side)) return [];
     if (!quote || quote.ask > MAX_FILLABLE_ASK || quote.ask <= 0 || quote.bid <= 0 || quote.bid > quote.ask) return [];
     const spread = quote.ask - quote.bid;
     if (spread > MAX_SPREAD) { rejections.push(`${readiness.venue} spread ${(spread * 100).toFixed(1)}c exceeds the ${MAX_SPREAD * 100}c limit`); return []; }
@@ -539,8 +539,11 @@ function marketFundingFor(
 }
 
 /** Paper trading is a continuous shadow: it keeps running while live automation is paused. */
-async function runPaper(dashboard: DashboardData, status: TradingControlData, ledger: Ledger, budgets: ProviderBudgetConfiguration): Promise<boolean> {
+async function runPaper(dashboard: DashboardData, status: TradingControlData, ledger: Ledger, regimeGate: RegimeGateStatus, budgets: ProviderBudgetConfiguration): Promise<boolean> {
   if (ledger.paperBudget.availableCents <= 0) return false;
+  // The mirror obeys every entry rule live obeys, the adaptive regime gate included. A paper track that
+  // kept trading through a cooling-off period would not be measuring the policy live is running.
+  if (!regimeGate.allowsEntries) return false;
   const paperProviders = new Set(status.tradingProviders?.filter((provider) => provider.paperEnabled).map((provider) => provider.id) ?? status.control.enabledVenues);
   const open = ledger.orders.filter((order) => order.executionMode === 'paper' && (order.status === 'open' || order.status === 'pending_reservation'));
   if (open.length >= maximumOpenPositions()) return false;
@@ -548,9 +551,9 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
   const equity = ledger.paperBudget.availableCents;
   const stakeLimit = Math.min(status.control.perTradeCents, maximumPaperStakeCents(), equity);
   const candidates = dashboard.predictions
-    .filter((item) => qualifiesAsBuyEdge(item, 'paper') && item.market.live && assetAdmitted(item.symbol, 'paper'))
+    .filter((item) => qualifiesAsBuyEdge(item) && item.market.live && assetAdmitted(item.symbol))
     .flatMap((prediction) => {
-      const side = selectedSide(prediction, 'paper');
+      const side = selectedSide(prediction);
       if (!side || !executionEligibility(prediction, side, ledger).eligible) return [];
       if (sideWindowOrders(ledger, prediction, 'paper', side).some((order) => order.status === 'open' || order.status === 'pending_reservation')) return [];
       if (reentryCooldownRemainingMs(ledger, prediction, 'paper', side) > 0) return [];
@@ -1042,7 +1045,7 @@ async function runLive(dashboard: DashboardData, status: TradingControlData, led
   const regimeByCandidate = new Map(await Promise.all(allQualified.map(async (item) =>
     [item.symbol, (await cycleRegimeFor(item.symbol, item.market.closesAt))?.regime] as const)));
   const regimeAllowed = allQualified
-    .filter((item) => assetAdmitted(item.symbol, 'live'))
+    .filter((item) => assetAdmitted(item.symbol))
     .filter((item) => regimeAdmits(regimeByCandidate.get(item.symbol)));
   if (allQualified.length && !regimeAllowed.length) {
     return skip(`No qualifying window has a characterised 15-second path yet (${allQualified.map((i) => `${i.symbol}:${regimeByCandidate.get(i.symbol) ?? 'unobserved'}`).join(', ')}).`);
@@ -1115,7 +1118,7 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
   const previousSkip = ledger.lastLiveSkip?.reason;
   // Read once per cycle: a ceiling that changed mid-cycle would size one order against the old value.
   const budgets = await getProviderBudgets({ revision: status.control.revision });
-  changed = await runPaper(dashboard, status, ledger, budgets) || changed;
+  changed = await runPaper(dashboard, status, ledger, regimeGate, budgets) || changed;
   changed = await runLive(dashboard, status, ledger, regimeGate, budgets) || changed;
   if (changed || ledger.lastLiveSkip?.reason !== previousSkip) await writeLedger(ledger);
 }

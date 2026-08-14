@@ -1,7 +1,7 @@
-import type { ExecutionMode, PositionSide, Prediction } from './types';
+import type { PositionSide, Prediction } from './types';
 
 /**
- * Binary buy policy v13.
+ * Binary buy policy v17.
  *
  * The objective is profit, not forecast accuracy. A well-calibrated forecast still loses money when
  * it is bought at or above fair value, so qualification is expressed as expected value net of venue
@@ -34,10 +34,10 @@ export function maximumNetEdge(): number {
 /** Minimum confidence in our own estimate. Deliberately independent of agreement with the market. */
 export const MIN_ESTIMATE_QUALITY = 0.5;
 /**
- * The selected side must be independently more likely than not. Policy v13 restores the 55% floor
- * for both paper and live after prospective v12 monitoring found that acquired 52.5–55% sides lost.
- * Venue prices do not enter the probability, and all edge, quality, price, persistence, timing,
- * portfolio, and risk gates remain unchanged.
+ * The selected side must be independently more likely than not. Policy v13 restored the 55% floor
+ * after prospective v12 monitoring found that acquired 52.5–55% sides lost, and it has applied to both
+ * tracks since. Venue prices do not enter the probability, and all edge, quality, price, persistence,
+ * timing, portfolio, and risk gates remain unchanged.
  */
 export const MIN_SELECTED_SIDE_PROBABILITY = 0.55;
 /**
@@ -51,7 +51,7 @@ export const MIN_SELECTED_SIDE_PROBABILITY = 0.55;
  */
 export const MIN_ENTRY_PRICE = 0.05;
 export const MAX_ENTRY_PRICE = 0.97;
-export const BUY_POLICY_VERSION = 'buy-binary-edge-net5to35-quality50-owned55-price5to97-uponly-v15';
+export const BUY_POLICY_VERSION = 'buy-binary-edge-net5to35-quality50-owned55-price5to97-v17';
 /** Minimum unique resolved 15-minute settlement timestamps, never updates or per-asset cycles. */
 export const MIN_CALIBRATION_SAMPLE = 100;
 
@@ -109,44 +109,54 @@ export function venueEntryOptions(prediction: EntryCandidate): VenueEntryOption[
 
 /** The entry with the highest expected value, which may be either side of the binary contract. */
 /**
- * DOWN/NO entry is suspended pending recalibration.
+ * DOWN/NO entry is permitted. The v14 suspension was withdrawn because its evidence did not reproduce.
  *
- * Measured over 44 independent settlement windows, DOWN returned -58.0% +/-14.7 per window and accounted
- * for -$17.86 of a -$18.62 lifetime live result, while UP was indistinguishable from zero (+2.9% +/-13.1
- * over 162 windows). Regime does not explain it: 60.9% of traded asset-windows resolved DOWN, a
- * favourable base rate, yet windows where DOWN was selected resolved DOWN only 11.6% of the time — worse
- * than random in an environment tilted its way. Set MONEY_NOODLE_ALLOW_DOWN_ENTRY=true to re-enable.
+ * The suspension cited DOWN at -58.0% +/-14.7 over 44 settlement windows, accounting for -$17.86 of a
+ * -$18.62 lifetime live result. Re-scored from the order ledger with the same convention the desk's own
+ * trade record uses, live DOWN is -8.9% +/-16.8 over 56 windows — noise — and lifetime live P&L is
+ * +$5.70, not negative. Excluding XRP, which is withheld separately and on evidence that does reproduce,
+ * paper DOWN is -0.4% +/-10.7 over 80 windows. Four P&L conventions and eight time cutoffs were tried;
+ * none recovers the original figures.
  *
- * Exits, reduce-only sells, and settlement of existing DOWN positions are unaffected: this gates new
- * entries only, exactly like the regime gate.
+ * That is not proof DOWN is profitable: the interval is wide and its point estimate is still negative.
+ * It is a statement that no measurement supports removing roughly half the desk's volume, so the side
+ * trades again while both tracks keep scoring it.
+ *
+ * Suspension remains one environment variable away if evidence arrives: MONEY_NOODLE_ALLOW_DOWN_ENTRY=false
+ * stops the side on both tracks at once, because live and paper must run the same policy. A candidate
+ * that stops DOWN belongs in the evaluation lane, not in a per-track flag. Exits, reduce-only sells,
+ * and settlement of existing DOWN positions were never affected by either state.
  */
-export function downEntryEnabled(mode: ExecutionMode = 'live'): boolean {
-  // Per track, and defaulting to the strict track. Every caller that does not state a mode — the
-  // dashboard, ranking helpers, anything added later — therefore gets live's answer, so forgetting to
-  // pass a mode can only ever be more restrictive than intended, never less.
-  const scoped = mode === 'paper' ? 'MONEY_NOODLE_ALLOW_DOWN_ENTRY_PAPER' : 'MONEY_NOODLE_ALLOW_DOWN_ENTRY_LIVE';
-  return process.env[scoped] === 'true';
+export function downEntryEnabled(): boolean {
+  // One switch for both tracks. Paper exists to mirror live, so a per-track control here would be a
+  // policy divergence between them — exactly what the mirror invariant forbids. See SPEC §12.3.
+  return process.env.MONEY_NOODLE_ALLOW_DOWN_ENTRY !== 'false';
 }
 
-const admissibleEntry = (option: VenueEntryOption, mode: ExecutionMode = 'live') => option.price >= MIN_ENTRY_PRICE && option.price <= MAX_ENTRY_PRICE
+/**
+ * The entry rules take no execution mode. Live and paper are the same policy by construction, so a
+ * per-track divergence cannot be expressed here at all — the tracks differ only in execution and
+ * capital. Candidate policies under evaluation never reach this path. See SPEC §12.3.
+ */
+const admissibleEntry = (option: VenueEntryOption) => option.price >= MIN_ENTRY_PRICE && option.price <= MAX_ENTRY_PRICE
   && option.probability >= MIN_SELECTED_SIDE_PROBABILITY
   && option.netEdge < maximumNetEdge()
-  && (option.side === 'UP' || downEntryEnabled(mode));
+  && (option.side === 'UP' || downEntryEnabled());
 
-export function bestEntry(prediction: EntryCandidate, mode: ExecutionMode = 'live'): VenueEntryOption | undefined {
-  return venueEntryOptions(prediction).find((option) => admissibleEntry(option, mode));
+export function bestEntry(prediction: EntryCandidate): VenueEntryOption | undefined {
+  return venueEntryOptions(prediction).find(admissibleEntry);
 }
 
-export function bestEntryForSide(prediction: EntryCandidate, side: PositionSide, mode: ExecutionMode = 'live'): VenueEntryOption | undefined {
-  return venueEntryOptions(prediction).find((option) => option.side === side && admissibleEntry(option, mode));
+export function bestEntryForSide(prediction: EntryCandidate, side: PositionSide): VenueEntryOption | undefined {
+  return venueEntryOptions(prediction).find((option) => option.side === side && admissibleEntry(option));
 }
 
-export function bestVenueEntry(prediction: EntryCandidate, venue: 'polymarket' | 'kalshi', side?: PositionSide, mode: ExecutionMode = 'live'): VenueEntryOption | undefined {
-  return venueEntryOptions(prediction).find((option) => option.venue === venue && (!side || option.side === side) && admissibleEntry(option, mode));
+export function bestVenueEntry(prediction: EntryCandidate, venue: 'polymarket' | 'kalshi', side?: PositionSide): VenueEntryOption | undefined {
+  return venueEntryOptions(prediction).find((option) => option.venue === venue && (!side || option.side === side) && admissibleEntry(option));
 }
 
-export function hasTradableEdge(prediction: EntryCandidate, mode: ExecutionMode = 'live'): boolean {
-  const entry = bestEntry(prediction, mode);
+export function hasTradableEdge(prediction: EntryCandidate): boolean {
+  const entry = bestEntry(prediction);
   return Boolean(entry && entry.netEdge >= MIN_NET_EDGE);
 }
 
@@ -155,16 +165,16 @@ export function edgeStrength(prediction: EntryCandidate & Pick<Prediction, 'conf
   return Math.max(0, bestEntry(prediction)?.netEdge ?? 0) * prediction.confidence;
 }
 
-export function qualifiesVenueBuyEdge(prediction: EntryCandidate & Pick<Prediction, 'confidence'>, venue: 'polymarket' | 'kalshi', side?: PositionSide, mode: ExecutionMode = 'live'): boolean {
-  const entry = bestVenueEntry(prediction, venue, side, mode);
-  // Repeats the DOWN suspension rather than relying on admissibleEntry: this function checks its
-  // conditions inline, so omitting it here would leave an entry path the suspension does not cover.
+export function qualifiesVenueBuyEdge(prediction: EntryCandidate & Pick<Prediction, 'confidence'>, venue: 'polymarket' | 'kalshi', side?: PositionSide): boolean {
+  const entry = bestVenueEntry(prediction, venue, side);
+  // Repeats the DOWN control rather than relying on admissibleEntry: this function checks its
+  // conditions inline, so omitting it here would leave an entry path the control does not cover.
   return prediction.confidence >= MIN_ESTIMATE_QUALITY && Boolean(entry
-    && (entry.side === 'UP' || downEntryEnabled(mode))
+    && (entry.side === 'UP' || downEntryEnabled())
     && entry.netEdge >= MIN_NET_EDGE && entry.netEdge < maximumNetEdge() && entry.price >= MIN_ENTRY_PRICE && entry.price <= MAX_ENTRY_PRICE
     && sideProbability(prediction, entry.side) >= MIN_SELECTED_SIDE_PROBABILITY);
 }
 
-export function qualifiesAsBuyEdge(prediction: EntryCandidate & Pick<Prediction, 'confidence'>, mode: ExecutionMode = 'live'): boolean {
-  return prediction.confidence >= MIN_ESTIMATE_QUALITY && hasTradableEdge(prediction, mode);
+export function qualifiesAsBuyEdge(prediction: EntryCandidate & Pick<Prediction, 'confidence'>): boolean {
+  return prediction.confidence >= MIN_ESTIMATE_QUALITY && hasTradableEdge(prediction);
 }

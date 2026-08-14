@@ -34,9 +34,37 @@ const component = (
  */
 const history: PolicyManifestHistoryEntry[] = [
   {
+    version: 'buy-binary-edge-net5to35-quality50-owned55-price5to97-v17',
+    activatedAt: '2026-08-14T01:05:00.000Z',
+    status: 'active',
+    summary: 'One policy for both tracks: paper became a true mirror of live rather than a second, quietly different desk.',
+    changes: [
+      'Entry rules take no execution mode, so a live/paper policy divergence can no longer be expressed',
+      'Paper now withholds XRP and obeys the adaptive regime gate, exactly as live does',
+      'The per-track DOWN switches collapse to one MONEY_NOODLE_ALLOW_DOWN_ENTRY, currently enabled',
+      'Asset withholding collapses to one MONEY_NOODLE_EXCLUDED_ASSETS list covering both tracks',
+      'Version bumped so records made before the alignment stay distinguishable from mirror records',
+    ],
+    evidence: ['SPEC.md §12 · Track separation and policy evaluation'],
+  },
+  {
+    version: 'buy-binary-edge-net5to35-quality50-owned55-price5to97-v16',
+    activatedAt: '2026-08-14T00:20:00.000Z',
+    deactivatedAt: '2026-08-14T01:05:00.000Z',
+    status: 'superseded',
+    summary: 'Withdrew the DOWN/NO suspension after its evidence failed to reproduce against the order ledger.',
+    changes: [
+      'DOWN/NO entry permitted again on both tracks, restoring roughly half the desk’s volume',
+      'Suspension inverted to an explicit per-track switch, MONEY_NOODLE_SUSPEND_DOWN_ENTRY_LIVE / _PAPER',
+      'XRP remains withheld from live entry on its own, reproducible evidence',
+    ],
+    evidence: ['STATUS.md · DOWN suspension withdrawn: the evidence did not reproduce (2026-08-14)'],
+  },
+  {
     version: 'buy-binary-edge-net5to35-quality50-owned55-price5to97-uponly-v15',
     activatedAt: '2026-08-13T21:20:43.000Z',
-    status: 'active',
+    deactivatedAt: '2026-08-14T00:20:00.000Z',
+    status: 'superseded',
     summary: 'Added an upper bound on claimed edge, above which a disagreement is treated as model failure rather than opportunity.',
     changes: [
       'Net edge must now be at least 5pp and strictly below 35pp',
@@ -119,10 +147,8 @@ export function activePolicyManifest(providers: TradingProviderDescriptor[], mod
   const regime = regimeGateSettings();
   const switchSettings = switchPolicySettings();
   const executionMode = parseEntryExecutionMode(process.env.MONEY_NOODLE_ENTRY_EXECUTION_MODE);
-  const liveDown = downEntryEnabled('live');
-  const paperDown = downEntryEnabled('paper');
-  const liveExcluded = excludedAssets('live');
-  const paperExcluded = excludedAssets('paper');
+  const downEnabled = downEntryEnabled();
+  const excluded = excludedAssets();
   const maximumEdge = maximumNetEdge();
   return {
     version: 'policy-manifest-v1',
@@ -143,11 +169,10 @@ export function activePolicyManifest(providers: TradingProviderDescriptor[], mod
         { label: 'Persistence', value: `${REQUIRED_QUALIFYING_SNAPSHOTS} snapshots spanning ${seconds(REQUIRED_OBSERVATION_SPAN_MS)}` },
         { label: 'Entry timing', value: `${EXECUTION_WARMUP_MS / 1000}-second warm-up; no entry in final ${EXECUTION_LATE_CUTOFF_MS / 1000} seconds` },
       ]),
-      component('eligibility', 'Side and asset eligibility', 'side-and-asset-withholding-v1', 'production', 'Sides and assets withheld from new entry on their own measured evidence, per track. Restrictive only: exits, reduce-only sells, and settlement of existing positions are unaffected.', [
-        { label: 'DOWN/NO entry · live', value: liveDown ? 'Permitted' : 'Suspended pending recalibration' },
-        { label: 'DOWN/NO entry · paper', value: paperDown ? 'Permitted, measuring' : 'Suspended' },
-        { label: 'Assets withheld · live', value: liveExcluded.join(', ') || 'None' },
-        { label: 'Assets withheld · paper', value: paperExcluded.join(', ') || 'None' },
+      component('eligibility', 'Side and asset eligibility', 'side-and-asset-withholding-v2', 'production', 'Sides and assets withheld from new entry on their own measured evidence. One set of rules for live and paper alike: the mirror trades what live trades. Restrictive only — exits, reduce-only sells, and settlement of existing positions are unaffected.', [
+        { label: 'DOWN/NO entry', value: downEnabled ? 'Permitted' : 'Suspended by operator switch' },
+        { label: 'Assets withheld', value: excluded.join(', ') || 'None' },
+        { label: 'Applies to', value: 'Live and paper identically' },
       ]),
       component('execution', 'Entry execution', ENTRY_EXECUTION_POLICY_VERSION, 'production', 'Maker-only live execution with separately measured taker shadows.', [
         { label: 'Production mode', value: executionMode === 'maker' ? 'Managed post-only maker' : executionMode === 'adaptive' ? 'Adaptive: may act on the taker recommendation' : 'Taker, retaining every hard gate' },

@@ -61,30 +61,29 @@ describe('published policy manifest', () => {
   });
 
   it('publishes the edge ceiling and the per-track side and asset withholdings', () => {
-    process.env.MONEY_NOODLE_ALLOW_DOWN_ENTRY_LIVE = 'false';
-    process.env.MONEY_NOODLE_ALLOW_DOWN_ENTRY_PAPER = 'true';
+    delete process.env.MONEY_NOODLE_ALLOW_DOWN_ENTRY;
     delete process.env.MONEY_NOODLE_MAX_NET_EDGE;
-    delete process.env.MONEY_NOODLE_LIVE_EXCLUDED_ASSETS;
+    delete process.env.MONEY_NOODLE_EXCLUDED_ASSETS;
     expect(detail('buy', 'Net edge after fees')).toBe('≥5pp and <35pp');
     expect(detail('buy', 'Selected-side probability')).toBe('≥55%');
     expect(detail('buy', 'Entry timing')).toBe('90-second warm-up; no entry in final 120 seconds');
-    expect(detail('eligibility', 'DOWN/NO entry · live')).toBe('Suspended pending recalibration');
-    expect(detail('eligibility', 'DOWN/NO entry · paper')).toBe('Permitted, measuring');
-    expect(detail('eligibility', 'Assets withheld · live')).toBe('XRP');
-    expect(detail('eligibility', 'Assets withheld · paper')).toBe('None');
+    // One row each, not one per track: the published policy says the tracks cannot differ.
+    expect(detail('eligibility', 'DOWN/NO entry')).toBe('Permitted');
+    expect(detail('eligibility', 'Assets withheld')).toBe('XRP');
+    expect(detail('eligibility', 'Applies to')).toBe('Live and paper identically');
   });
 
   it('reports configured values rather than defaults for every tunable control', () => {
     process.env.MONEY_NOODLE_MAX_NET_EDGE = '0.25';
-    process.env.MONEY_NOODLE_ALLOW_DOWN_ENTRY_LIVE = 'true';
-    process.env.MONEY_NOODLE_LIVE_EXCLUDED_ASSETS = 'DOGE,SOL';
+    process.env.MONEY_NOODLE_ALLOW_DOWN_ENTRY = 'false';
+    process.env.MONEY_NOODLE_EXCLUDED_ASSETS = 'DOGE,SOL';
     process.env.MONEY_NOODLE_REGIME_GATE_ENABLED = 'false';
     process.env.MONEY_NOODLE_REGIME_MIN_POLICY_WINDOWS = '20';
     process.env.MONEY_NOODLE_MIN_SWITCH_PROBABILITY_ADVANTAGE = '0.25';
     process.env.MONEY_NOODLE_MAX_LIVE_MAKER_ATTEMPTS = '2';
     expect(detail('buy', 'Net edge after fees')).toBe('≥5pp and <25pp');
-    expect(detail('eligibility', 'DOWN/NO entry · live')).toBe('Permitted');
-    expect(detail('eligibility', 'Assets withheld · live')).toBe('DOGE, SOL');
+    expect(detail('eligibility', 'DOWN/NO entry')).toBe('Suspended by operator switch');
+    expect(detail('eligibility', 'Assets withheld')).toBe('DOGE, SOL');
     expect(detail('regime', 'Status')).toBe('Disabled; entries are not gated');
     expect(detail('regime', 'Warm-up')).toBe('20 policy windows');
     expect(detail('switch', 'Replacement advantage')).toBe('25pp');

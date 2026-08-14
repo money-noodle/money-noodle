@@ -1,10 +1,8 @@
-import type { ExecutionMode } from './types';
-
 /**
- * Assets withheld from live entry on their own evidence.
+ * Assets withheld from entry on their own evidence.
  *
  * XRP is the only asset whose clustered per-window return clears two standard errors negative, and it
- * does so independently on both tracks: live −44.3% ±21.4 over 41 windows, paper −34.3% ±13.1 over 80.
+ * does so independently on both tracks: live −45.7% ±21.5 over 41 windows, paper −35.1% ±13.0 over 81.
  * Seven assets were tested, so roughly 0.4 false positives are expected by chance — one asset failing in
  * two separate samples is a good deal stronger than one failing in a ranking.
  *
@@ -12,24 +10,18 @@ import type { ExecutionMode } from './types';
  * errors on either track, and excluding or favouring an asset on a ranking alone is how a five-day sample
  * becomes a permanent rule.
  *
- * Live-only by default: paper keeps trading XRP so the evidence continues to accumulate, in the same
- * spirit as the DOWN experiment. Real money stops; measurement does not.
+ * One list for both tracks. This was live-only while paper carried it as an experiment; paper is now the
+ * mirror, so an asset the desk will not buy with real money is not one it pretends to buy in the shadow
+ * either. Continuing to measure a withheld asset belongs in the evaluation lane. See SPEC §12.
  */
-export const DEFAULT_LIVE_EXCLUDED_ASSETS = ['XRP'];
+export const DEFAULT_EXCLUDED_ASSETS = ['XRP'];
 
-function configured(name: string, fallback: string[]): string[] {
-  const raw = process.env[name];
-  if (raw === undefined) return fallback;
+export function excludedAssets(): string[] {
+  const raw = process.env.MONEY_NOODLE_EXCLUDED_ASSETS;
+  if (raw === undefined) return DEFAULT_EXCLUDED_ASSETS;
   return raw.split(',').map((item) => item.trim().toUpperCase()).filter(Boolean);
 }
 
-export function excludedAssets(mode: ExecutionMode): string[] {
-  return mode === 'live'
-    ? configured('MONEY_NOODLE_LIVE_EXCLUDED_ASSETS', DEFAULT_LIVE_EXCLUDED_ASSETS)
-    : configured('MONEY_NOODLE_PAPER_EXCLUDED_ASSETS', []);
-}
-
-/** Defaults to the stricter track when a mode is not stated, so a forgotten argument cannot loosen this. */
-export function assetAdmitted(symbol: string, mode: ExecutionMode = 'live'): boolean {
-  return !excludedAssets(mode).includes(symbol.toUpperCase());
+export function assetAdmitted(symbol: string): boolean {
+  return !excludedAssets().includes(symbol.toUpperCase());
 }
