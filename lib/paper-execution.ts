@@ -2,6 +2,7 @@ import 'server-only';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { beginLiveTransaction, blockExecutionDrain, completeExecutionDrain, endLiveTransaction, getExecutionDrainStatus, startExecutionDrain } from './execution-drain-state';
+import { CALENDAR_EVALUATION_VERSION, calendarFixedSnapshotDue, updateCalendarEvaluationStore, type CalendarEvaluationCycle } from './calendar-evaluation-store';
 import { reconcileExecutionLedger } from './execution-reconciliation';
 import { ENTRY_EXECUTION_POLICY_VERSION, entrySideProbability, evaluateEntryExecutionPolicy, makerCohortEvidence, parseEntryExecutionMode, type EntryExecutionDecision } from './entry-execution-policy';
 import { POST_EXIT_REENTRY_COOLDOWN_MS, evaluateExitPolicy } from './exit-policy';
@@ -302,6 +303,76 @@ function regimeSentinelCandidate(dashboard: DashboardData, ledger: Ledger): Regi
     estimatedFeeRate: entry.feeRate,
     predictedNetEdge: entry.netEdge,
   };
+}
+
+function calendarEvaluationCycle(dashboard: DashboardData, ledger: Ledger): CalendarEvaluationCycle {
+  const observedMs = Date.parse(dashboard.generatedAt);
+  const forecasts: CalendarEvaluationCycle['forecasts'] = [];
+  const windows = new Map<string, CalendarEvaluationCycle['windows'][number]>();
+  for (const prediction of dashboard.predictions) {
+    if (!prediction.market.live || !prediction.kalshi?.live) continue;
+    const closesAt = prediction.kalshi.closesAt;
+    const windowId = `${CALENDAR_EVALUATION_VERSION}:${BUY_POLICY_VERSION}:${closesAt}`;
+    if (!windows.has(windowId)) windows.set(windowId, {
+      id: windowId, collectionVersion: CALENDAR_EVALUATION_VERSION, policyVersion: BUY_POLICY_VERSION,
+      closesAt, evaluationAt: new Date(Date.parse(closesAt) - 300_000).toISOString(),
+      firstObservedAt: dashboard.generatedAt, candidateStatus: 'pending',
+    });
+    const secondsRemaining = (Date.parse(closesAt) - observedMs) / 1_000;
+    // Capture the first collector update at or below five minutes. A bounded 30-second tolerance avoids
+    // backfilling a missed fixed snapshot from materially later information.
+    if (!calendarFixedSnapshotDue(secondsRemaining)) continue;
+    const side = selectedSide(prediction);
+    const entry = side ? bestVenueEntry(prediction, 'kalshi', side) : undefined;
+    forecasts.push({
+      id: `${CALENDAR_EVALUATION_VERSION}:${BUY_POLICY_VERSION}:${prediction.symbol}:${closesAt}`,
+      collectionVersion: CALENDAR_EVALUATION_VERSION, policyVersion: BUY_POLICY_VERSION,
+      modelVersion: dashboard.modelVersion, symbol: prediction.symbol, contractId: prediction.kalshi.ticker,
+      closesAt, observedAt: dashboard.generatedAt, secondsRemaining,
+      probabilityUp: prediction.modelProbabilityUp, confidence: prediction.confidence,
+      askUp: prediction.kalshi.askUp, bidUp: prediction.kalshi.bidUp,
+      askDown: prediction.kalshi.askDown, bidDown: prediction.kalshi.bidDown,
+      estimatedFeeUp: venueFeeRate('kalshi', prediction.kalshi.askUp),
+      estimatedFeeDown: venueFeeRate('kalshi', prediction.kalshi.askDown),
+      qualified: qualifiesAsBuyEdge(prediction), selectedSide: side,
+      predictedNetEdge: entry?.netEdge, cycleRegime: prediction.cycleRegime?.regime,
+      factors: prediction.factors.map(({ id, score, contribution, available }) => ({ id, score, contribution, available })),
+    });
+  }
+  // Select independently of capital, positions, and the adaptive gate. Unlike the older regime sentinel,
+  // this cohort includes the active asset and classified-path rules so an excluded best edge cannot hide
+  // the next valid candidate or contaminate a clock cohort.
+  const selected = dashboard.predictions.flatMap((prediction) => {
+    const side = selectedSide(prediction);
+    if (!side || !prediction.market.live || !prediction.kalshi?.live || !assetAdmitted(prediction.symbol)
+      || !regimeAdmits(prediction.cycleRegime?.regime)) return [];
+    if (!qualifiesAsBuyEdge(prediction) || !qualifiesVenueBuyEdge(prediction, 'kalshi', side)
+      || !executionEligibility(prediction, side, ledger).eligible) return [];
+    const entry = bestVenueEntry(prediction, 'kalshi', side);
+    const quote = venueQuote(prediction, 'kalshi', side);
+    if (!entry || !quote || !(quote.ask > 0) || quote.ask > MAX_FILLABLE_ASK || !(quote.bid > 0)
+      || quote.bid > quote.ask || quote.ask - quote.bid > MAX_SPREAD) return [];
+    return [{ prediction, side, entry, quote, score: entry.netEdge * prediction.confidence }];
+  }).sort((a, b) => b.score - a.score)[0];
+  if (selected) {
+    const { prediction, side, entry, quote } = selected;
+    const window = windows.get(`${CALENDAR_EVALUATION_VERSION}:${BUY_POLICY_VERSION}:${prediction.kalshi!.closesAt}`)!;
+    const touch = prediction.makerFillEstimates?.[side] ?? prediction.makerFillEstimate ?? null;
+    const evidence = makerCohortEvidence(ledger.orders, quote.ask, quote.ask - quote.bid);
+    const makerEstimate = estimateMakerFill({
+      touch, cohortLabel: evidence.label, cohortAttempts: evidence.accepted, cohortFills: evidence.fills,
+    });
+    window.candidateStatus = 'selected';
+    window.candidate = {
+      symbol: prediction.symbol, contractId: prediction.kalshi!.ticker, side,
+      createdAt: dashboard.generatedAt, selectedSideProbability: sideProbability(prediction, side),
+      confidence: prediction.confidence, askPrice: quote.ask, bidPrice: quote.bid,
+      estimatedFeeRate: entry.feeRate, estimatedMakerFeeRate: venueFeeRate('kalshi', quote.bid),
+      predictedNetEdge: entry.netEdge,
+      makerFillProbability: makerEstimate?.probability ?? null, makerFillModel: makerEstimate?.model,
+    };
+  }
+  return { productionPolicyVersion: BUY_POLICY_VERSION, observedAt: dashboard.generatedAt, forecasts, windows: [...windows.values()] };
 }
 
 function entryExecutionDecision(prediction: Prediction, side: PositionSide, order: PaperOrder, ledger: Ledger): EntryExecutionDecision {
@@ -1251,9 +1322,13 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
   changed = await settleDueOrders(ledger) || changed;
   changed = await updateSoldCounterfactuals(ledger) || changed;
   if (changed) await writeLedger(ledger);
-  const regimeGate = await updateRegimeGate(regimeSentinelCandidate(dashboard, ledger));
-  // Candidate collection is deliberately detached: storage or settlement failure cannot delay or
-  // block paper/live execution, and the candidate module has no function that can place an order.
+  const regimeSentinel = regimeSentinelCandidate(dashboard, ledger);
+  const regimeGate = await updateRegimeGate(regimeSentinel);
+  // Evaluation collection is deliberately detached: storage or settlement failure cannot delay or
+  // block paper/live execution, and neither evaluation module can place an order.
+  void Promise.resolve()
+    .then(() => updateCalendarEvaluationStore(calendarEvaluationCycle(dashboard, ledger)))
+    .catch((error) => console.error('Calendar evaluation collection failed:', error));
   void persistenceCandidateCycle(dashboard, ledger, regimeGate.allowsEntries)
     .then((cycle) => updatePersistenceCandidateStore(cycle))
     .catch((error) => console.error('Two-snapshot persistence candidate collection failed:', error));

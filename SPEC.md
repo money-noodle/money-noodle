@@ -570,6 +570,7 @@ Recommended future service boundaries:
 - [x] Deterministic failure-injection reconciliation tests for lost responses/cancellations, malformed history, amendment chains, partial fills/exits, cash/position contradictions, and restart recovery.
 - [ ] Historical execution replay/backtest harness distinct from the prospective walk-forward evaluator.
 - [x] Start a prospective observation-only `persistence-two-consecutive-v1` candidate: two qualifying snapshots over 15 seconds versus production's three over 30, with exact Kalshi terms, production catch-up delay, ask outcome, empirical fill-weighted maker benchmark, policy-version scoping, and a 100-independent-incremental-window review floor. It cannot place an order, reserve budget, or promote itself.
+- [x] Add `calendar-effects-v1`: a non-pruned fixed-five-minute forecast for every exact Kalshi asset/window plus one current-policy candidate or explicit no-candidate marker per settlement window, with policy-scoped time-band/weekday reporting and manual review locks. It cannot gate, size, reserve, trade, or promote.
 - [x] Explicitly armed, audited live Kalshi v2 maker limits with fractional sizing, fee reconciliation, stake/rate caps, cancel, and kill switch.
 - [x] Reduce-only Kalshi switch exits with liquidation-loss-aware valuation and partial-exit protection.
 - [ ] Persist complete position-lifecycle and executable liquidation snapshots, including high-water marks, probability deterioration, reversal features, depth, and sampled HOLD counterfactuals.
@@ -690,6 +691,8 @@ A **candidate** is an immutable, named parameter set with a status. It never pla
 
 **First committed candidate implemented 2026-08-14.** `persistence-two-consecutive-v1` changes only entry maturity: two consecutive qualifying observations spanning 15 seconds against production's three spanning 30. Every current probability, edge, quality, price, asset, side, warm-up, late cutoff, Kalshi-specific quote/spread, classified-path, and adaptive-regime rule remains fixed. It records every signal-level candidate intent, whether production was already eligible, when production later catches up, exact ask/bid/fees, a prospectively captured empirical fill-weighted maker benchmark, and exact Kalshi settlement. Capital, current positions, and reconciliation are deliberately excluded because they are operational state rather than evidence about persistence. Evidence is scoped to the active production buy-policy version and resets on a production policy change. The first review remains manual and locked until 100 resolved **incremental** settlement windows; reaching that count is not promotion eligibility.
 
+**Calendar-effects collection implemented 2026-08-14.** `calendar-effects-v1` fixes the selection-bias and retention problems in the original time-of-day replay. For every exact Kalshi asset/window it commits the first collector update at or below five minutes remaining within a 30-second tolerance, regardless of qualification, with probability, confidence, both side books/fees, selected side/edge, compact factor values, cycle regime, model version, buy-policy version, and exact outcome. It separately records one first actionable highest-edge current-policy candidate per correlated settlement window, or finalizes an explicit no-candidate marker. Candidate outcomes report bounded fee-aware ask return and a decision-time empirical fill-weighted maker benchmark. Superseded policy cohorts remain durable but are never blended. Six four-hour `America/Los_Angeles` bands are predeclared to preserve the existing review definition; UTC timestamps remain authoritative and local labels are derived. Time review is locked until every band has 30 dates and 100 resolved candidate windows. Individual-weekday review additionally requires 12 occurrences and 100 candidate windows per weekday. Those counts only open manual held-out review and cannot change production.
+
 ### 12.6 Storage and modules
 
 | Path | Role |
@@ -701,12 +704,16 @@ A **candidate** is an immutable, named parameter set with a status. It never pla
 | `data/policy-sentinels.json` | Immutable per-window sentinel records keyed by candidate |
 | `lib/persistence-candidate-store.ts` | Implemented narrow first candidate, durable scoring, exact settlement, and read-only report |
 | `data/persistence-candidate.json` | Worker-local prospective intents for the two-snapshot candidate; no execution authority |
+| `lib/calendar-evaluation-store.ts` | Append-journaled, non-pruned fixed-snapshot/calendar collection and pure policy-scoped report |
+| `data/calendar-evaluation.json` / `.journal.jsonl` | Worker-local calendar evidence; no execution authority; journal compacts at 50 MB |
 
 The regime gate is a special case of this mechanism — one implicit candidate, the production policy, scored forward on its own sentinels. Unifying them is a follow-up, not a prerequisite; the gate works and retrofitting it earns nothing immediately.
 
 ### 12.7 Surfaces
 
 The Policy dialog gains a candidates section beside the production policy: each candidate's status, its parameter delta against production, its screening evidence marked as re-derived, its committed evidence, and its promotion eligibility.
+
+The signed Performance dialog includes a read-only Calendar tab with current-policy four-hour and weekday cohorts, date/window counts, forecast Brier, no-candidate coverage, fee-aware candidate return, and explicit review locks. It is omitted from the public/stateless payload with the other worker-local evaluation evidence.
 
 A side-by-side comparison surface reports the mirror against live per settlement window — the decision each lane made, the outcome, and the aggregate drag decomposed into fill, limit and stop. This is the surface that answers "predicted versus actual" directly, which the current dialogs only approximate.
 
@@ -746,6 +753,7 @@ This design does not change any live entry rule, does not let a candidate place 
 
 | Date | Decision |
 |---|---|
+| 2026-08-14 | Calendar effects remain observation-only. Retain an unbiased, non-pruned fixed-five-minute sample and one candidate/no-candidate record per settlement window, scoped by policy. Review time bands only after 30 dates and 100 candidate windows per band; review individual weekdays only after 12 occurrences and 100 candidate windows each. Counts unlock manual held-out review, never a clock gate. |
 | 2026-08-14 | Do not reduce production persistence from three snapshots on retrospective results. Start `persistence-two-consecutive-v1` in the evaluation lane, preserving every other rule and collecting exact forward Kalshi outcomes plus a prospectively captured empirical maker-fill estimate. Require 100 resolved incremental settlement windows before the first manual review; sample readiness cannot promote or alter production. |
 | 2026-08-14 | Maker retry cooldown begins when an attempt becomes terminal, not when it was submitted, so the 12-second resting horizon cannot consume the requested 30-second pause. Paper uses the same active attempt cap and durable retry identity as live; the cap stays at one pending separate forward attempt-2 evidence, after historical second attempts resolved 1/12 with −79.2% mean return. |
 | 2026-08-14 | Paper simulates maker fills rather than filling at the ask. Filling at the ask is taker execution, so paper was paying a spread and fee live does not pay while missing none of the trades live misses; the always-fills benchmark is retained through the existing ask-fill maker shadow instead of through the mirror itself. |

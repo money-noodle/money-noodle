@@ -862,6 +862,106 @@ export interface LiveRiskStatus {
   reasons: string[];
 }
 
+export interface CalendarForecastObservation {
+  id: string;
+  collectionVersion: string;
+  policyVersion: string;
+  modelVersion: string;
+  symbol: string;
+  contractId: string;
+  closesAt: string;
+  observedAt: string;
+  secondsRemaining: number;
+  probabilityUp: number;
+  confidence: number;
+  askUp: number;
+  bidUp: number;
+  askDown: number;
+  bidDown: number;
+  estimatedFeeUp: number;
+  estimatedFeeDown: number;
+  qualified: boolean;
+  selectedSide?: PositionSide;
+  predictedNetEdge?: number;
+  cycleRegime?: CycleRegimeLabel;
+  factors: Array<Pick<Factor, 'id' | 'score' | 'contribution' | 'available'>>;
+  outcome?: PositionSide;
+  resolvedAt?: string;
+  brierScore?: number;
+  correct?: boolean;
+}
+
+export interface CalendarCandidateObservation {
+  symbol: string;
+  contractId: string;
+  side: PositionSide;
+  createdAt: string;
+  selectedSideProbability: number;
+  confidence: number;
+  askPrice: number;
+  bidPrice: number;
+  estimatedFeeRate: number;
+  estimatedMakerFeeRate: number;
+  predictedNetEdge: number;
+  makerFillProbability?: number | null;
+  makerFillModel?: string;
+  outcome?: PositionSide;
+  resolvedAt?: string;
+  askProfitPerContract?: number;
+  makerExpectedProfitPerContract?: number;
+}
+
+export interface CalendarWindowObservation {
+  id: string;
+  collectionVersion: string;
+  policyVersion: string;
+  closesAt: string;
+  evaluationAt: string;
+  firstObservedAt: string;
+  candidate?: CalendarCandidateObservation;
+  candidateStatus: 'pending' | 'selected' | 'none';
+  finalizedAt?: string;
+}
+
+export interface CalendarCohortReport {
+  key: string;
+  label: string;
+  observedWindows: number;
+  calendarDates: number;
+  fixedForecasts: number;
+  resolvedForecastWindows: number;
+  forecastAccuracy: number | null;
+  brierScore: number | null;
+  candidateWindows: number;
+  resolvedCandidateWindows: number;
+  noCandidateWindows: number;
+  meanAskProfitPerContract: number | null;
+  askStandardError: number | null;
+  meanMakerExpectedProfitPerContract: number | null;
+}
+
+export interface CalendarEvaluationReport {
+  collectionVersion: string;
+  productionPolicyVersion: string;
+  timeZone: string;
+  startedAt: string;
+  updatedAt: string;
+  fixedForecasts: number;
+  resolvedForecasts: number;
+  observedWindows: number;
+  resolvedCandidateWindows: number;
+  noCandidateWindows: number;
+  distinctCalendarDates: number;
+  minimumTimeReviewDates: number;
+  minimumCandidateWindowsPerCohort: number;
+  minimumWeekdayOccurrences: number;
+  timeReviewReady: boolean;
+  weekdayReviewReady: boolean;
+  productionChanged: false;
+  timeBands: CalendarCohortReport[];
+  weekdays: CalendarCohortReport[];
+}
+
 export interface PersistenceCandidateIntent {
   id: string;
   candidateVersion: string;

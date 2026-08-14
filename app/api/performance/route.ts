@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { isAuthenticatedRequest } from '@/lib/auth';
 import { isStatelessDeployment, STATELESS_WORKER_MESSAGE } from '@/lib/runtime-environment';
 import { getCyclePathReport } from '@/lib/cycle-path-store';
+import { getCalendarEvaluationReport } from '@/lib/calendar-evaluation-store';
 import { buildMakerFillReport, buildProviderTradeRecords, buildTradeRecord } from '@/lib/execution-report';
 import { epochResults, lifetimeRealizedPnlCents } from '@/lib/budget-epoch';
 import { evaluateStakeExpansion } from '@/lib/stake-expansion-policy';
@@ -27,9 +28,9 @@ export async function GET(request: Request) {
     if (responseCache && responseCache.expiresAt > Date.now()) {
       return NextResponse.json(responseCache.body, { headers: { 'Cache-Control': 'private, no-store' } });
     }
-    const [forecasts, summary, orders, cyclePaths, control, persistenceCandidate] = await Promise.all([
+    const [forecasts, summary, orders, cyclePaths, control, persistenceCandidate, calendarEvaluation] = await Promise.all([
       getForecastHistory(), getPerformanceSummary(), getExecutionOrders(), getCyclePathReport(), getTradingControl(),
-      getPersistenceCandidateReport(BUY_POLICY_VERSION),
+      getPersistenceCandidateReport(BUY_POLICY_VERSION), getCalendarEvaluationReport(BUY_POLICY_VERSION),
     ]);
     const modelEvaluations = await getWalkForwardEvaluationHistory(summary.calibrationWindows);
     const promotionLedger = await readPromotionLedger();
@@ -66,6 +67,7 @@ export async function GET(request: Request) {
       cyclePaths,
       makerFillReport: buildMakerFillReport(orders, forecasts),
       persistenceCandidate,
+      calendarEvaluation,
       modelEvaluations,
     };
     responseCache = { expiresAt: Date.now() + 15_000, body };
