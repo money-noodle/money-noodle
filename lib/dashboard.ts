@@ -428,14 +428,19 @@ export function publicDashboardData(dashboard: DashboardData): PublicDashboardDa
  */
 const PREFETCH_LEAD_MS = 7_000;
 const REFRESH_AFTER_MS = DATA_FRESHNESS.dashboardPollMs - PREFETCH_LEAD_MS;
+/** Floor between builds, so a build slower than the whole lead cannot spin the loop back-to-back. */
+const MIN_REBUILD_SPACING_MS = 1_000;
+let lastBuildDurationMs = 0;
 
 const dashboardAge = () => latestDashboard ? Date.now() - Date.parse(latestDashboard.generatedAt) : Number.POSITIVE_INFINITY;
 
 /** One build at a time. Concurrent callers join the running build rather than queueing another. */
 function startDashboardBuild(force: boolean, liveOnly: boolean): Promise<DashboardData> {
+  const started = Date.now();
   buildInFlight ??= buildDashboard(force, liveOnly)
     .then((dashboard) => { latestDashboard = dashboard; return dashboard; })
     .finally(() => {
+      lastBuildDurationMs = Date.now() - started;
       buildInFlight = undefined;
       scheduleDashboardPrefetch();
     });
@@ -450,10 +455,14 @@ function startDashboardBuild(force: boolean, liveOnly: boolean): Promise<Dashboa
  */
 function scheduleDashboardPrefetch(): void {
   if (isStatelessDeployment() || prefetchTimer) return;
+  // Timed so the next result lands before the current one expires, not so the next one starts a fixed
+  // gap after the last finished. Waiting a full lead after a slow build pushed the completion-to-
+  // completion period out past the freshness window — the delay has to absorb the build, not follow it.
+  const delay = Math.max(MIN_REBUILD_SPACING_MS, REFRESH_AFTER_MS - lastBuildDurationMs);
   prefetchTimer = setTimeout(() => {
     prefetchTimer = undefined;
     void startDashboardBuild(false, false).catch((error) => console.error('Dashboard prefetch failed:', error));
-  }, Math.max(1_000, REFRESH_AFTER_MS));
+  }, delay);
   prefetchTimer.unref?.();
 }
 

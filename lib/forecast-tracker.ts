@@ -2,12 +2,12 @@ import 'server-only';
 import { appendFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { contractProvenanceRef } from './contract-provenance';
-import { recordContractProvenance } from './contract-provenance-store';
+import { getContractProvenanceRegistry, recordContractProvenance } from './contract-provenance-store';
 import { bestEntry, directionalLikelihood, qualifiesAsBuyEdge, venueEntryOptions, BUY_POLICY_VERSION } from './prediction-policy';
 import { summarizePerformance } from './performance';
 import { DATA_FRESHNESS } from './freshness';
 import { calculationObservationId, signalObservationId, TRACKING_POLICY_VERSION } from './observation-window';
-import type { PerformanceSummary, Prediction, TrackedForecast, TradingVenue, VenueOutcomeRecord } from './types';
+import type { ContractProvenanceRecord, PerformanceSummary, Prediction, TrackedForecast, TradingVenue, VenueOutcomeRecord } from './types';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const HISTORY_FILE = path.join(DATA_DIR, 'forecast-history.json');
@@ -96,6 +96,42 @@ async function readForecastSnapshot(): Promise<TrackedForecast[]> {
   }
 }
 
+/**
+ * Provenance is stored once in the registry and referenced from forecasts, not copied into each one.
+ *
+ * Rows carried a full copy of the venue contract record — 51 MB across the history, 39,290 copies of
+ * 5,193 distinct records — which is the single largest thing in the file and the reason parsing it
+ * blocked the event loop for around ten seconds. Every field was verified present and identical in the
+ * registry beforehand, apart from `capturedAt`, which is per-observation and stays on the row. A
+ * reference the registry cannot resolve keeps its full copy rather than losing anything.
+ */
+function slimProvenance(forecast: TrackedForecast, known: Set<string>): TrackedForecast {
+  const contracts = forecast.venueContracts;
+  if (!contracts) return forecast;
+  const slimmed = Object.fromEntries(Object.entries(contracts).map(([venue, ref]) => [
+    venue,
+    ref?.registryId && known.has(ref.registryId)
+      // Persisted form only; `rehydrateProvenance` restores the full record on load.
+      ? { registryId: ref.registryId, capturedAt: ref.capturedAt } as unknown as typeof ref
+      : ref,
+  ]));
+  return { ...forecast, venueContracts: slimmed as TrackedForecast['venueContracts'] };
+}
+
+function rehydrateProvenance(forecast: TrackedForecast, records: Map<string, ContractProvenanceRecord>): TrackedForecast {
+  const contracts = forecast.venueContracts;
+  if (!contracts) return forecast;
+  let expanded = false;
+  const restored = Object.fromEntries(Object.entries(contracts).map(([venue, ref]) => {
+    const record = ref?.registryId ? records.get(ref.registryId) : undefined;
+    // Only a slimmed reference needs expanding; a full copy is already whole.
+    if (!record || ref?.contractId !== undefined) return [venue, ref];
+    expanded = true;
+    return [venue, { ...record, capturedAt: ref!.capturedAt ?? record.capturedAt } as unknown as typeof ref];
+  }));
+  return expanded ? { ...forecast, venueContracts: restored as TrackedForecast['venueContracts'] } : forecast;
+}
+
 async function atomicWrite(file: string, content: string): Promise<void> {
   await mkdir(DATA_DIR, { recursive: true });
   const temporary = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
@@ -105,7 +141,17 @@ async function atomicWrite(file: string, content: string): Promise<void> {
 
 async function writeForecastSnapshot(forecasts: TrackedForecast[]): Promise<void> {
   // Compact JSON cuts the durable snapshot substantially; new observations use the append journal.
-  await atomicWrite(HISTORY_FILE, JSON.stringify(forecasts));
+  const known = await knownProvenanceIds();
+  await atomicWrite(HISTORY_FILE, JSON.stringify(forecasts.map((forecast) => slimProvenance(forecast, known))));
+}
+
+async function knownProvenanceIds(): Promise<Set<string>> {
+  try {
+    return new Set((await getContractProvenanceRegistry()).records.map((record) => record.registryId));
+  } catch {
+    // Without the registry nothing may be collapsed, because nothing could be restored.
+    return new Set();
+  }
 }
 
 async function loadForecasts(): Promise<TrackedForecast[]> {
@@ -132,7 +178,14 @@ async function loadForecasts(): Promise<TrackedForecast[]> {
     validLines.push(line);
     events.push(event);
   }
-  return replayForecastJournal(snapshot, events);
+  const replayed = replayForecastJournal(snapshot, events);
+  let records: Map<string, ContractProvenanceRecord>;
+  try {
+    records = new Map((await getContractProvenanceRegistry()).records.map((record) => [record.registryId, record]));
+  } catch {
+    return replayed;
+  }
+  return replayed.map((forecast) => rehydrateProvenance(forecast, records));
 }
 
 async function readForecasts(): Promise<TrackedForecast[]> {
@@ -159,8 +212,9 @@ function resolutionPatch(forecast: TrackedForecast): Partial<TrackedForecast> {
 async function persistForecastChanges(
   upserts: TrackedForecast[], patches: TrackedForecast[], deletedIds: string[], retained: TrackedForecast[],
 ): Promise<void> {
+  const known = await knownProvenanceIds();
   const events: ForecastJournalEvent[] = [
-    ...upserts.map((forecast): ForecastJournalEvent => ({ op: 'upsert', forecast })),
+    ...upserts.map((forecast): ForecastJournalEvent => ({ op: 'upsert', forecast: slimProvenance(forecast, known) })),
     ...patches.map((forecast): ForecastJournalEvent => ({ op: 'patch', id: forecast.id, changes: resolutionPatch(forecast) })),
     ...deletedIds.map((id): ForecastJournalEvent => ({ op: 'delete', id })),
   ];
