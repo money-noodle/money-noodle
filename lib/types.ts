@@ -304,12 +304,19 @@ export interface SettlementAverageEstimate {
 }
 
 export interface MakerFillEstimate {
+  /** Probability the resting order is FILLED, not merely touched. */
   probability: number;
   horizonSeconds: number;
   quoteDistance: number;
   quoteVolatilityPerSecond: number;
   samples: number;
-  model: 'quote-first-passage-v1';
+  model: 'quote-first-passage-v1' | 'maker-fill-empirical-v2';
+  /** First-passage touch probability, retained as a diagnostic after it failed validation. */
+  touchProbability?: number;
+  /** Comparable prior attempts the empirical estimate was shrunk toward, and their observed rate. */
+  cohortLabel?: string;
+  cohortAttempts?: number;
+  cohortFillRate?: number | null;
 }
 
 export interface CalibrationReplaySnapshot {

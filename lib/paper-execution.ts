@@ -5,6 +5,7 @@ import { beginLiveTransaction, blockExecutionDrain, completeExecutionDrain, endL
 import { reconcileExecutionLedger } from './execution-reconciliation';
 import { ENTRY_EXECUTION_POLICY_VERSION, entrySideProbability, evaluateEntryExecutionPolicy, makerCohortEvidence, parseEntryExecutionMode, type EntryExecutionDecision } from './entry-execution-policy';
 import { POST_EXIT_REENTRY_COOLDOWN_MS, evaluateExitPolicy } from './exit-policy';
+import { estimateMakerFill } from './maker-fill-model';
 import { isFreshCalculationTimestamp } from './freshness';
 import { orderMarketId, orderProviderId } from './execution-report';
 import { assetAdmitted } from './asset-exclusion';
@@ -349,7 +350,15 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
       settlementAverageEstimate: prediction.settlementAverageEstimate ? { ...prediction.settlementAverageEstimate } : undefined,
       factors: prediction.factors.map((factor) => ({ ...factor })),
     },
-    makerFillEstimate: prediction.makerFillEstimates?.[side] ?? prediction.makerFillEstimate,
+    // Calibrated here rather than at forecast time: the estimate that predicts a fill is what
+    // comparable attempts did, and only this path has the ledger to read them from.
+    makerFillEstimate: (() => {
+      const touch = prediction.makerFillEstimates?.[side] ?? prediction.makerFillEstimate ?? null;
+      const cohort = makerCohortEvidence(ledger.orders, selected.fill.limitPriceCents / 100, selected.spread);
+      return estimateMakerFill({
+        touch, cohortLabel: cohort.label, cohortAttempts: cohort.accepted, cohortFills: cohort.fills,
+      }) ?? undefined;
+    })(),
     settlementAverageEstimate: prediction.settlementAverageEstimate,
     // The recorded ask is the limit actually sent, so fills reconcile against what was submitted.
     askPrice: selected.fill.limitPriceCents / 100, bidPrice: selected.quote.bid, spread: selected.spread,

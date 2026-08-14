@@ -642,7 +642,7 @@ Portfolio selection was expected to need merging and does not: `runLive` and `ru
 
 | Differs | Why |
 |---|---|
-| Fill model — maker post-only vs immediate ask | The measurement being taken. 56% of live attempts on 2026-08-13 never filled. |
+| Fill model — maker post-only vs simulated maker | Paper originally filled at the ask, which is taker execution, not perfect execution: it pays the spread and the fee that live's resting orders avoid. Paper therefore simulates maker fills so the books are comparable, and the perfect-execution benchmark moves to the ask-fill shadow that `buildMakerShadow` already computes. *(Decided 2026-08-14; implementation pending.)* |
 | Budget, stake sizing, bankroll | Paper is not capital-constrained; matching it would hide policy outcomes behind sizing noise. |
 | Hourly filled-order limit, live risk stops, reconciliation gate | Venue and capital protections, not predictions. |
 | Position and correlation caps | Same constants, counted separately, because the books are separate. |
@@ -740,6 +740,8 @@ This design does not change any live entry rule, does not let a candidate place 
 
 | Date | Decision |
 |---|---|
+| 2026-08-14 | Paper simulates maker fills rather than filling at the ask. Filling at the ask is taker execution, so paper was paying a spread and fee live does not pay while missing none of the trades live misses; the always-fills benchmark is retained through the existing ask-fill maker shadow instead of through the mirror itself. |
+| 2026-08-14 | The maker fill probability is estimated from what comparable attempts did, not from a first-passage model of the quote. Validation on 623 recorded attempts found the first-passage estimate inverted — predictions of 12/41/64/86% against observed fills of 66/61/57/52% — so it is retained as a recorded diagnostic and excluded from the estimate. |
 | 2026-08-14 | Paper mirrors live exactly at the rule layer. The rule functions take no execution-mode parameter, so a policy divergence between tracks cannot be expressed; the tracks differ only in fill model, sizing, and the live-only capital protections, making `paper − live` the desk's execution and capital cost. |
 | 2026-08-14 | Speculative policy changes never run in paper. They run in a third evaluation lane that places no orders and holds no budget, because a paper track carrying experiments cannot serve as the control that makes predicted-versus-actual readable. |
 | 2026-08-14 | Retroactive scoring may screen a candidate but may never promote one. Promotion requires forward evidence committed at decision time, following the regime-gate sentinel pattern, after retroactive figures adopted on 2026-08-13 failed to reproduce a day later. |
