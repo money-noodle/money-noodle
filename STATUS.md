@@ -411,6 +411,10 @@ One forecast is currently unresolved by design: HYPE 2026-08-14T07:15:00Z. Kalsh
 
 The freshness window stays strict at 15 seconds: it is the display's honest statement of data age, not a trading gate.
 
+Verified on a clean process: twelve consecutive samples returned payload ages of 0.1–7.6 seconds with none expired. A clean restart is required to verify any of this — the background collector is created once by `instrumentation.register()`, and Next's hot reload does not replace a running timer's module instances, so an edited module reaches HTTP requests while the collector keeps executing the old one.
+
+**Remaining bottleneck — the forecast history file.** `data/forecast-history.json` is 214 MB across 47,536 rows, and `JSON.parse`/`JSON.stringify` on it block the event loop for about ten seconds. This is now the dominant cause of the residual stalls, and it disguises itself as slow upstreams: four unrelated hosts logged 11363, 11361, 11359, and 11356 ms in the same cluster, which is a blocked loop rather than four simultaneous network faults. It also defeats the feed deadline, because a `setTimeout` cannot fire while the loop is blocked. Only `qualified === false` rows are pruned, capped at 20,000; the 27,536 qualified rows grow without bound. Fixing the cadence fully requires bounding this file — the journal compaction threshold of 50 MB would also serialize the entire history in one blocking write.
+
 ## Operational posture
 
 Live mode was explicitly **active** at 07:34 UTC after quiescent standalone-exit deployment, with BNB DOWN and DOGE DOWN positions, 18¢ reserved, 259¢ available, reconciliation ready, and zero blockers. Manual reconciliation confirmed both signed NO positions and recovered one fill state. The new exit engine records executable high water continuously; neither position had armed the +75% lock. No model parameter or stake limit changed. Keep stake size and second attempts unchanged while verifying the first organic strict/profit-reversal exit and monitoring re-entry, side-specific return, high-water risk, API consistency, maker-shadow, and evaluator evidence.
