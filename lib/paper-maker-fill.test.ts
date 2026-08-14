@@ -28,7 +28,9 @@ const dashboard = (ask: number, closesAt = CLOSES): DashboardData => ({
 describe('paper maker simulation', () => {
   it('re-prices the candidate to rest at the bid, not the ask', () => {
     const resting = restAtBid(order(), 200)!;
-    expect(resting.askPrice).toBe(0.43);           // the limit actually posted
+    expect(resting.askPrice).toBe(0.45);           // immutable issuance ask
+    expect(resting.initialSubmittedPrice).toBe(0.43); // limit actually posted
+    expect(resting.entryExecutionObservations?.[0]).toMatchObject({ event: 'paper_submitted', limitPrice: 0.43 });
     expect(resting.status).toBe('pending_reservation');
     expect(resting.liquidityRole).toBe('maker');
     expect(resting.restingUntil).toBeDefined();
@@ -43,6 +45,8 @@ describe('paper maker simulation', () => {
     expect(resolveRestingPaperOrders(dashboard(0.43), ledger)).toBe(true);
     expect(ledger.orders[0].status).toBe('open');
     expect(ledger.orders[0].filledCount).toBe(ledger.orders[0].quantity);
+    expect(ledger.orders[0].authoritativeFillPrice).toBe(0.43);
+    expect(ledger.orders[0].entryExecutionObservations.at(-1)).toMatchObject({ event: 'paper_fill', limitPrice: 0.43 });
   });
 
   it('returns the reserved stake when the horizon expires without a fill', () => {

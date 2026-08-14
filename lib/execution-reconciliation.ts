@@ -45,6 +45,10 @@ export function reconcileExecutionLedger(localOrders: PaperOrder[], snapshot: Ka
 
   for (const order of localLive) {
     order.clientOrderId ??= order.id;
+    order.issuanceAskPrice ??= order.entryDecision?.actionableAsk ?? order.askPrice;
+    order.issuanceBidPrice ??= order.entryDecision?.actionableBid ?? order.bidPrice;
+    order.issuanceSpread ??= order.entryDecision?.spread ?? order.spread;
+    order.approvedMaximumPrice ??= order.entryDecision?.actionableAsk ?? order.askPrice;
     const venueOrders = matchedOrders(order, snapshot.orders);
     const venueIds = new Set(venueOrders.map((item) => item.orderId));
     if (order.venueOrderId) venueIds.add(order.venueOrderId);
@@ -61,7 +65,7 @@ export function reconcileExecutionLedger(localOrders: PaperOrder[], snapshot: Ka
       order.venueOrderId = filledVenueOrder?.orderId ?? order.venueOrderId;
       order.filledCount = Number(totals.count.toFixed(2));
       order.quantity = Number(totals.count.toFixed(2));
-      order.askPrice = totals.averagePriceCents / 100;
+      order.authoritativeFillPrice = totals.averagePriceCents / 100;
       order.feeCents = totals.feeCents;
       order.actualPurchaseCents = totals.purchaseCents;
       order.actualFeeCents = totals.feeCents;
@@ -137,7 +141,7 @@ export function reconcileExecutionLedger(localOrders: PaperOrder[], snapshot: Ka
           if (!orders.some((item) => item.id === partialId)) orders.push({
             ...order, id: partialId, status: 'sold', quantity: Number(exit.count.toFixed(2)), filledCount: Number(exit.count.toFixed(2)),
             stakeCents: releasedStake, actualStakeCents: soldStake,
-            actualPurchaseCents: (order.actualPurchaseCents ?? order.askPrice * originalQuantity * 100) * soldRatio,
+            actualPurchaseCents: (order.actualPurchaseCents ?? (order.authoritativeFillPrice ?? order.askPrice) * originalQuantity * 100) * soldRatio,
             actualFeeCents: (order.actualFeeCents ?? order.feeCents) * soldRatio,
             potentialPayoutCents: Math.round(exit.count * 100), exitPending: false,
             exitVenueOrderId: exitVenueOrder?.orderId ?? order.exitVenueOrderId, exitPrice: exit.averagePriceCents / 100,
@@ -146,7 +150,7 @@ export function reconcileExecutionLedger(localOrders: PaperOrder[], snapshot: Ka
             settledAt: new Date(nowMs).toISOString(), reason: 'Recovered partial reduce-only exit during startup reconciliation; replacement withheld.',
           });
           order.quantity = Number((originalQuantity - exit.count).toFixed(2)); order.filledCount = order.quantity;
-          order.actualPurchaseCents = (order.actualPurchaseCents ?? order.askPrice * originalQuantity * 100) * (1 - soldRatio);
+          order.actualPurchaseCents = (order.actualPurchaseCents ?? (order.authoritativeFillPrice ?? order.askPrice) * originalQuantity * 100) * (1 - soldRatio);
           order.actualFeeCents = (order.actualFeeCents ?? order.feeCents) * (1 - soldRatio);
           order.actualStakeCents = remainingActualStake; order.stakeCents = remainingReserved;
           order.potentialPayoutCents = Math.round(order.quantity * 100); order.exitPending = false;

@@ -40,7 +40,8 @@ describe('Kalshi execution ledger reconciliation', () => {
     }), now);
     expect(result.issues).toEqual([]);
     expect(result.orders[0]).toMatchObject({ side: 'DOWN', status: 'open', quantity: 0.3 });
-    expect(result.orders[0].askPrice).toBeCloseTo(0.29);
+    expect(result.orders[0].askPrice).toBeCloseTo(0.30);
+    expect(result.orders[0].authoritativeFillPrice).toBeCloseTo(0.29);
     expect(result.orders[0].actualStakeCents).toBeCloseTo(8.7);
     expect(result.targetReservedCents).toBe(9);
   });

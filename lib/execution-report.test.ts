@@ -50,6 +50,26 @@ describe('maker first-passage validation report', () => {
     expect(report.segments.some((segment) => segment.dimension === 'Attempt')).toBe(true);
   });
 
+  it('reports execution-depth, cancellation, and position-path coverage without treating it as policy evidence', () => {
+    const audited = order(0.5, 0, {
+      entryExecutionObservations: [
+        { at: '2026-01-01T00:01:00Z', event: 'create_quote', displayedAhead: 12, bestBidDepth: 5 },
+        { at: '2026-01-01T00:01:02Z', event: 'amend_accepted', displayedAhead: 8 },
+        { at: '2026-01-01T00:01:12Z', event: 'cancel_confirmed', cancellationLatencyMs: 275 },
+      ],
+      positionObservations: [{
+        at: '2026-01-01T00:02:00Z', selectedBid: 0.4, selectedAsk: 0.41, spread: 0.01,
+        netLiquidationCents: 7, exitFeeCents: 1, exactCostCents: 9, unrealizedPnlCents: -2,
+        unrealizedReturn: -2 / 9, ownedSideProbability: 0.7, confidence: 0.7, secondsRemaining: 780,
+      }],
+    });
+    expect(buildMakerFillReport([audited]).executionAudit).toEqual({
+      attemptsWithPath: 1, attemptsWithDepth: 1, repricedAttempts: 1, meanDisplayedAhead: 10,
+      cancellationsObserved: 1, meanCancellationLatencyMs: 275, meanRestingDurationMs: null,
+      positionsObserved: 1, positionSnapshots: 1,
+    });
+  });
+
   it('reports shadow taker recommendations without blending them into actual taker fills', () => {
     const shadow = order(0.5, 0, {
       symbol: 'BNB', shadowTakerAllInCents: 9, shadowTakerQuantity: 0.2,

@@ -64,7 +64,7 @@ export function TradeHistoryDialog() {
 function HistoryOrder({ order }: { order: PaperOrder }) {
   const selectedProbability = order.entryDecision?.selectedSideProbability ?? (order.side === 'UP' ? order.modelProbabilityUp : 1 - order.modelProbabilityUp);
   const feeRate = order.entryDecision?.feeRate ?? ((order.actualFeeCents ?? order.feeCents) / Math.max(1, order.potentialPayoutCents));
-  const edge = order.entryDecision?.netEdge ?? selectedProbability - order.askPrice - feeRate;
+  const edge = order.entryDecision?.netEdge ?? selectedProbability - (order.issuanceAskPrice ?? order.askPrice) - feeRate;
   const pnl = order.actualPnlCents ?? order.pnlCents;
   return <div className="rounded-lg border p-3">
     <div className="flex flex-wrap items-start justify-between gap-2">

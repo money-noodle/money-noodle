@@ -79,8 +79,10 @@ function OpenOrderRow({ order }: { order: PaperOrder }) {
   const exactStake = order.actualStakeCents ?? order.stakeCents;
   const entryProbability = order.entryDecision?.selectedSideProbability ?? (order.side === 'UP' ? order.modelProbabilityUp : 1 - order.modelProbabilityUp);
   const entryFeeRate = order.entryDecision?.feeRate ?? ((order.actualFeeCents ?? order.feeCents) / Math.max(1, order.potentialPayoutCents));
-  const entryNetEdge = order.entryDecision?.netEdge ?? entryProbability - order.askPrice - entryFeeRate;
-  const entryPriceCents = order.actualPurchaseCents !== undefined && order.quantity > 0 ? order.actualPurchaseCents / order.quantity : order.askPrice * 100;
+  const entryNetEdge = order.entryDecision?.netEdge ?? entryProbability - (order.issuanceAskPrice ?? order.askPrice) - entryFeeRate;
+  const entryPriceCents = order.actualPurchaseCents !== undefined && order.quantity > 0
+    ? order.actualPurchaseCents / order.quantity
+    : (order.authoritativeFillPrice ?? order.initialSubmittedPrice ?? order.askPrice) * 100;
   const state = order.exitPending ? 'exit pending' : order.status === 'pending_reservation' ? 'entry pending' : order.status;
   return <div className="rounded-md border bg-background/45 px-3 py-2">
     <div className="flex flex-wrap items-center justify-between gap-2">

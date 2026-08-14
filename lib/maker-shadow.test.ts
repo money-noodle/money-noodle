@@ -137,7 +137,8 @@ describe('shadow columns across the maker-execution boundary', () => {
 
   it('re-prices the ask side for an order that executed as a maker', () => {
     // Filled at its resting bid of 43c; the always-fills benchmark is the 45c ask it never paid.
-    const maker = { ...base, liquidityRole: 'maker' as const, askPrice: 0.43, bidPrice: 0.43,
+    const maker = { ...base, liquidityRole: 'maker' as const, askPrice: 0.45, issuanceAskPrice: 0.45,
+      bidPrice: 0.43, initialSubmittedPrice: 0.43, authoritativeFillPrice: 0.43,
       stakeCents: 177, pnlCents: 223 } as unknown as PaperOrder;
     const [row] = buildMakerShadow([maker], 'paper').rows;
     expect(row.makerReturn).toBeCloseTo(223 / 177, 6);   // realized, because it is the maker

@@ -238,6 +238,17 @@ export interface MarketQuote {
   contract?: ContractProvenanceRecord;
 }
 
+export interface OrderBookLevel {
+  price: number;
+  quantity: number;
+}
+
+export interface BinaryOrderBook {
+  yesBids: OrderBookLevel[];
+  noBids: OrderBookLevel[];
+  observedAt: string;
+}
+
 export interface VenueQuote {
   venue: 'kalshi';
   probabilityUp: number;
@@ -253,6 +264,7 @@ export interface VenueQuote {
   live: boolean;
   comparability: ContractComparability;
   floorStrike?: number;
+  orderBook?: BinaryOrderBook;
   contract?: ContractProvenanceRecord;
 }
 
@@ -1168,6 +1180,48 @@ export interface EntryDecisionSnapshot {
   factors: Factor[];
 }
 
+export interface EntryExecutionObservation {
+  at: string;
+  event: 'paper_submitted' | 'paper_fill' | 'paper_expired' | 'create_quote' | 'create_rejected'
+    | 'accepted' | 'management_quote' | 'amend_accepted' | 'amend_rejected'
+    | 'cancel_requested' | 'cancel_confirmed' | 'terminal_fill';
+  selectedBid?: number;
+  selectedAsk?: number;
+  spread?: number;
+  limitPrice?: number;
+  displayedAtLimit?: number;
+  displayedAhead?: number;
+  bestBidDepth?: number;
+  bestAskDepth?: number;
+  depthImbalance?: number;
+  filledCount?: number;
+  remainingCount?: number;
+  cancellationLatencyMs?: number;
+  restingDurationMs?: number;
+  touched?: boolean;
+  reason?: string;
+}
+
+export interface PositionLifecycleObservation {
+  at: string;
+  selectedBid: number;
+  selectedAsk: number;
+  spread: number;
+  bestBidDepth?: number;
+  bestAskDepth?: number;
+  depthImbalance?: number;
+  netLiquidationCents: number;
+  exitFeeCents: number;
+  exactCostCents: number;
+  unrealizedPnlCents: number;
+  unrealizedReturn: number;
+  ownedSideProbability: number;
+  confidence: number;
+  basisPercent?: number;
+  cycleRegime?: CycleRegimeLabel;
+  secondsRemaining: number;
+}
+
 export interface PaperOrder {
   id: string;
   /** Paper runs continuously as a shadow; live only runs while automation is active in live mode. */
@@ -1223,9 +1277,18 @@ export interface PaperOrder {
   /** When a maker attempt became terminal; retry cooldown starts after cancellation, not submission. */
   makerCompletedAt?: string;
   settlementAverageEstimate?: SettlementAverageEstimate;
+  /** Legacy entry price retained for compatibility. New orders keep this as the issuance ask. */
   askPrice: number;
   bidPrice: number;
   spread: number;
+  issuanceAskPrice?: number;
+  issuanceBidPrice?: number;
+  issuanceSpread?: number;
+  approvedMaximumPrice?: number;
+  initialSubmittedPrice?: number;
+  authoritativeFillPrice?: number;
+  entryExecutionObservations?: EntryExecutionObservation[];
+  positionObservations?: PositionLifecycleObservation[];
   quantity: number;
   /** Original requested count retained when a partial fill later replaces quantity with acquired size. */
   requestedQuantity?: number;
@@ -1387,6 +1450,17 @@ export interface MakerFillReport {
   meanAcceptedNoFillCounterfactualReturn: number | null;
   pairedReturnGap: number | null;
   pairedReturnGapStandardError: number | null;
+  executionAudit: {
+    attemptsWithPath: number;
+    attemptsWithDepth: number;
+    repricedAttempts: number;
+    meanDisplayedAhead: number | null;
+    cancellationsObserved: number;
+    meanCancellationLatencyMs: number | null;
+    meanRestingDurationMs: number | null;
+    positionsObserved: number;
+    positionSnapshots: number;
+  };
   segments: MakerExecutionSegment[];
 }
 

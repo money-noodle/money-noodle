@@ -80,11 +80,19 @@ export function OrderDecisionDetails({ order, defaultOpen = false }: { order: Pa
         <p className="mt-1 font-mono text-[8px] text-muted-foreground">executed {execution.executedStyle} · recommended {execution.recommendedStyle} · taker edge {points(execution.takerNetEdge)} · maker edge {points(execution.makerNetEdge)} · fill cohort {execution.makerCohort} ({execution.makerSamples})</p>
       </div>}
 
+      {!!order.entryExecutionObservations?.length && <details className="rounded-md border"><summary className="cursor-pointer px-2 py-1.5 text-[8px] font-medium">Execution quote and reprice path ({order.entryExecutionObservations.length})</summary><div className="divide-y border-t">{order.entryExecutionObservations.map((observation, index) => <div key={`${observation.at}:${index}`} className="grid grid-cols-[1fr_auto] gap-2 px-2 py-1.5 text-[8px]"><div><span className="font-medium">{observation.event.replaceAll('_', ' ')}</span><span className="ml-2 font-mono text-muted-foreground">{new Date(observation.at).toLocaleTimeString()}</span><p className="font-mono text-[7px] text-muted-foreground">book {observation.selectedBid === undefined ? '—' : percent(observation.selectedBid)} / {observation.selectedAsk === undefined ? '—' : percent(observation.selectedAsk)} · limit {observation.limitPrice === undefined ? '—' : percent(observation.limitPrice)}</p></div><div className="text-right font-mono text-[7px]"><p>ahead {observation.displayedAhead?.toFixed(2) ?? '—'}</p><p className="text-muted-foreground">fill {observation.filledCount?.toFixed(2) ?? '—'}</p></div></div>)}</div></details>}
+
+      {!!order.positionObservations?.length && <details className="rounded-md border"><summary className="cursor-pointer px-2 py-1.5 text-[8px] font-medium">Position lifecycle ({order.positionObservations.length} snapshots)</summary><div className="divide-y border-t">{order.positionObservations.slice(-30).map((observation) => <div key={observation.at} className="grid grid-cols-[1fr_auto] gap-2 px-2 py-1.5 text-[8px]"><div><span className="font-mono">{new Date(observation.at).toLocaleTimeString()}</span><span className="ml-2 text-muted-foreground">bid/ask {percent(observation.selectedBid)} / {percent(observation.selectedAsk)} · P({order.side}) {percent(observation.ownedSideProbability)}</span></div><span className={cn('font-mono', observation.unrealizedPnlCents >= 0 ? 'text-primary' : 'text-red-400')}>{observation.unrealizedPnlCents >= 0 ? '+' : ''}{observation.unrealizedPnlCents.toFixed(2)}¢</span></div>)}</div></details>}
+
       <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
-        <DecisionValue label="Submitted limit" value={percent(order.askPrice)}/>
-        <DecisionValue label="Actual principal" value={cents(order.actualPurchaseCents ?? order.askPrice * order.quantity * 100)}/>
+        <DecisionValue label="Issuance ask" value={percent(order.issuanceAskPrice ?? decisionAsk)}/>
+        <DecisionValue label="Approved maximum" value={percent(order.approvedMaximumPrice ?? decisionAsk)}/>
+        <DecisionValue label="Initial submitted" value={order.initialSubmittedPrice === undefined ? '—' : percent(order.initialSubmittedPrice)}/>
+        <DecisionValue label="Authoritative fill" value={order.authoritativeFillPrice === undefined ? '—' : percent(order.authoritativeFillPrice)}/>
+        <DecisionValue label="Actual principal" value={cents(order.actualPurchaseCents ?? (order.authoritativeFillPrice ?? order.initialSubmittedPrice ?? order.askPrice) * order.quantity * 100)}/>
         <DecisionValue label="Actual fee" value={cents(order.actualFeeCents ?? order.feeCents)}/>
         <DecisionValue label="Potential payout" value={cents(order.potentialPayoutCents)}/>
+        <DecisionValue label="Depth snapshots" value={`${order.entryExecutionObservations?.filter((item) => item.bestBidDepth !== undefined).length ?? 0}`}/>
       </div>
     </div>
   </details>;

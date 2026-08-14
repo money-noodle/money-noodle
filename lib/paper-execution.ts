@@ -7,8 +7,10 @@ import { reconcileExecutionLedger } from './execution-reconciliation';
 import { ENTRY_EXECUTION_POLICY_VERSION, entrySideProbability, evaluateEntryExecutionPolicy, makerCohortEvidence, parseEntryExecutionMode, type EntryExecutionDecision } from './entry-execution-policy';
 import { POST_EXIT_REENTRY_COOLDOWN_MS, evaluateExitPolicy } from './exit-policy';
 import { estimateMakerFill, MANAGED_MAKER_HORIZON_SECONDS } from './maker-fill-model';
+import { observeKalshiOrderBook } from './kalshi-depth';
 import { isFreshCalculationTimestamp } from './freshness';
 import { observationBucket } from './observation-window';
+import { selectedSideDepth } from './order-book-depth';
 import { orderMarketId, orderProviderId } from './execution-report';
 import { assetAdmitted } from './asset-exclusion';
 import { cycleRegimeFor } from './cycle-path-store';
@@ -489,8 +491,10 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
       }) ?? undefined;
     })(),
     settlementAverageEstimate: prediction.settlementAverageEstimate,
-    // The recorded ask is the limit actually sent, so fills reconcile against what was submitted.
+    // Keep the legacy ask field issuance-denominated; submitted/repriced/fill terms have distinct fields.
     askPrice: selected.fill.limitPriceCents / 100, bidPrice: selected.quote.bid, spread: selected.spread,
+    issuanceAskPrice: selected.quote.ask, issuanceBidPrice: selected.quote.bid, issuanceSpread: selected.spread,
+    approvedMaximumPrice: selected.fill.limitPriceCents / 100,
     quantity: selected.fill.quantity, requestedQuantity: selected.fill.quantity,
     stakeCents: selected.fill.stakeCents, feeCents: selected.fill.feeCents,
     potentialPayoutCents: selected.fill.potentialPayoutCents,
@@ -498,6 +502,7 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
 }
 
 const orderProbability = (order: Pick<PaperOrder, 'side' | 'modelProbabilityUp'>) => order.side === 'UP' ? order.modelProbabilityUp : 1 - order.modelProbabilityUp;
+const entryFillPrice = (order: PaperOrder) => order.authoritativeFillPrice ?? order.initialSubmittedPrice ?? order.askPrice;
 const expectedProfitCents = (order: PaperOrder) => order.potentialPayoutCents * orderProbability(order) - order.stakeCents;
 
 function updatePortfolioDecisions(dashboard: DashboardData, status: TradingControlData, ledger: Ledger): boolean {
@@ -689,12 +694,19 @@ export function restAtBid(order: PaperOrder, stakeLimitCents: number): PaperOrde
   if (!(bid > 0) || !(bid < 1)) return undefined;
   const fill = estimatePaperFill(stakeLimitCents, bid, order.venue);
   if (!fill) return undefined;
+  const submittedAt = new Date().toISOString();
+  const submittedPrice = fill.limitPriceCents / 100;
   return {
     ...order,
     status: 'pending_reservation',
     liquidityRole: 'maker',
     restingUntil: new Date(Date.now() + MANAGED_MAKER_HORIZON_SECONDS * 1000).toISOString(),
-    askPrice: fill.limitPriceCents / 100,
+    initialSubmittedPrice: submittedPrice,
+    entryExecutionObservations: [...(order.entryExecutionObservations ?? []), {
+      at: submittedAt, event: 'paper_submitted', selectedBid: order.bidPrice,
+      selectedAsk: order.issuanceAskPrice ?? order.askPrice, spread: order.issuanceSpread ?? order.spread,
+      limitPrice: submittedPrice, remainingCount: fill.quantity,
+    }],
     quantity: fill.quantity, requestedQuantity: fill.quantity,
     feeCents: fill.feeCents,
     stakeCents: fill.stakeCents, potentialPayoutCents: fill.potentialPayoutCents,
@@ -713,10 +725,21 @@ export function resolveRestingPaperOrders(dashboard: DashboardData, ledger: Ledg
     if (order.executionMode !== 'paper' || order.status !== 'pending_reservation') continue;
     const prediction = dashboard.predictions.find((item) => item.symbol === order.symbol);
     const quote = prediction ? venueQuote(prediction, order.venue, order.side) : undefined;
-    const reached = quote && quote.closesAt === order.closesAt && quote.ask <= order.askPrice + 1e-9;
+    const submittedPrice = order.initialSubmittedPrice ?? order.askPrice;
+    const submittedAtMs = Date.parse(order.entryExecutionObservations?.find((item) => item.event === 'paper_submitted')?.at ?? order.createdAt);
+    const restingDurationMs = Number.isFinite(submittedAtMs) ? Math.max(0, now - submittedAtMs) : undefined;
+    const reached = quote && quote.closesAt === order.closesAt && quote.ask <= submittedPrice + 1e-9;
     if (reached) {
       order.status = 'open';
       order.filledCount = order.quantity;
+      order.authoritativeFillPrice = submittedPrice;
+      const depth = order.venue === 'kalshi'
+        ? selectedSideDepth(observeKalshiOrderBook(order.contractId), order.side, quote.bid, quote.ask, submittedPrice) : {};
+      order.entryExecutionObservations = [...(order.entryExecutionObservations ?? []), {
+        at: dashboard.generatedAt, event: 'paper_fill', selectedBid: quote.bid, selectedAsk: quote.ask,
+        spread: quote.ask - quote.bid, limitPrice: submittedPrice, filledCount: order.quantity, remainingCount: 0,
+        restingDurationMs, touched: true, ...depth,
+      }];
       changed = true;
       continue;
     }
@@ -726,6 +749,10 @@ export function resolveRestingPaperOrders(dashboard: DashboardData, ledger: Ledg
       order.status = 'unfilled';
       order.noFillReason = 'rested_no_fill';
       order.makerCompletedAt = new Date(now).toISOString();
+      order.entryExecutionObservations = [...(order.entryExecutionObservations ?? []), {
+        at: order.makerCompletedAt, event: 'paper_expired', limitPrice: submittedPrice,
+        filledCount: 0, remainingCount: 0, restingDurationMs,
+      }];
       ledger.paperBudget.availableCents += order.stakeCents;
       changed = true;
     }
@@ -792,6 +819,13 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
   // always-fills benchmark is not lost — buildMakerShadow scores these same signals at the ask.
   const resting = restAtBid(built.order, stakeLimit);
   if (!resting) return false;
+  if (resting.venue === 'kalshi' && resting.entryExecutionObservations?.length) {
+    Object.assign(resting.entryExecutionObservations.at(-1)!, selectedSideDepth(
+      observeKalshiOrderBook(resting.contractId), resting.side,
+      resting.issuanceBidPrice ?? resting.bidPrice, resting.issuanceAskPrice ?? resting.askPrice,
+      resting.initialSubmittedPrice,
+    ));
+  }
   ledger.paperBudget.availableCents -= resting.stakeCents;
   ledger.orders.push(resting);
   return true;
@@ -812,18 +846,30 @@ async function executePreparedLiveBuy(order: PaperOrder, status: TradingControlD
   }
   try {
     const onAccepted = async (venueOrderId: string) => { order.venueOrderId = venueOrderId; await writeLedger(ledger); };
+    const onObservation = async (observation: NonNullable<PaperOrder['entryExecutionObservations']>[number]) => {
+      order.entryExecutionObservations = [...(order.entryExecutionObservations ?? []), observation];
+      if (order.initialSubmittedPrice === undefined && observation.event === 'create_quote' && observation.limitPrice !== undefined) {
+        order.initialSubmittedPrice = observation.limitPrice;
+      }
+      // No I/O here: telemetry must not alter the managed order's quote/amend/cancel timing. The
+      // completed path is persisted with the terminal result; accepted venue identity remains the
+      // separately awaited crash-recovery boundary.
+    };
+    const approvedMaximumPrice = order.approvedMaximumPrice ?? order.askPrice;
     const fill = executionStyle === 'taker'
       ? await placeKalshiTakerBuy({
-        ticker: order.contractId, positionSide: order.side, maximumPriceCents: order.askPrice * 100,
-        count: order.quantity, clientOrderId: order.clientOrderId ?? order.id, onAccepted,
+        ticker: order.contractId, positionSide: order.side, maximumPriceCents: approvedMaximumPrice * 100,
+        count: order.quantity, clientOrderId: order.clientOrderId ?? order.id, onAccepted, onObservation,
       })
       : await placeKalshiBuy({
-        ticker: order.contractId, positionSide: order.side, priceCents: order.askPrice * 100, startPriceCents: order.bidPrice * 100,
-        count: order.quantity, clientOrderId: order.clientOrderId ?? order.id, onAccepted,
+        ticker: order.contractId, positionSide: order.side, priceCents: approvedMaximumPrice * 100,
+        startPriceCents: (order.issuanceBidPrice ?? order.bidPrice) * 100,
+        count: order.quantity, clientOrderId: order.clientOrderId ?? order.id, onAccepted, onObservation,
       });
     order.venueOrderId = fill.venueOrderId;
     order.filledCount = fill.filledCount;
     order.liquidityRole = fill.liquidityRole;
+    order.entryExecutionObservations = fill.executionObservations;
     const reservedCents = order.stakeCents;
     if (fill.filledCount > 0) {
       const actualPurchaseCents = fill.filledCount * fill.averagePriceCents;
@@ -831,7 +877,7 @@ async function executePreparedLiveBuy(order: PaperOrder, status: TradingControlD
       const accountedStakeCents = Math.ceil(exactStakeCents - 1e-9);
       if (accountedStakeCents > reservedCents || exactStakeCents > status.proposedStakeCents + 1e-9) throw new Error(`Kalshi fill cost ${exactStakeCents.toFixed(4)}c exceeded the ${status.proposedStakeCents}c all-in purchase cap.`);
       order.quantity = fill.filledCount;
-      order.askPrice = fill.averagePriceCents / 100;
+      order.authoritativeFillPrice = fill.averagePriceCents / 100;
       order.feeCents = fill.feeCents;
       order.actualPurchaseCents = actualPurchaseCents;
       order.actualFeeCents = fill.feeCents;
@@ -904,8 +950,24 @@ function applyExitObservation(order: PaperOrder, prediction: Prediction, observe
   order.peakObservedAt = decision.peakObservedAt;
   order.latestNetLiquidationCents = decision.netLiquidationCents;
   order.latestNetProfitPercent = decision.netProfitPercent;
-  order.latestOwnedSideProbability = sideProbability(prediction, order.side);
+  const ownedSideProbability = sideProbability(prediction, order.side);
+  order.latestOwnedSideProbability = ownedSideProbability;
   order.latestExitObservationAt = observedAt;
+  const depth = order.venue === 'kalshi'
+    ? selectedSideDepth(observeKalshiOrderBook(order.contractId), order.side, quote.bid, quote.ask) : {};
+  const exactCostCents = order.actualStakeCents ?? order.stakeCents;
+  if (!order.positionObservations?.some((observation) => observation.at === observedAt)) {
+    order.positionObservations = [...(order.positionObservations ?? []), {
+      at: observedAt, selectedBid: quote.bid, selectedAsk: quote.ask, spread: quote.ask - quote.bid,
+      bestBidDepth: depth.bestBidDepth, bestAskDepth: depth.bestAskDepth, depthImbalance: depth.depthImbalance,
+      netLiquidationCents: decision.netLiquidationCents, exitFeeCents: decision.exitFeeCents,
+      exactCostCents, unrealizedPnlCents: decision.netLiquidationCents - exactCostCents,
+      unrealizedReturn: exactCostCents > 0 ? (decision.netLiquidationCents - exactCostCents) / exactCostCents : 0,
+      ownedSideProbability, confidence: prediction.confidence,
+      basisPercent: prediction.basis?.basisPercent, cycleRegime: prediction.cycleRegime?.regime,
+      secondsRemaining: Math.max(0, (Date.parse(order.closesAt) - Date.parse(observedAt)) / 1_000),
+    }];
+  }
   return decision;
 }
 
@@ -969,7 +1031,7 @@ async function executeLiveStandaloneExit(order: PaperOrder, decision: NonNullabl
           ...order, id: `${order.id}:exit:${exit.venueOrderId}`, status: 'sold',
           quantity: exit.filledCount, filledCount: exit.filledCount, stakeCents: releasedStake,
           actualStakeCents: soldActualStake,
-          actualPurchaseCents: (order.actualPurchaseCents ?? order.askPrice * originalQuantity * 100) * soldRatio,
+          actualPurchaseCents: (order.actualPurchaseCents ?? entryFillPrice(order) * originalQuantity * 100) * soldRatio,
           actualFeeCents: (order.actualFeeCents ?? order.feeCents) * soldRatio,
           potentialPayoutCents: Math.round(exit.filledCount * 100), exitPending: false,
           exitVenueOrderId: exit.venueOrderId, exitPrice: exit.averagePriceCents / 100, exitFeeCents: exit.feeCents,
@@ -980,7 +1042,7 @@ async function executeLiveStandaloneExit(order: PaperOrder, decision: NonNullabl
         };
         order.quantity = Number((originalQuantity - exit.filledCount).toFixed(2));
         order.filledCount = order.quantity;
-        order.actualPurchaseCents = (order.actualPurchaseCents ?? order.askPrice * originalQuantity * 100) * (1 - soldRatio);
+        order.actualPurchaseCents = (order.actualPurchaseCents ?? entryFillPrice(order) * originalQuantity * 100) * (1 - soldRatio);
         order.actualFeeCents = (order.actualFeeCents ?? order.feeCents) * (1 - soldRatio);
         order.actualStakeCents = remainingActualStake;
         order.stakeCents = remainingReserved;
@@ -1018,14 +1080,14 @@ async function executeLiveStandaloneExit(order: PaperOrder, decision: NonNullabl
 async function observeAndExecuteStandaloneExits(dashboard: DashboardData, status: TradingControlData, ledger: Ledger): Promise<boolean> {
   if (!isFreshCalculationTimestamp(dashboard.generatedAt)) return false;
   let changed = false;
-  for (const order of ledger.orders.filter((item) => item.status === 'open' && !item.standaloneExitAttemptedAt)) {
+  for (const order of ledger.orders.filter((item) => item.status === 'open')) {
     const prediction = dashboard.predictions.find((item) => item.symbol === order.symbol
       && (order.venue === 'kalshi' ? item.kalshi?.closesAt === order.closesAt : item.market.closesAt === order.closesAt));
     if (!prediction) continue;
     const decision = applyExitObservation(order, prediction, dashboard.generatedAt);
     if (!decision) continue;
     changed = true;
-    if (decision.action !== 'SELL') continue;
+    if (order.standaloneExitAttemptedAt || decision.action !== 'SELL') continue;
     if (order.executionMode === 'paper') executePaperStandaloneExit(order, decision, ledger);
     else if (status.control.state === 'active' && status.control.mode === 'live' && status.liveRisk.allowed
       && getKalshiReconciliationStatus().phase === 'ready'
@@ -1140,11 +1202,11 @@ async function executeSwitch(plan: SwitchPlan, status: TradingControlData, ledge
       // IOC may partially fill. Allocate entry cost proportionally, preserve the remaining position,
       // release only whole cents no longer needed, and never buy the replacement after a partial exit.
       const soldRatio = exit.filledCount / originalQuantity;
-      const soldActualPurchase = (incumbent.actualPurchaseCents ?? incumbent.askPrice * originalQuantity * 100) * soldRatio;
+      const soldActualPurchase = (incumbent.actualPurchaseCents ?? entryFillPrice(incumbent) * originalQuantity * 100) * soldRatio;
       const soldActualFee = (incumbent.actualFeeCents ?? incumbent.feeCents) * soldRatio;
       const soldActualStake = soldActualPurchase + soldActualFee;
       const remainingQuantity = Number((originalQuantity - exit.filledCount).toFixed(2));
-      const remainingActualPurchase = (incumbent.actualPurchaseCents ?? incumbent.askPrice * originalQuantity * 100) - soldActualPurchase;
+      const remainingActualPurchase = (incumbent.actualPurchaseCents ?? entryFillPrice(incumbent) * originalQuantity * 100) - soldActualPurchase;
       const remainingActualFee = (incumbent.actualFeeCents ?? incumbent.feeCents) - soldActualFee;
       const remainingActualStake = remainingActualPurchase + remainingActualFee;
       const remainingReservedCents = Math.ceil(remainingActualStake - 1e-9);
@@ -1534,7 +1596,8 @@ export async function getExecutionOrders(): Promise<PaperOrder[]> {
 function publicPaperExecution(order: PaperOrder): PublicPaperExecutionRecord {
   return {
     symbol: order.symbol, venue: order.venue, side: order.side, status: order.status,
-    createdAt: order.createdAt, closesAt: order.closesAt, askPrice: order.askPrice,
+    createdAt: order.createdAt, closesAt: order.closesAt,
+    askPrice: order.issuanceAskPrice ?? order.entryDecision?.actionableAsk ?? order.askPrice,
     quantity: order.quantity, stakeCents: order.actualStakeCents ?? order.stakeCents,
     feeCents: order.actualFeeCents ?? order.feeCents,
     pnlCents: order.actualPnlCents ?? order.pnlCents, outcome: order.outcome,

@@ -105,9 +105,9 @@ function returnAtPrice(order: PaperOrder, price: number): number | null {
  * forecast outcomes.
  */
 const executedAsMaker = (order: PaperOrder) => order.liquidityRole === 'maker';
-const askPriceFor = (order: PaperOrder): number => executedAsMaker(order)
-  ? order.bidPrice + (order.spread ?? 0)
-  : order.askPrice;
+const askPriceFor = (order: PaperOrder): number => order.issuanceAskPrice
+  ?? order.entryDecision?.actionableAsk
+  ?? (executedAsMaker(order) ? order.bidPrice + (order.spread ?? 0) : order.askPrice);
 
 function makerReturnFor(order: PaperOrder): number | null {
   const bid = order.bidPrice;

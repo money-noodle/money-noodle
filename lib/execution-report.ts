@@ -5,13 +5,14 @@ const settledStatuses = new Set(['won', 'lost', 'invalid', 'sold']);
 
 const actualStake = (order: PaperOrder) => order.actualStakeCents ?? order.stakeCents;
 const actualPnl = (order: PaperOrder) => order.actualPnlCents ?? order.pnlCents ?? 0;
+const issuanceAsk = (order: PaperOrder) => order.issuanceAskPrice ?? order.entryDecision?.actionableAsk ?? order.askPrice;
 
 /** Expected value the order was placed on, recovered from the fill terms recorded at entry. */
 function predictedEdge(order: PaperOrder): number {
   const fee = order.actualFeeCents ?? order.feeCents;
   const feeRate = order.potentialPayoutCents ? fee / order.potentialPayoutCents : 0;
   const probability = order.side === 'UP' ? order.modelProbabilityUp : 1 - order.modelProbabilityUp;
-  return probability - order.askPrice - feeRate;
+  return order.entryDecision?.netEdge ?? probability - issuanceAsk(order) - feeRate;
 }
 
 /** Cash returned per $1 staked, which is the only definition of success that pays. */
@@ -182,7 +183,7 @@ export function buildMakerFillReport(orders: PaperOrder[], forecasts: TrackedFor
   const groupedSegments: Array<[MakerExecutionSegment['dimension'], (order: PaperOrder) => string | null]> = [
     ['Direction', (order) => order.side],
     ['Attempt', (order) => `attempt ${order.attemptNumber ?? 1}`],
-    ['Entry price', (order) => order.askPrice < 0.1 ? '<10¢' : order.askPrice < 0.25 ? '10–25¢' : order.askPrice < 0.5 ? '25–50¢' : '50¢+'],
+    ['Entry price', (order) => issuanceAsk(order) < 0.1 ? '<10¢' : issuanceAsk(order) < 0.25 ? '10–25¢' : issuanceAsk(order) < 0.5 ? '25–50¢' : '50¢+'],
     ['Quote distance', (order) => !order.makerFillEstimate ? null : order.makerFillEstimate.quoteDistance < 0.005 ? '<0.5¢' : order.makerFillEstimate.quoteDistance <= 0.01 ? '0.5–1¢' : order.makerFillEstimate.quoteDistance <= 0.02 ? '1–2¢' : '2¢+'],
     ['Quote volatility', (order) => !order.makerFillEstimate ? null : order.makerFillEstimate.quoteVolatilityPerSecond * 100 < 0.5 ? '<0.5¢/s' : order.makerFillEstimate.quoteVolatilityPerSecond * 100 < 1 ? '0.5–1¢/s' : order.makerFillEstimate.quoteVolatilityPerSecond * 100 < 2 ? '1–2¢/s' : '2¢+/s'],
   ];
@@ -211,6 +212,14 @@ export function buildMakerFillReport(orders: PaperOrder[], forecasts: TrackedFor
     const value = outcome ? makerReturn(order, outcome, true) : null;
     return value === null ? [] : [value];
   });
+  const auditedAttempts = makerEntries.filter((order) => order.entryExecutionObservations?.length);
+  const depthObservations = auditedAttempts.flatMap((order) => order.entryExecutionObservations ?? [])
+    .filter((observation) => observation.displayedAhead !== undefined);
+  const cancellationObservations = auditedAttempts.flatMap((order) => order.entryExecutionObservations ?? [])
+    .filter((observation) => observation.cancellationLatencyMs !== undefined);
+  const restingObservations = auditedAttempts.flatMap((order) => order.entryExecutionObservations ?? [])
+    .filter((observation) => observation.restingDurationMs !== undefined);
+  const lifecycleOrders = orders.filter((order) => order.executionMode === 'live' && order.positionObservations?.length);
   return {
     adaptiveExecution: {
       policyVersion: shadowEvaluations.at(-1)?.entryExecutionDecision?.policyVersion ?? 'maker-taker-adaptive-shadow-v1',
@@ -243,6 +252,20 @@ export function buildMakerFillReport(orders: PaperOrder[], forecasts: TrackedFor
     meanFilledReturn: filledReturns.length ? filledReturns.reduce((sum, value) => sum + value, 0) / filledReturns.length : null,
     meanAcceptedNoFillCounterfactualReturn: noFillReturns.length ? noFillReturns.reduce((sum, value) => sum + value, 0) / noFillReturns.length : null,
     pairedReturnGap: pairedReturns.mean, pairedReturnGapStandardError: pairedReturns.standardError,
+    executionAudit: {
+      attemptsWithPath: auditedAttempts.length,
+      attemptsWithDepth: auditedAttempts.filter((order) => order.entryExecutionObservations?.some((item) => item.displayedAhead !== undefined)).length,
+      repricedAttempts: auditedAttempts.filter((order) => order.entryExecutionObservations?.some((item) => item.event === 'amend_accepted')).length,
+      meanDisplayedAhead: depthObservations.length
+        ? depthObservations.reduce((sum, item) => sum + item.displayedAhead!, 0) / depthObservations.length : null,
+      cancellationsObserved: cancellationObservations.length,
+      meanCancellationLatencyMs: cancellationObservations.length
+        ? cancellationObservations.reduce((sum, item) => sum + item.cancellationLatencyMs!, 0) / cancellationObservations.length : null,
+      meanRestingDurationMs: restingObservations.length
+        ? restingObservations.reduce((sum, item) => sum + item.restingDurationMs!, 0) / restingObservations.length : null,
+      positionsObserved: lifecycleOrders.length,
+      positionSnapshots: lifecycleOrders.reduce((sum, order) => sum + (order.positionObservations?.length ?? 0), 0),
+    },
     segments,
   };
 }
@@ -335,7 +358,7 @@ export function buildTradeRecord(orders: PaperOrder[], mode: ExecutionMode): Tra
       group('Asset', 'Which markets paid', settled, (order) => order.symbol),
       group('Direction', 'Which binary side was purchased', settled, (order) => order.side),
       group('Venue', 'Where the fill happened', settled, (order) => order.venue),
-      group('Entry price', 'Cheap entries are where model error dominates', settled, (order) => priceBand(order.askPrice)),
+      group('Entry price', 'Cheap entries are where model error dominates', settled, (order) => priceBand(issuanceAsk(order))),
       group('Time to settlement', 'Later entries are more predictable', settled, timeBand),
     ] : [],
   };
