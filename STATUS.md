@@ -24,9 +24,10 @@ The system is mechanically capable. The unresolved question is economic: current
 Snapshot from local durable files on 2026-08-14:
 
 - Forecast history: 48,291 rows, 28,291 qualifying rows, 27,625 resolved qualifying rows, 2,191 resolved asset-cycles, and 463 resolved qualifying close windows.
-- Live ledger lifetime: 819 non-exit orders, 395 settled entries, 229 settled windows, -33.27 cents realized P&L on 12,049.56 cents stake, 0 open and 0 working orders, 420 unfilled entries.
-- Paper ledger lifetime: 779 non-exit orders, 746 settled entries, 332 settled windows, +366.70 cents realized P&L on 27,600 cents stake, 0 open and 0 working orders, 33 unfilled entries.
-- Current live budget control: active, live mode, 2,000 cents starting budget, 911 cents available, 0 reserved, -1,089 cents current-epoch realized P&L, 2,000 cents peak-equity reference.
+- Live ledger lifetime: 821 non-exit orders, 396 settled entries, 230 settled windows, -112.11 cents exact realized P&L on 12,128.40 cents exact stake, 1 open and 0 working orders, 420 unfilled entries.
+- Paper ledger lifetime: 781 non-exit orders, 746 settled entries, 332 settled windows, +366.70 cents exact realized P&L on 27,600 cents stake, 0 open and 0 working orders, 35 unfilled entries.
+- Current live budget control: active, live mode, 2,000 cents starting budget, 679 cents available, 171 cents reserved, -1,150 cents current-epoch whole-cent realized P&L, 2,000 cents peak-equity reference.
+- Budget audit: live control roll-forward matches the durable budget audit and current open reservation exactly. The 2026-08-14 BNB partial-exit chain is balanced: 200c reserved, 13c released, 108c partial exit settled for 126c, and the 79c remainder settled for 0c. Paper spendable budget matches the current reset epoch using whole-cent `pnlCents`; exact sold-exit `payoutCents` remain a reporting/accounting view and explain the apparent lifetime difference.
 - Latest walk-forward run: `walk-forward:500:fnv1a-26981834`, generated 2026-08-14T17:26:16.618Z, 500 checkpoint windows, decision `baseline_retained`. Candidate mean window return was 3.07% versus baseline 3.89%; candidate had 3 positive folds and beat baseline in 3 folds, below promotion criteria.
 - Forecast storage remains the dominant cadence risk: `data/forecast-history.json` is 228.8 MB and `data/forecast-history.journal.jsonl` is 39.1 MB. Full parse/stringify work can still block the event loop for seconds.
 
