@@ -453,6 +453,8 @@ Planned repository boundaries:
 - `OrderAuditRepository`
 - `ResearchSessionRepository`
 
+The single-array forecast snapshot has reached the point where reading it whole blocks the event loop: 47,536 rows and 213.6 MB, parsed synchronously for about ten seconds, which is long enough to make a 15-second calculation late. Nothing on that path needs the resolved rows — a resolved row is immutable, and the cycle needs only unresolved rows plus lifetime aggregates. `ForecastRepository` therefore splits into a small hot set, sealed immutable daily shards, and per-shard rollups that make lifetime performance a sum rather than a scan, with all shard parsing behind a worker so no file size can hold the loop. Shrinking the file was measured and rejected as insufficient: de-duplication reaches 176.3 MB and roughly eight seconds, which still does not fit the window. Retention is deliberately unchanged by that work — making unbounded history affordable is not the same decision as choosing what to discard. See [`docs/forecast-storage-design.md`](docs/forecast-storage-design.md).
+
 ### MongoDB migration
 
 Replace repository implementations without changing domain/services. Add TTL indexes for raw cache records and durable collections for forecasts, outcomes, trades, and audit events. Credentials do **not** belong in MongoDB documents in plaintext.
