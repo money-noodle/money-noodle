@@ -256,12 +256,6 @@ export function buildPrediction(coin: CoinSnapshot, market: MarketQuote | undefi
   const independentLogOdds = weighted.filter((item) => item.factor.id !== 'market').reduce((sum, item) => sum + item.logOdds, 0);
   const totalLogOdds = weighted.reduce((sum, item) => sum + item.logOdds, 0);
   const probability = clampProbability(sigmoid(independentLogOdds), 0.03, 0.97);
-  const calibrationReplay = createCalibrationReplaySnapshot({
-    basis,
-    slowTiltLogOdds: tiltLogOdds,
-    slowTerms: tilts.map((item) => ({ id: item.factor.id, logOdds: item.logOdds * tiltScaling })),
-    productionProbabilityUp: probability,
-  });
   const blendedProbabilityUp = clampProbability(sigmoid(totalLogOdds), 0.03, 0.97);
   // Each contribution is the exact marginal effect of removing that term from the blended reference.
   for (const item of weighted) item.factor.contribution = (blendedProbabilityUp - clampProbability(sigmoid(totalLogOdds - item.logOdds), 0.03, 0.97)) * 100;
@@ -279,6 +273,23 @@ export function buildPrediction(coin: CoinSnapshot, market: MarketQuote | undefi
       + Math.min(0.04, range / 60),
   };
   const confidence = clamp(confidenceBreakdown.base + confidenceBreakdown.dataQuality + confidenceBreakdown.sampleQuality - confidenceBreakdown.uncertaintyPenalty, 0.25, 0.86);
+  // Persisted after confidence exists so the snapshot carries the exact inputs it was computed from,
+  // and can verify its own replay against the value production actually used.
+  const calibrationReplay = createCalibrationReplaySnapshot({
+    basis,
+    slowTiltLogOdds: tiltLogOdds,
+    slowTerms: tilts.map((item) => ({ id: item.factor.id, logOdds: item.logOdds * tiltScaling })),
+    productionProbabilityUp: probability,
+    confidence: {
+      productionConfidence: confidence,
+      input: {
+        basisPresent: Boolean(basis),
+        venueProbabilityCount: liveVenueProbabilities.length,
+        volatilitySamples: basis?.volatilitySamples ?? 0,
+        secondsRemaining, rangePercent: range,
+      },
+    },
+  });
   const targetComparison = quote.contract && kalshi?.contract
     ? compareContractTargets(quote.contract, kalshi.contract) : undefined;
   const prediction: Prediction = {

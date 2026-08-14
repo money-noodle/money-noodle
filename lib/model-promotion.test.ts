@@ -18,6 +18,7 @@ const run = (over: Partial<WalkForwardEvaluationRun> = {}): WalkForwardEvaluatio
   id: 'run-1', policyVersion: 'p', generatedAt: '2026-08-13T00:00:00Z', checkpointWindows: 425,
   datasetFingerprint: 'fnv', datasetStartsAt: 'a', datasetEndsAt: 'b',
   exactReplayObservations: 900, reconstructedReplayObservations: 0, maximumBaselineReplayError: 0.001,
+  exactConfidenceReplayObservations: 900, absentConfidenceReplayObservations: 0, maximumConfidenceReplayError: 0,
   folds: [], baseline: { windows: 100, observations: 900, trades: 70, winningTrades: 20, meanWindowReturn: 0.02, brierScore: 0.2, logLoss: 0.6, maximumDrawdown: 0.2 },
   candidate: { windows: 100, observations: 900, trades: 80, winningTrades: 30, meanWindowReturn: 0.06, brierScore: 0.19, logLoss: 0.58, maximumDrawdown: 0.18 },
   recommendedParameters: parameters, parameterSelectionCounts: [],

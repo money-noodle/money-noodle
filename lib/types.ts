@@ -391,9 +391,32 @@ export interface MakerFillEstimate {
   cohortFillRate?: number | null;
 }
 
+/**
+ * Everything production's estimate-quality expression reads, so a candidate can recompute quality
+ * instead of inheriting the number production already produced.
+ */
+export interface ConfidenceReplayInput {
+  basisPresent: boolean;
+  /** Only presence changes the score today, but the count is what production actually observed. */
+  venueProbabilityCount: number;
+  volatilitySamples: number;
+  secondsRemaining: number;
+  /** 24-hour high-low spread as a percent of price. */
+  rangePercent: number;
+}
+
 export interface CalibrationReplaySnapshot {
   version: 'calibration-replay-v1';
   source: 'issuance-exact' | 'historical-reconstruction';
+  /**
+   * Quality replay is tracked separately from probability replay because it began later: rows issued
+   * before it existed carry `absent` rather than a reconstruction, since quality cannot be inverted
+   * from its output uniquely the way the basis z-score can.
+   */
+  confidenceSource?: 'issuance-exact' | 'absent';
+  confidenceInput?: ConfidenceReplayInput;
+  productionConfidence?: number;
+  confidenceReplayError?: number;
   basisInput?: {
     referencePrice: number;
     currentPrice: number;
@@ -765,6 +788,14 @@ export interface WalkForwardEvaluationRun {
   exactReplayObservations: number;
   reconstructedReplayObservations: number;
   maximumBaselineReplayError: number;
+  /**
+   * Quality-replay coverage, reported separately from probability coverage. Until this reaches the
+   * whole dataset, a candidate that changes how quality is computed can only be scored on the rows
+   * that carry exact inputs — the rest inherit production's quality and cannot test a replacement.
+   */
+  exactConfidenceReplayObservations: number;
+  absentConfidenceReplayObservations: number;
+  maximumConfidenceReplayError: number;
   folds: WalkForwardFold[];
   baseline: WalkForwardScore;
   candidate: WalkForwardScore;

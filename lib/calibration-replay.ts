@@ -1,9 +1,64 @@
 import { basisProbability, clampProbability, logit, normalCdf, normalInverseCdf, sigmoid } from './basis-model';
-import type { CalibrationReplaySnapshot, ContractBasis, TrackedForecast, WalkForwardParameters } from './types';
+import type { CalibrationReplaySnapshot, ConfidenceReplayInput, ContractBasis, TrackedForecast, WalkForwardParameters } from './types';
 
 export const CALIBRATION_REPLAY_VERSION = 'calibration-replay-v1';
 export const PRODUCTION_BASIS_LOG_ODDS_WEIGHT = 0.55;
 export const PRODUCTION_PROBABILITY_CAP = 0.03;
+
+/**
+ * Estimate quality as an explicit parameter set rather than an expression.
+ *
+ * `clockPenaltyMax` over `clockHorizonSeconds` is the implicit elapsed-time lift: the penalty decays as
+ * a window runs down, so quality rises on the clock alone by up to that much. Because quality gates
+ * entry at 50%, that decay decides which late-window trades pass. Naming it here does not change it —
+ * these values reproduce production exactly — but it makes a replacement expressible and scorable,
+ * which it was not while the numbers lived inside one expression.
+ */
+export interface ConfidenceParameters {
+  base: number;
+  basisBonus: number;
+  venueBonus: number;
+  sampleQualityMax: number;
+  sampleQualitySamples: number;
+  clockPenaltyMax: number;
+  clockHorizonSeconds: number;
+  missingBasisPenalty: number;
+  rangePenaltyMax: number;
+  rangePenaltyDivisor: number;
+  floor: number;
+  ceiling: number;
+}
+
+export const PRODUCTION_CONFIDENCE_PARAMETERS: ConfidenceParameters = {
+  base: 0.30,
+  basisBonus: 0.20,
+  venueBonus: 0.04,
+  sampleQualityMax: 0.22,
+  sampleQualitySamples: 60,
+  clockPenaltyMax: 0.12,
+  clockHorizonSeconds: 900,
+  missingBasisPenalty: 0.16,
+  rangePenaltyMax: 0.04,
+  rangePenaltyDivisor: 60,
+  floor: 0.25,
+  ceiling: 0.86,
+};
+
+const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value));
+
+/**
+ * Reproduces production's estimate quality from the inputs it read. Verified against the stored
+ * production value at issuance, the same contract the probability replay holds itself to.
+ */
+export function replayConfidence(input: ConfidenceReplayInput, parameters: ConfidenceParameters = PRODUCTION_CONFIDENCE_PARAMETERS): number {
+  const dataQuality = (input.basisPresent ? parameters.basisBonus : 0) + (input.venueProbabilityCount ? parameters.venueBonus : 0);
+  const sampleQuality = input.basisPresent
+    ? Math.min(1, input.volatilitySamples / parameters.sampleQualitySamples) * parameters.sampleQualityMax : 0;
+  const uncertaintyPenalty = Math.min(parameters.clockPenaltyMax, (input.secondsRemaining / parameters.clockHorizonSeconds) * parameters.clockPenaltyMax)
+    + (input.basisPresent ? 0 : parameters.missingBasisPenalty)
+    + Math.min(parameters.rangePenaltyMax, input.rangePercent / parameters.rangePenaltyDivisor);
+  return clamp(parameters.base + dataQuality + sampleQuality - uncertaintyPenalty, parameters.floor, parameters.ceiling);
+}
 
 export const PRODUCTION_REPLAY_PARAMETERS: Pick<WalkForwardParameters, 'temperature' | 'basisWeight' | 'volatilityScale' | 'slowTiltScale' | 'probabilityCap'> = {
   temperature: 1,
@@ -43,10 +98,16 @@ export function createCalibrationReplaySnapshot(input: {
   slowTiltLogOdds: number;
   slowTerms: Array<{ id: string; logOdds: number }>;
   productionProbabilityUp: number;
+  confidence?: { input: ConfidenceReplayInput; productionConfidence: number };
 }): CalibrationReplaySnapshot {
   const snapshot: CalibrationReplaySnapshot = {
     version: CALIBRATION_REPLAY_VERSION,
     source: 'issuance-exact',
+    confidenceSource: input.confidence ? 'issuance-exact' : 'absent',
+    confidenceInput: input.confidence?.input,
+    productionConfidence: input.confidence?.productionConfidence,
+    confidenceReplayError: input.confidence
+      ? Math.abs(replayConfidence(input.confidence.input) - input.confidence.productionConfidence) : undefined,
     basisInput: input.basis ? {
       referencePrice: input.basis.referencePrice,
       currentPrice: input.basis.currentPrice,
@@ -75,6 +136,10 @@ export function calibrationReplayForForecast(forecast: TrackedForecast): Calibra
   const snapshot: CalibrationReplaySnapshot = {
     version: CALIBRATION_REPLAY_VERSION,
     source: 'historical-reconstruction',
+    // Quality is deliberately not reconstructed. Its inputs include a venue count and a 24-hour range
+    // that were never stored, and one recorded quality value cannot identify two unknown terms — any
+    // value produced here would be invented, not recovered.
+    confidenceSource: 'absent',
     baselineBasisProbability: basisProbability,
     basisLogOddsWeight: PRODUCTION_BASIS_LOG_ODDS_WEIGHT,
     slowTiltLogOdds,
