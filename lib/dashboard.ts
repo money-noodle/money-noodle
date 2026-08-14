@@ -428,9 +428,8 @@ export function publicDashboardData(dashboard: DashboardData): PublicDashboardDa
  */
 const PREFETCH_LEAD_MS = 7_000;
 const REFRESH_AFTER_MS = DATA_FRESHNESS.dashboardPollMs - PREFETCH_LEAD_MS;
-/** Floor between builds, so a build slower than the whole lead cannot spin the loop back-to-back. */
-const MIN_REBUILD_SPACING_MS = 1_000;
-let lastBuildDurationMs = 0;
+/** Hard floor between builds, so no future scheduling change can turn this into a hot loop. */
+const MIN_REBUILD_SPACING_MS = 5_000;
 
 const dashboardAge = () => latestDashboard ? Date.now() - Date.parse(latestDashboard.generatedAt) : Number.POSITIVE_INFINITY;
 
@@ -440,7 +439,10 @@ function startDashboardBuild(force: boolean, liveOnly: boolean): Promise<Dashboa
   buildInFlight ??= buildDashboard(force, liveOnly)
     .then((dashboard) => { latestDashboard = dashboard; return dashboard; })
     .finally(() => {
-      lastBuildDurationMs = Date.now() - started;
+      const elapsed = Date.now() - started;
+      // A build slower than the window it serves means the cycle cannot keep up; say so rather than
+      // silently rebuilding faster and consuming the capacity that reconciliation needs.
+      if (elapsed > DATA_FRESHNESS.dashboardPollMs) console.warn(`Dashboard build took ${elapsed}ms, longer than the ${DATA_FRESHNESS.dashboardPollMs}ms window.`);
       buildInFlight = undefined;
       scheduleDashboardPrefetch();
     });
@@ -455,10 +457,13 @@ function startDashboardBuild(force: boolean, liveOnly: boolean): Promise<Dashboa
  */
 function scheduleDashboardPrefetch(): void {
   if (isStatelessDeployment() || prefetchTimer) return;
-  // Timed so the next result lands before the current one expires, not so the next one starts a fixed
-  // gap after the last finished. Waiting a full lead after a slow build pushed the completion-to-
-  // completion period out past the freshness window — the delay has to absorb the build, not follow it.
-  const delay = Math.max(MIN_REBUILD_SPACING_MS, REFRESH_AFTER_MS - lastBuildDurationMs);
+  // A fixed gap after the previous build, deliberately not shortened by how long that build took.
+  // Subtracting the build duration to "catch up" inverts under load: once a build exceeds the lead the
+  // delay collapses to its floor, so the server rebuilds continuously, which saturates the CPU and
+  // makes builds slower still. That loop pegged a machine for nine hours and starved Kalshi
+  // reconciliation of event-loop time until it timed out and suspended live trading. When builds are
+  // slower than the window, the correct response is to fall behind, not to spin.
+  const delay = Math.max(MIN_REBUILD_SPACING_MS, REFRESH_AFTER_MS);
   prefetchTimer = setTimeout(() => {
     prefetchTimer = undefined;
     void startDashboardBuild(false, false).catch((error) => console.error('Dashboard prefetch failed:', error));
