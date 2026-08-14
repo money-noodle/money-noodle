@@ -999,6 +999,8 @@ export interface PaperOrder {
   makerFillEstimate?: MakerFillEstimate;
   /** Paper maker simulation: the order rests until this instant, then goes unfilled. */
   restingUntil?: string;
+  /** When a maker attempt became terminal; retry cooldown starts after cancellation, not submission. */
+  makerCompletedAt?: string;
   settlementAverageEstimate?: SettlementAverageEstimate;
   askPrice: number;
   bidPrice: number;

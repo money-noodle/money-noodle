@@ -51,6 +51,7 @@ describe('paper maker simulation', () => {
     expect(resolveRestingPaperOrders(dashboard(0.48), ledger)).toBe(true);
     expect(ledger.orders[0].status).toBe('unfilled');
     expect(ledger.orders[0].noFillReason).toBe('rested_no_fill');
+    expect(ledger.orders[0].makerCompletedAt).toBeDefined();
     // An unfilled attempt must cost the mirror nothing but the opportunity.
     expect(ledger.paperBudget.availableCents).toBe(1000 + stale.stakeCents);
   });

@@ -23,6 +23,12 @@ describe('bounded maker retry policy', () => {
     expect(result).toMatchObject({ allowed: true, attemptNumber: 2, retryOfOrderId: logical });
   });
 
+  it('starts the cooldown after the maker attempt completes, not when it was submitted', () => {
+    const completed = order({ makerCompletedAt: '2026-01-01T00:01:20Z' });
+    expect(makerRetryDecision([completed], Date.parse('2026-01-01T00:01:40Z'), close).allowed).toBe(false);
+    expect(makerRetryDecision([completed], Date.parse('2026-01-01T00:01:50Z'), close)).toMatchObject({ allowed: true, attemptNumber: 2 });
+  });
+
   it('supports a one-attempt live validation cap without removing the two-attempt hard ceiling', () => {
     const result = makerRetryDecision([order()], Date.parse('2026-01-01T00:02:00Z'), close, 1);
     expect(result.allowed).toBe(false);
@@ -41,10 +47,13 @@ describe('bounded maker retry policy', () => {
     expect(makerRetryDecision([order(), retry], Date.parse('2026-01-01T00:03:00Z'), close).reason).toContain('Maximum 2');
   });
 
-  it('finds historical first attempts and excludes copied exit records', () => {
+  it('finds attempts for the requested track and excludes copied exit records', () => {
     const retry = order({ id: `${logical}:retry:2`, attemptNumber: 2, createdAt: '2026-01-01T00:02:00Z' });
     const exit = order({ id: `${logical}:exit:venue`, status: 'sold' });
     const unrelated = order({ id: 'live:ETH:other', logicalOrderId: 'live:ETH:other', symbol: 'ETH' });
-    expect(entryAttemptsForLogicalOrder([unrelated, exit, retry, order({ logicalOrderId: undefined })], logical).map((item) => item.id)).toEqual([logical, `${logical}:retry:2`]);
+    const paperLogical = logical.replace('live:', 'paper:');
+    const paper = order({ id: paperLogical, logicalOrderId: paperLogical, executionMode: 'paper' });
+    expect(entryAttemptsForLogicalOrder([unrelated, exit, retry, paper, order({ logicalOrderId: undefined })], logical).map((item) => item.id)).toEqual([logical, `${logical}:retry:2`]);
+    expect(entryAttemptsForLogicalOrder([paper, order()], paperLogical, 'paper').map((item) => item.id)).toEqual([paperLogical]);
   });
 });

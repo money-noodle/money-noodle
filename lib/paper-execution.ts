@@ -171,6 +171,7 @@ const orderId = (prediction: Prediction, mode: ExecutionMode, side: PositionSide
   return generation <= 1 ? base : `${base}:reentry:${generation}`;
 };
 const liveAttempts = (ledger: Ledger, prediction: Prediction, side: PositionSide) => entryAttemptsForLogicalOrder(ledger.orders, orderId(prediction, 'live', side, ledger));
+const paperAttempts = (ledger: Ledger, prediction: Prediction, side: PositionSide) => entryAttemptsForLogicalOrder(ledger.orders, orderId(prediction, 'paper', side, ledger), 'paper');
 const reentryCooldownRemainingMs = (ledger: Ledger, prediction: Prediction, mode: ExecutionMode, side: PositionSide, nowMs = Date.now()) => {
   const sold = sideWindowOrders(ledger, prediction, mode, side).filter((order) => order.status === 'sold' && order.settledAt).at(-1);
   return sold ? Math.max(0, Date.parse(sold.settledAt!) + POST_EXIT_REENTRY_COOLDOWN_MS - nowMs) : 0;
@@ -596,6 +597,7 @@ export function resolveRestingPaperOrders(dashboard: DashboardData, ledger: Ledg
     if (expired) {
       order.status = 'unfilled';
       order.noFillReason = 'rested_no_fill';
+      order.makerCompletedAt = new Date(now).toISOString();
       ledger.paperBudget.availableCents += order.stakeCents;
       changed = true;
     }
@@ -619,12 +621,22 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
     .flatMap((prediction) => {
       const side = selectedSide(prediction);
       if (!side || !executionEligibility(prediction, side, ledger).eligible) return [];
-      if (sideWindowOrders(ledger, prediction, 'paper', side).some((order) => order.status === 'open' || order.status === 'pending_reservation')) return [];
       if (reentryCooldownRemainingMs(ledger, prediction, 'paper', side) > 0) return [];
+      // The mirror uses the same bounded-attempt policy as live. Before this check, each paper miss
+      // could be submitted again every collector tick under the same id, overstating its fill rate.
+      const logicalId = orderId(prediction, 'paper', side, ledger);
+      const retry = makerRetryDecision(paperAttempts(ledger, prediction, side), Date.now(), prediction.market.closesAt, maximumLiveMakerAttempts());
+      if (!retry.allowed) return [];
       const candidate = buildOrder(prediction, side, {
         ...status, venues: status.venues.map((readiness) => ({ ...readiness, enabled: paperProviders.has(readiness.venue) })),
       }, ledger, dashboard.generatedAt, dashboard.modelVersion, 'paper', stakeLimit);
-      return 'order' in candidate ? [{ prediction, order: candidate.order }] : [];
+      if ('reason' in candidate) return [];
+      candidate.order.logicalOrderId = logicalId;
+      candidate.order.attemptNumber = retry.attemptNumber;
+      candidate.order.retryOfOrderId = retry.retryOfOrderId;
+      candidate.order.id = makerAttemptId(logicalId, retry.attemptNumber);
+      candidate.order.clientOrderId = candidate.order.id;
+      return [{ prediction, order: candidate.order }];
     })
     // Funding is a feasibility filter applied after candidates exist, so a pair without allocation
     // headroom drops out while another provider's candidate for the same window survives.
@@ -703,6 +715,7 @@ async function executePreparedLiveBuy(order: PaperOrder, status: TradingControlD
     } else {
       order.status = 'unfilled';
       order.noFillReason = executionStyle === 'taker' ? 'ioc_no_fill' : 'rested_no_fill';
+      order.makerCompletedAt = new Date().toISOString();
       order.reason = executionStyle === 'taker'
         ? 'Marketable IOC limit received no fill and left no resting remainder; no money was spent.'
         : 'Managed post-only maker limit rested for 12 seconds but received no fill before its remainder was canceled; no money was spent.';
@@ -718,6 +731,7 @@ async function executePreparedLiveBuy(order: PaperOrder, status: TradingControlD
       ? 'Post-only acknowledgement race remained after three refreshed submissions with progressive tick backoff; Kalshi rejected it before placement and no money was spent.'
       : message;
     if (definitivePostOnlyCross || definitiveTakerSkip) {
+      order.makerCompletedAt = new Date().toISOString();
       await releaseTradingBudget(order.stakeCents, order.venue, order.id).catch(() => undefined);
     } else {
       // A transport/schema/cancellation failure is not evidence that Kalshi rejected the request.

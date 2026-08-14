@@ -1,4 +1,4 @@
-import type { PaperOrder } from './types';
+import type { ExecutionMode, PaperOrder } from './types';
 
 export const MAX_MAKER_ATTEMPTS_PER_CONTRACT = 2;
 export const MAKER_RETRY_COOLDOWN_MS = 30_000;
@@ -24,8 +24,8 @@ export function makerAttemptId(logicalOrderId: string, attemptNumber: number): s
   return attemptNumber <= 1 ? logicalOrderId : `${logicalOrderId}:retry:${attemptNumber}`;
 }
 
-export function entryAttemptsForLogicalOrder(orders: PaperOrder[], logicalOrderId: string): PaperOrder[] {
-  return orders.filter((order) => order.executionMode === 'live'
+export function entryAttemptsForLogicalOrder(orders: PaperOrder[], logicalOrderId: string, mode: ExecutionMode = 'live'): PaperOrder[] {
+  return orders.filter((order) => order.executionMode === mode
     && !order.id.includes(':exit:')
     && (order.logicalOrderId === logicalOrderId || order.id === logicalOrderId || order.id.startsWith(`${logicalOrderId}:retry:`)))
     .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
@@ -45,7 +45,10 @@ export function makerRetryDecision(attempts: PaperOrder[], nowMs: number, closes
     reason: `Maximum ${effectiveMaximum} maker attempt${effectiveMaximum === 1 ? '' : 's'} reached for this asset/contract window.`,
   };
   if (latest.status !== 'unfilled') return { allowed: false, attemptNumber: ordered.length + 1, reason: `Latest entry state ${latest.status} is not safely retryable.` };
-  const retryAtMs = Date.parse(latest.createdAt) + MAKER_RETRY_COOLDOWN_MS;
+  // Waiting from submission shortens the intended pause by however long the order spent resting.
+  // New attempts record the terminal cancellation time; legacy records retain the old fallback.
+  const completedAtMs = Date.parse(latest.makerCompletedAt ?? latest.createdAt);
+  const retryAtMs = completedAtMs + MAKER_RETRY_COOLDOWN_MS;
   if (nowMs < retryAtMs) return {
     allowed: false, attemptNumber: ordered.length + 1, retryOfOrderId: latest.id,
     reason: `Maker retry cooldown has ${Math.ceil((retryAtMs - nowMs) / 1000)}s remaining.`, retryAt: new Date(retryAtMs).toISOString(),

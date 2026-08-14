@@ -580,7 +580,8 @@ Recommended future service boundaries:
 - [x] Reconciliation, periodic-failure, guarded-recovery, and execution-drain status UI.
 - [x] Add non-auto-resumable current-budget and lifetime-live loss breakers; deploy with live paused and both limits blocking Resume on the observed ledger.
 - [x] Default live maker recovery to one attempt behind a server-side hard maximum of two.
-- [ ] Add prospective attempt-2 paper counterfactuals and require held-out manual promotion before restoring live retries.
+- [x] Apply the same bounded-attempt identity, cap, and post-cancellation cooldown to the paper mirror; record terminal maker completion so the pause starts after the remainder is canceled rather than at submission.
+- [ ] Add prospective attempt-2 paper counterfactuals in the evaluation lane and require held-out manual promotion before restoring live retries; the production mirror remains at the active one-attempt cap.
 - [ ] Complete the engine-level regression fixture for bounded post-DELETE polling and the fallback uncertain/reconciliation path; unit polling and fail-closed tests are implemented.
 - [x] Correct live execution summary `startingCents` to use configured starting allocation rather than current working equity.
 - [x] Correct entry-price report bands below 25¢ and above 75¢ without rewriting raw records.
@@ -616,7 +617,7 @@ Recommended future service boundaries:
 
 ### 12.1 Why this exists
 
-Three lanes are needed and only two exist. Live runs the active policy with real money. Paper is supposed to run the *same* policy with perfect fills, so that `paper − live` isolates what execution costs. There is no lane for a change the desk is considering but has not adopted.
+Three lanes are needed and only two exist. Live runs the active policy with real money. Paper is supposed to run the *same* policy with a simulated version of live's maker execution, so that `paper − live` isolates real queue, venue, reconciliation, and capital effects rather than mixing in a taker fill assumption. The always-fills benchmark belongs in a separate ask-fill shadow. There is no lane for a change the desk is considering but has not adopted.
 
 Because the third lane is missing, speculative changes have leaked into paper — paper trades XRP that live withholds, and paper ignores the adaptive regime gate that live obeys — and one-off evaluations have been written three separate times and thrown away (`missedBuyCounterfactual`, `buildMakerShadow`, and the regime-gate sentinel loop in `data/regime-gate.json`).
 
@@ -627,7 +628,7 @@ Both failures are the same mistake. Paper's entire value is that exactly one var
 | Lane | Policy | Money | Execution | Answers |
 |---|---|---|---|---|
 | **Live** | active | real | maker post-only, real fills | What did the desk actually earn? |
-| **Paper mirror** | active, *identical* | simulated | immediate fill at ask | Was the decision right, and what did execution cost? |
+| **Paper mirror** | active, *identical* | simulated | bounded maker at bid, observed ask-touch fill | Was the decision right under comparable maker execution, and what did real execution/capital cost? |
 | **Evaluation** | candidate, non-production | none | never places an order | Should this change be adopted? |
 
 ### 12.3 The mirror invariant
@@ -642,7 +643,7 @@ Portfolio selection was expected to need merging and does not: `runLive` and `ru
 
 | Differs | Why |
 |---|---|
-| Fill model — maker post-only vs simulated maker | Paper originally filled at the ask, which is taker execution, not perfect execution: it pays the spread and the fee that live's resting orders avoid. Paper therefore simulates maker fills so the books are comparable, and the perfect-execution benchmark moves to the ask-fill shadow that `buildMakerShadow` already computes. *(Implemented 2026-08-14: paper rests at the bid for the same 12-second horizon live uses, fills when the recorded ask reaches the limit, and returns the reserved stake on a miss.)* |
+| Fill model — maker post-only vs simulated maker | Paper originally filled at the ask, which is taker execution, not perfect execution: it pays the spread and the fee that live's resting orders avoid. Paper therefore simulates maker fills so the books are comparable, and the perfect-execution benchmark moves to the ask-fill shadow that `buildMakerShadow` already computes. *(Implemented 2026-08-14: paper rests at the bid for the same 12-second horizon live uses, fills when the recorded ask reaches the limit, and returns the reserved stake on a miss. It uses live's active attempt cap and cooldown; durable retry identity is shared, while venue queue/cancellation mechanics remain live-only.)* |
 | Budget, stake sizing, bankroll | Paper is not capital-constrained; matching it would hide policy outcomes behind sizing noise. |
 | Hourly filled-order limit, live risk stops, reconciliation gate | Venue and capital protections, not predictions. |
 | Position and correlation caps | Same constants, counted separately, because the books are separate. |
@@ -740,6 +741,7 @@ This design does not change any live entry rule, does not let a candidate place 
 
 | Date | Decision |
 |---|---|
+| 2026-08-14 | Maker retry cooldown begins when an attempt becomes terminal, not when it was submitted, so the 12-second resting horizon cannot consume the requested 30-second pause. Paper uses the same active attempt cap and durable retry identity as live; the cap stays at one pending separate forward attempt-2 evidence, after historical second attempts resolved 1/12 with −79.2% mean return. |
 | 2026-08-14 | Paper simulates maker fills rather than filling at the ask. Filling at the ask is taker execution, so paper was paying a spread and fee live does not pay while missing none of the trades live misses; the always-fills benchmark is retained through the existing ask-fill maker shadow instead of through the mirror itself. |
 | 2026-08-14 | The maker fill probability is estimated from what comparable attempts did, not from a first-passage model of the quote. Validation on 623 recorded attempts found the first-passage estimate inverted — predictions of 12/41/64/86% against observed fills of 66/61/57/52% — so it is retained as a recorded diagnostic and excluded from the estimate. |
 | 2026-08-14 | Paper mirrors live exactly at the rule layer. The rule functions take no execution-mode parameter, so a policy divergence between tracks cannot be expressed; the tracks differ only in fill model, sizing, and the live-only capital protections, making `paper − live` the desk's execution and capital cost. |
