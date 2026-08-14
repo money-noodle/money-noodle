@@ -99,28 +99,40 @@ async function fetchKrakenLastTrades(): Promise<Record<string, number>> {
  */
 export async function fetchPriceSeries(): Promise<Record<string, PriceSeries>> {
   const slot = contractSlot();
-  const lastTrades = await fetchKrakenLastTrades().catch(() => ({} as Record<string, number>));
-  const entries = await Promise.all(ASSETS.map(async (asset) => {
-    try {
-      const payload = await fetchJson<{ error: string[]; result: Record<string, Array<Array<number | string>> | number> }>(
-        `https://api.kraken.com/0/public/OHLC?pair=${KRAKEN_PAIRS[asset.symbol]}&interval=1`,
-      );
-      if (payload.error.length) return null;
-      const rows = Object.entries(payload.result).find(([key, value]) => key !== 'last' && Array.isArray(value))?.[1];
-      if (!Array.isArray(rows)) return null;
-      const closes = rows.slice(-121).map((row) => Number(row[4])).filter((price) => Number.isFinite(price) && price > 0);
-      // The candle covering the final minute before the cycle opened closes exactly at the open, so
-      // its close approximates the settlement reference the venues fix at that instant.
-      const referenceRow = rows.find((row) => Number(row[0]) === slot - 60);
-      const referencePrice = Number(referenceRow?.[4]);
-      const currentPrice = lastTrades[asset.symbol] ?? closes.at(-1);
-      if (closes.length < 12 || !Number.isFinite(referencePrice) || referencePrice <= 0 || !currentPrice) return null;
-      return [asset.symbol, {
-        symbol: asset.symbol, slot, referencePrice, currentPrice, closes,
-        referenceSource: 'Kraken 1m series at cycle open',
-      } satisfies PriceSeries] as const;
-    } catch { return null; }
-  }));
+  // Both rounds are requested at once. They are independent — last trades only supply the current
+  // price — and running them in sequence doubled this feed's worst case to twice the request timeout,
+  // which is longer than the lead the next calculation is started on.
+  const [lastTrades, series] = await Promise.all([
+    fetchKrakenLastTrades().catch(() => ({} as Record<string, number>)),
+    Promise.all(ASSETS.map(async (asset) => {
+      try {
+        const payload = await fetchJson<{ error: string[]; result: Record<string, Array<Array<number | string>> | number> }>(
+          `https://api.kraken.com/0/public/OHLC?pair=${KRAKEN_PAIRS[asset.symbol]}&interval=1`,
+        );
+        if (payload.error.length) return null;
+        const rows = Object.entries(payload.result).find(([key, value]) => key !== 'last' && Array.isArray(value))?.[1];
+        if (!Array.isArray(rows)) return null;
+        const closes = rows.slice(-121).map((row) => Number(row[4])).filter((price) => Number.isFinite(price) && price > 0);
+        // The candle covering the final minute before the cycle opened closes exactly at the open, so
+        // its close approximates the settlement reference the venues fix at that instant.
+        const referenceRow = rows.find((row) => Number(row[0]) === slot - 60);
+        const referencePrice = Number(referenceRow?.[4]);
+        if (closes.length < 12 || !Number.isFinite(referencePrice) || referencePrice <= 0) return null;
+        return { symbol: asset.symbol, referencePrice, closes };
+      } catch { return null; }
+    })),
+  ]);
+  // The current price is chosen after both rounds land, since the last trade is only preferred over
+  // the newest candle close when it actually arrived.
+  const entries = series.map((entry) => {
+    if (!entry) return null;
+    const currentPrice = lastTrades[entry.symbol] ?? entry.closes.at(-1);
+    if (!currentPrice) return null;
+    return [entry.symbol, {
+      symbol: entry.symbol, slot, referencePrice: entry.referencePrice, currentPrice, closes: entry.closes,
+      referenceSource: 'Kraken 1m series at cycle open',
+    } satisfies PriceSeries] as const;
+  });
   const valid = entries.filter((entry): entry is NonNullable<typeof entry> => entry !== null);
   if (!valid.length) throw new Error('No usable price series for contract basis');
   return Object.fromEntries(valid);

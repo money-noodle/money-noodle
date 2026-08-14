@@ -7,6 +7,26 @@ const CACHE_DIR = path.resolve(process.cwd(), '.cache');
 const memoryCache = new Map<string, CacheEnvelope<unknown>>();
 /** Roughly a fifth of the calculation window: slow enough to matter, quiet on a healthy upstream. */
 const SLOW_FEED_LOG_MS = 3_000;
+/**
+ * Whole-feed deadline, shorter than the lead the next calculation is started on.
+ *
+ * A per-request timeout cannot bound a feed that makes more than one round — Polymarket must read the
+ * events before it can ask for their books — so two capped requests still exceed the window they serve.
+ * This bounds the feed itself. It applies only when a previous value exists to fall back to, so it can
+ * never turn a cold start into a failure; it only stops a warm cycle waiting on an answer it would
+ * discard anyway.
+ */
+const FEED_BUDGET_MS = 6_000;
+
+function withDeadline<T>(loader: () => Promise<T>, key: string): Promise<T> {
+  return Promise.race([
+    loader(),
+    new Promise<never>((_, reject) => {
+      const timer = setTimeout(() => reject(new Error(`Feed ${key} exceeded ${FEED_BUDGET_MS}ms`)), FEED_BUDGET_MS);
+      timer.unref?.();
+    }),
+  ]);
+}
 
 interface CacheEnvelope<T> {
   savedAt: number;
@@ -53,7 +73,7 @@ export async function cached<T>(
   // delays everything. Naming it costs a timestamp and is the only way to tell which one is degrading.
   const started = Date.now();
   try {
-    const value = await loader();
+    const value = previous ? await withDeadline(loader, key) : await loader();
     await writeCache(key, value);
     return { value, fromCache: false };
   } catch (error) {
