@@ -12,6 +12,8 @@ import { getTradingControl } from '@/lib/trading-control';
 import { getForecastHistory, getPerformanceSummary } from '@/lib/forecast-tracker';
 import { getExecutionOrders } from '@/lib/paper-execution';
 import { getWalkForwardEvaluationHistory } from '@/lib/model-evaluation-store';
+import { getPersistenceCandidateReport } from '@/lib/persistence-candidate-store';
+import { BUY_POLICY_VERSION } from '@/lib/prediction-policy';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -25,8 +27,9 @@ export async function GET(request: Request) {
     if (responseCache && responseCache.expiresAt > Date.now()) {
       return NextResponse.json(responseCache.body, { headers: { 'Cache-Control': 'private, no-store' } });
     }
-    const [forecasts, summary, orders, cyclePaths, control] = await Promise.all([
+    const [forecasts, summary, orders, cyclePaths, control, persistenceCandidate] = await Promise.all([
       getForecastHistory(), getPerformanceSummary(), getExecutionOrders(), getCyclePathReport(), getTradingControl(),
+      getPersistenceCandidateReport(BUY_POLICY_VERSION),
     ]);
     const modelEvaluations = await getWalkForwardEvaluationHistory(summary.calibrationWindows);
     const promotionLedger = await readPromotionLedger();
@@ -62,6 +65,7 @@ export async function GET(request: Request) {
       promotionLedger,
       cyclePaths,
       makerFillReport: buildMakerFillReport(orders, forecasts),
+      persistenceCandidate,
       modelEvaluations,
     };
     responseCache = { expiresAt: Date.now() + 15_000, body };

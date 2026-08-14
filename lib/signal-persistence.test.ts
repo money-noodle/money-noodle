@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { advanceSignalPersistence, evaluateSignalPersistence, type SignalPersistenceState } from './signal-persistence';
+import { advanceSignalPersistence, evaluateSignalPersistence, evaluateSignalPersistenceWithRequirements, type SignalPersistenceState } from './signal-persistence';
 
 const close = '2026-01-01T00:15:00.000Z';
 const time = (seconds: number) => new Date(Date.parse(close) - 900_000 + seconds * 1000).toISOString();
@@ -64,6 +64,15 @@ describe('execution signal persistence', () => {
     const result = evaluateSignalPersistence(state, Date.parse(time(100)), 0.05, 0.5);
     expect(result.eligible).toBe(false);
     expect(result.reason).toContain('span');
+  });
+
+  it('can score a two-snapshot candidate without changing production requirements', () => {
+    let state: SignalPersistenceState | undefined;
+    for (const seconds of [90, 105]) state = advance(state, seconds);
+    expect(evaluateSignalPersistenceWithRequirements(state, Date.parse(time(105)), 0.05, 0.5, {
+      requiredSnapshots: 2, requiredSpanMs: 15_000,
+    }).eligible).toBe(true);
+    expect(evaluateSignalPersistence(state, Date.parse(time(105)), 0.05, 0.5).eligible).toBe(false);
   });
 
   it('uses median edge rather than one temporary spike', () => {

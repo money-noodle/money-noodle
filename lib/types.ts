@@ -862,6 +862,64 @@ export interface LiveRiskStatus {
   reasons: string[];
 }
 
+export interface PersistenceCandidateIntent {
+  id: string;
+  candidateVersion: string;
+  productionPolicyVersion: string;
+  symbol: string;
+  contractId: string;
+  side: PositionSide;
+  closesAt: string;
+  createdAt: string;
+  calculationAt: string;
+  selectedSideProbability: number;
+  confidence: number;
+  askPrice: number;
+  bidPrice: number;
+  spread: number;
+  estimatedAskFeeRate: number;
+  estimatedMakerFeeRate: number;
+  predictedNetEdge: number;
+  qualifyingSnapshots: number;
+  observationSpanMs: number;
+  productionEligibleAtCandidate: boolean;
+  productionEligibleAt?: string;
+  productionDelayMs?: number;
+  /** Empirical accepted-order fill estimate captured prospectively; never treated as an observed fill. */
+  makerFillProbability?: number | null;
+  makerFillModel?: string;
+  outcome?: PositionSide;
+  resolvedAt?: string;
+  askProfitPerContract?: number;
+  makerExpectedProfitPerContract?: number;
+  invalidReason?: string;
+}
+
+export interface PersistenceCandidateReport {
+  candidateVersion: string;
+  productionPolicyVersion: string;
+  startedAt: string;
+  updatedAt: string;
+  candidateIntents: number;
+  incrementalIntents: number;
+  productionCaughtUp: number;
+  meanProductionDelayMs: number | null;
+  modelledMakerIntents: number;
+  resolvedIntents: number;
+  resolvedWindows: number;
+  resolvedIncrementalIntents: number;
+  resolvedIncrementalWindows: number;
+  meanAskProfitPerContract: number | null;
+  meanMakerExpectedProfitPerContract: number | null;
+  meanIncrementalAskProfitPerContract: number | null;
+  meanIncrementalMakerExpectedProfitPerContract: number | null;
+  incrementalAskStandardError: number | null;
+  minimumReviewWindows: number;
+  reviewReady: boolean;
+  productionChanged: false;
+  recent: PersistenceCandidateIntent[];
+}
+
 export interface AdaptiveRegimeGateStatus {
   phase: 'disabled' | 'warming' | 'open' | 'closed';
   allowsEntries: boolean;

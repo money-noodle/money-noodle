@@ -569,6 +569,7 @@ Recommended future service boundaries:
 - [x] Paper mode using durable reservation/settlement hooks and automated 15-second processing.
 - [x] Deterministic failure-injection reconciliation tests for lost responses/cancellations, malformed history, amendment chains, partial fills/exits, cash/position contradictions, and restart recovery.
 - [ ] Historical execution replay/backtest harness distinct from the prospective walk-forward evaluator.
+- [x] Start a prospective observation-only `persistence-two-consecutive-v1` candidate: two qualifying snapshots over 15 seconds versus production's three over 30, with exact Kalshi terms, production catch-up delay, ask outcome, empirical fill-weighted maker benchmark, policy-version scoping, and a 100-independent-incremental-window review floor. It cannot place an order, reserve budget, or promote itself.
 - [x] Explicitly armed, audited live Kalshi v2 maker limits with fractional sizing, fee reconciliation, stake/rate caps, cancel, and kill switch.
 - [x] Reduce-only Kalshi switch exits with liquidation-loss-aware valuation and partial-exit protection.
 - [ ] Persist complete position-lifecycle and executable liquidation snapshots, including high-water marks, probability deterioration, reversal features, depth, and sampled HOLD counterfactuals.
@@ -687,6 +688,8 @@ A **candidate** is an immutable, named parameter set with a status. It never pla
 
 **Promotion requires committed sentinel evidence**, a minimum number of independent settlement windows, a clustered return clearing a stated threshold, and a written reason — mirroring the model promotion ledger already in `lib/model-promotion.ts`. Nothing reaches production on a number that was only ever computed after the fact. That failure mode is not hypothetical: the DOWN suspension of 2026-08-13 was adopted on retroactive figures that later failed to reproduce, and was withdrawn a day later.
 
+**First committed candidate implemented 2026-08-14.** `persistence-two-consecutive-v1` changes only entry maturity: two consecutive qualifying observations spanning 15 seconds against production's three spanning 30. Every current probability, edge, quality, price, asset, side, warm-up, late cutoff, Kalshi-specific quote/spread, classified-path, and adaptive-regime rule remains fixed. It records every signal-level candidate intent, whether production was already eligible, when production later catches up, exact ask/bid/fees, a prospectively captured empirical fill-weighted maker benchmark, and exact Kalshi settlement. Capital, current positions, and reconciliation are deliberately excluded because they are operational state rather than evidence about persistence. Evidence is scoped to the active production buy-policy version and resets on a production policy change. The first review remains manual and locked until 100 resolved **incremental** settlement windows; reaching that count is not promotion eligibility.
+
 ### 12.6 Storage and modules
 
 | Path | Role |
@@ -696,6 +699,8 @@ A **candidate** is an immutable, named parameter set with a status. It never pla
 | `lib/policy-candidate-store.ts` | Server-only durable candidate and sentinel records |
 | `data/policy-candidates.json` | Candidate definitions and statuses; append-only history |
 | `data/policy-sentinels.json` | Immutable per-window sentinel records keyed by candidate |
+| `lib/persistence-candidate-store.ts` | Implemented narrow first candidate, durable scoring, exact settlement, and read-only report |
+| `data/persistence-candidate.json` | Worker-local prospective intents for the two-snapshot candidate; no execution authority |
 
 The regime gate is a special case of this mechanism — one implicit candidate, the production policy, scored forward on its own sentinels. Unifying them is a follow-up, not a prerequisite; the gate works and retrofitting it earns nothing immediately.
 
@@ -710,8 +715,8 @@ A side-by-side comparison surface reports the mirror against live per settlement
 1. **Unify the rules.** *(Done, buy policy v17.)* Removed the mode parameter from the rule layer, collapsed the per-track environment variables to `MONEY_NOODLE_ALLOW_DOWN_ENTRY` and `MONEY_NOODLE_EXCLUDED_ASSETS`, applied the regime gate to both tracks, and added `lib/mirror-invariant.test.ts`, which asserts the absence of a mode parameter by arity so the divergence cannot return unnoticed.
 2. **Record live skips durably** per window, and build the side-by-side comparison surface.
 3. **Introduce `BuyPolicy`** as a value, with production as its first instance.
-4. **Candidate store and retroactive screening**, published in the Policy dialog.
-5. **Committed sentinels and promotion criteria**, reusing the model-promotion shape.
+4. **Candidate store and retroactive screening**, ultimately published in the Policy dialog. *(Partially implemented: the first persistence candidate is collecting and appears in the signed Performance view; generalized `BuyPolicy` candidates and the Policy surface remain.)*
+5. **Committed sentinels and promotion criteria**, reusing the model-promotion shape. *(First committed sentinel implemented with a sample-count review lock and no promotion path; generalized comparative criteria remain.)*
 
 Step 1 has an immediate, intended consequence: **paper stops trading XRP and starts obeying the regime gate.** XRP evidence collection therefore pauses until step 4 restores it as a candidate. That is accepted rather than worked around — XRP already clears −2se on both tracks independently (live −45.7% ±21.5 over 41 windows, paper −35.1% ±13.0 over 81), so more of the same evidence is worth less than a mirror that can be trusted.
 
@@ -741,6 +746,7 @@ This design does not change any live entry rule, does not let a candidate place 
 
 | Date | Decision |
 |---|---|
+| 2026-08-14 | Do not reduce production persistence from three snapshots on retrospective results. Start `persistence-two-consecutive-v1` in the evaluation lane, preserving every other rule and collecting exact forward Kalshi outcomes plus a prospectively captured empirical maker-fill estimate. Require 100 resolved incremental settlement windows before the first manual review; sample readiness cannot promote or alter production. |
 | 2026-08-14 | Maker retry cooldown begins when an attempt becomes terminal, not when it was submitted, so the 12-second resting horizon cannot consume the requested 30-second pause. Paper uses the same active attempt cap and durable retry identity as live; the cap stays at one pending separate forward attempt-2 evidence, after historical second attempts resolved 1/12 with −79.2% mean return. |
 | 2026-08-14 | Paper simulates maker fills rather than filling at the ask. Filling at the ask is taker execution, so paper was paying a spread and fee live does not pay while missing none of the trades live misses; the always-fills benchmark is retained through the existing ask-fill maker shadow instead of through the mirror itself. |
 | 2026-08-14 | The maker fill probability is estimated from what comparable attempts did, not from a first-passage model of the quote. Validation on 623 recorded attempts found the first-passage estimate inverted — predictions of 12/41/64/86% against observed fills of 66/61/57/52% — so it is retained as a recorded diagnostic and excluded from the estimate. |

@@ -7,6 +7,7 @@ import { ENTRY_EXECUTION_POLICY_VERSION, entrySideProbability, evaluateEntryExec
 import { POST_EXIT_REENTRY_COOLDOWN_MS, evaluateExitPolicy } from './exit-policy';
 import { estimateMakerFill, MANAGED_MAKER_HORIZON_SECONDS } from './maker-fill-model';
 import { isFreshCalculationTimestamp } from './freshness';
+import { observationBucket } from './observation-window';
 import { orderMarketId, orderProviderId } from './execution-report';
 import { assetAdmitted } from './asset-exclusion';
 import { cycleRegimeFor } from './cycle-path-store';
@@ -20,10 +21,11 @@ import { entryAttemptsForLogicalOrder, makerAttemptId, makerRetryDecision, maxim
 import { liveBlockers, liveTradingEnabled, maxLiveOrdersPerHour, maxLiveStakeCents, placeKalshiBuy, placeKalshiSell, placeKalshiTakerBuy } from './live-orders';
 import { countFilledLiveVenueOrders } from './order-rate-limit';
 import { selectPortfolio, DEFAULT_PORTFOLIO_CONSTRAINTS, parseMaximumOpenPositions, type PortfolioConstraints } from './portfolio-policy';
-import { bestEntry, bestVenueEntry, BUY_POLICY_VERSION, edgeStrength, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, qualifiesAsBuyEdge, qualifiesVenueBuyEdge, sideProbability } from './prediction-policy';
+import { bestEntry, bestVenueEntry, BUY_POLICY_VERSION, edgeStrength, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, qualifiesAsBuyEdge, qualifiesVenueBuyEdge, sideProbability, venueFeeRate } from './prediction-policy';
 import { getKalshiReconciliationStatus, serializedReconciliation, setKalshiReconciliationStatus, type KalshiReconciliationStatus } from './reconciliation-state';
 import { getRegimeGateStatus, updateRegimeGate, type RegimeGateStatus, type RegimeSentinelCandidate } from './regime-gate-store';
-import { advanceSignalPersistence, evaluateSignalPersistence, type SignalEligibility, type SignalPersistenceState } from './signal-persistence';
+import { TWO_SNAPSHOT_PERSISTENCE_CANDIDATE_VERSION, updatePersistenceCandidateStore, type PersistenceCandidateCycle } from './persistence-candidate-store';
+import { advanceSignalPersistence, evaluateSignalPersistence, evaluateSignalPersistenceWithRequirements, type SignalEligibility, type SignalPersistenceState } from './signal-persistence';
 import { REQUIRED_SWITCH_SNAPSHOTS, REQUIRED_SWITCH_SPAN_MS, advanceSwitchPersistence, switchCooldownRemainingMs, switchEvidenceReady, switchEvidenceSpanMs, type SwitchPersistenceState } from './switch-hysteresis';
 import { evaluateSwitchProbabilityGate, switchPolicySettings, valueSwitch } from './switch-policy';
 import { autoResumeTradingAfterReconciliation, getTradingControl, pauseTrading, reconcileTradingBudget, recordTradingReconciliationFailure, releaseTradingBudget, reserveTradingBudget, settleTradingBudget, stopTradingForLiveRisk, suspendTrading } from './trading-control';
@@ -207,6 +209,61 @@ function updateSignalPersistence(dashboard: DashboardData, ledger: Ledger): bool
 
 function executionEligibility(prediction: Prediction, side: PositionSide, ledger: Ledger, nowMs = Date.now()): SignalEligibility {
   return evaluateSignalPersistence(ledger.signalPersistence[persistenceKey(prediction, side)], nowMs, MIN_NET_EDGE, MIN_ESTIMATE_QUALITY);
+}
+
+/**
+ * Builds a prospective two-snapshot policy observation without consulting automation, cash, or current
+ * positions. Those are operational constraints rather than properties of the signal being compared.
+ * Every ordinary prediction, quote, timing, asset, and classified-regime gate remains unchanged.
+ */
+async function persistenceCandidateCycle(dashboard: DashboardData, ledger: Ledger, regimeAllowsEntries: boolean): Promise<PersistenceCandidateCycle> {
+  const nowMs = Date.now();
+  const observedAt = dashboard.generatedAt;
+  const intents: PersistenceCandidateCycle['intents'] = [];
+  const productionEligibleIds: string[] = [];
+
+  for (const prediction of dashboard.predictions) {
+    const side = selectedSide(prediction);
+    if (!regimeAllowsEntries || !side || !prediction.market.live || !prediction.kalshi?.live || !assetAdmitted(prediction.symbol)) continue;
+    if (!qualifiesAsBuyEdge(prediction) || !qualifiesVenueBuyEdge(prediction, 'kalshi', side)) continue;
+    const regime = (await cycleRegimeFor(prediction.symbol, prediction.market.closesAt))?.regime;
+    if (!regimeAdmits(regime)) continue;
+    const quote = venueQuote(prediction, 'kalshi', side);
+    const entry = bestVenueEntry(prediction, 'kalshi', side);
+    if (!quote || !entry || !(quote.bid > 0) || quote.bid > quote.ask || quote.ask - quote.bid > MAX_SPREAD) continue;
+
+    const state = ledger.signalPersistence[persistenceKey(prediction, side)];
+    const candidate = evaluateSignalPersistenceWithRequirements(state, nowMs, MIN_NET_EDGE, MIN_ESTIMATE_QUALITY, {
+      requiredSnapshots: 2, requiredSpanMs: 15_000,
+    });
+    const production = executionEligibility(prediction, side, ledger, nowMs);
+    const id = `${TWO_SNAPSHOT_PERSISTENCE_CANDIDATE_VERSION}:${BUY_POLICY_VERSION}:${prediction.symbol}:${side}:${prediction.kalshi.closesAt}`;
+    if (production.eligible) productionEligibleIds.push(id);
+    if (!candidate.eligible || !isFreshCalculationTimestamp(observedAt, nowMs)) continue;
+    const observations = state?.observations.slice(-2) ?? [];
+    const spanMs = observations.length < 2 ? 0
+      : observationBucket(Date.parse(observations.at(-1)!.at)) - observationBucket(Date.parse(observations[0].at));
+    const touch = prediction.makerFillEstimates?.[side] ?? prediction.makerFillEstimate ?? null;
+    const cohort = makerCohortEvidence(ledger.orders, quote.ask, quote.ask - quote.bid);
+    const makerEstimate = estimateMakerFill({
+      touch, cohortLabel: cohort.label, cohortAttempts: cohort.accepted, cohortFills: cohort.fills,
+    });
+    intents.push({
+      id, candidateVersion: TWO_SNAPSHOT_PERSISTENCE_CANDIDATE_VERSION,
+      productionPolicyVersion: BUY_POLICY_VERSION,
+      symbol: prediction.symbol, contractId: prediction.kalshi.ticker, side,
+      closesAt: prediction.kalshi.closesAt, createdAt: observedAt, calculationAt: observedAt,
+      selectedSideProbability: sideProbability(prediction, side), confidence: prediction.confidence,
+      askPrice: quote.ask, bidPrice: quote.bid, spread: quote.ask - quote.bid,
+      estimatedAskFeeRate: entry.feeRate, estimatedMakerFeeRate: venueFeeRate('kalshi', quote.bid),
+      predictedNetEdge: entry.netEdge, qualifyingSnapshots: candidate.qualifyingSnapshots,
+      observationSpanMs: spanMs, productionEligibleAtCandidate: production.eligible,
+      ...(production.eligible ? { productionEligibleAt: observedAt, productionDelayMs: 0 } : {}),
+      makerFillProbability: makerEstimate?.probability ?? null,
+      makerFillModel: makerEstimate?.model,
+    });
+  }
+  return { productionPolicyVersion: BUY_POLICY_VERSION, observedAt, intents, productionEligibleIds };
 }
 
 /**
@@ -1195,6 +1252,11 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
   changed = await updateSoldCounterfactuals(ledger) || changed;
   if (changed) await writeLedger(ledger);
   const regimeGate = await updateRegimeGate(regimeSentinelCandidate(dashboard, ledger));
+  // Candidate collection is deliberately detached: storage or settlement failure cannot delay or
+  // block paper/live execution, and the candidate module has no function that can place an order.
+  void persistenceCandidateCycle(dashboard, ledger, regimeGate.allowsEntries)
+    .then((cycle) => updatePersistenceCandidateStore(cycle))
+    .catch((error) => console.error('Two-snapshot persistence candidate collection failed:', error));
   const status = await getTradingControl();
   changed = await observeAndExecuteStandaloneExits(dashboard, status, ledger) || changed;
   changed = updatePortfolioDecisions(dashboard, status, ledger) || changed;

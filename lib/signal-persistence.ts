@@ -31,6 +31,16 @@ export interface SignalEligibility {
   medianNetEdge: number | null;
 }
 
+export interface SignalPersistenceRequirements {
+  requiredSnapshots: number;
+  requiredSpanMs: number;
+}
+
+export const PRODUCTION_SIGNAL_PERSISTENCE: SignalPersistenceRequirements = {
+  requiredSnapshots: REQUIRED_QUALIFYING_SNAPSHOTS,
+  requiredSpanMs: REQUIRED_OBSERVATION_SPAN_MS,
+};
+
 /**
  * Advances one signal's durable execution evidence. A failed current snapshot resets the streak;
  * repeated processing of the same generatedAt timestamp never manufactures extra persistence.
@@ -62,7 +72,13 @@ function median(values: number[]): number | null {
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
-export function evaluateSignalPersistence(state: SignalPersistenceState | undefined, nowMs: number, minimumNetEdge: number, minimumQuality: number): SignalEligibility {
+export function evaluateSignalPersistenceWithRequirements(
+  state: SignalPersistenceState | undefined,
+  nowMs: number,
+  minimumNetEdge: number,
+  minimumQuality: number,
+  requirements: SignalPersistenceRequirements,
+): SignalEligibility {
   if (!state) return { eligible: false, reason: 'No persistence observations yet.', cycleAgeMs: 0, remainingMs: 0, qualifyingSnapshots: 0, medianNetEdge: null };
   const closesAtMs = Date.parse(state.closesAt);
   const cycleAgeMs = nowMs - (closesAtMs - CYCLE_DURATION_MS);
@@ -74,13 +90,18 @@ export function evaluateSignalPersistence(state: SignalPersistenceState | undefi
   if (!Number.isFinite(closesAtMs)) return { ...base, eligible: false, reason: 'Contract close time is invalid.' };
   if (cycleAgeMs < EXECUTION_WARMUP_MS) return { ...base, eligible: false, reason: `Cycle warming up: ${Math.max(0, Math.floor(cycleAgeMs / 1000))}/${EXECUTION_WARMUP_MS / 1000}s.` };
   if (remainingMs <= EXECUTION_LATE_CUTOFF_MS) return { ...base, eligible: false, reason: `Inside the final ${EXECUTION_LATE_CUTOFF_MS / 1000}s entry cutoff.` };
-  if (observations.length < REQUIRED_QUALIFYING_SNAPSHOTS) return { ...base, eligible: false, reason: `Signal persistence ${observations.length}/${REQUIRED_QUALIFYING_SNAPSHOTS} qualifying snapshots.` };
-  const required = observations.slice(-REQUIRED_QUALIFYING_SNAPSHOTS);
+  if (observations.length < requirements.requiredSnapshots) return { ...base, eligible: false, reason: `Signal persistence ${observations.length}/${requirements.requiredSnapshots} qualifying snapshots.` };
+  const required = observations.slice(-requirements.requiredSnapshots);
   const spanMs = observationBucket(Date.parse(required.at(-1)!.at)) - observationBucket(Date.parse(required[0].at));
-  if (spanMs < REQUIRED_OBSERVATION_SPAN_MS) return { ...base, eligible: false, reason: `Signal observations span ${Math.max(0, Math.floor(spanMs / 1000))}/${REQUIRED_OBSERVATION_SPAN_MS / 1000}s.` };
+  if (spanMs < requirements.requiredSpanMs) return { ...base, eligible: false, reason: `Signal observations span ${Math.max(0, Math.floor(spanMs / 1000))}/${requirements.requiredSpanMs / 1000}s.` };
   const latest = observations.at(-1)!;
   if (nowMs - Date.parse(latest.at) > MAX_EXECUTION_SNAPSHOT_AGE_MS) return { ...base, eligible: false, reason: 'Latest persistence snapshot is stale.' };
   if (latest.quality < minimumQuality) return { ...base, eligible: false, reason: `Current estimate quality ${(latest.quality * 100).toFixed(1)}% is below ${(minimumQuality * 100).toFixed(0)}%.` };
   if (medianNetEdge === null || medianNetEdge < minimumNetEdge) return { ...base, eligible: false, reason: `Median edge ${((medianNetEdge ?? 0) * 100).toFixed(1)}pp is below ${(minimumNetEdge * 100).toFixed(0)}pp.` };
   return { ...base, eligible: true, reason: `${observations.length} qualifying snapshots; median edge ${(medianNetEdge * 100).toFixed(1)}pp.` };
+}
+
+/** Production remains on three snapshots; candidates call the explicit evaluator above. */
+export function evaluateSignalPersistence(state: SignalPersistenceState | undefined, nowMs: number, minimumNetEdge: number, minimumQuality: number): SignalEligibility {
+  return evaluateSignalPersistenceWithRequirements(state, nowMs, minimumNetEdge, minimumQuality, PRODUCTION_SIGNAL_PERSISTENCE);
 }
