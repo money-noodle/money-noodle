@@ -5,7 +5,7 @@ import { beginLiveTransaction, blockExecutionDrain, completeExecutionDrain, endL
 import { reconcileExecutionLedger } from './execution-reconciliation';
 import { ENTRY_EXECUTION_POLICY_VERSION, entrySideProbability, evaluateEntryExecutionPolicy, makerCohortEvidence, parseEntryExecutionMode, type EntryExecutionDecision } from './entry-execution-policy';
 import { POST_EXIT_REENTRY_COOLDOWN_MS, evaluateExitPolicy } from './exit-policy';
-import { estimateMakerFill } from './maker-fill-model';
+import { estimateMakerFill, MANAGED_MAKER_HORIZON_SECONDS } from './maker-fill-model';
 import { isFreshCalculationTimestamp } from './freshness';
 import { orderMarketId, orderProviderId } from './execution-report';
 import { assetAdmitted } from './asset-exclusion';
@@ -548,6 +548,61 @@ function marketFundingFor(
 }
 
 /** Paper trading is a continuous shadow: it keeps running while live automation is paused. */
+/**
+ * Re-prices a paper candidate as a resting maker order at the bid.
+ *
+ * Qualification still uses the actionable ask, because that is the price the edge gate must clear —
+ * posting passively does not entitle the desk to assume a better entry. Only the simulated execution
+ * moves to the bid, so a paper order that never gets there simply does not fill, exactly as live's do.
+ */
+export function restAtBid(order: PaperOrder, stakeLimitCents: number): PaperOrder | undefined {
+  const bid = order.bidPrice;
+  if (!(bid > 0) || !(bid < 1)) return undefined;
+  const fill = estimatePaperFill(stakeLimitCents, bid, order.venue);
+  if (!fill) return undefined;
+  return {
+    ...order,
+    status: 'pending_reservation',
+    liquidityRole: 'maker',
+    restingUntil: new Date(Date.now() + MANAGED_MAKER_HORIZON_SECONDS * 1000).toISOString(),
+    askPrice: fill.limitPriceCents / 100,
+    quantity: fill.quantity, requestedQuantity: fill.quantity,
+    feeCents: fill.feeCents,
+    stakeCents: fill.stakeCents, potentialPayoutCents: fill.potentialPayoutCents,
+  };
+}
+
+/**
+ * Advances resting paper orders against the current book: filled when the ask reaches the resting
+ * limit, unfilled when the horizon expires or the contract closes first. The reserved stake is
+ * returned on a miss, so an unfilled attempt costs the mirror nothing but the opportunity.
+ */
+export function resolveRestingPaperOrders(dashboard: DashboardData, ledger: Ledger): boolean {
+  const now = Date.now();
+  let changed = false;
+  for (const order of ledger.orders) {
+    if (order.executionMode !== 'paper' || order.status !== 'pending_reservation') continue;
+    const prediction = dashboard.predictions.find((item) => item.symbol === order.symbol);
+    const quote = prediction ? venueQuote(prediction, order.venue, order.side) : undefined;
+    const reached = quote && quote.closesAt === order.closesAt && quote.ask <= order.askPrice + 1e-9;
+    if (reached) {
+      order.status = 'open';
+      order.filledCount = order.quantity;
+      changed = true;
+      continue;
+    }
+    const expired = (order.restingUntil ? Date.parse(order.restingUntil) <= now : true)
+      || Date.parse(order.closesAt) <= now;
+    if (expired) {
+      order.status = 'unfilled';
+      order.noFillReason = 'rested_no_fill';
+      ledger.paperBudget.availableCents += order.stakeCents;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 async function runPaper(dashboard: DashboardData, status: TradingControlData, ledger: Ledger, regimeGate: RegimeGateStatus, budgets: ProviderBudgetConfiguration): Promise<boolean> {
   if (ledger.paperBudget.availableCents <= 0) return false;
   // The mirror obeys every entry rule live obeys, the adaptive regime gate included. A paper track that
@@ -591,9 +646,14 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
     .filter((item) => item.selected).sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99))[0];
   const built = selected ? eligible.find(({ order }) => order.id === selected.id) : undefined;
   if (!built) return false;
-  ledger.paperBudget.availableCents -= built.order.stakeCents;
-  built.order.status = 'open';
-  ledger.orders.push(built.order);
+  // Paper posts the same resting maker order live posts, at the bid, and fills only when the recorded
+  // ask actually reaches it. Filling at the ask was taker execution: it charged the mirror a spread and
+  // a fee live does not pay, on every trade, while missing none of the trades live misses. The
+  // always-fills benchmark is not lost — buildMakerShadow scores these same signals at the ask.
+  const resting = restAtBid(built.order, stakeLimit);
+  if (!resting) return false;
+  ledger.paperBudget.availableCents -= resting.stakeCents;
+  ledger.orders.push(resting);
   return true;
 }
 
@@ -1127,6 +1187,7 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
   const previousSkip = ledger.lastLiveSkip?.reason;
   // Read once per cycle: a ceiling that changed mid-cycle would size one order against the old value.
   const budgets = await getProviderBudgets({ revision: status.control.revision });
+  changed = resolveRestingPaperOrders(dashboard, ledger) || changed;
   changed = await runPaper(dashboard, status, ledger, regimeGate, budgets) || changed;
   changed = await runLive(dashboard, status, ledger, regimeGate, budgets) || changed;
   if (changed || ledger.lastLiveSkip?.reason !== previousSkip) await writeLedger(ledger);

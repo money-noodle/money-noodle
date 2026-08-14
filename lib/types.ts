@@ -997,6 +997,8 @@ export interface PaperOrder {
   entryDecision?: EntryDecisionSnapshot;
   /** Observation-only estimate captured for fill-model validation; never used for sizing/gating. */
   makerFillEstimate?: MakerFillEstimate;
+  /** Paper maker simulation: the order rests until this instant, then goes unfilled. */
+  restingUntil?: string;
   settlementAverageEstimate?: SettlementAverageEstimate;
   askPrice: number;
   bidPrice: number;

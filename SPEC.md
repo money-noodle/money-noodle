@@ -642,7 +642,7 @@ Portfolio selection was expected to need merging and does not: `runLive` and `ru
 
 | Differs | Why |
 |---|---|
-| Fill model — maker post-only vs simulated maker | Paper originally filled at the ask, which is taker execution, not perfect execution: it pays the spread and the fee that live's resting orders avoid. Paper therefore simulates maker fills so the books are comparable, and the perfect-execution benchmark moves to the ask-fill shadow that `buildMakerShadow` already computes. *(Decided 2026-08-14; implementation pending.)* |
+| Fill model — maker post-only vs simulated maker | Paper originally filled at the ask, which is taker execution, not perfect execution: it pays the spread and the fee that live's resting orders avoid. Paper therefore simulates maker fills so the books are comparable, and the perfect-execution benchmark moves to the ask-fill shadow that `buildMakerShadow` already computes. *(Implemented 2026-08-14: paper rests at the bid for the same 12-second horizon live uses, fills when the recorded ask reaches the limit, and returns the reserved stake on a miss.)* |
 | Budget, stake sizing, bankroll | Paper is not capital-constrained; matching it would hide policy outcomes behind sizing noise. |
 | Hourly filled-order limit, live risk stops, reconciliation gate | Venue and capital protections, not predictions. |
 | Position and correlation caps | Same constants, counted separately, because the books are separate. |
