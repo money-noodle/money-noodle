@@ -41,9 +41,8 @@ describe('binary buy policy v13', () => {
     expect(bestEntry(cheapDownUnderdog)).toMatchObject({ side: 'UP', probability: 0.6 });
     expect(qualifiesAsBuyEdge(cheapDownUnderdog)).toBe(false);
 
-    // The favoured-DOWN half needs the suspension lifted; the underdog rejection above is decided by the
-    // probability floor and holds either way.
-    process.env.MONEY_NOODLE_ALLOW_DOWN_ENTRY_LIVE = 'true';
+    // DOWN entry is permitted by default since v16, so nothing needs enabling here; the underdog
+    // rejection above is decided by the probability floor either way.
     const favoredDown = candidate({
       modelProbabilityUp: 0.4,
       market: { ...market, askUp: 0.95, askDown: 0.40 },
@@ -87,14 +86,11 @@ describe('binary buy policy v13', () => {
     expect(qualifiesVenueBuyEdge(mixed, 'kalshi')).toBe(false);
   });
 
-  // DOWN entry is suspended by default pending recalibration, so these cases enable it explicitly. The
-  // selection and pricing logic must stay correct and covered for when the suspension is lifted; see
-  // down-entry-suspension.test.ts for the suspension behaviour itself.
-  afterEach(() => { delete process.env.MONEY_NOODLE_ALLOW_DOWN_ENTRY_LIVE;
-  delete process.env.MONEY_NOODLE_ALLOW_DOWN_ENTRY_PAPER; });
+  // DOWN entry is permitted by default since v16; see down-entry-suspension.test.ts for the switch
+  // itself. These cases assert side selection and pricing, which must hold whatever the switch says.
+  afterEach(() => { delete process.env.MONEY_NOODLE_ALLOW_DOWN_ENTRY; });
 
   it('buys DOWN only from its own actionable ask and probability', () => {
-    process.env.MONEY_NOODLE_ALLOW_DOWN_ENTRY_LIVE = 'true';
     // Edge held inside the 35pp ceiling so this case tests side selection, not the edge bound.
     const bearish = candidate({ modelProbabilityUp: 0.35, market: { ...market, askUp: 0.7, askDown: 0.45 } });
     expect(bestEntry(bearish)).toMatchObject({ side: 'DOWN', price: 0.45 });
