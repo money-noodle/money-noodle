@@ -1,6 +1,6 @@
 # Money Noodle — Living Product Specification
 
-> **Status:** Draft 0.33 · **Updated:** 2026-08-12
+> **Status:** Draft 0.34 · **Updated:** 2026-08-14
 > This is the source of truth for product scope, architecture, model behavior, and safety decisions. Update the decision log whenever a requirement changes. Current implementation progress is tracked separately in [`STATUS.md`](STATUS.md).
 
 ## 1. Product statement
@@ -612,7 +612,113 @@ Recommended future service boundaries:
 11. New paper orders are blocked while unconfigured, depleted, stale, duplicated, disconnected, underfunded, too wide, too near close, above exposure limits, or unable to buy the venue's minimum supported quantity.
 12. Budget configuration, control-state transitions, reservations, settlements, and rejected resumes are durably audited.
 
-## 12. Open decisions
+## 12. Track separation and policy evaluation
+
+### 12.1 Why this exists
+
+Three lanes are needed and only two exist. Live runs the active policy with real money. Paper is supposed to run the *same* policy with perfect fills, so that `paper − live` isolates what execution costs. There is no lane for a change the desk is considering but has not adopted.
+
+Because the third lane is missing, speculative changes have leaked into paper — paper trades XRP that live withholds, and paper ignores the adaptive regime gate that live obeys — and one-off evaluations have been written three separate times and thrown away (`missedBuyCounterfactual`, `buildMakerShadow`, and the regime-gate sentinel loop in `data/regime-gate.json`).
+
+Both failures are the same mistake. Paper's entire value is that exactly one variable differs from live. Add a second and the subtraction stops meaning anything: when the books disagree, nothing distinguishes a policy difference from a fill difference from a cohort live never traded.
+
+### 12.2 The three lanes
+
+| Lane | Policy | Money | Execution | Answers |
+|---|---|---|---|---|
+| **Live** | active | real | maker post-only, real fills | What did the desk actually earn? |
+| **Paper mirror** | active, *identical* | simulated | immediate fill at ask | Was the decision right, and what did execution cost? |
+| **Evaluation** | candidate, non-production | none | never places an order | Should this change be adopted? |
+
+### 12.3 The mirror invariant
+
+**For any prediction snapshot, the entry decision is identical for live and paper. The tracks may differ only in execution and capital.**
+
+This is structural, not a convention to remember: the rule layer takes no execution-mode parameter, so a divergence cannot be expressed. Concretely, `qualifiesAsBuyEdge`, `bestEntry`, `downEntryEnabled` and `assetAdmitted` lose their `mode` argument; the per-track environment variables (`MONEY_NOODLE_SUSPEND_DOWN_ENTRY_LIVE`/`_PAPER`, `MONEY_NOODLE_LIVE_EXCLUDED_ASSETS`/`PAPER_EXCLUDED_ASSETS`) collapse to one each; the adaptive regime gate applies to both tracks; and the adaptive regime gate, previously checked only in `runLive`, applies to both.
+
+Portfolio selection was expected to need merging and does not: `runLive` and `runPaper` already call the same `selectPortfolio` with the same `portfolioConstraints()`, differing only in which book's exposures they pass, which is correct because the books are separate. The surrounding differences — maker retry accounting, live stake caps, funding headroom — are execution, and forcing them into one path would push live-only concerns into the mirror.
+
+**What remains per-track, deliberately:**
+
+| Differs | Why |
+|---|---|
+| Fill model — maker post-only vs immediate ask | The measurement being taken. 56% of live attempts on 2026-08-13 never filled. |
+| Budget, stake sizing, bankroll | Paper is not capital-constrained; matching it would hide policy outcomes behind sizing noise. |
+| Hourly filled-order limit, live risk stops, reconciliation gate | Venue and capital protections, not predictions. |
+| Position and correlation caps | Same constants, counted separately, because the books are separate. |
+
+The consequence is intended: `paper − live` is the desk's total execution and capital cost. To make that decomposable rather than inferred, every live skip is recorded durably per settlement window with its reason, replacing the single `lastLiveSkip` slot that keeps only the most recent. The comparison then attributes each missing live trade to fill drag, limit drag, or stop drag.
+
+### 12.4 The policy as data
+
+Candidates cannot be expressed while the rules are module constants. The buy policy becomes a value:
+
+```ts
+export interface BuyPolicy {
+  version: string;
+  minNetEdge: number; maxNetEdge: number; minEstimateQuality: number;
+  minSelectedSideProbability: number; minEntryPrice: number; maxEntryPrice: number;
+  downEnabled: boolean; excludedAssets: string[];
+  requiredSnapshots: number; observationSpanMs: number; warmupMs: number; lateCutoffMs: number;
+}
+export const PRODUCTION_BUY_POLICY: BuyPolicy = { /* the current constants */ };
+```
+
+Rule functions take a `BuyPolicy`, defaulting to production. The exported constants remain as the fields of that object so existing readers and the published manifest keep working. This is what turns an ad-hoc analysis script into production code: the same evaluator scores production and every candidate, so a candidate's number can never come from a different implementation than the one that trades.
+
+### 12.5 Candidates and their evidence
+
+A **candidate** is an immutable, named parameter set with a status. It never places an order, never touches a budget, and cannot affect either trading lane.
+
+| Status | Meaning |
+|---|---|
+| `screening` | Retroactive scoring only. Cheap, instant, recomputable, and never sufficient for promotion. |
+| `collecting` | Committed sentinels are accumulating forward evidence. |
+| `promotable` | Sentinel evidence meets the stated criteria; promotion remains a manual act. |
+| `production` | The active policy. Exactly one at a time. |
+| `retired` | Superseded or refuted; the record and its evidence are retained. |
+
+**Two kinds of evidence, and the distinction is load-bearing:**
+
+*Retroactive screening* replays a candidate's rules over recorded snapshots. The forecast journal already carries what this needs — every 15-second snapshot with both sides' actionable asks, and settlement outcomes patched in on resolution. It answers "what would a 4pp floor have done?" over all history in seconds, which is how a dozen ideas get filtered down to one. It is re-derived by code each time it runs, so it is labelled as such and can never, by itself, promote anything.
+
+*Committed sentinels* are written at decision time: when a candidate qualifies a window the production policy does not, or refuses one it takes, an immutable record captures the contract, side, ask, fee, predicted edge and timestamp, and is followed to settlement. This is the existing regime-gate sentinel pattern generalized from one implicit candidate to many. It cannot be re-derived favourably later, and it accrues only from the moment it starts.
+
+**Promotion requires committed sentinel evidence**, a minimum number of independent settlement windows, a clustered return clearing a stated threshold, and a written reason — mirroring the model promotion ledger already in `lib/model-promotion.ts`. Nothing reaches production on a number that was only ever computed after the fact. That failure mode is not hypothetical: the DOWN suspension of 2026-08-13 was adopted on retroactive figures that later failed to reproduce, and was withdrawn a day later.
+
+### 12.6 Storage and modules
+
+| Path | Role |
+|---|---|
+| `lib/buy-policy.ts` | `BuyPolicy` type, `PRODUCTION_BUY_POLICY`, pure rule evaluation |
+| `lib/policy-candidate.ts` | Candidate definition, retroactive scoring, promotion criteria (pure) |
+| `lib/policy-candidate-store.ts` | Server-only durable candidate and sentinel records |
+| `data/policy-candidates.json` | Candidate definitions and statuses; append-only history |
+| `data/policy-sentinels.json` | Immutable per-window sentinel records keyed by candidate |
+
+The regime gate is a special case of this mechanism — one implicit candidate, the production policy, scored forward on its own sentinels. Unifying them is a follow-up, not a prerequisite; the gate works and retrofitting it earns nothing immediately.
+
+### 12.7 Surfaces
+
+The Policy dialog gains a candidates section beside the production policy: each candidate's status, its parameter delta against production, its screening evidence marked as re-derived, its committed evidence, and its promotion eligibility.
+
+A side-by-side comparison surface reports the mirror against live per settlement window — the decision each lane made, the outcome, and the aggregate drag decomposed into fill, limit and stop. This is the surface that answers "predicted versus actual" directly, which the current dialogs only approximate.
+
+### 12.8 Delivery order
+
+1. **Unify the rules.** *(Done, buy policy v17.)* Removed the mode parameter from the rule layer, collapsed the per-track environment variables to `MONEY_NOODLE_ALLOW_DOWN_ENTRY` and `MONEY_NOODLE_EXCLUDED_ASSETS`, applied the regime gate to both tracks, and added `lib/mirror-invariant.test.ts`, which asserts the absence of a mode parameter by arity so the divergence cannot return unnoticed.
+2. **Record live skips durably** per window, and build the side-by-side comparison surface.
+3. **Introduce `BuyPolicy`** as a value, with production as its first instance.
+4. **Candidate store and retroactive screening**, published in the Policy dialog.
+5. **Committed sentinels and promotion criteria**, reusing the model-promotion shape.
+
+Step 1 has an immediate, intended consequence: **paper stops trading XRP and starts obeying the regime gate.** XRP evidence collection therefore pauses until step 4 restores it as a candidate. That is accepted rather than worked around — XRP already clears −2se on both tracks independently (live −45.7% ±21.5 over 41 windows, paper −35.1% ±13.0 over 81), so more of the same evidence is worth less than a mirror that can be trusted.
+
+### 12.9 Out of scope
+
+This design does not change any live entry rule, does not let a candidate place an order or hold a budget, does not alter sizing or the fill model, and does not bump the buy policy version when a candidate changes. Only promotion changes the production policy version, and only through the recorded, manual act described in §12.5.
+
+## 13. Open decisions
 
 - Redundant fallback for the primary Kraken cycle-reference/current-price/volatility series without introducing cross-source basis offsets.
 - Exact cross-provider market sets that semantically match each normalized 15-minute target, without assuming equal settlement rules.
@@ -626,11 +732,18 @@ Recommended future service boundaries:
 - Whether to pin dependency versions explicitly. 21 of 24 entries in `package.json` are `"latest"`, including `next`, `react`, and `typescript`. The lockfile keeps current installs reproducible, but any lockfile refresh can pull new majors silently and a compromised release of any of those packages would land automatically in a process that signs live orders.
 - Alert channels (in-app, desktop, email, SMS/Telegram).
 - Manual model-promotion criteria after the automatic 100-window walk-forward evaluation.
+- Promotion thresholds for a **policy** candidate: how many independent settlement windows of committed sentinel evidence, and what clustered return margin over production, before a candidate becomes promotable. The model-promotion constants (60 held-out trades, 4 positive folds, 4 beating baseline, 2pp mean-window gap) are the obvious starting point but were tuned for a different question.
+- Whether a candidate should also emit sentinels for windows it *refuses* that production takes. Recording only the extra trades measures the upside of a loosening but leaves a tightening with no forward evidence at all, which is the shape of every change adopted on 2026-08-13.
+- Whether the adaptive regime gate should keep scoping its evidence to the buy policy version once policies become values. Three version bumps on 2026-08-13 each reset the gate to warming, leaving it inert for most of the day it was most needed.
 
-## 13. Decision log
+## 14. Decision log
 
 | Date | Decision |
 |---|---|
+| 2026-08-14 | Paper mirrors live exactly at the rule layer. The rule functions take no execution-mode parameter, so a policy divergence between tracks cannot be expressed; the tracks differ only in fill model, sizing, and the live-only capital protections, making `paper − live` the desk's execution and capital cost. |
+| 2026-08-14 | Speculative policy changes never run in paper. They run in a third evaluation lane that places no orders and holds no budget, because a paper track carrying experiments cannot serve as the control that makes predicted-versus-actual readable. |
+| 2026-08-14 | Retroactive scoring may screen a candidate but may never promote one. Promotion requires forward evidence committed at decision time, following the regime-gate sentinel pattern, after retroactive figures adopted on 2026-08-13 failed to reproduce a day later. |
+| 2026-08-14 | The buy policy becomes a value (`BuyPolicy`) rather than module constants, so production and every candidate are scored by one evaluator and a candidate's number cannot come from a different implementation than the one that trades. |
 | 2026-08-08 | Use Next.js to keep UI and server integrations in one portable TypeScript app. |
 | 2026-08-08 | Use Tailwind CSS with local shadcn/ui components. |
 | 2026-08-08 | Start with local JSON cache/history; isolate storage for later MongoDB. |
