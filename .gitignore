@@ -5,6 +5,7 @@ out/
 data/*.json
 data/*.jsonl
 data/*.tmp
+data/forecast-history-shards/
 *.tsbuildinfo
 .env
 .env.local

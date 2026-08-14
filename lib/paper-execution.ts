@@ -20,7 +20,7 @@ import { getProviderBudgets, providerBudget } from './provider-budget-store';
 import { isStatelessDeployment } from './runtime-environment';
 import { postgresPaperProjectionSyncEnabled, readPublicPaperBudgetFromPostgres, syncPublicPaperBudgetToPostgres } from './postgres-paper-projection';
 import { fetchKalshiReconciliationSnapshot } from './kalshi-reconciliation';
-import { entryAttemptsForLogicalOrder, makerAttemptId, makerRetryDecision, maximumLiveMakerAttempts } from './maker-retry-policy';
+import { entryAttemptsForLogicalOrder, makerAttemptId, makerRetryDecision, maximumLiveMakerAttempts, maximumPaperMakerAttempts } from './maker-retry-policy';
 import { liveBlockers, liveTradingEnabled, maxLiveOrdersPerHour, maxLiveStakeCents, placeKalshiBuy, placeKalshiSell, placeKalshiTakerBuy } from './live-orders';
 import { countFilledLiveVenueOrders } from './order-rate-limit';
 import { selectPortfolio, DEFAULT_PORTFOLIO_CONSTRAINTS, parseMaximumOpenPositions, type PortfolioConstraints } from './portfolio-policy';
@@ -762,10 +762,10 @@ export function resolveRestingPaperOrders(dashboard: DashboardData, ledger: Ledg
 
 async function runPaper(dashboard: DashboardData, status: TradingControlData, ledger: Ledger, regimeGate: RegimeGateStatus, budgets: ProviderBudgetConfiguration): Promise<boolean> {
   if (ledger.paperBudget.availableCents <= 0) return false;
-  // The mirror obeys every entry rule live obeys, the adaptive regime gate included. A paper track that
-  // kept trading through a cooling-off period would not be measuring the policy live is running.
+  // The mirror obeys policy-level live entry rules, the adaptive regime gate included. It remains
+  // independent from live operational switches so simulation continues while real-money trading is off.
   if (!regimeGate.allowsEntries) return false;
-  const paperProviders = new Set(status.tradingProviders?.filter((provider) => provider.paperEnabled).map((provider) => provider.id) ?? status.control.enabledVenues);
+  const paperProviders = new Set(status.tradingProviders?.filter((provider) => provider.paperEnabled || provider.liveEnabled).map((provider) => provider.id) ?? status.control.enabledVenues);
   const open = ledger.orders.filter((order) => order.executionMode === 'paper' && (order.status === 'open' || order.status === 'pending_reservation'));
   if (open.length >= maximumOpenPositions()) return false;
   if (!isFreshCalculationTimestamp(dashboard.generatedAt)) return false;
@@ -780,28 +780,26 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
       // The mirror uses the same bounded-attempt policy as live. Before this check, each paper miss
       // could be submitted again every collector tick under the same id, overstating its fill rate.
       const logicalId = orderId(prediction, 'paper', side, ledger);
-      const retry = makerRetryDecision(paperAttempts(ledger, prediction, side), Date.now(), prediction.market.closesAt, maximumLiveMakerAttempts());
+      const retry = makerRetryDecision(paperAttempts(ledger, prediction, side), Date.now(), prediction.market.closesAt, maximumPaperMakerAttempts());
       if (!retry.allowed) return [];
       const candidate = buildOrder(prediction, side, {
         ...status, venues: status.venues.map((readiness) => ({ ...readiness, enabled: paperProviders.has(readiness.venue) })),
-      }, ledger, dashboard.generatedAt, dashboard.modelVersion, 'paper', stakeLimit);
+      }, ledger, dashboard.generatedAt, dashboard.modelVersion, 'paper', stakeLimit, 'kalshi');
       if ('reason' in candidate) return [];
       candidate.order.logicalOrderId = logicalId;
       candidate.order.attemptNumber = retry.attemptNumber;
       candidate.order.retryOfOrderId = retry.retryOfOrderId;
       candidate.order.id = makerAttemptId(logicalId, retry.attemptNumber);
       candidate.order.clientOrderId = candidate.order.id;
-      return [{ prediction, order: candidate.order }];
+      return [{ prediction, order: candidate.order, portfolioKey: persistenceKey(prediction, side) }];
     })
     // Funding is a feasibility filter applied after candidates exist, so a pair without allocation
     // headroom drops out while another provider's candidate for the same window survives.
     .filter(({ order }) => order.stakeCents <= marketFundingFor(budgets, 'paper', orderProviderId(order),
       orderMarketId(order), ledger, equity, ledger.paperBudget.availableCents).spendableCents);
 
-  // Paper-only: refuse windows whose path the classifier could not characterise. Every live DOWN entry
-  // to date fell in `insufficient`, and the `insufficient` UP cohort won 22% against 28-33% for
-  // classified windows. Paper carries the experiment so live sizing and behaviour are untouched;
-  // MONEY_NOODLE_REQUIRE_CLASSIFIED_REGIME=false disables it.
+  // Keep the same classified-path admission rule used by live candidate selection, while recording the
+  // label on the simulated order so later cohorts can still be audited.
   const withRegime = await Promise.all(candidates.map(async (item) => ({
     ...item, regime: (await cycleRegimeFor(item.order.symbol, item.order.closesAt))?.regime,
   })));
@@ -810,25 +808,34 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
   const selected = selectPortfolio(eligible.map(({ order }) => ({
     id: order.id, symbol: order.symbol, closesAt: order.closesAt, expectedProfitCents: expectedProfitCents(order),
   })), open.map((order) => ({ symbol: order.symbol, closesAt: order.closesAt })), portfolioConstraints())
-    .filter((item) => item.selected).sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99))[0];
-  const built = selected ? eligible.find(({ order }) => order.id === selected.id) : undefined;
-  if (!built) return false;
-  // Paper posts the same resting maker order live posts, at the bid, and fills only when the recorded
-  // ask actually reaches it. Filling at the ask was taker execution: it charged the mirror a spread and
-  // a fee live does not pay, on every trade, while missing none of the trades live misses. The
-  // always-fills benchmark is not lost — buildMakerShadow scores these same signals at the ask.
-  const resting = restAtBid(built.order, stakeLimit);
-  if (!resting) return false;
-  if (resting.venue === 'kalshi' && resting.entryExecutionObservations?.length) {
-    Object.assign(resting.entryExecutionObservations.at(-1)!, selectedSideDepth(
-      observeKalshiOrderBook(resting.contractId), resting.side,
-      resting.issuanceBidPrice ?? resting.bidPrice, resting.issuanceAskPrice ?? resting.askPrice,
-      resting.initialSubmittedPrice,
-    ));
+    .filter((item) => item.selected).sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
+  let placed = 0;
+  for (const choice of selected) {
+    if (open.length + placed >= maximumOpenPositions()) break;
+    const built = eligible.find(({ order }) => order.id === choice.id);
+    if (!built || ledger.paperBudget.availableCents <= 0) continue;
+    // Paper posts the same resting maker order live posts, at the bid, and fills only when the recorded
+    // ask actually reaches it. Filling at the ask was taker execution: it charged the mirror a spread and
+    // a fee live does not pay, on every trade, while missing none of the trades live misses. The
+    // always-fills benchmark is not lost — buildMakerShadow scores these same signals at the ask.
+    const currentStakeLimit = Math.min(status.control.perTradeCents, maximumPaperStakeCents(), ledger.paperBudget.availableCents);
+    const resting = restAtBid(built.order, currentStakeLimit);
+    if (!resting) continue;
+    const funding = marketFundingFor(budgets, 'paper', orderProviderId(resting), orderMarketId(resting), ledger,
+      ledger.paperBudget.availableCents, ledger.paperBudget.availableCents);
+    if (resting.stakeCents > funding.spendableCents) continue;
+    if (resting.venue === 'kalshi' && resting.entryExecutionObservations?.length) {
+      Object.assign(resting.entryExecutionObservations.at(-1)!, selectedSideDepth(
+        observeKalshiOrderBook(resting.contractId), resting.side,
+        resting.issuanceBidPrice ?? resting.bidPrice, resting.issuanceAskPrice ?? resting.askPrice,
+        resting.initialSubmittedPrice,
+      ));
+    }
+    ledger.paperBudget.availableCents -= resting.stakeCents;
+    ledger.orders.push(resting);
+    placed += 1;
   }
-  ledger.paperBudget.availableCents -= resting.stakeCents;
-  ledger.orders.push(resting);
-  return true;
+  return placed > 0;
 }
 
 async function executePreparedLiveBuy(order: PaperOrder, status: TradingControlData, ledger: Ledger): Promise<void> {
@@ -1368,8 +1375,7 @@ async function runLive(dashboard: DashboardData, status: TradingControlData, led
   built.order.id = makerAttemptId(logicalId, retry.attemptNumber);
   built.order.clientOrderId = built.order.id;
   built.order.entryExecutionDecision = entryExecutionDecision(prediction, side, built.order, ledger);
-  // Observation only on live: recorded for cohort analysis, never gating. The classified-regime
-  // requirement is deliberately paper-only until it has evidence of its own.
+  // Record the path label that admitted this live candidate so later cohorts can be audited.
   built.order.entryCycleRegime = (await cycleRegimeFor(prediction.symbol, prediction.market.closesAt))?.regime;
   built.order.shadowTakerAllInCents = built.order.stakeCents;
   built.order.shadowTakerQuantity = built.order.quantity;

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { entryAttemptsForLogicalOrder, makerAttemptId, makerRetryDecision } from './maker-retry-policy';
+import { afterEach, describe, expect, it } from 'vitest';
+import { entryAttemptsForLogicalOrder, makerAttemptId, makerRetryDecision, maximumLiveMakerAttempts, maximumPaperMakerAttempts } from './maker-retry-policy';
 import type { PaperOrder } from './types';
 
 const logical = 'live:BTC:2026-01-01T00:15:00Z';
@@ -10,6 +10,11 @@ const order = (patch: Partial<PaperOrder> = {}): PaperOrder => ({
   createdAt: '2026-01-01T00:01:00Z', calculationAt: '2026-01-01T00:01:00Z', closesAt: close,
   modelProbabilityUp: 0.7, confidence: 0.7, askPrice: 0.4, bidPrice: 0.39, spread: 0.01,
   quantity: 0.2, stakeCents: 9, feeCents: 1, potentialPayoutCents: 20, ...patch,
+});
+
+afterEach(() => {
+  delete process.env.MONEY_NOODLE_MAX_LIVE_MAKER_ATTEMPTS;
+  delete process.env.MONEY_NOODLE_MAX_PAPER_MAKER_ATTEMPTS;
 });
 
 describe('bounded maker retry policy', () => {
@@ -33,6 +38,13 @@ describe('bounded maker retry policy', () => {
     const result = makerRetryDecision([order()], Date.parse('2026-01-01T00:02:00Z'), close, 1);
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain('Maximum 1 maker attempt');
+  });
+
+  it('keeps paper retry capacity separate from the conservative live default', () => {
+    expect(maximumLiveMakerAttempts()).toBe(1);
+    expect(maximumPaperMakerAttempts()).toBe(2);
+    process.env.MONEY_NOODLE_MAX_PAPER_MAKER_ATTEMPTS = '1';
+    expect(maximumPaperMakerAttempts()).toBe(1);
   });
 
   it('blocks during cooldown and in the final two minutes', () => {

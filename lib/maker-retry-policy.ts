@@ -12,6 +12,14 @@ export function maximumLiveMakerAttempts(): number {
     : 1;
 }
 
+/** Paper can retry once by default so an early simulated miss does not hide a later live-aligned buy. */
+export function maximumPaperMakerAttempts(): number {
+  const configured = Number(process.env.MONEY_NOODLE_MAX_PAPER_MAKER_ATTEMPTS ?? MAX_MAKER_ATTEMPTS_PER_CONTRACT);
+  return Number.isSafeInteger(configured) && configured >= 1
+    ? Math.min(MAX_MAKER_ATTEMPTS_PER_CONTRACT, configured)
+    : MAX_MAKER_ATTEMPTS_PER_CONTRACT;
+}
+
 export interface MakerRetryDecision {
   allowed: boolean;
   attemptNumber: number;

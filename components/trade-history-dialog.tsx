@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils';
 
 interface HistoryResponse { orders: PaperOrder[]; total: number; offset: number; limit: number; hasMore: boolean }
 
-export function TradeHistoryDialog() {
+export function TradeHistoryDialog({ triggerLabel = 'Trade history' }: { triggerLabel?: string }) {
   const [data, setData] = useState<HistoryResponse | null>(null);
   const [mode, setMode] = useState('all');
   const [state, setState] = useState('all');
@@ -38,7 +38,7 @@ export function TradeHistoryDialog() {
   function changeState(value: string) { setState(value); void load({ nextState: value }); }
 
   return <Dialog onOpenChange={(open) => { if (open) void load(); }}>
-    <DialogTrigger asChild><Button variant="outline" size="sm" className="h-7 gap-1.5 px-2 text-[9px]"><History className="size-3"/>Decision history</Button></DialogTrigger>
+    <DialogTrigger asChild><Button variant="outline" size="sm" className="h-7 gap-1.5 px-2 text-[9px]"><History className="size-3"/>{triggerLabel}</Button></DialogTrigger>
     <DialogContent className="max-w-5xl p-0">
       <DialogHeader className="border-b p-5 pr-12"><DialogTitle className="flex items-center gap-2"><History className="size-4 text-primary"/>Trade decision history</DialogTitle><DialogDescription>Issuance-time probability, edge, basis, factors, persistence, execution choice, and eventual trade result remain attached to the same durable order.</DialogDescription></DialogHeader>
       <div className="flex max-h-[82vh] flex-col">

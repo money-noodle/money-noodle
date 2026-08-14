@@ -1,6 +1,6 @@
 import { excludedAssets } from './asset-exclusion';
 import { ENTRY_EXECUTION_POLICY_VERSION, parseEntryExecutionMode } from './entry-execution-policy';
-import { POST_EXIT_REENTRY_COOLDOWN_MS, PROFIT_REVERSAL_ARM_PERCENT, STANDALONE_EXIT_POLICY_VERSION, STRICT_EXIT_MIN_GAIN_CENTS } from './exit-policy';
+import { POST_EXIT_REENTRY_COOLDOWN_MS, PROFIT_REVERSAL_ARM_PERCENT, STRICT_EXIT_MIN_GAIN_CENTS, profitReversalExitEnabled, standaloneExitPolicyVersion } from './exit-policy';
 import { maximumLiveMakerAttempts } from './maker-retry-policy';
 import { activeModel } from './model-promotion';
 import {
@@ -179,9 +179,10 @@ export function activePolicyManifest(providers: TradingProviderDescriptor[], mod
         { label: 'Live attempts per contract', value: `${maximumLiveMakerAttempts()}` },
         { label: 'Taker', value: executionMode === 'maker' ? 'Observation-only recommendation; capped IOC primitive' : 'Executable when every strict gate clears' },
       ]),
-      component('exit', 'Standalone exits', STANDALONE_EXIT_POLICY_VERSION, 'production', 'Reduce-only value and armed profit-reversal exits.', [
+      component('exit', 'Standalone exits', standaloneExitPolicyVersion(), 'production', 'Reduce-only value exits, with armed profit reversal recorded whether or not it may sell.', [
         { label: 'Strict value margin', value: `${STRICT_EXIT_MIN_GAIN_CENTS}¢` },
         { label: 'Profit lock arms', value: `+${PROFIT_REVERSAL_ARM_PERCENT * 100}% executable profit` },
+        { label: 'Profit reversal exit', value: profitReversalExitEnabled() ? 'Executable' : 'Withheld on its own evidence; armed downturns are recorded only' },
         { label: 'Re-entry cooldown', value: `${seconds(POST_EXIT_REENTRY_COOLDOWN_MS)} plus fresh evidence` },
       ]),
       component('switch', 'Switch policy', SWITCH_POLICY_VERSION, 'production', 'Reduce-only replacement only when future wealth and probability advantage are positive.', [

@@ -1,3 +1,4 @@
+import { pushInto } from './group';
 import { BUY_POLICY_VERSION, MIN_CALIBRATION_SAMPLE, MIN_ENTRY_PRICE, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, MIN_SELECTED_SIDE_PROBABILITY, venueFeeRate } from './prediction-policy';
 import type { BenchmarkScore, CalibrationBin, EdgeBucket, LeadTimeSlice, MissedBuyCounterfactual, PerformanceSlice, PerformanceSummary, PerformanceTimelinePoint, SegmentGroup, SegmentStat, TrackedForecast } from './types';
 
@@ -18,8 +19,7 @@ function isQualified(forecast: TrackedForecast): boolean {
 function slices(forecasts: TrackedForecast[], key: (forecast: TrackedForecast) => string): PerformanceSlice[] {
   const groups = new Map<string, TrackedForecast[]>();
   for (const forecast of forecasts.filter((item) => item.status === 'resolved')) {
-    const label = key(forecast);
-    groups.set(label, [...(groups.get(label) ?? []), forecast]);
+    pushInto(groups, key(forecast), forecast);
   }
   return [...groups.entries()].map(([label, items]) => {
     const correct = items.filter((item) => item.correct).length;
@@ -121,7 +121,7 @@ function missedBuyCounterfactual(forecasts: TrackedForecast[]): MissedBuyCounter
     const outcome = forecast.venueOutcomes?.kalshi?.outcome;
     if (!outcome || !forecast.venueContracts?.kalshi || forecast.venueOutcomes?.kalshi?.contractId !== forecast.venueContracts.kalshi.contractId) continue;
     const key = `${forecast.symbol}:${settlementWindowKey(forecast)}`;
-    byAssetWindow.set(key, [...(byAssetWindow.get(key) ?? []), forecast]);
+    pushInto(byAssetWindow, key, forecast);
   }
   const candidates: Array<{ closesAt: string; edge: number; returnValue: number }> = [];
   for (const snapshots of byAssetWindow.values()) {
@@ -143,7 +143,7 @@ function missedBuyCounterfactual(forecasts: TrackedForecast[]): MissedBuyCounter
     }
   }
   const windowValues = new Map<string, number[]>();
-  for (const candidate of candidates) windowValues.set(candidate.closesAt, [...(windowValues.get(candidate.closesAt) ?? []), candidate.returnValue]);
+  for (const candidate of candidates) pushInto(windowValues, candidate.closesAt, candidate.returnValue);
   const clustered = [...windowValues.values()].map((values) => values.reduce((sum, value) => sum + value, 0) / values.length);
   const mean = clustered.length ? clustered.reduce((sum, value) => sum + value, 0) / clustered.length : null;
   const standardError = mean !== null && clustered.length > 1
@@ -197,7 +197,7 @@ function edgeBuckets(resolved: TrackedForecast[]): EdgeBucket[] {
  */
 function segmentStat(label: string, items: TrackedForecast[]): SegmentStat {
   const windows = new Map<string, TrackedForecast[]>();
-  for (const item of items) windows.set(item.closesAt, [...(windows.get(item.closesAt) ?? []), item]);
+  for (const item of items) pushInto(windows, item.closesAt, item);
   const windowReturns = [...windows.values()].map((group) => group.reduce((sum, item) => sum + (item.realizedReturn ?? 0), 0) / group.length);
   const mean = windowReturns.reduce((sum, value) => sum + value, 0) / windowReturns.length;
   const standardError = windowReturns.length > 1
@@ -216,7 +216,7 @@ function bucketed(dimension: string, description: string, items: TrackedForecast
   for (const item of items) {
     const label = key(item);
     if (label === null) continue;
-    groups.set(label, [...(groups.get(label) ?? []), item]);
+    pushInto(groups, label, item);
   }
   return {
     dimension, description,
@@ -287,7 +287,7 @@ export function summarizePerformance(forecasts: TrackedForecast[]): PerformanceS
   const resolvedCycleGroups = new Map<string, TrackedForecast[]>();
   for (const forecast of resolved) {
     const key = cycleKey(forecast);
-    resolvedCycleGroups.set(key, [...(resolvedCycleGroups.get(key) ?? []), forecast]);
+    pushInto(resolvedCycleGroups, key, forecast);
   }
   const cycleAccuracies = [...resolvedCycleGroups.values()].map((items) => items.filter((item) => item.correct).length / items.length);
   const cycleBalancedAccuracy = cycleAccuracies.length ? cycleAccuracies.reduce((sum, value) => sum + value, 0) / cycleAccuracies.length : null;

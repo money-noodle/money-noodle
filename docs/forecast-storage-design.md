@@ -5,12 +5,15 @@
 
 ## 1. The problem, with evidence
 
-`data/forecast-history.json` is a single JSON array of **47,536 rows / 213.6 MB**. `JSON.parse` and
-`JSON.stringify` on it are synchronous, so loading or snapshotting it holds the Node event loop for
-roughly ten seconds.
+> **Corrected 2026-08-14 after direct measurement.** The stall was real and the lockstep evidence below
+> is sound, but this section originally blamed `JSON.parse`/`JSON.stringify`, and that attribution was
+> wrong. The block was `summarizePerformance`. See §1.1. The layout goals in this document still stand
+> on their own merits; the ten-second figure that motivated them does not.
 
-That block is what the operator sees as "Calculation window expired". It disguises itself as slow
-upstreams, because feed timing is measured in wall time:
+`data/forecast-history.json` is a single JSON array, now **48,291 rows / 228.8 MB**.
+
+The operator symptom is "Calculation window expired". It disguises itself as slow upstreams, because
+feed timing is measured in wall time:
 
 ```
 Slow feed: coingecko    took 11363ms
@@ -21,7 +24,43 @@ Slow feed: price-series took 11356ms
 
 Four independent hosts do not stall in lockstep. The loop was blocked and every in-flight feed
 recorded the same elapsed time. The same fact defeats the 6-second feed deadline added earlier: a
-`setTimeout` cannot fire while the loop is held.
+`setTimeout` cannot fire while the loop is held. That reasoning was correct — only the culprit was
+misidentified.
+
+### 1.1 What the block actually was
+
+Measured against the real 48,291-row history:
+
+| Operation | Cost |
+|---|---|
+| `JSON.parse` of the 228.8 MB file | **1.2 s** |
+| `JSON.stringify` of the same | **0.63 s** |
+| All eight durable stores, parsed *and* written once | **2.0 s** |
+| `summarizePerformance(forecasts)` | **9.6–13.1 s** |
+
+The parse is also not per-cycle: `readForecasts` caches the promise (`forecastCache ??= loadForecasts()`),
+so the file is parsed once per process. `summarizePerformance` runs behind a 60-second cache on the hot
+path, and it alone accounted for the entire observed stall.
+
+A CPU profile put 43.8% of its samples in the garbage collector, 24.7% in `bucketed`, and 15.7% in
+`slices`. All three were one bug: grouping rows with `map.set(key, [...(map.get(key) ?? []), item])`,
+which copies the whole bucket on every row. That is O(n²) copies and the allocation churn is what the
+collector was cleaning up. `byDirection` groups ~27k resolved rows into two buckets, which is the shape
+that punishes copy-on-append hardest.
+
+Replacing the six occurrences with an in-place append took `summarizePerformance` from **9.6 s to
+~0.7 s**, with the serialized summary verified **byte-identical** over the full history.
+
+This changes the case for the rest of this document. In particular, §1.2's rejection of the cheaper
+fixes was argued from the ten-second figure — at 1.2 s to parse, "a 15-second cycle cannot absorb a
+7-second stall" no longer follows. Sharding and the worker boundary remain defensible for growth,
+startup cost, and the evaluator, but they should be re-justified on those grounds rather than on a
+hot-path stall that has already been removed.
+
+**Still outstanding:** the same quadratic idiom appears at 16 other sites. Most group into many small
+buckets and are harmless, but `lib/forecast-storage.ts` groups every terminal row by day shard — few
+buckets, tens of thousands of rows each — and would reintroduce this exact stall in the code meant to
+cure it. Fix that before the rollup path ships.
 
 Growth is ~8–10k rows and ~45 MB per day, all of it retained:
 
