@@ -15,6 +15,26 @@ const JOURNAL_FILE = path.join(DATA_DIR, 'forecast-history.journal.jsonl');
 const JOURNAL_COMPACTION_BYTES = 50 * 1024 * 1024;
 /** Keeps well over 100 windows of one-minute, seven-asset calibration snapshots locally. */
 const UNQUALIFIED_RETENTION = 20_000;
+/** Cycles settled per pass. Bounds concurrent upstream requests without starving a resolution backlog. */
+const RESOLUTION_CYCLES_PER_PASS = 20;
+/** Backoff ceiling for a contract that never publishes an outcome. */
+const RESOLUTION_MAX_RETRY_MS = 30 * 60_000;
+/**
+ * When a venue is treated as having abandoned a contract.
+ *
+ * Settlement is usually immediate — Kalshi's median is half a minute — but the tail is long, and the
+ * slowest observed row still resolved after 146 minutes. Six hours sits far enough beyond that to
+ * catch only genuinely abandoned contracts, never a slow one. Abandoned rows become `invalid`, which
+ * excludes them from scoring: an outcome the venue never published cannot be graded, and inferring it
+ * from the other venue is the cross-venue substitution the target-integrity rules forbid.
+ */
+const RESOLUTION_ABANDON_AFTER_MS = 6 * 60 * 60_000;
+/**
+ * Well inside the 15-second calculation cadence. A slower answer is worthless anyway: the pass simply
+ * retries, so waiting longer only delayed work that had already missed its window.
+ */
+const RESOLUTION_TIMEOUT_MS = 3_000;
+let resolutionInFlight = false;
 let operationQueue: Promise<void> = Promise.resolve();
 let forecastCache: Promise<TrackedForecast[]> | undefined;
 let performanceCache: { generatedAt: number; summary: PerformanceSummary } | undefined;
@@ -131,6 +151,7 @@ function resolutionPatch(forecast: TrackedForecast): Partial<TrackedForecast> {
     targetIntegrity: forecast.targetIntegrity, correct: forecast.correct, brierScore: forecast.brierScore,
     logLoss: forecast.logLoss, realizedReturn: forecast.realizedReturn, resolvedAt: forecast.resolvedAt,
     invalidReason: forecast.invalidReason, lastResolutionCheckAt: forecast.lastResolutionCheckAt,
+    resolutionAttempts: forecast.resolutionAttempts,
     venueOutcomes: forecast.venueOutcomes,
   };
 }
@@ -232,6 +253,12 @@ function venueOutcome(venue: TradingVenue, contractId: string, result: Resolutio
   };
 }
 
+/** Issuance contract, falling back to the slug for rows written before provenance was recorded. */
+function polymarketContractId(forecast: TrackedForecast): string {
+  return forecast.venueContracts?.polymarket?.contractId
+    ?? `legacy:${forecast.marketUrl.split('/').filter(Boolean).at(-1) ?? forecast.symbol}`;
+}
+
 async function resolvePolymarketOutcome(forecast: TrackedForecast): Promise<VenueOutcomeRecord | null> {
   const reference = forecast.venueContracts?.polymarket;
   const slug = forecast.marketUrl.split('/').filter(Boolean).at(-1);
@@ -239,7 +266,7 @@ async function resolvePolymarketOutcome(forecast: TrackedForecast): Promise<Venu
   const resolutionSource = reference?.rulesSource ?? `https://gamma-api.polymarket.com/events?slug=${encodeURIComponent(slug)}`;
   const response = await fetch(`https://gamma-api.polymarket.com/events?slug=${encodeURIComponent(slug)}`, {
     headers: { Accept: 'application/json', 'User-Agent': 'MoneyNoodle/0.2 local-research' },
-    signal: AbortSignal.timeout(10_000), cache: 'no-store',
+    signal: AbortSignal.timeout(RESOLUTION_TIMEOUT_MS), cache: 'no-store',
   });
   if (!response.ok) return null;
   const event = (await response.json() as GammaEvent[])[0];
@@ -267,7 +294,7 @@ async function resolveKalshiOutcome(forecast: TrackedForecast): Promise<VenueOut
   const resolutionSource = `https://api.elections.kalshi.com/trade-api/v2/markets/${encodeURIComponent(reference.contractId)}`;
   const response = await fetch(resolutionSource, {
     headers: { Accept: 'application/json', 'User-Agent': 'MoneyNoodle/0.2 local-research' },
-    signal: AbortSignal.timeout(10_000), cache: 'no-store',
+    signal: AbortSignal.timeout(RESOLUTION_TIMEOUT_MS), cache: 'no-store',
   });
   if (!response.ok) return null;
   const body = await response.json() as { market?: { result?: string; status?: string } };
@@ -320,12 +347,34 @@ function scoreResolution(forecast: TrackedForecast, outcome: 'UP' | 'DOWN', venu
   forecast.resolvedAt = new Date().toISOString();
 }
 
+/**
+ * Prunes, journals, and republishes the cache for a mutated forecast list. Shared by calculation
+ * recording and resolution so both commit through exactly one durability path.
+ */
+async function commitForecastChanges(
+  forecasts: TrackedForecast[], newForecastIds: Set<string>, patchedForecastIds: Set<string>,
+): Promise<TrackedForecast[]> {
+  const retained = pruned(forecasts);
+  const retainedIds = new Set(retained.map((forecast) => forecast.id));
+  const deletedIds = forecasts.filter((forecast) => !retainedIds.has(forecast.id)).map((forecast) => forecast.id);
+  const upserts = retained.filter((forecast) => newForecastIds.has(forecast.id));
+  const patches = retained.filter((forecast) => patchedForecastIds.has(forecast.id) && !newForecastIds.has(forecast.id));
+  try {
+    await persistForecastChanges(upserts, patches, deletedIds, retained);
+    forecastCache = Promise.resolve(retained);
+  } catch (error) {
+    // Discard mutated memory so a failed append cannot make an undurable observation appear committed.
+    forecastCache = undefined;
+    throw error;
+  }
+  return retained;
+}
+
 async function updateTracking(predictions: Prediction[], modelVersion: string): Promise<PerformanceSummary> {
   await recordContractProvenance(predictions);
   const forecasts = await readForecasts();
   const known = new Set(forecasts.map((forecast) => forecast.id));
   const newForecastIds = new Set<string>();
-  const patchedForecastIds = new Set<string>();
   let changed = false;
   const observedAt = Date.now();
   for (const prediction of predictions) {
@@ -341,85 +390,8 @@ async function updateTracking(predictions: Prediction[], modelVersion: string): 
     }
   }
 
-  const due = forecasts.filter((forecast) => forecast.status === 'pending'
-    && new Date(forecast.closesAt).getTime() < Date.now()
-    && (!forecast.lastResolutionCheckAt || Date.now() - new Date(forecast.lastResolutionCheckAt).getTime() >= DATA_FRESHNESS.resolutionRetryMs));
-  const dueCycles = new Map<string, TrackedForecast[]>();
-  for (const forecast of due) {
-    const id = storedCycleId(forecast);
-    dueCycles.set(id, [...(dueCycles.get(id) ?? []), forecast]);
-  }
-  await Promise.all([...dueCycles.values()].slice(0, 20).map(async (cycleForecasts) => {
-    const checkedAt = new Date().toISOString();
-    for (const forecast of cycleForecasts) {
-      forecast.lastResolutionCheckAt = checkedAt;
-      patchedForecastIds.add(forecast.id);
-    }
-    changed = true;
-    try {
-      // Resolve each venue once per cycle. One venue's temporary delay never fabricates or substitutes
-      // the other venue's outcome.
-      const requests = new Map<string, { venue: TradingVenue; forecast: TrackedForecast }>();
-      for (const forecast of cycleForecasts) {
-        const polyId = forecast.venueContracts?.polymarket?.contractId
-          ?? `legacy:${forecast.marketUrl.split('/').filter(Boolean).at(-1) ?? forecast.symbol}`;
-        requests.set(`polymarket:${polyId}`, { venue: 'polymarket', forecast });
-        const kalshiId = forecast.venueContracts?.kalshi?.contractId;
-        if (kalshiId) requests.set(`kalshi:${kalshiId}`, { venue: 'kalshi', forecast });
-      }
-      const requested = [...requests.entries()];
-      const results = await Promise.allSettled(requested.map(([, request]) => request.venue === 'polymarket'
-        ? resolvePolymarketOutcome(request.forecast)
-        : resolveKalshiOutcome(request.forecast)));
-      const resolvedByContract = new Map<string, VenueOutcomeRecord>();
-      results.forEach((result, index) => {
-        if (result.status === 'fulfilled' && result.value) resolvedByContract.set(requested[index][0], result.value);
-      });
-      for (const forecast of cycleForecasts) {
-        const polyId = forecast.venueContracts?.polymarket?.contractId
-          ?? `legacy:${forecast.marketUrl.split('/').filter(Boolean).at(-1) ?? forecast.symbol}`;
-        const kalshiId = forecast.venueContracts?.kalshi?.contractId;
-        const ownOutcomes: Partial<Record<TradingVenue, VenueOutcomeRecord>> = {
-          ...(resolvedByContract.get(`polymarket:${polyId}`) ? { polymarket: resolvedByContract.get(`polymarket:${polyId}`)! } : {}),
-          ...(kalshiId && resolvedByContract.get(`kalshi:${kalshiId}`) ? { kalshi: resolvedByContract.get(`kalshi:${kalshiId}`)! } : {}),
-        };
-        forecast.venueOutcomes = { ...forecast.venueOutcomes, ...ownOutcomes };
-        const target = evaluationTargetForForecast(forecast);
-        forecast.evaluationVenue = target.venue;
-        forecast.targetIntegrity = target.integrity;
-        if (target.integrity === 'missing-provenance' || target.integrity === 'mismatched-outcome') {
-          forecast.status = 'invalid';
-          forecast.invalidReason = target.integrity === 'missing-provenance'
-            ? `Missing issuance-time ${target.venue} contract provenance; cross-venue outcome substitution is forbidden.`
-            : `${target.venue} outcome contract ${target.resolution?.contractId ?? 'unknown'} does not match issuance contract ${forecast.venueContracts?.[target.venue]?.contractId ?? 'unknown'}.`;
-          forecast.resolvedAt = new Date().toISOString();
-        } else if (target.resolution?.outcome) {
-          scoreResolution(forecast, target.resolution.outcome, target.venue, target.integrity);
-        } else if (target.resolution?.invalidReason) {
-          forecast.status = 'invalid';
-          forecast.invalidReason = `${target.venue}: ${target.resolution.invalidReason}`;
-          forecast.resolvedAt = new Date().toISOString();
-        }
-      }
-    } catch {
-      // Resolution is retried; a temporary upstream error never invalidates a forecast.
-    }
-  }));
   if (!changed) return cachedPerformanceSummary(forecasts);
-  const retained = pruned(forecasts);
-  const retainedIds = new Set(retained.map((forecast) => forecast.id));
-  const deletedIds = forecasts.filter((forecast) => !retainedIds.has(forecast.id)).map((forecast) => forecast.id);
-  const upserts = retained.filter((forecast) => newForecastIds.has(forecast.id));
-  const patches = retained.filter((forecast) => patchedForecastIds.has(forecast.id) && !newForecastIds.has(forecast.id));
-  try {
-    await persistForecastChanges(upserts, patches, deletedIds, retained);
-    forecastCache = Promise.resolve(retained);
-  } catch (error) {
-    // Discard mutated memory so a failed append cannot make an undurable observation appear committed.
-    forecastCache = undefined;
-    throw error;
-  }
-  return cachedPerformanceSummary(retained);
+  return cachedPerformanceSummary(await commitForecastChanges(forecasts, newForecastIds, new Set()));
 }
 
 function pruned(forecasts: TrackedForecast[]): TrackedForecast[] {
@@ -435,6 +407,135 @@ export function trackCalculations(predictions: Prediction[], modelVersion: strin
   const operation = operationQueue.then(() => updateTracking(predictions, modelVersion));
   operationQueue = operation.then(() => undefined, () => undefined);
   return operation;
+}
+
+/**
+ * Retry delay for a forecast whose venue has not published an outcome yet. The first miss retries on
+ * the ordinary interval; each further miss doubles it, up to the cap. A contract that will never
+ * resolve therefore costs a couple of requests an hour instead of one every minute forever.
+ */
+export function resolutionRetryDelayMs(attempts: number): number {
+  return Math.min(RESOLUTION_MAX_RETRY_MS, DATA_FRESHNESS.resolutionRetryMs * 2 ** Math.max(0, attempts - 1));
+}
+
+/** True once the evaluation venue has had long enough that silence means abandonment, not slowness. */
+export function abandonedByVenue(forecast: TrackedForecast, now: number): boolean {
+  return now - new Date(forecast.closesAt).getTime() >= RESOLUTION_ABANDON_AFTER_MS;
+}
+
+export function resolutionDue(forecast: TrackedForecast, now: number): boolean {
+  if (forecast.status !== 'pending' || new Date(forecast.closesAt).getTime() >= now) return false;
+  if (!forecast.lastResolutionCheckAt) return true;
+  return now - new Date(forecast.lastResolutionCheckAt).getTime() >= resolutionRetryDelayMs(forecast.resolutionAttempts ?? 0);
+}
+
+/** Fetches both venues for one cycle. Each venue is requested once; neither substitutes for the other. */
+async function fetchCycleOutcomes(cycleForecasts: TrackedForecast[]): Promise<Map<string, VenueOutcomeRecord>> {
+  const requests = new Map<string, { venue: TradingVenue; forecast: TrackedForecast }>();
+  for (const forecast of cycleForecasts) {
+    requests.set(`polymarket:${polymarketContractId(forecast)}`, { venue: 'polymarket', forecast });
+    const kalshiId = forecast.venueContracts?.kalshi?.contractId;
+    if (kalshiId) requests.set(`kalshi:${kalshiId}`, { venue: 'kalshi', forecast });
+  }
+  const requested = [...requests.entries()];
+  const results = await Promise.allSettled(requested.map(([, request]) => request.venue === 'polymarket'
+    ? resolvePolymarketOutcome(request.forecast)
+    : resolveKalshiOutcome(request.forecast)));
+  const resolved = new Map<string, VenueOutcomeRecord>();
+  results.forEach((result, index) => {
+    if (result.status === 'fulfilled' && result.value) resolved.set(requested[index][0], result.value);
+  });
+  return resolved;
+}
+
+/** Applies fetched outcomes to one cycle. Returns true when any forecast reached a terminal state. */
+function applyCycleOutcomes(cycleForecasts: TrackedForecast[], resolvedByContract: Map<string, VenueOutcomeRecord>): boolean {
+  let resolvedAny = false;
+  for (const forecast of cycleForecasts) {
+    const polyId = polymarketContractId(forecast);
+    const kalshiId = forecast.venueContracts?.kalshi?.contractId;
+    const ownOutcomes: Partial<Record<TradingVenue, VenueOutcomeRecord>> = {
+      ...(resolvedByContract.get(`polymarket:${polyId}`) ? { polymarket: resolvedByContract.get(`polymarket:${polyId}`)! } : {}),
+      ...(kalshiId && resolvedByContract.get(`kalshi:${kalshiId}`) ? { kalshi: resolvedByContract.get(`kalshi:${kalshiId}`)! } : {}),
+    };
+    forecast.venueOutcomes = { ...forecast.venueOutcomes, ...ownOutcomes };
+    const target = evaluationTargetForForecast(forecast);
+    forecast.evaluationVenue = target.venue;
+    forecast.targetIntegrity = target.integrity;
+    if (target.integrity === 'missing-provenance' || target.integrity === 'mismatched-outcome') {
+      forecast.status = 'invalid';
+      forecast.invalidReason = target.integrity === 'missing-provenance'
+        ? `Missing issuance-time ${target.venue} contract provenance; cross-venue outcome substitution is forbidden.`
+        : `${target.venue} outcome contract ${target.resolution?.contractId ?? 'unknown'} does not match issuance contract ${forecast.venueContracts?.[target.venue]?.contractId ?? 'unknown'}.`;
+      forecast.resolvedAt = new Date().toISOString();
+    } else if (target.resolution?.outcome) {
+      scoreResolution(forecast, target.resolution.outcome, target.venue, target.integrity);
+    } else if (target.resolution?.invalidReason) {
+      forecast.status = 'invalid';
+      forecast.invalidReason = `${target.venue}: ${target.resolution.invalidReason}`;
+      forecast.resolvedAt = new Date().toISOString();
+    }
+    if (forecast.status === 'pending' && abandonedByVenue(forecast, Date.now())) {
+      forecast.status = 'invalid';
+      forecast.invalidReason = `${forecast.evaluationVenue ?? 'venue'} published no outcome for ${forecast.venueContracts?.[forecast.evaluationVenue ?? 'kalshi']?.contractId ?? 'the issuance contract'} within ${RESOLUTION_ABANDON_AFTER_MS / 3_600_000} hours of close.`;
+      forecast.resolvedAt = new Date().toISOString();
+    }
+    // A pass that produced nothing counts against the backoff; any terminal state clears it.
+    if (forecast.status === 'pending') forecast.resolutionAttempts = (forecast.resolutionAttempts ?? 0) + 1;
+    else { forecast.resolutionAttempts = undefined; resolvedAny = true; }
+  }
+  return resolvedAny;
+}
+
+/**
+ * Settles windows that have already closed.
+ *
+ * This runs on its own schedule rather than inside `trackCalculations`, because it is bookkeeping about
+ * the past and the forecast cycle is about the present. Inline, one venue that had not yet published an
+ * outcome held the entire 15-second calculation behind a 10-second request — so a handful of forecasts
+ * stuck pending made every cycle late, indefinitely. Nothing here blocks a calculation now: the network
+ * phase holds no lock, and only the short apply phase is serialized against other writers.
+ */
+export async function resolveDueForecasts(): Promise<{ cycles: number; resolved: number }> {
+  if (resolutionInFlight) return { cycles: 0, resolved: 0 };
+  resolutionInFlight = true;
+  try {
+    const now = Date.now();
+    const due = (await readForecasts()).filter((forecast) => resolutionDue(forecast, now));
+    const dueCycles = new Map<string, TrackedForecast[]>();
+    for (const forecast of due) {
+      const id = storedCycleId(forecast);
+      dueCycles.set(id, [...(dueCycles.get(id) ?? []), forecast]);
+    }
+    const selected = [...dueCycles.values()].slice(0, RESOLUTION_CYCLES_PER_PASS);
+    if (!selected.length) return { cycles: 0, resolved: 0 };
+
+    // Network phase: deliberately outside the write queue so a slow venue delays nothing but itself.
+    const fetched = await Promise.all(selected.map(async (cycleForecasts) => ({
+      cycleForecasts,
+      // A failed fetch resolves nothing and simply counts toward this cycle's backoff.
+      outcomes: await fetchCycleOutcomes(cycleForecasts).catch(() => new Map<string, VenueOutcomeRecord>()),
+    })));
+
+    const apply = operationQueue.then(async () => {
+      const checkedAt = new Date().toISOString();
+      const patchedForecastIds = new Set<string>();
+      let resolved = 0;
+      for (const { cycleForecasts, outcomes } of fetched) {
+        for (const forecast of cycleForecasts) {
+          forecast.lastResolutionCheckAt = checkedAt;
+          patchedForecastIds.add(forecast.id);
+        }
+        if (applyCycleOutcomes(cycleForecasts, outcomes)) resolved += 1;
+      }
+      await commitForecastChanges(await readForecasts(), new Set(), patchedForecastIds);
+      return { cycles: selected.length, resolved };
+    });
+    operationQueue = apply.then(() => undefined, () => undefined);
+    return await apply;
+  } finally {
+    resolutionInFlight = false;
+  }
 }
 
 export async function getPerformanceSummary(): Promise<PerformanceSummary> {

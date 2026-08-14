@@ -395,6 +395,22 @@ Review the adaptive maker/taker shadow after another day of observations. Report
 12. Add provider/live-paper/policy dashboard filters and the active-policy details/history surface.
 13. **Only after validated profitability and operational evidence** consider larger stake limits, queue-aware execution rules, or any newly supported live provider.
 
+## Calculation cadence — repaired 2026-08-14
+
+The 15-second cycle was routinely missing its window, showing "Calculation window expired" roughly half the time. Three independent causes, all fixed; none touched the model.
+
+- **Settlement ran on the forecast path.** `trackCalculations` resolved already-closed windows inline, up to 20 cycles in parallel behind a 10-second venue timeout. Stage profiling caught it directly: two 11-second builds were `trackCalculations=10995ms` and `10878ms`, essentially one whole timeout. Resolution now runs on its own schedule from the collector, with its network phase deliberately outside the write queue, so it holds no lock while waiting on a venue.
+- **Timeouts exceeded the window they served.** Feeds waited 10 seconds and resolution 10 seconds inside a 15-second cycle. Both are discarded on arrival anyway — `cached` falls back to the previous value and the next pass re-asks — so they are now 4 and 3 seconds.
+- **Two fixed clocks beat against each other.** A 15-second timer, a 14.5-second cache TTL, and a multi-second build meant a slow build shifted the phase so every second tick landed inside the cache window and was thrown away, halving the real calculation rate to one per 30 seconds. The next calculation now begins a 7-second lead before the current one expires, so a fresh result exists at the boundary instead of arriving after it.
+
+Also added: exponential resolution backoff (60s doubling to a 30-minute cap), a six-hour venue-abandonment terminal state, and a `Slow feed` warning from `cached` naming any upstream over 3 seconds — the codebase had no timing observability at all, which is why this took stage profiling to find.
+
+Measured settlement lag across 48,335 resolved rows, which set the abandonment threshold: median 1.4 minutes, p99 31.7, maximum **146 minutes**; Kalshi alone is 0.5 median. 220 rows took over an hour, so six hours can only catch a genuinely abandoned contract.
+
+One forecast is currently unresolved by design: HYPE 2026-08-14T07:15:00Z. Kalshi returns `status="closed", result=""` more than an hour past close while Polymarket resolved it DOWN. The entry's evaluation venue is Kalshi, so the resolver correctly refuses the substitution and waits. No paper or live position is affected — there are zero unsettled orders past close.
+
+The freshness window stays strict at 15 seconds: it is the display's honest statement of data age, not a trading gate.
+
 ## Operational posture
 
 Live mode was explicitly **active** at 07:34 UTC after quiescent standalone-exit deployment, with BNB DOWN and DOGE DOWN positions, 18¢ reserved, 259¢ available, reconciliation ready, and zero blockers. Manual reconciliation confirmed both signed NO positions and recovered one fill state. The new exit engine records executable high water continuously; neither position had armed the +75% lock. No model parameter or stake limit changed. Keep stake size and second attempts unchanged while verifying the first organic strict/profit-reversal exit and monitoring re-entry, side-specific return, high-water risk, API consistency, maker-shadow, and evaluator evidence.

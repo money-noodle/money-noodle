@@ -27,7 +27,17 @@ export interface CoinSnapshot {
   chart: ChartPoint[];
 }
 
-function timeoutSignal(ms = 10_000): AbortSignal {
+/**
+ * Bounded well inside the 15-second calculation cadence.
+ *
+ * A feed that answers more slowly than this cannot be used by the cycle that asked: `cached` falls back
+ * to the previous value and the next cycle asks again. Waiting the old ten seconds bought nothing and
+ * cost the whole window — one stalling feed made every calculation late, because the six run together
+ * and the build takes as long as the slowest.
+ */
+const FEED_TIMEOUT_MS = 4_000;
+
+function timeoutSignal(ms = FEED_TIMEOUT_MS): AbortSignal {
   return AbortSignal.timeout(ms);
 }
 

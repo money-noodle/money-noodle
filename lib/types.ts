@@ -531,6 +531,11 @@ export interface TrackedForecast {
   factors: Array<Pick<Factor, 'id' | 'label' | 'score' | 'weight' | 'contribution' | 'confidence' | 'available'>>;
   status: 'pending' | 'resolved' | 'invalid';
   lastResolutionCheckAt?: string;
+  /**
+   * Consecutive resolution passes that produced no outcome. Drives exponential backoff so a forecast
+   * whose contract never resolves stops costing an upstream request every minute forever.
+   */
+  resolutionAttempts?: number;
   resolvedAt?: string;
   outcome?: 'UP' | 'DOWN';
   correct?: boolean;

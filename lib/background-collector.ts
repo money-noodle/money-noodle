@@ -1,6 +1,7 @@
 import 'server-only';
 import { collectorRuntime } from './collector-state';
 import { getDashboard } from './dashboard';
+import { resolveDueForecasts } from './forecast-tracker';
 import { processPaperTradingCycle } from './paper-execution';
 import { maybeRunPeriodicReconciliation } from './periodic-reconciliation';
 import { maybeRunWalkForwardEvaluation } from './model-evaluation-store';
@@ -15,6 +16,10 @@ async function collect(): Promise<void> {
     // Regular cache policy is intentional: market TTLs are shorter than this loop, while slower inputs retain theirs.
     const dashboard = await getDashboard(false, false);
     await processPaperTradingCycle(dashboard);
+    // Settlement of already-closed windows is deliberately not awaited by the calculation above: it is
+    // bookkeeping about the past, and letting it block the present is what made every cycle late.
+    void resolveDueForecasts()
+      .catch((error) => console.error('Forecast resolution pass failed:', error));
     // Best effort and never awaited: hosted-dashboard freshness must not delay reconciliation or a cycle.
     void replicatePublicPaperPerformance()
       .catch((error) => console.error('Postgres public paper performance sync failed:', error));

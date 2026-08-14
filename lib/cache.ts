@@ -5,6 +5,8 @@ import { isStatelessDeployment } from './runtime-environment';
 
 const CACHE_DIR = path.resolve(process.cwd(), '.cache');
 const memoryCache = new Map<string, CacheEnvelope<unknown>>();
+/** Roughly a fifth of the calculation window: slow enough to matter, quiet on a healthy upstream. */
+const SLOW_FEED_LOG_MS = 3_000;
 
 interface CacheEnvelope<T> {
   savedAt: number;
@@ -47,6 +49,9 @@ export async function cached<T>(
     return { value: previous.value, fromCache: true };
   }
 
+  // Feeds run together and the calculation takes as long as the slowest, so one stalling upstream
+  // delays everything. Naming it costs a timestamp and is the only way to tell which one is degrading.
+  const started = Date.now();
   try {
     const value = await loader();
     await writeCache(key, value);
@@ -54,6 +59,9 @@ export async function cached<T>(
   } catch (error) {
     if (previous) return { value: previous.value, fromCache: true };
     throw error;
+  } finally {
+    const elapsed = Date.now() - started;
+    if (elapsed >= SLOW_FEED_LOG_MS) console.warn(`Slow feed: ${key} took ${elapsed}ms`);
   }
 }
 

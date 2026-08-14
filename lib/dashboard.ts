@@ -400,8 +400,9 @@ async function buildDashboard(force = false, liveOnly = false): Promise<Dashboar
   };
 }
 
-let dashboardQueue: Promise<void> = Promise.resolve();
 let latestDashboard: DashboardData | undefined;
+let buildInFlight: Promise<DashboardData> | undefined;
+let prefetchTimer: ReturnType<typeof setTimeout> | undefined;
 
 /**
  * Public policy explains immutable model rules but never provider permissions or readiness, and never
@@ -418,15 +419,50 @@ export function publicDashboardData(dashboard: DashboardData): PublicDashboardDa
   return { ...publicData, policyManifest: publicPolicyManifest(policyManifest) };
 }
 
+/**
+ * How far ahead of expiry the next calculation begins.
+ *
+ * A calculation that starts when the previous one expires is late by however long it takes. Starting
+ * this early means a fresh result exists at the boundary instead of arriving after it — so the lead
+ * must exceed a normal build, including one feed spending its full timeout.
+ */
+const PREFETCH_LEAD_MS = 7_000;
+const REFRESH_AFTER_MS = DATA_FRESHNESS.dashboardPollMs - PREFETCH_LEAD_MS;
+
+const dashboardAge = () => latestDashboard ? Date.now() - Date.parse(latestDashboard.generatedAt) : Number.POSITIVE_INFINITY;
+
+/** One build at a time. Concurrent callers join the running build rather than queueing another. */
+function startDashboardBuild(force: boolean, liveOnly: boolean): Promise<DashboardData> {
+  buildInFlight ??= buildDashboard(force, liveOnly)
+    .then((dashboard) => { latestDashboard = dashboard; return dashboard; })
+    .finally(() => {
+      buildInFlight = undefined;
+      scheduleDashboardPrefetch();
+    });
+  return buildInFlight;
+}
+
+/**
+ * Keeps the cached calculation continuously ahead of its own expiry, so neither the browser poll nor
+ * the trading cycle ever waits on feed assembly. Without this the two fixed clocks beat against each
+ * other: a slow build shifted the phase so every second tick landed inside the cache window and was
+ * discarded, halving the real calculation rate to one per 30 seconds.
+ */
+function scheduleDashboardPrefetch(): void {
+  if (isStatelessDeployment() || prefetchTimer) return;
+  prefetchTimer = setTimeout(() => {
+    prefetchTimer = undefined;
+    void startDashboardBuild(false, false).catch((error) => console.error('Dashboard prefetch failed:', error));
+  }, Math.max(1_000, REFRESH_AFTER_MS));
+  prefetchTimer.unref?.();
+}
+
 export function getDashboard(force = false, liveOnly = false): Promise<DashboardData> {
-  const operation = dashboardQueue.then(async () => {
-    const latestAge = latestDashboard ? Date.now() - Date.parse(latestDashboard.generatedAt) : Number.POSITIVE_INFINITY;
-    // Browser polling and the background collector share one fresh calculation instead of duplicating
-    // feed assembly, history scoring, persistence, and multi-megabyte serialization every 15 seconds.
-    if (!force && latestDashboard && latestAge >= 0 && latestAge < DATA_FRESHNESS.dashboardPollMs - 500) return latestDashboard;
-    latestDashboard = await buildDashboard(force, liveOnly);
-    return latestDashboard;
-  });
-  dashboardQueue = operation.then(() => undefined, () => undefined);
-  return operation;
+  // Browser polling and the background collector share one calculation rather than duplicating feed
+  // assembly, history scoring, persistence, and multi-megabyte serialization.
+  if (!force && latestDashboard && dashboardAge() >= 0 && dashboardAge() < REFRESH_AFTER_MS) {
+    scheduleDashboardPrefetch();
+    return Promise.resolve(latestDashboard);
+  }
+  return startDashboardBuild(force, liveOnly);
 }
