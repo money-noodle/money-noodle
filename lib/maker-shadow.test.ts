@@ -127,3 +127,34 @@ describe('shadow cohorts, tail concentration, and segments', () => {
     expect(report.bySymbol.at(-1)!.expectedMakerReturn!).toBeLessThan(report.bySymbol[0].expectedMakerReturn!);
   });
 });
+
+describe('shadow columns across the maker-execution boundary', () => {
+  const base = {
+    id: 'paper:BTC:UP:1', closesAt: '2026-08-14T01:00:00Z', executionMode: 'paper' as const,
+    symbol: 'BTC', venue: 'kalshi' as const, side: 'UP' as const, status: 'won' as const,
+    quantity: 4, spread: 0.02, payoutCents: 400,
+  };
+
+  it('re-prices the ask side for an order that executed as a maker', () => {
+    // Filled at its resting bid of 43c; the always-fills benchmark is the 45c ask it never paid.
+    const maker = { ...base, liquidityRole: 'maker' as const, askPrice: 0.43, bidPrice: 0.43,
+      stakeCents: 177, pnlCents: 223 } as unknown as PaperOrder;
+    const [row] = buildMakerShadow([maker], 'paper').rows;
+    expect(row.makerReturn).toBeCloseTo(223 / 177, 6);   // realized, because it is the maker
+    expect(row.askReturn).toBeLessThan(row.makerReturn!); // the ask costs more, so it earns less
+    // It already survived the fill risk, so no probability is applied a second time.
+    expect(row.fillProbability).toBeNull();
+    expect(row.expectedMakerReturn).toBe(row.makerReturn);
+  });
+
+  it('keeps the legacy ask-filled convention for orders that predate the change', () => {
+    const taker = { ...base, askPrice: 0.45, bidPrice: 0.43, stakeCents: 185, pnlCents: 215,
+      makerFillEstimate: { probability: 0.5, horizonSeconds: 12, quoteDistance: 0.02,
+        quoteVolatilityPerSecond: 0.01, samples: 7, model: 'quote-first-passage-v1' as const },
+    } as unknown as PaperOrder;
+    const [row] = buildMakerShadow([taker], 'paper').rows;
+    expect(row.askReturn).toBeCloseTo(215 / 185, 6);      // realized, because it took the ask
+    expect(row.makerReturn).toBeGreaterThan(row.askReturn); // the bid is cheaper, so it earns more
+    expect(row.expectedMakerReturn).toBeCloseTo(row.makerReturn! * 0.5, 6);
+  });
+});

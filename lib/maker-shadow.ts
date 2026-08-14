@@ -19,13 +19,13 @@ import type { ExecutionMode, PaperOrder } from './types';
 export interface MakerShadowRow {
   id: string;
   closesAt: string;
-  /** Return actually achieved by the immediate-ask paper fill. */
+  /** Return entering at the ask: realized for ask-filled orders, re-priced for maker-executed ones. */
   askReturn: number;
-  /** Return the same outcome would have produced entering at the bid. */
+  /** Return entering at the bid: re-priced for ask-filled orders, realized for maker-executed ones. */
   makerReturn: number | null;
-  /** Modelled chance the resting order traded at all, from the recorded first-passage estimate. */
+  /** Fill chance applied to the maker counterfactual. Null once the order actually rested and filled. */
   fillProbability: number | null;
-  /** makerReturn weighted by fill chance; an unfilled order returns nothing and risks nothing. */
+  /** makerReturn including fill risk; equal to makerReturn when the order already survived that risk. */
   expectedMakerReturn: number | null;
 }
 
@@ -77,9 +77,38 @@ const pnl = (order: PaperOrder) => order.actualPnlCents ?? order.pnlCents ?? 0;
 const mean = (values: number[]) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
 
 /**
- * The same settled contract bought at the bid. Quantity and outcome are held fixed: only the entry price
- * and its fee change, which isolates price improvement from any difference in what was traded.
+ * The same settled contract re-priced at a different entry, holding quantity and outcome fixed so only
+ * the entry price and its fee move. This isolates price improvement from any difference in what traded.
  */
+function returnAtPrice(order: PaperOrder, price: number): number | null {
+  if (!(price > 0) || !(price < 1) || !(order.quantity > 0)) return null;
+  const feeRate = venueFeeRate(order.venue, price);
+  const stakeCents = order.quantity * (price + feeRate) * 100;
+  if (!(stakeCents > 0)) return null;
+  // Payout is a property of the settled outcome, not of the entry price.
+  const payoutCents = order.payoutCents ?? (stake(order) + pnl(order));
+  return (payoutCents - stakeCents) / stakeCents;
+}
+
+/**
+ * Which side of the comparison actually happened.
+ *
+ * Since 2026-08-14 paper executes as a maker, so its realized return *is* the maker return and the
+ * always-fills benchmark is the counterfactual. Before that, paper filled at the ask and the maker side
+ * was the counterfactual. Both eras are scored into the same two columns — `askReturn` always means
+ * "filled at the ask" and `expectedMakerReturn` always means "resting at the bid, fill risk included" —
+ * so the series stays readable across the change instead of inverting halfway through.
+ *
+ * One caveat the numbers cannot remove: for maker-executed orders this population is conditioned on
+ * having filled, because an unfilled attempt never settles and has no payout to re-price. The
+ * always-fills column is therefore optimistic for that era until unfilled attempts are joined to their
+ * forecast outcomes.
+ */
+const executedAsMaker = (order: PaperOrder) => order.liquidityRole === 'maker';
+const askPriceFor = (order: PaperOrder): number => executedAsMaker(order)
+  ? order.bidPrice + (order.spread ?? 0)
+  : order.askPrice;
+
 function makerReturnFor(order: PaperOrder): number | null {
   const bid = order.bidPrice;
   if (!(bid > 0) || !(bid < 1) || !(order.quantity > 0)) return null;
@@ -97,13 +126,16 @@ export function buildMakerShadow(orders: PaperOrder[], mode: ExecutionMode): Mak
   const symbolOf = new Map<string, string>();
   const rows: MakerShadowRow[] = settled.map((order) => {
     symbolOf.set(order.id, order.symbol);
-    const askReturn = pnl(order) / Math.max(1, stake(order));
-    const makerReturn = makerReturnFor(order);
-    const fillProbability = order.makerFillEstimate?.probability ?? null;
-    return {
-      id: order.id, closesAt: order.closesAt, askReturn, makerReturn, fillProbability,
-      expectedMakerReturn: makerReturn === null || fillProbability === null ? null : makerReturn * fillProbability,
-    };
+    const realized = pnl(order) / Math.max(1, stake(order));
+    const maker = executedAsMaker(order);
+    // A maker order that filled carries no residual fill risk, so its expected return is what it did.
+    const askReturn = maker ? (returnAtPrice(order, askPriceFor(order)) ?? realized) : realized;
+    const makerReturn = maker ? realized : makerReturnFor(order);
+    const fillProbability = maker ? null : (order.makerFillEstimate?.probability ?? null);
+    const expectedMakerReturn = maker
+      ? makerReturn
+      : makerReturn === null || fillProbability === null ? null : makerReturn * fillProbability;
+    return { id: order.id, closesAt: order.closesAt, askReturn, makerReturn, fillProbability, expectedMakerReturn };
   });
   const modelledRows = rows.filter((row) => row.expectedMakerReturn !== null);
 
