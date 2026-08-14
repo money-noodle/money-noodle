@@ -100,6 +100,78 @@ export function promotionEntry(input: {
   };
 }
 
+/** Typed exactly by the operator, so a promotion cannot be a mis-click or a replayed request. */
+export const PROMOTION_CONFIRMATION = 'PROMOTE PRODUCTION MODEL';
+export const ROLLBACK_CONFIRMATION = 'ROLL BACK PRODUCTION MODEL';
+
+export interface PromotionRequest {
+  action: ModelPromotionAction;
+  modelVersion: string;
+  parameters: WalkForwardParameters;
+  reason: string;
+  confirmation: string;
+  evidenceRunId?: string;
+  supersedesId?: string;
+}
+
+export interface PromotionContext {
+  /** What the running code actually forecasts with, not what the request claims. */
+  running: { modelVersion: string; parameters: WalkForwardParameters };
+  eligibility: PromotionEligibility;
+  latestRunId?: string;
+  ledger: ModelPromotionEntry[];
+}
+
+const parameterKeys: Array<keyof WalkForwardParameters> = [
+  'temperature', 'basisWeight', 'volatilityScale', 'slowTiltScale', 'probabilityCap', 'minimumEdge', 'minimumQuality',
+];
+
+function divergentParameters(claimed: WalkForwardParameters, running: WalkForwardParameters): string[] {
+  return parameterKeys.filter((key) => claimed[key] !== running[key])
+    .map((key) => `${key} ${claimed[key]} vs running ${running[key]}`);
+}
+
+/**
+ * Why a promotion or rollback must be refused, or `null` when it may be recorded.
+ *
+ * The integrity rule is the load-bearing one: the ledger may only ever describe the model the running
+ * code is actually forecasting with. Production parameters are compile-time constants, so promotion is
+ * a deploy-then-record act — recording a version or parameter set production is not running would make
+ * `unrecorded: false` a lie, which is worse than the honest empty ledger it replaced.
+ */
+export function promotionRefusal(request: PromotionRequest, context: PromotionContext): string | null {
+  if (request.action !== 'promoted' && request.action !== 'rolled-back') return 'Action must be promoted or rolled-back.';
+  if (!request.reason?.trim()) return 'A promotion or rollback requires a written reason.';
+
+  const expected = request.action === 'promoted' ? PROMOTION_CONFIRMATION : ROLLBACK_CONFIRMATION;
+  if (request.confirmation !== expected) return `Type ${expected} exactly to record this decision.`;
+
+  if (request.modelVersion !== context.running.modelVersion) {
+    return `Production is running ${context.running.modelVersion}, not ${request.modelVersion}. Deploy the model first, then record it.`;
+  }
+  if (!request.parameters || typeof request.parameters !== 'object') return 'Parameters are required and must match the running model.';
+  const divergent = divergentParameters(request.parameters, context.running.parameters);
+  if (divergent.length) return `Parameters do not match the running model: ${divergent.join('; ')}.`;
+
+  if (request.action === 'rolled-back') {
+    if (!request.supersedesId) return 'A rollback must name the entry it supersedes.';
+    if (!context.ledger.some((entry) => entry.id === request.supersedesId)) return 'The superseded entry is not in the ledger.';
+    // Rollback is deliberately not eligibility-gated. Reverting must stay available precisely when the
+    // evidence for the current model has fallen apart, which is when eligibility would fail.
+    return null;
+  }
+
+  if (!request.evidenceRunId) return 'A promotion must cite the walk-forward run it relies on.';
+  if (context.latestRunId && request.evidenceRunId !== context.latestRunId) {
+    return `Evidence run ${request.evidenceRunId} is stale; the newest run is ${context.latestRunId}.`;
+  }
+  if (!context.eligibility.eligible) {
+    const failed = context.eligibility.criteria.filter((item) => !item.met).map((item) => item.detail);
+    return `Promotion criteria not met: ${failed.join(' ')}`;
+  }
+  return null;
+}
+
 /** Append-only: an existing entry is never edited, so the ledger stays a record rather than a state. */
 export function appendPromotion(ledger: ModelPromotionEntry[], entry: ModelPromotionEntry): ModelPromotionEntry[] {
   if (ledger.some((item) => item.id === entry.id)) throw new Error('Promotion entries are immutable and may not be rewritten.');

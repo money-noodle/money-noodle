@@ -3,8 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 
 import {
-  activeModel, appendPromotion, evaluatePromotionEligibility, promotionEntry,
-  PROMOTION_MIN_TEST_TRADES,
+  activeModel, appendPromotion, evaluatePromotionEligibility, promotionEntry, promotionRefusal,
+  PROMOTION_CONFIRMATION, PROMOTION_MIN_TEST_TRADES, ROLLBACK_CONFIRMATION,
+  type PromotionContext, type PromotionRequest,
 } from './model-promotion';
 import type { WalkForwardEvaluationRun, WalkForwardParameters } from './types';
 
@@ -93,5 +94,71 @@ describe('promotion ledger', () => {
     expect(activeModel([])).toBeUndefined();
     const only = promotionEntry({ action: 'promoted', modelVersion: 'Blend 0.5', parameters, reason: 'a', at: '2026-08-13T01:00:00Z' });
     expect(activeModel([only])!.modelVersion).toBe('Blend 0.5');
+  });
+});
+
+describe('promotion request refusal', () => {
+  const running = { modelVersion: 'Blend 0.4', parameters };
+  const context = (over: Partial<PromotionContext> = {}): PromotionContext => ({
+    running, eligibility: evaluatePromotionEligibility(run()), latestRunId: 'run-1', ledger: [], ...over,
+  });
+  const promote = (over: Partial<PromotionRequest> = {}): PromotionRequest => ({
+    action: 'promoted', modelVersion: 'Blend 0.4', parameters, reason: 'held-out evidence cleared every gate',
+    confirmation: PROMOTION_CONFIRMATION, evidenceRunId: 'run-1', ...over,
+  });
+
+  it('accepts a promotion that cites the newest run and matches the running model', () => {
+    expect(promotionRefusal(promote(), context())).toBeNull();
+  });
+
+  it('refuses a version the running code is not forecasting with', () => {
+    expect(promotionRefusal(promote({ modelVersion: 'Blend 0.5' }), context()))
+      .toMatch(/Production is running Blend 0.4/);
+  });
+
+  it('refuses parameters that differ from the running model even when the version matches', () => {
+    const drifted = { ...parameters, basisWeight: parameters.basisWeight + 0.1 };
+    expect(promotionRefusal(promote({ parameters: drifted }), context())).toMatch(/basisWeight/);
+  });
+
+  it('refuses a promotion whose evidence is not the newest run', () => {
+    expect(promotionRefusal(promote({ evidenceRunId: 'run-0' }), context())).toMatch(/stale/);
+    expect(promotionRefusal(promote({ evidenceRunId: undefined }), context())).toMatch(/must cite/);
+  });
+
+  it('refuses a promotion whose evidence does not clear the criteria', () => {
+    const ineligible = evaluatePromotionEligibility(run({ decision: 'baseline_retained' }));
+    expect(promotionRefusal(promote(), context({ eligibility: ineligible }))).toMatch(/criteria not met/);
+  });
+
+  it('requires the exact typed confirmation and a written reason', () => {
+    expect(promotionRefusal(promote({ confirmation: 'promote' }), context())).toMatch(/PROMOTE PRODUCTION MODEL/);
+    expect(promotionRefusal(promote({ reason: '  ' }), context())).toMatch(/written reason/);
+  });
+
+  it('lets a rollback proceed on failed evidence, which is exactly when one is needed', () => {
+    const entry = promotionEntry({ action: 'promoted', modelVersion: 'Blend 0.4', parameters, reason: 'a', id: 'p1' });
+    const rollback: PromotionRequest = {
+      action: 'rolled-back', modelVersion: 'Blend 0.4', parameters, reason: 'live return degraded',
+      confirmation: ROLLBACK_CONFIRMATION, supersedesId: 'p1',
+    };
+    const ineligible = evaluatePromotionEligibility(undefined);
+    expect(promotionRefusal(rollback, context({ eligibility: ineligible, ledger: [entry] }))).toBeNull();
+    expect(promotionRefusal({ ...rollback, supersedesId: undefined }, context({ ledger: [entry] }))).toMatch(/must name/);
+    expect(promotionRefusal({ ...rollback, supersedesId: 'missing' }, context({ ledger: [entry] }))).toMatch(/not in the ledger/);
+  });
+
+  it('refuses a rollback confirmed with the promotion phrase', () => {
+    const entry = promotionEntry({ action: 'promoted', modelVersion: 'Blend 0.4', parameters, reason: 'a', id: 'p1' });
+    const rollback: PromotionRequest = {
+      action: 'rolled-back', modelVersion: 'Blend 0.4', parameters, reason: 'reverting',
+      confirmation: PROMOTION_CONFIRMATION, supersedesId: 'p1',
+    };
+    expect(promotionRefusal(rollback, context({ ledger: [entry] }))).toMatch(/ROLL BACK PRODUCTION MODEL/);
+  });
+
+  it('refuses a malformed action or missing parameters rather than throwing', () => {
+    expect(promotionRefusal({ ...promote(), action: 'deleted' as PromotionRequest['action'] }, context())).toMatch(/promoted or rolled-back/);
+    expect(promotionRefusal({ ...promote(), parameters: undefined as unknown as PromotionRequest['parameters'] }, context())).toMatch(/Parameters are required/);
   });
 });
