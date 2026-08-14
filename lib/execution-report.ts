@@ -1,3 +1,4 @@
+import { ACTION_COUNTERFACTUAL_VERSION, buildActionCounterfactuals, clusterByWindow } from './action-counterfactual';
 import { normalizeMarketId } from './market-registry';
 import type { ExecutionMode, MakerExecutionSegment, MakerFillReport, MarketId, PaperOrder, ProviderTradeRecord, SegmentGroup, SegmentStat, TrackedForecast, TradeTrackRecord, TradingProviderId } from './types';
 
@@ -26,17 +27,11 @@ function realizedReturn(order: PaperOrder): number {
  * move. Treating them as independent is what made earlier readings look far more certain than they were.
  */
 function segmentStat(label: string, orders: PaperOrder[]): SegmentStat {
-  const windows = new Map<string, PaperOrder[]>();
-  for (const order of orders) windows.set(order.closesAt, [...(windows.get(order.closesAt) ?? []), order]);
-  const perWindow = [...windows.values()].map((group) => group.reduce((sum, order) => sum + realizedReturn(order), 0) / group.length);
-  const mean = perWindow.reduce((sum, value) => sum + value, 0) / perWindow.length;
-  const standardError = perWindow.length > 1
-    ? Math.sqrt(perWindow.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (perWindow.length - 1) / perWindow.length)
-    : null;
+  const clustered = clusterByWindow(orders, (order) => order.closesAt, realizedReturn);
   return {
-    label, trades: orders.length, windows: windows.size,
+    label, trades: orders.length, windows: clustered.windows,
     meanPredictedEdge: orders.reduce((sum, order) => sum + predictedEdge(order), 0) / orders.length,
-    meanRealizedReturn: mean, standardError,
+    meanRealizedReturn: clustered.mean ?? Number.NaN, standardError: clustered.standardError,
     winRate: orders.filter((order) => order.status === 'won').length / orders.length,
   };
 }
@@ -312,9 +307,6 @@ export function buildTradeRecord(orders: PaperOrder[], mode: ExecutionMode): Tra
   const evaluatedSwitches = mine.filter((order) => order.switchVsHoldCents !== undefined);
   const evaluatedStandaloneExits = mine.filter((order) => order.status === 'sold' && !order.switchedToOrderId
     && order.counterfactualHoldPnlCents !== undefined && !order.id.includes(':exit:'));
-  const standaloneExitVsHoldCents = evaluatedStandaloneExits.length
-    ? evaluatedStandaloneExits.reduce((sum, order) => sum + actualPnl(order) - order.counterfactualHoldPnlCents!, 0)
-    : null;
   // Observation-only alternative: at the full exit's realized average net price, sell only enough
   // quantity to recover exact principal and retain the residual binary payout. It is intentionally
   // reported rather than traded until independent exit windows justify changing the approved policy.
@@ -349,8 +341,8 @@ export function buildTradeRecord(orders: PaperOrder[], mode: ExecutionMode): Tra
     switchesEvaluated: evaluatedSwitches.length,
     meanSwitchVsHoldCents: evaluatedSwitches.length ? evaluatedSwitches.reduce((sum, order) => sum + order.switchVsHoldCents!, 0) / evaluatedSwitches.length : null,
     standaloneExitsEvaluated: evaluatedStandaloneExits.length,
-    standaloneExitVsHoldCents,
-    meanStandaloneExitVsHoldCents: standaloneExitVsHoldCents === null ? null : standaloneExitVsHoldCents / evaluatedStandaloneExits.length,
+    actionCounterfactualVersion: ACTION_COUNTERFACTUAL_VERSION,
+    actionCounterfactuals: buildActionCounterfactuals(orders, mode),
     principalRecoveryExitsEvaluated: principalRecovery.length,
     principalRecoveryVsFullExitCents,
     meanPrincipalRecoveryVsFullExitCents: principalRecoveryVsFullExitCents === null ? null : principalRecoveryVsFullExitCents / principalRecovery.length,

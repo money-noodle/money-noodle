@@ -1,4 +1,4 @@
-import type { PositionSide } from './types';
+import type { PositionSide, StandaloneExitPolicy } from './types';
 
 export const PROFIT_REVERSAL_ARM_PERCENT = 0.75;
 export const STRICT_EXIT_MIN_GAIN_CENTS = 1;
@@ -35,7 +35,7 @@ export interface ExitPolicyDecision extends ExitObservationState {
   holdValueCents: number;
   optimisticHoldValueCents: number;
   action: 'HOLD' | 'SELL';
-  policy?: 'strict-value-v1' | 'profit-reversal-75-v1';
+  policy?: StandaloneExitPolicy;
   reason: string;
 }
 

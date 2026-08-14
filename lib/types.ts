@@ -570,6 +570,36 @@ export interface SegmentGroup {
   segments: SegmentStat[];
 }
 
+/** The standalone exit policies, named exactly as they are stamped onto each exit order. */
+export type StandaloneExitPolicy = 'strict-value-v1' | 'profit-reversal-75-v1';
+
+/**
+ * Whether an arm's rejected alternative is priced from the settled venue outcome, or estimated from an
+ * executable bid recorded while the position was open. The two are not equivalent evidence.
+ */
+export type ActionCounterfactualBasis = 'authoritative' | 'approximate';
+
+/**
+ * One action-versus-alternative comparison. Positive incremental values mean the action actually taken
+ * beat the alternative it rejected. Means are clustered by settlement window.
+ */
+export interface ActionCounterfactualArm {
+  action: 'HOLD' | 'EXIT' | 'SWITCH';
+  alternative: string;
+  policy: string;
+  basis: ActionCounterfactualBasis;
+  description: string;
+  decisions: number;
+  windows: number;
+  takenPnlCents: number;
+  alternativePnlCents: number;
+  incrementalCents: number;
+  meanIncrementalCents: number | null;
+  meanIncrementalReturn: number | null;
+  incrementalReturnStandardError: number | null;
+  credible: boolean;
+}
+
 /**
  * Track record of actually executed trades for one mode. Built from the order ledger rather than the
  * calculation log, because fills, fees, and stake sizing are what determine realized money.
@@ -596,8 +626,12 @@ export interface TradeTrackRecord {
   switchesEvaluated: number;
   meanSwitchVsHoldCents: number | null;
   standaloneExitsEvaluated: number;
-  standaloneExitVsHoldCents: number | null;
-  meanStandaloneExitVsHoldCents: number | null;
+  /**
+   * Per-policy HOLD/EXIT/SWITCH counterfactuals. These replace the single blended exit-versus-hold
+   * figure, which averaged two policies that point in opposite directions and hid both.
+   */
+  actionCounterfactualVersion: string;
+  actionCounterfactuals: ActionCounterfactualArm[];
   principalRecoveryExitsEvaluated: number;
   principalRecoveryVsFullExitCents: number | null;
   meanPrincipalRecoveryVsFullExitCents: number | null;
@@ -1328,7 +1362,7 @@ export interface PaperOrder {
   latestNetProfitPercent?: number;
   latestOwnedSideProbability?: number;
   latestExitObservationAt?: string;
-  standaloneExitPolicy?: 'strict-value-v1' | 'profit-reversal-75-v1';
+  standaloneExitPolicy?: StandaloneExitPolicy;
   standaloneExitAttemptedAt?: string;
   standaloneExitHoldValueCents?: number;
   standaloneExitOptimisticHoldValueCents?: number;

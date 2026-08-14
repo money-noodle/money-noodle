@@ -119,8 +119,9 @@ describe('maker first-passage validation report', () => {
     });
     const record = buildTradeRecord([exited], 'live');
     expect(record.standaloneExitsEvaluated).toBe(1);
-    expect(record.standaloneExitVsHoldCents).toBe(-6);
-    expect(record.meanStandaloneExitVsHoldCents).toBe(-6);
+    const reversal = record.actionCounterfactuals.find((arm) => arm.policy === 'profit-reversal-75-v1');
+    expect(reversal?.incrementalCents).toBe(-6);
+    expect(reversal?.meanIncrementalCents).toBe(-6);
     expect(record.principalRecoveryExitsEvaluated).toBe(1);
     expect(record.principalRecoveryVsFullExitCents).toBeCloseTo(20 * (1 - 9 / 14) - 5);
   });

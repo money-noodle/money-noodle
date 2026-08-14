@@ -118,6 +118,38 @@ function ProviderRecordRows({ records, label }: { records: ProviderTradeRecord[]
   </div>;
 }
 
+/**
+ * One row per action-versus-alternative arm. The two exit policies are shown separately on purpose:
+ * blending them averaged a positive and a negative policy into a single number that read as neutral.
+ */
+function ActionCounterfactualPanel({ record }: { record: TradeTrackRecord }) {
+  return <div className="mt-3 rounded-lg border bg-background/40 p-3">
+    <div className="flex flex-wrap items-baseline justify-between gap-2">
+      <p className="text-[8px] uppercase tracking-wider text-muted-foreground">Action versus rejected alternative</p>
+      <span className="font-mono text-[8px] text-muted-foreground">{record.actionCounterfactualVersion}</span>
+    </div>
+    <div className="mt-2 grid grid-cols-[1fr_52px_74px_84px] gap-2 border-b pb-1 text-[8px] uppercase text-muted-foreground">
+      <span>Action · policy</span><span className="text-right">n/w</span><span className="text-right">Total</span><span className="text-right">Per stake</span>
+    </div>
+    {record.actionCounterfactuals.map((armed) => (
+      <div key={`${armed.action}:${armed.policy}`} className="grid grid-cols-[1fr_52px_74px_84px] gap-2 py-1 text-[10px]" title={armed.description}>
+        <span className="truncate">
+          <span className="font-medium">{armed.action}</span>
+          <span className="text-muted-foreground"> vs {armed.alternative} · {armed.policy}</span>
+          {armed.basis === 'approximate' && <span className="ml-1 text-amber-200/70">≈</span>}
+        </span>
+        <span className="text-right font-mono text-muted-foreground">{armed.decisions}/{armed.windows}w</span>
+        <span className={cn('text-right font-mono', armed.incrementalCents > 0 ? 'text-primary/70' : armed.incrementalCents < 0 ? 'text-red-400/70' : 'text-muted-foreground')}>{`${armed.incrementalCents >= 0 ? '+' : ''}${armed.incrementalCents.toFixed(1)}¢`}</span>
+        <span className={cn('text-right font-mono', !armed.credible ? 'text-muted-foreground' : (armed.meanIncrementalReturn ?? 0) > 0 ? 'text-primary' : 'text-red-400')}>
+          {armed.meanIncrementalReturn === null ? '—' : `${armed.meanIncrementalReturn >= 0 ? '+' : ''}${(armed.meanIncrementalReturn * 100).toFixed(0)}%`}
+          {armed.incrementalReturnStandardError !== null && <span className="ml-0.5 text-[8px] text-muted-foreground">±{(armed.incrementalReturnStandardError * 100).toFixed(0)}</span>}
+        </span>
+      </div>
+    ))}
+    <p className="mt-1 text-[9px] text-muted-foreground">Positive means the action beat the alternative it rejected. Per-stake means are clustered by settlement window; greyed-out rows do not clear two standard errors. Rows marked ≈ price the rejected exit from an observed bid rather than a settled outcome. Reporting only — no arm may change execution.</p>
+  </div>;
+}
+
 function TradeRecordCard({ record }: { record: TradeTrackRecord }) {
   const live = record.mode === 'live';
   const credible = record.windows >= 5 && record.standardError !== null && Math.abs(record.meanRealizedReturn ?? 0) > 2 * record.standardError;
@@ -139,7 +171,7 @@ function TradeRecordCard({ record }: { record: TradeTrackRecord }) {
       <p className="mt-1 text-[9px] text-muted-foreground">{credible ? 'Clears two standard errors across independent windows.' : 'Not yet distinguishable from noise — needs at least 5 settlement windows.'}</p>
     </div>
     {record.switchesEvaluated > 0 && <div className="mt-3 rounded-lg border bg-background/40 p-3"><p className="text-[8px] uppercase tracking-wider text-muted-foreground">Switch versus hold counterfactual</p><p className={cn('mt-1 font-mono text-sm', (record.meanSwitchVsHoldCents ?? 0) > 0 ? 'text-primary' : 'text-red-400')}>{record.meanSwitchVsHoldCents === null ? '—' : `${record.meanSwitchVsHoldCents >= 0 ? '+' : ''}${record.meanSwitchVsHoldCents.toFixed(2)}¢`} <span className="text-[9px] text-muted-foreground">mean incremental P&amp;L across {record.switchesEvaluated}</span></p></div>}
-    {record.standaloneExitsEvaluated > 0 && <div className="mt-3 rounded-lg border bg-background/40 p-3"><p className="text-[8px] uppercase tracking-wider text-muted-foreground">Standalone exit versus hold</p><p className={cn('mt-1 font-mono text-sm', (record.standaloneExitVsHoldCents ?? 0) > 0 ? 'text-primary' : 'text-red-400')}>{record.standaloneExitVsHoldCents === null ? '—' : `${record.standaloneExitVsHoldCents >= 0 ? '+' : ''}${record.standaloneExitVsHoldCents.toFixed(2)}¢`} <span className="text-[9px] text-muted-foreground">total · {record.meanStandaloneExitVsHoldCents === null ? '—' : `${record.meanStandaloneExitVsHoldCents >= 0 ? '+' : ''}${record.meanStandaloneExitVsHoldCents.toFixed(2)}¢ mean`} across {record.standaloneExitsEvaluated}</span></p></div>}
+    {record.actionCounterfactuals.length > 0 && <ActionCounterfactualPanel record={record}/>}
     {record.principalRecoveryExitsEvaluated > 0 && <div className="mt-3 rounded-lg border bg-background/40 p-3"><p className="text-[8px] uppercase tracking-wider text-muted-foreground">Principal-recovery shadow versus full exit</p><p className={cn('mt-1 font-mono text-sm', (record.principalRecoveryVsFullExitCents ?? 0) > 0 ? 'text-primary' : 'text-red-400')}>{record.principalRecoveryVsFullExitCents === null ? '—' : `${record.principalRecoveryVsFullExitCents >= 0 ? '+' : ''}${record.principalRecoveryVsFullExitCents.toFixed(2)}¢`} <span className="text-[9px] text-muted-foreground">counterfactual total across {record.principalRecoveryExitsEvaluated}; observation only</span></p></div>}
     {record.segments.length > 0 && <div className="mt-3 grid gap-2 sm:grid-cols-2">{record.segments.map((segmentGroup) => <SegmentTable key={segmentGroup.dimension} group={segmentGroup}/>)}</div>}
   </div>;
