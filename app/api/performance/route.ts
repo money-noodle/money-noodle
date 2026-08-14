@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
 import { isAuthenticatedRequest } from '@/lib/auth';
 import { isStatelessDeployment, STATELESS_WORKER_MESSAGE } from '@/lib/runtime-environment';
-import { getCyclePathReport } from '@/lib/cycle-path-store';
+import { getCyclePathReport, getCyclePaths } from '@/lib/cycle-path-store';
+import { getContractProvenanceRegistry } from '@/lib/contract-provenance-store';
+import { buildContractComparabilityReport } from '@/lib/contract-comparability';
 import { getCalendarEvaluationReport } from '@/lib/calendar-evaluation-store';
 import { buildMakerFillReport, buildProviderTradeRecords, buildTradeRecord } from '@/lib/execution-report';
 import { epochResults, lifetimeRealizedPnlCents } from '@/lib/budget-epoch';
@@ -28,9 +30,10 @@ export async function GET(request: Request) {
     if (responseCache && responseCache.expiresAt > Date.now()) {
       return NextResponse.json(responseCache.body, { headers: { 'Cache-Control': 'private, no-store' } });
     }
-    const [forecasts, summary, orders, cyclePaths, control, persistenceCandidate, calendarEvaluation] = await Promise.all([
-      getForecastHistory(), getPerformanceSummary(), getExecutionOrders(), getCyclePathReport(), getTradingControl(),
-      getPersistenceCandidateReport(BUY_POLICY_VERSION), getCalendarEvaluationReport(BUY_POLICY_VERSION),
+    const [forecasts, summary, orders, cyclePaths, cyclePathRecords, provenance, control, persistenceCandidate, calendarEvaluation] = await Promise.all([
+      getForecastHistory(), getPerformanceSummary(), getExecutionOrders(), getCyclePathReport(), getCyclePaths(),
+      getContractProvenanceRegistry(), getTradingControl(), getPersistenceCandidateReport(BUY_POLICY_VERSION),
+      getCalendarEvaluationReport(BUY_POLICY_VERSION),
     ]);
     const modelEvaluations = await getWalkForwardEvaluationHistory(summary.calibrationWindows);
     const promotionLedger = await readPromotionLedger();
@@ -65,6 +68,7 @@ export async function GET(request: Request) {
       promotionEligibility: evaluatePromotionEligibility(modelEvaluations.runs.at(-1)),
       promotionLedger,
       cyclePaths,
+      contractComparability: buildContractComparabilityReport(forecasts, cyclePathRecords, provenance.records),
       makerFillReport: buildMakerFillReport(orders, forecasts),
       persistenceCandidate,
       calendarEvaluation,

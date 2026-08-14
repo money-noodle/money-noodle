@@ -179,6 +179,17 @@ export interface PolicyManifest {
 }
 
 export type ContractComparability = 'exact' | 'approximate' | 'not-comparable';
+export type SettlementPriceMethod = 'simple-average' | 'time-weighted-average' | 'point-in-time' | 'unknown';
+
+export interface ContractTargetComparison {
+  comparability: ContractComparability;
+  reason: string;
+  closeAligned: boolean;
+  settlementWindowAligned: boolean | null;
+  referenceWindowAligned: boolean | null;
+  oracleAligned: boolean | null;
+  methodAligned: boolean | null;
+}
 
 /** Immutable venue contract/rules record; full rules live once in the provenance registry. */
 export interface ContractProvenanceRecord {
@@ -194,7 +205,10 @@ export interface ContractProvenanceRecord {
   rulesText: string;
   referenceSource?: string;
   referenceValue?: number;
+  settlementPriceMethod?: SettlementPriceMethod;
+  referenceWindowSeconds?: number;
   settlementWindowSeconds?: number;
+  roundingDecimals?: number;
   comparability: ContractComparability;
 }
 
@@ -240,6 +254,51 @@ export interface VenueQuote {
   comparability: ContractComparability;
   floorStrike?: number;
   contract?: ContractProvenanceRecord;
+}
+
+export interface ContractComparabilityVenueReport {
+  venue: TradingVenue;
+  contracts: number;
+  metadataContracts: number;
+  resolvedWindows: number;
+  directReferenceDriftSamples: number;
+  meanReferenceDriftPercent: number | null;
+  meanAbsoluteReferenceDriftPercent: number | null;
+  maximumAbsoluteReferenceDriftPercent: number | null;
+  proxyOutcomeSamples: number;
+  proxyOutcomeAgreement: number | null;
+}
+
+export interface ContractComparabilityRow {
+  id: string;
+  symbol: string;
+  venue: TradingVenue;
+  contractId: string;
+  closesAt: string;
+  settlementPriceMethod: SettlementPriceMethod;
+  referenceWindowSeconds?: number;
+  settlementWindowSeconds?: number;
+  krakenReferencePrice: number;
+  venueReferencePrice?: number;
+  referenceDriftPercent?: number;
+  krakenSettlementAverage?: number;
+  proxyOutcome?: PositionSide;
+  venueOutcome?: PositionSide;
+  proxyAgreed?: boolean;
+}
+
+export interface ContractComparabilityReport {
+  version: 'contract-comparability-v1';
+  generatedAt: string;
+  comparison: ContractTargetComparison;
+  totalContracts: number;
+  metadataContracts: number;
+  pairedOutcomeWindows: number;
+  pairedOutcomeAssetWindows: number;
+  venueOutcomeDisagreements: number;
+  venues: ContractComparabilityVenueReport[];
+  recent: ContractComparabilityRow[];
+  productionChanged: false;
 }
 
 export interface ContractBasis {
@@ -296,6 +355,7 @@ export interface CyclePathReport {
 
 export interface SettlementAverageEstimate {
   probabilityUp: number;
+  windowSeconds?: number;
   expectedAveragePrice: number;
   standardDeviationPercent: number;
   effectiveVarianceSeconds: number;
@@ -373,6 +433,8 @@ export interface Prediction {
   signal: Signal;
   market: MarketQuote;
   kalshi?: VenueQuote;
+  /** Rule-level comparison only; observation/reporting input, never a forecast or execution gate. */
+  targetComparison?: ContractTargetComparison;
   enabledTradingVenues: Array<'polymarket' | 'kalshi'>;
   factors: Factor[];
   chart: ChartPoint[];
@@ -422,6 +484,7 @@ export interface TrackedForecast {
   settlementAverageEstimate?: SettlementAverageEstimate;
   makerFillEstimate?: MakerFillEstimate;
   venueProbabilityUp?: number;
+  targetComparison?: ContractTargetComparison;
   enabledTradingVenues?: Array<'polymarket' | 'kalshi'>;
   actionableVenuePrices?: Array<{ venue: 'polymarket' | 'kalshi'; side: 'UP' | 'DOWN'; price: number }>;
   /** Issuance-time pointers into the immutable full-rules contract registry. */

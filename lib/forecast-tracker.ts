@@ -198,6 +198,7 @@ function newTrackedForecast(prediction: Prediction, modelVersion: string, observ
     settlementAverageEstimate: prediction.settlementAverageEstimate,
     makerFillEstimate: prediction.makerFillEstimate,
     venueProbabilityUp: prediction.venueProbabilityUp,
+    targetComparison: prediction.targetComparison,
     id: forecastId(prediction, observedAt, qualified), cycleId: predictionCycleId(prediction),
     trackingPolicyVersion: TRACKING_POLICY_VERSION,
     symbol: prediction.symbol, marketUrl: prediction.market.url,

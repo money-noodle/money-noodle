@@ -51,8 +51,8 @@ function emptyPerformance(generatedAt: string): PublicPaperPerformance {
 /**
  * Paper-only counterpart to the signed performance history. Forecast scoring is mode-independent and is
  * served whole; the executed-money half is built from paper orders alone. The live record and the
- * live-only maker-fill report and worker-local prospective policy/calendar evaluations are never
- * requested, so no real-money or private evaluation record exists here to redact.
+ * live-only maker-fill report, private target-integrity registry report, and worker-local prospective
+ * policy/calendar evaluations are never requested, so no real-money or private evaluation record exists here to redact.
  */
 export async function getPublicPaperPerformance(): Promise<PublicPaperPerformance> {
   const generatedAt = new Date().toISOString();

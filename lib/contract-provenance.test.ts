@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { contractProvenanceRef, createContractProvenance } from './contract-provenance';
+import { compareContractTargets, contractProvenanceRef, createContractProvenance, parseContractSettlementMetadata } from './contract-provenance';
 
 const input = {
   venue: 'kalshi' as const,
@@ -27,6 +27,36 @@ describe('contract provenance fingerprints', () => {
     const changed = createContractProvenance({ ...input, rulesText: `${input.rulesText} Final value is a 60-second average.` });
     expect(changed.rulesFingerprint).not.toBe(first.rulesFingerprint);
     expect(changed.registryId).not.toBe(first.registryId);
+  });
+
+  it('parses Kalshi simple-average and Polymarket TWAP windows', () => {
+    expect(parseContractSettlementMetadata(
+      "If the simple average of the sixty seconds before close is higher. The value is rounded to the nearest 4 decimal places.",
+    )).toEqual({ settlementPriceMethod: 'simple-average', referenceWindowSeconds: 60, settlementWindowSeconds: 60, roundingDecimals: 4 });
+    expect(parseContractSettlementMetadata(
+      'The time-weighted average price resolves from Chainlink.', 'https://data.chain.link/streams/btc-usd-twap-60s-streams',
+    )).toMatchObject({ settlementPriceMethod: 'time-weighted-average', referenceWindowSeconds: 60, settlementWindowSeconds: 60 });
+  });
+
+  it('classifies aligned windows with different oracles and methods as approximate', () => {
+    const poly = createContractProvenance({
+      ...input, venue: 'polymarket', contractId: 'poly',
+      rulesText: 'Chainlink time-weighted average price.', referenceSource: 'https://data.chain.link/streams/btc-usd-twap-60s-streams',
+    });
+    const kalshi = createContractProvenance({
+      ...input, rulesText: "Simple average of the sixty seconds of CF Benchmarks' BTCUSDRTI before close.",
+      referenceSource: 'CF Benchmarks RTI',
+    });
+    expect(compareContractTargets(poly, kalshi)).toMatchObject({
+      comparability: 'approximate', closeAligned: true, settlementWindowAligned: true,
+      referenceWindowAligned: true, oracleAligned: false, methodAligned: false,
+    });
+  });
+
+  it('fails comparison closed when published averaging windows differ', () => {
+    const poly = createContractProvenance({ ...input, venue: 'polymarket', contractId: 'poly', settlementWindowSeconds: 30, referenceWindowSeconds: 30 });
+    const kalshi = createContractProvenance({ ...input, settlementWindowSeconds: 60, referenceWindowSeconds: 60 });
+    expect(compareContractTargets(poly, kalshi)).toMatchObject({ comparability: 'not-comparable', settlementWindowAligned: false });
   });
 
   it('keeps full rules in the registry record but not repeated forecast references', () => {

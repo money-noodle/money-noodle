@@ -18,6 +18,15 @@ describe('final-minute settlement-average uncertainty', () => {
     expect(result.probabilityUp).toBeCloseTo(0.5, 5);
   });
 
+  it('uses a parsed non-default averaging window when supplied', () => {
+    const result = estimateSettlementAverage({
+      referencePrice: 100, currentPrice: 100, closesAtMs: close, nowMs: close - 30_000,
+      volatilityPerSecond: 0.001, windowSeconds: 30,
+    })!;
+    expect(result.windowSeconds).toBe(30);
+    expect(result.effectiveVarianceSeconds).toBeCloseTo(10);
+  });
+
   it('conditions on the observed part of the final minute', () => {
     const start = close - 60_000;
     const result = estimateSettlementAverage({

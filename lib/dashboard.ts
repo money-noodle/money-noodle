@@ -1,5 +1,6 @@
 import { basisProbability, clampProbability, impliedVolatility, logit, realizedVolatility, resolveVolatility, sigmoid } from './basis-model';
 import { createCalibrationReplaySnapshot } from './calibration-replay';
+import { compareContractTargets } from './contract-provenance';
 import { cached, recordOracleHistory, recordPriceHistory, recordVenueHistory, type OracleSnapshot, type PriceSnapshot, type VenueSnapshot } from './cache';
 import { collectorStatus } from './collector-state';
 import { recordCyclePathObservations } from './cycle-path-store';
@@ -176,6 +177,7 @@ export function buildPrediction(coin: CoinSnapshot, market: MarketQuote | undefi
   const settlementAverageEstimate = basis && referencePrice ? estimateSettlementAverage({
     referencePrice, currentPrice, closesAtMs: Date.parse(quote.closesAt), nowMs: Date.now(),
     volatilityPerSecond: basis.volatilityPerSecond,
+    windowSeconds: quote.contract?.settlementWindowSeconds ?? kalshi?.contract?.settlementWindowSeconds,
     observations: oracleHistory.flatMap((point) => {
       const price = point.prices[coin.symbol];
       return price === undefined ? [] : [{ time: point.time, price }];
@@ -277,10 +279,12 @@ export function buildPrediction(coin: CoinSnapshot, market: MarketQuote | undefi
       + Math.min(0.04, range / 60),
   };
   const confidence = clamp(confidenceBreakdown.base + confidenceBreakdown.dataQuality + confidenceBreakdown.sampleQuality - confidenceBreakdown.uncertaintyPenalty, 0.25, 0.86);
+  const targetComparison = quote.contract && kalshi?.contract
+    ? compareContractTargets(quote.contract, kalshi.contract) : undefined;
   const prediction: Prediction = {
     symbol: coin.symbol, name: coin.name, iconUrl: coin.iconUrl, price: coin.price, priceChange24h: coin.change24h,
     modelProbabilityUp: probability, edge, confidence, confidenceBreakdown, basis, calibrationReplay,
-    settlementAverageEstimate, makerFillEstimates, blendedProbabilityUp,
+    settlementAverageEstimate, makerFillEstimates, blendedProbabilityUp, targetComparison,
     venueProbabilityUp: liveVenueProbabilities.length ? venueProbability : undefined,
     venueDisagreement: quote.live && kalshi?.live ? venueDivergence : undefined,
     signal: 'PASS', market: quote, kalshi, enabledTradingVenues, factors, chart: coin.chart,

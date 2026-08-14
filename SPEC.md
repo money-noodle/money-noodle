@@ -269,7 +269,7 @@ Money Noodle must persist every calculation that passes the active buy policy an
 - Disabled venues may remain visible for research but are dimmed, excluded from qualification, excluded from tracked actionable prices, and unavailable to execution.
 - A calculation is current for no more than one 15-second observation window. Expired calculations must not remain presented as qualifying outputs or be accepted by future execution logic.
 - Every qualifying 15-second update is a separate immutable forecast observation. At most one observation is stored per asset/contract/15-second UTC bucket, preventing duplicate browser or manual requests.
-- Each observation stores a shared cycle ID plus issue time, close time, direction, UP probability, confidence, model version, tracking-policy version, Polymarket/Kalshi quotes, confidence calculation, and complete factor snapshot. It also stores per-venue contract ID, rules fingerprint, resolution/reference source, reference value, averaging window, and comparability state when available.
+- Each observation stores a shared cycle ID plus issue time, close time, direction, UP probability, confidence, model version, tracking-policy version, Polymarket/Kalshi quotes, confidence calculation, and complete factor snapshot. It also stores per-venue contract ID, rules fingerprint, resolution/reference source/value, opening-reference and closing-settlement averaging windows, averaging method, rounding precision, and a reasoned cross-venue comparability state when available.
 - Direction changes within a cycle are retained and scored independently; no update is overwritten or selected with hindsight.
 - Forecast observations are durable user data, not disposable response cache data.
 - Threshold or policy changes create a new policy/model version and never rewrite historical records.
@@ -280,6 +280,7 @@ Money Noodle must persist every calculation that passes the active buy policy an
 - Each update records venue-specific outcomes and resolution timestamps. Signal-quality Brier/log loss uses the explicitly identified target outcome; simulated return uses the outcome from the same venue as its stored entry ask.
 - Unresolved, cancelled, ambiguous, or invalid markets remain separately classified and are excluded from accuracy.
 - The system retries delayed resolutions without changing the original forecast.
+- A separate target-integrity report joins immutable rules and aligned Kraken paths: direct reference drift only when the venue publishes its reference value; final-window proxy averages only with bounded path coverage; and proxy-versus-exact outcome agreement without substituting the proxy for resolution. Close or known-window mismatch is `not-comparable`; `exact` additionally requires the same oracle and averaging method; aligned windows with different oracles/methods remain `approximate`.
 
 #### Performance summary
 
@@ -529,7 +530,7 @@ Recommended future service boundaries:
 - [x] Add automatic versioned expanding-window evaluation after 100 unique resolved settlement timestamps, repeating every 25 new windows. It uses five chronological folds, one fixed five-minute snapshot per asset/window, largest-edge selection within each correlated window, fee-aware return/Brier/log-loss/drawdown scoring, dataset fingerprints, and persisted history. Evaluation cannot promote production automatically.
 - [x] Persist an immutable venue-specific contract/rules/reference registry, retain issuance fingerprints, resolve Polymarket/Kalshi independently, and exclude legacy/mismatched venue entries from walk-forward return scoring.
 - [x] Prospectively verify provenance-bearing dual-venue resolution, including genuine cross-venue outcome disagreements with venue-specific scoring.
-- [ ] Add explicit averaging-window parsing and Kraken-to-venue reference-drift comparability reports.
+- [x] Parse and fingerprint explicit reference/settlement averaging windows, averaging method, and rounding precision; report Kraken-to-venue reference drift, sparse final-window path proxies against exact venue outcomes, and reasoned exact/approximate/not-comparable labels without changing production.
 - [ ] Harden walk-forward pass/review criteria for Brier, log loss, coverage, drawdown, clustered uncertainty, candidate-grid selection, and separate maker-executable return; add replayable quality inputs before testing a replacement confidence formula.
 - [ ] Add an immutable model registry with quiescent, audited manual promotion and rollback; automatic evaluation and LLM research must have no promotion capability.
 - [x] Add side-aware DOWN/NO paper and live entries from executable NO asks, with signed Kalshi order translation, side-specific persistence/settlement/reconciliation/reporting, and no implicit reversal through SELL.
@@ -753,6 +754,7 @@ This design does not change any live entry rule, does not let a candidate place 
 
 | Date | Decision |
 |---|---|
+| 2026-08-14 | Keep Polymarket and Kalshi `approximate`, not exact: both currently publish aligned 60-second opening/closing windows, but Polymarket uses a Chainlink TWAP stream while Kalshi uses a simple average of CF Benchmarks RTI observations. Parse and fingerprint those fields, retain exact venue outcomes separately, and use Kraken drift/path agreement only as an observation-only proxy. |
 | 2026-08-14 | Calendar effects remain observation-only. Retain an unbiased, non-pruned fixed-five-minute sample and one candidate/no-candidate record per settlement window, scoped by policy. Review time bands only after 30 dates and 100 candidate windows per band; review individual weekdays only after 12 occurrences and 100 candidate windows each. Counts unlock manual held-out review, never a clock gate. |
 | 2026-08-14 | Do not reduce production persistence from three snapshots on retrospective results. Start `persistence-two-consecutive-v1` in the evaluation lane, preserving every other rule and collecting exact forward Kalshi outcomes plus a prospectively captured empirical maker-fill estimate. Require 100 resolved incremental settlement windows before the first manual review; sample readiness cannot promote or alter production. |
 | 2026-08-14 | Maker retry cooldown begins when an attempt becomes terminal, not when it was submitted, so the 12-second resting horizon cannot consume the requested 30-second pause. Paper uses the same active attempt cap and durable retry identity as live; the cap stays at one pending separate forward attempt-2 evidence, after historical second attempts resolved 1/12 with −79.2% mean return. |

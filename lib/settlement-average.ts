@@ -32,12 +32,14 @@ export function estimateSettlementAverage(input: {
   closesAtMs: number;
   nowMs: number;
   volatilityPerSecond: number;
+  windowSeconds?: number;
   observations?: TimedPrice[];
 }): SettlementAverageEstimate | null {
   const { referencePrice, currentPrice, closesAtMs, nowMs, volatilityPerSecond } = input;
   if (!(referencePrice > 0) || !(currentPrice > 0) || !(volatilityPerSecond > 0) || ![closesAtMs, nowMs].every(Number.isFinite)) return null;
   const remainingSeconds = Math.max(0, (closesAtMs - nowMs) / 1000);
-  const window = SETTLEMENT_AVERAGE_SECONDS;
+  const window = Number.isFinite(input.windowSeconds) && input.windowSeconds! > 0
+    ? input.windowSeconds! : SETTLEMENT_AVERAGE_SECONDS;
   let meanLogPrice: number;
   let effectiveVarianceSeconds: number;
   let observedSettlementSeconds = 0;
@@ -63,7 +65,7 @@ export function estimateSettlementAverage(input: {
     ? clampProbability(normalCdf(logBasis / standardDeviation), 0.001, 0.999)
     : logBasis >= 0 ? 0.999 : 0.001;
   return {
-    probabilityUp, expectedAveragePrice: Math.exp(meanLogPrice),
+    probabilityUp, windowSeconds: window, expectedAveragePrice: Math.exp(meanLogPrice),
     standardDeviationPercent: standardDeviation * 100,
     effectiveVarianceSeconds, observedSettlementSeconds, method,
   };
