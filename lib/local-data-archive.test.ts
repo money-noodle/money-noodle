@@ -1,0 +1,104 @@
+import { Readable } from 'node:stream';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { GetObjectCommand, HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('server-only', () => ({}));
+
+import {
+  archiveIntervalMs, archiveLocalData, listArchiveCandidates, localArchiveConfig, readLocalArchiveState,
+  type ArchiveObjectStore, type LocalArchiveConfig,
+} from './local-data-archive';
+
+async function bytes(body: unknown): Promise<Buffer> {
+  if (typeof body === 'string' || body instanceof Uint8Array) return Buffer.from(body);
+  const chunks: Buffer[] = [];
+  for await (const chunk of body as Readable) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}
+
+class MemoryStore implements ArchiveObjectStore {
+  objects = new Map<string, { body: Buffer; metadata?: Record<string, string> }>();
+  async send(command: unknown): Promise<unknown> {
+    if (command instanceof PutObjectCommand) {
+      const key = command.input.Key!;
+      this.objects.set(key, { body: await bytes(command.input.Body), metadata: command.input.Metadata });
+      return {};
+    }
+    if (command instanceof HeadObjectCommand) {
+      const object = this.objects.get(command.input.Key!);
+      if (!object) throw Object.assign(new Error('not found'), { name: 'NotFound', $metadata: { httpStatusCode: 404 } });
+      return { ContentLength: object.body.length, Metadata: object.metadata };
+    }
+    if (command instanceof GetObjectCommand) {
+      const object = this.objects.get(command.input.Key!);
+      if (!object) throw new Error('not found');
+      return { Body: Readable.from(object.body) };
+    }
+    throw new Error(`Unexpected command ${(command as { constructor?: { name?: string } }).constructor?.name}`);
+  }
+}
+
+const roots: string[] = [];
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+async function fixture(): Promise<LocalArchiveConfig> {
+  const dataDirectory = await mkdtemp(path.join(os.tmpdir(), 'money-noodle-archive-test-'));
+  roots.push(dataDirectory);
+  return {
+    bucket: 'archive', region: 'fr-par', endpoint: 'https://example.test', prefix: 'money-noodle/v1',
+    accessKeyId: 'access', secretAccessKey: 'secret', dataDirectory,
+  };
+}
+
+describe('local durable-data archive', () => {
+  it('is explicitly enabled, credentialed, bounded, and disabled on Vercel', () => {
+    const enabled: NodeJS.ProcessEnv = {
+      ...process.env,
+      MONEY_NOODLE_ARCHIVE_ENABLED: 'true', MONEY_NOODLE_ARCHIVE_BUCKET: 'bucket',
+      MONEY_NOODLE_ARCHIVE_ACCESS_KEY_ID: 'access', MONEY_NOODLE_ARCHIVE_SECRET_ACCESS_KEY: 'secret',
+      MONEY_NOODLE_ARCHIVE_INTERVAL_HOURS: '0',
+    };
+    expect(localArchiveConfig(enabled, '/tmp/project')).toMatchObject({ bucket: 'bucket', region: 'fr-par', dataDirectory: '/tmp/project/data' });
+    expect(archiveIntervalMs(enabled)).toBe(60 * 60_000);
+    expect(localArchiveConfig({ ...enabled, VERCEL: '1' }, '/tmp/project')).toBeUndefined();
+    expect(localArchiveConfig({ ...enabled, MONEY_NOODLE_ARCHIVE_SECRET_ACCESS_KEY: '' }, '/tmp/project')).toBeUndefined();
+  });
+
+  it('selects durable JSON recursively but excludes state, temporary files, and hidden paths', async () => {
+    const config = await fixture();
+    await mkdir(path.join(config.dataDirectory, 'forecast-history-shards'));
+    await mkdir(path.join(config.dataDirectory, '.private'));
+    await writeFile(path.join(config.dataDirectory, 'paper-orders.json'), '{}');
+    await writeFile(path.join(config.dataDirectory, 'forecast-history.journal.jsonl'), '{}\n');
+    await writeFile(path.join(config.dataDirectory, 'archive-state.json'), '{}');
+    await writeFile(path.join(config.dataDirectory, 'paper-orders.json.1.tmp'), '{}');
+    await writeFile(path.join(config.dataDirectory, '.private', 'secret.json'), '{}');
+    await writeFile(path.join(config.dataDirectory, 'forecast-history-shards', '2026-08-14.json'), '[]');
+    expect(await listArchiveCandidates(config.dataDirectory)).toEqual([
+      'forecast-history-shards/2026-08-14.json', 'forecast-history.journal.jsonl', 'paper-orders.json',
+    ]);
+  });
+
+  it('uploads content-addressed gzip blobs, reads every new blob back, and reuses unchanged data', async () => {
+    const config = await fixture();
+    const store = new MemoryStore();
+    await writeFile(path.join(config.dataDirectory, 'paper-orders.json'), `${JSON.stringify({ orders: ['x'.repeat(100_000)] })}\n`);
+
+    const first = await archiveLocalData(config, { store, now: new Date('2026-08-14T12:00:00Z'), hostname: 'test-host' });
+    expect(first.manifest.totals).toMatchObject({ files: 1, newBlobs: 1, reusedBlobs: 0 });
+    expect(first.manifest.files[0].objectKey).toMatch(/^money-noodle\/v1\/blobs\/sha256\/[a-f0-9]{2}\/[a-f0-9]{64}\.gz$/);
+    expect(first.manifestKey).toContain('/manifests/2026/08/14/');
+
+    const second = await archiveLocalData(config, { store, now: new Date('2026-08-15T12:00:00Z'), hostname: 'test-host' });
+    expect(second.manifest.totals).toMatchObject({ files: 1, newBlobs: 0, reusedBlobs: 1 });
+    const state = await readLocalArchiveState(config.dataDirectory);
+    expect(state).toMatchObject({ lastManifestKey: second.manifestKey, newBlobs: 0, reusedBlobs: 1 });
+    expect(state?.lastError).toBeUndefined();
+    expect(JSON.parse(await readFile(path.join(config.dataDirectory, 'archive-state.json'), 'utf8'))).toMatchObject({ version: 'money-noodle-local-archive-v1' });
+  });
+});

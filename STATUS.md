@@ -61,6 +61,7 @@ Interpretation: lifetime live is slightly positive, but the current live budget 
 
 - Atomic JSON writes for cache, forecast history, provider settings, budget control, execution ledger, promotion ledger, and evaluation history.
 - Forecast history journal and compaction path exist, but the legacy full-history file remains too large and still needs sharding/rollups.
+- A local-only Scaleway Object Storage archive is enabled against private bucket `money-noodle-archive-857bea21`. A detached nice-priority worker runs every 24 hours, stores gzip-compressed content-addressed blobs, verifies every new upload by full read-back SHA-256 and byte count, and writes an immutable manifest only after the set passes. The first verified archive covered 31 files and 471,687,329 source bytes, uploading 43,128,615 compressed bytes. This first phase performs no local deletion and never runs on Vercel.
 - Optional Postgres public paper projection is implemented with migrations:
   - [001_public_paper_projection.sql](/Users/raiphairow/code/money/db/migrations/001_public_paper_projection.sql)
   - [002_public_paper_performance.sql](/Users/raiphairow/code/money/db/migrations/002_public_paper_performance.sql)
@@ -83,6 +84,7 @@ Started 2026-08-14:
 - `npm run verify:forecast-storage` replays the legacy snapshot plus journal, builds a coexistence shard plan, and verifies row identity plus current summary counters before writing anything.
 - A verified `--write` run created ignored local shard artifacts under `data/forecast-history-shards/`: 49,219 effective rows, 3,082 open rows, 46,137 terminal rows, and 7 daily terminal shards. Summary counters matched exactly: 29,197 issued, 971 pending, 28,226 resolved, 2,358 cycles, 2,254 resolved cycles, 480 resolved windows, and 507 calibration windows.
 - The first materialized `open.json` is still 14 MB, so the next runtime step must reduce/seal old unresolved rows before switching the collector to the hot-set file.
+- Off-machine archive phase 1 is active: dedicated one-year Scaleway application credentials have object read/write and bucket read permissions but no object-delete or bucket-write permission. The app archives daily from the persistent worker; rolling local deletion remains deliberately disabled until repeated manifests and an independent restore test pass.
 
 Plan:
 
