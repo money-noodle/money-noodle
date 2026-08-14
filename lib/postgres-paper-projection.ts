@@ -212,6 +212,7 @@ export async function syncPublicPaperBudgetToPostgres(budget: PublicPaperBudget)
         bankroll_resets = excluded.bankroll_resets,
         source_updated_at = excluded.source_updated_at
     `;
+    await transaction`delete from money_noodle_public_paper_executions`;
     if (!budget.recentExecutions.length) return;
     const rows = budget.recentExecutions.map((record) => ({
       execution_key: `${record.createdAt}:${record.symbol}:${record.side}:${record.venue}`,
