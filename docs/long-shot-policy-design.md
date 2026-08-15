@@ -85,6 +85,17 @@ does, and the reason is structural: every contract that settles YES passes throu
 so **every winner is also a toucher**, plus every near-miss that ran up and fell back. The touch rate is
 strictly greater than the win rate. By how much is the open question.
 
+**These break-even rates are conservative, and deliberately so.** They price a miss as a total loss, which
+it is not: with no fallback exit, a position that never reaches the mark simply settles, exactly as the hold
+arm does, and at a 10¢ entry it settles in the money about a tenth of the time. The true break-even touch
+rate is therefore lower than the table states. The table stands as written because too hard a bar is the
+safe direction to be wrong in, but no decision should rest on it — §10's sentinels compare realized return
+per $1 staked on identical triggers, which needs no assumption about misses at all.
+
+The cost of selling early is the mirror of the same point: capping a winner at 90¢ forgoes settlement at
+100¢, and the contracts that reach 90¢ are exactly the ones most likely to settle in the money. Both
+directions are real, which is why this is measured rather than argued.
+
 **Launch marks: buy ≤10¢, sell 90¢.** Break-even 12.5%, roughly 1 in 8.
 
 ## 4. What screening established, and what it cannot
