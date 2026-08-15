@@ -1508,6 +1508,14 @@ export interface PaperOrder {
    */
   exitTargetCents?: number;
   /**
+   * Entry generation within this asset and settlement window; 1 is the first, above 1 is a re-entry.
+   *
+   * A re-entry can only follow a profitable exit, so it carries direct evidence that this window whipsaws
+   * — a fresher version of what the rejected prior-cycle filter was reaching for. Tagged so that
+   * hypothesis stays testable rather than buried in a blended average.
+   */
+  entryGeneration?: number;
+  /**
    * Highest owned-side bid observed while this position was open, sampled every two seconds.
    *
    * Recorded on every tick rather than only on a fill: it is what lets every candidate exit mark be
