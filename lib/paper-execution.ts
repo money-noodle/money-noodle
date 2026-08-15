@@ -24,7 +24,7 @@ import {
   buildLongShotOrder, longShotDailyNetLossCents, longShotFunding, openLongShotPositions,
 } from './long-shot-engine';
 import {
-  evaluateTargetExit, observePeakBid, targetExitPosition, targetExitSettlement,
+  TARGET_EXIT_POLL_MS, evaluateTargetExit, observePeakBid, targetExitPosition, targetExitSettlement,
 } from './target-exit-policy';
 import { assetAdmitted } from './asset-exclusion';
 import { cycleRegimeFor } from './cycle-path-store';
@@ -1464,7 +1464,7 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
   changed = paperChanged || liveChanged || changed;
   // Exits before entries, so a position that reached its mark this tick frees its slot for a re-entry in
   // the same cycle rather than waiting fifteen seconds. Both run inside the serialized engine queue.
-  changed = await runLongShotExits(dashboard, ledger) || changed;
+  changed = await runLongShotExits(dashboardBid(dashboard), ledger) || changed;
   changed = await runLongShot(dashboard, status, ledger, 'paper') || changed;
   changed = await runLongShot(dashboard, status, ledger, 'live') || changed;
   if (changed || ledger.lastLiveSkip?.reason !== previousSkip) await writeLedger(ledger);
@@ -1614,7 +1614,16 @@ async function runLongShot(
  * 2026-08-15). The submitted limit is the mark rather than the observed bid, so a quote that retreats
  * between observation and submission produces no fill instead of a worse one.
  */
-async function runLongShotExits(dashboard: DashboardData, ledger: Ledger): Promise<boolean> {
+type OwnedSideBid = (order: PaperOrder) => number | undefined;
+
+/** Owned-side bid from the 15-second dashboard snapshot: bid(side) = 100 - ask(other side). */
+const dashboardBid = (dashboard: DashboardData): OwnedSideBid => (order) => {
+  const quote = dashboard.predictions.find((item) => item.kalshi?.ticker === order.contractId)?.kalshi;
+  if (!quote?.live) return undefined;
+  return (1 - (order.side === 'UP' ? quote.askDown : quote.askUp)) * 100;
+};
+
+async function runLongShotExits(bidFor: OwnedSideBid, ledger: Ledger): Promise<boolean> {
   const settings = longShotSettings();
   if (!settings.enabled) return false;
   const draining = getExecutionDrainStatus().phase === 'draining';
@@ -1622,10 +1631,8 @@ async function runLongShotExits(dashboard: DashboardData, ledger: Ledger): Promi
 
   for (const mode of ['paper', 'live'] as const) {
     for (const order of openLongShotPositions(ledger.orders, mode)) {
-      const quote = dashboard.predictions.find((item) => item.kalshi?.ticker === order.contractId)?.kalshi;
-      if (!quote?.live) continue;
-      // bid(side) = 100 - ask(other side) on Kalshi's shared book.
-      const bidCents = (1 - (order.side === 'UP' ? quote.askDown : quote.askUp)) * 100;
+      const bidCents = bidFor(order);
+      if (bidCents === undefined || !Number.isFinite(bidCents)) continue;
       const peak = observePeakBid(order.peakOwnedSideBidCents, bidCents);
       if (peak !== order.peakOwnedSideBidCents) { order.peakOwnedSideBidCents = peak; changed = true; }
 
@@ -1701,7 +1708,72 @@ async function runLongShotExits(dashboard: DashboardData, ledger: Ledger): Promi
   return changed;
 }
 
+let longShotPollTimer: NodeJS.Timeout | undefined;
+let longShotPollRunning = false;
+
+/**
+ * Two-second exit poll for open long-shot positions.
+ *
+ * The fifteen-second collector cycle is too slow for this strategy: the whole premise is transient
+ * excursions, and a round trip inside ninety seconds would be sampled six times rather than forty-five.
+ * A resting order would have removed the need to watch at all, but Kalshi refuses `reduce_only` with
+ * `good_till_canceled` (SPEC decision 2026-08-15), so the watching has to be ours.
+ *
+ * Two properties keep this from destabilising the engine:
+ *
+ * - **Quotes are fetched outside the write queue.** Only the ledger mutation is queued, following the
+ *   2026-08-14 decision that upstream waits must not sit inside the queue they serve — a slow venue read
+ *   would otherwise delay every fifteen-second calculation behind it.
+ * - **A tick never queues behind itself.** If a pass is still running the next one is dropped rather than
+ *   accumulating, so a slow venue produces fewer polls instead of an unbounded backlog.
+ */
+async function longShotExitTick(): Promise<void> {
+  if (longShotPollRunning) return;
+  longShotPollRunning = true;
+  try {
+    if (getExecutionDrainStatus().phase === 'draining') return;
+    const ledger = await readLedger();
+    const open = [...openLongShotPositions(ledger.orders, 'paper'), ...openLongShotPositions(ledger.orders, 'live')];
+    if (!open.length) return;
+
+    // One read per distinct contract and side, not per position: paper and live hold the same contract.
+    const wanted = new Map(open.map((order) => [`${order.contractId}:${order.side}`, order]));
+    const bids = new Map<string, number>();
+    await Promise.all([...wanted].map(async ([key, order]) => {
+      try {
+        const quote = await fetchKalshiManagedMakerQuote(order.contractId, order.side);
+        bids.set(key, quote.bid * 100);
+      } catch {
+        // A transient quote failure is not a reason to sell or to stop; the next tick retries.
+      }
+    }));
+    if (!bids.size) return;
+
+    const operation = engineQueue.then(async () => {
+      const current = await readLedger();
+      if (await runLongShotExits((order) => bids.get(`${order.contractId}:${order.side}`), current)) {
+        await writeLedger(current);
+      }
+    });
+    engineQueue = operation.then(() => undefined, () => undefined);
+    await operation;
+  } catch (error) {
+    console.error('Long-shot exit poll failed:', error);
+  } finally {
+    longShotPollRunning = false;
+  }
+}
+
+/** Started lazily from the collector cycle, so it exists exactly where the collector does. */
+function startLongShotExitPoller(): void {
+  if (longShotPollTimer || !longShotSettings().enabled) return;
+  longShotPollTimer = setInterval(() => { void longShotExitTick(); }, TARGET_EXIT_POLL_MS);
+  // Never hold the process open on its own account.
+  longShotPollTimer.unref?.();
+}
+
 export function processPaperTradingCycle(dashboard: DashboardData): Promise<void> {
+  startLongShotExitPoller();
   const operation = engineQueue.then(() => processCycle(dashboard));
   engineQueue = operation.then(() => undefined, () => undefined);
   return operation.then(async () => {
