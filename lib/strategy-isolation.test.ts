@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
@@ -107,6 +108,21 @@ describe('money never crosses the strategy boundary', () => {
     ];
     expect(makerCohortEvidence(attempts, 0.10, 0.01)).toMatchObject({ accepted: 2, fills: 1, fillRate: 0.5 });
     expect(makerCohortEvidence(attempts, 0.10, 0.01, LONG_SHOT_ROUND_TRIP)).toMatchObject({ accepted: 2, fills: 2, fillRate: 1 });
+  });
+});
+
+describe('the paper bankroll belongs to the edge policy alone', () => {
+  it('is a counter, unlike live cash, so another strategy must not credit into it', () => {
+    // Live cash is one real Kalshi balance and settles through the shared control whatever spent it. The
+    // paper bankroll is the edge policy's own number: crediting a long-shot payout into it would inflate
+    // the edge policy's paper equity and its published track record. Other strategies derive their paper
+    // equity from their own orders instead, so there is nothing to credit.
+    const source = readFileSync(new URL('./paper-execution.ts', import.meta.url), 'utf8');
+    const settlement = source.slice(source.indexOf('async function settleDueOrders'), source.indexOf('async function updateSoldCounterfactuals'));
+    expect(settlement).toContain('orderStrategyId(order) === EDGE_BINARY_BUY');
+    // The guard must sit on the branch that mutates the bankroll, not merely appear somewhere nearby.
+    const guardIndex = settlement.indexOf('orderStrategyId(order) === EDGE_BINARY_BUY');
+    expect(settlement.indexOf('paperBudget.availableCents +=')).toBeGreaterThan(guardIndex);
   });
 });
 

@@ -573,7 +573,12 @@ async function settleDueOrders(ledger: Ledger): Promise<boolean> {
       if (!outcome) continue;
       const payoutCents = outcome === 'INVALID' ? order.stakeCents : outcome === order.side ? order.potentialPayoutCents : 0;
       if (order.executionMode === 'live') await settleTradingBudget(order.stakeCents, payoutCents, order.venue, order.id);
-      else {
+      // Live cash is one real Kalshi balance and settles through the shared control whatever strategy
+      // spent it. The paper bankroll is not: it is the edge policy's own counter, and crediting another
+      // strategy's payout into it would inflate the edge policy's paper equity and its published track
+      // record. Other strategies derive their paper equity from their own orders, so there is nothing to
+      // credit here.
+      else if (orderStrategyId(order) === EDGE_BINARY_BUY) {
         ledger.paperBudget.availableCents += payoutCents;
         ledger.paperBudget.realizedPnlCents += payoutCents - order.stakeCents;
       }
