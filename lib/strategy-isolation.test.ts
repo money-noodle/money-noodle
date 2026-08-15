@@ -5,7 +5,7 @@ vi.mock('server-only', () => ({}));
 
 import { orderStrategyId, strategyOrders } from './execution-report';
 import { makerCohortEvidence } from './entry-execution-policy';
-import { evaluateLiveRisk, lifetimeLiveRealizedPnlCents } from './live-risk-policy';
+import { currentEpochAttribution, evaluateLiveRisk, lifetimeLiveRealizedPnlCents } from './live-risk-policy';
 import { countFilledLiveVenueOrders } from './order-rate-limit';
 import { DEFAULT_STRATEGY_ID, EDGE_BINARY_BUY, LONG_SHOT_ROUND_TRIP, isStrategyId, normalizeStrategyId, strategyDescriptor } from './strategy-registry';
 import type { BudgetControl, PaperOrder } from './types';
@@ -160,5 +160,40 @@ describe('the edge policy acts only on positions it owns', () => {
     // full allowance of the same correlated window. Acting on a position and counting it are different.
     const exposures = between('function updatePortfolioDecisions', 'async function resolveOutcome');
     expect(exposures).not.toContain('EDGE_BINARY_BUY');
+  });
+});
+
+describe('the account drawdown stop is blended, and says so', () => {
+  const epoch = 'epoch-1';
+  const mixed = [
+    order('edge-1', -80, { budgetEpochId: epoch }),
+    order('shot-1', -30, { strategyId: LONG_SHOT_ROUND_TRIP, budgetEpochId: epoch }),
+    order('old-epoch', -500, { budgetEpochId: 'epoch-0' }),
+  ];
+
+  it('attributes the epoch by strategy without scoping the stop', () => {
+    // One pot of cash: if a strategy loses, the account really is down, and a capital-preservation stop
+    // that ignored that would not be preserving capital. What that costs is attribution, so the split is
+    // reported rather than the stop being narrowed.
+    expect(currentEpochAttribution(mixed, epoch)).toEqual([
+      { strategyId: EDGE_BINARY_BUY, realizedPnlCents: -80 },
+      { strategyId: LONG_SHOT_ROUND_TRIP, realizedPnlCents: -30 },
+    ]);
+  });
+
+  it('excludes closed epochs from the attribution', () => {
+    expect(currentEpochAttribution(mixed, epoch).some((entry) => entry.realizedPnlCents === -500)).toBe(false);
+  });
+
+  it('names the stop account-wide and shows who earned it', () => {
+    // The old wording read as though the strategy being blocked had caused it, which the figure cannot know.
+    const risk = evaluateLiveRisk(
+      control({ availableBudgetCents: 1_400, epochId: epoch }), mixed, environment,
+    );
+    expect(risk.allowed).toBe(false);
+    const drawdown = risk.reasons.find((reason) => reason.includes('drawdown'))!;
+    expect(drawdown).toContain('Account live drawdown');
+    expect(drawdown).toContain('edge-binary-buy -80.00c');
+    expect(drawdown).toContain('long-shot-round-trip -30.00c');
   });
 });

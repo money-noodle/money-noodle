@@ -1064,6 +1064,18 @@ export interface LiveRiskStatus {
   maximumCurrentEpochDrawdownCents: number;
   maximumCurrentEpochDrawdownPercent: number;
   maximumLifetimeLossCents: number;
+  /**
+   * Current-epoch realized P&L per strategy, for the drawdown stop only.
+   *
+   * The drawdown is deliberately **not** scoped by strategy: there is one pot of cash, so if one strategy
+   * loses, the account really is down and a capital-preservation stop should fire. What that costs is
+   * attribution — the stop can pause a strategy that did nothing wrong — so the split is reported instead,
+   * and the reason names it as account-wide rather than implying the strategy being blocked caused it.
+   *
+   * The lifetime stop is different and *is* scoped, because it measures a strategy's own track record
+   * rather than the capital remaining.
+   */
+  currentEpochAttribution: Array<{ strategyId: StrategyId; realizedPnlCents: number }>;
   reasons: string[];
 }
 

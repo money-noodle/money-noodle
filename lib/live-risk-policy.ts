@@ -1,5 +1,5 @@
 import { drawdownReferenceCents } from './budget-ledger';
-import { DEFAULT_STRATEGY_ID, normalizeStrategyId } from './strategy-registry';
+import { DEFAULT_STRATEGY_ID, STRATEGIES, normalizeStrategyId } from './strategy-registry';
 import type { BudgetControl, LiveRiskStatus, PaperOrder, StrategyId } from './types';
 
 export const DEFAULT_MAX_CURRENT_EPOCH_DRAWDOWN_PERCENT = 25;
@@ -29,6 +29,26 @@ export function liveRiskLimits(startingBudgetCents: number, environment: NodeJS.
     1_000_000,
   );
   return { maximumCurrentEpochDrawdownCents, maximumCurrentEpochDrawdownPercent, maximumLifetimeLossCents };
+}
+
+
+/**
+ * Current-epoch realized P&L per strategy.
+ *
+ * Reported beside the drawdown so the stop can be read honestly. The drawdown itself stays blended: one
+ * pot of cash means one strategy's losses really do reduce the capital available to all of them, and a
+ * capital-preservation stop that ignored that would not be preserving capital.
+ */
+export function currentEpochAttribution(orders: PaperOrder[], epochId: string | undefined): Array<{ strategyId: StrategyId; realizedPnlCents: number }> {
+  const settled = orders.filter((order) => order.executionMode === 'live'
+    && ['won', 'lost', 'sold', 'invalid'].includes(order.status)
+    && (epochId === undefined || order.budgetEpochId === epochId));
+  return STRATEGIES.map((strategy) => ({
+    strategyId: strategy.id,
+    realizedPnlCents: settled
+      .filter((order) => normalizeStrategyId(order.strategyId) === strategy.id)
+      .reduce((sum, order) => sum + (order.actualPnlCents ?? order.pnlCents ?? 0), 0),
+  })).filter((entry) => entry.realizedPnlCents !== 0);
 }
 
 /**
@@ -63,14 +83,20 @@ export function evaluateLiveRisk(
   const lifetimeRealizedPnlCents = lifetimeLiveRealizedPnlCents(orders, strategyId);
   const lifetimeLossCents = Math.max(0, -lifetimeRealizedPnlCents);
   const reasons: string[] = [];
+  const attribution = currentEpochAttribution(orders, control.epochId);
   if (currentEpochDrawdownCents >= limits.maximumCurrentEpochDrawdownCents) {
-    reasons.push(`Current live budget drawdown ${currentEpochDrawdownCents.toFixed(2)}c reached the ${limits.maximumCurrentEpochDrawdownCents.toFixed(2)}c (${limits.maximumCurrentEpochDrawdownPercent.toFixed(1)}%) stop.`);
+    // Named account-wide, and attributed. Blended is correct for a capital stop, but the previous wording
+    // read as though the strategy being blocked had caused it, which is not something the figure knows.
+    const split = attribution.length > 1
+      ? ` Account-wide across every strategy this epoch: ${attribution.map((entry) => `${entry.strategyId} ${entry.realizedPnlCents.toFixed(2)}c`).join(', ')}.`
+      : '';
+    reasons.push(`Account live drawdown ${currentEpochDrawdownCents.toFixed(2)}c reached the ${limits.maximumCurrentEpochDrawdownCents.toFixed(2)}c (${limits.maximumCurrentEpochDrawdownPercent.toFixed(1)}%) stop.${split}`);
   }
   if (lifetimeLossCents >= limits.maximumLifetimeLossCents) {
     reasons.push(`Lifetime live loss ${lifetimeLossCents.toFixed(2)}c reached the ${limits.maximumLifetimeLossCents.toFixed(2)}c stop.`);
   }
   return {
     ...limits, allowed: reasons.length === 0, currentEpochDrawdownCents,
-    lifetimeRealizedPnlCents, lifetimeLossCents, reasons,
+    lifetimeRealizedPnlCents, lifetimeLossCents, currentEpochAttribution: attribution, reasons,
   };
 }
