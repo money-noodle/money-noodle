@@ -741,6 +741,36 @@ Step 1 has an immediate, intended consequence: **paper stops trading XRP and sta
 
 This design does not change any live entry rule, does not let a candidate place an order or hold a budget, does not alter sizing or the fill model, and does not bump the buy policy version when a candidate changes. Only promotion changes the production policy version, and only through the recorded, manual act described in §12.5.
 
+### 12.10 Second production policy: long-shot round trip
+
+A second policy runs beside the edge policy on the same `crypto-15m` market. It buys a side whose executable
+Kalshi ask falls to a low mark early in the cycle and sells it through a resting reduce-only limit at a high
+mark before settlement. It consumes no `P(UP)`; the trigger is a venue price and a clock. Complete design,
+arithmetic, and the screening evidence behind every parameter are in
+[`docs/long-shot-policy-design.md`](docs/long-shot-policy-design.md).
+
+The axis being added is a **policy**, keyed `strategyId` alongside `marketId` and `executionMode`. This
+preserves §12.3's mirror invariant — the rule layer gains no execution-mode parameter, and the invariant
+holds within each policy, so long-shot paper and long-shot live differ only in fill and capital. It also
+preserves the 2026-08-13 decision that the forecast model is keyed by market and never by strategy.
+
+Candidates are disjoint from the edge policy's by construction: buy policy v17 requires `P(side) ≥ 55%` with
+net edge in `[5pp, 35pp]`, and a 10¢ ask against a 55% probability is a 45pp edge the max-edge ceiling
+rejects. These intents are **not** positive-edge buys under §3.7 and must never enter that track record,
+which exists to score model calculations and would be corrupted by rows carrying no model probability.
+
+Two approaches, deliberately separated. The **round trip** executes in paper and live. **Buy-and-hold** on
+the identical trigger executes nothing: it is recorded as an immutable sentinel at trigger time — not
+derived from fills, which would inherit every selection bias of the executing lane — and is the exact HOLD
+arm of the round trip's exit decision, priced from the settled venue outcome as `action-counterfactual-v1`
+already does.
+
+Budget extends the existing chain by one level of the same shape, **provider → market → policy**, each a
+percentage of the level above summing to no more than 100%. Splitting budget does not split risk: position,
+same-window and correlation caps remain keyed by market and global across providers and policies, because
+risk is exposure to the underlying. The kill switch, reconciliation barrier, quiescent drain, hourly filled
+order ceiling and serialized live execution queue are venue and account properties and remain shared.
+
 ## 13. Open decisions
 
 - Redundant fallback for the primary Kraken cycle-reference/current-price/volatility series without introducing cross-source basis offsets.
@@ -763,6 +793,14 @@ This design does not change any live entry rule, does not let a candidate place 
 
 | Date | Decision |
 |---|---|
+| 2026-08-14 | Add a second production policy on `crypto-15m` rather than a second model, market, or provider. It buys a side at a low executable ask early in the cycle and sells through a resting reduce-only limit at a high mark. The durable axis is `strategyId`; the forecast model stays keyed by market, since this policy consumes no probability at all. Its intents are a separate stream and never enter the §3.7 positive-edge track record, which scores model calculations and would be corrupted by rows carrying no model probability. Buy-and-hold on the same trigger executes nothing and is recorded as a decision-time sentinel, because deriving it from fills would measure "hold, conditional on having successfully bought." |
+| 2026-08-14 | Extend budget keying to provider → market → policy, each a percentage of the level above. Percentages rather than fixed amounts, so a policy's ceiling compounds with its wins and contracts in its own drawdown without manual edits, and so return on allocated capital becomes comparable across policies. Splitting budget does not split risk: exposure caps stay keyed by market and global across policies, and the kill switch, reconciliation barrier, drain, hourly order ceiling and serialized execution queue stay shared, because they are venue and account properties. |
+| 2026-08-14 | Size the long-shot ticket as policy equity ÷ 30 with a 10¢ floor, and take its loss stop as the consequence rather than a chosen percentage. The divisor is the drought the policy must survive — at a 12.5% hit rate, 30 consecutive losses occurs 1.8% of the time. The floor is where Kalshi's `max(1, ceil(...))` fee stops being negligible: a 20¢ and a 10¢ ticket both break even at 12.5%, a 3¢ ticket needs 17.6%. Together they halt the policy below 300¢ of equity. The existing 25% drawdown stop must not be reused; on this policy it would fire after five consecutive losses, which happens 55% of the time. Deriving the ticket from the edge policy's all-in cap was rejected as a hidden dependency — lowering that cap for its own reasons would silently halve this one. |
+| 2026-08-14 | Do not reuse `cryptoExposureGroup` for the long-shot policy. It encodes directional correlation — market-cap beta tiers — and this policy trades reversal. Screening separated the two: candidate arrivals are strongly correlated (41% of settlement windows carry more than one, some carry six), but outcomes are close to independent, with co-occurring pairs both missing 75.7% of the time against a fully-independent 74.0%. Group rationing would therefore cost more than it buys, and would concentrate the cost in `alt-beta`, the high-fluctuation assets this policy most wants. Cap at 3 open positions per settlement window with no group restriction, provisionally, until the path recorder measures outcome correlation properly. |
+| 2026-08-14 | Exit the long-shot position through a resting reduce-only GTC limit placed as soon as the entry fills, with no stop-loss and no fallback exit. The premise is transient excursions, and polling cannot see them: a round trip inside 90 seconds is invisible to a 15-second poll. A resting order fills on the spike unattended. The absence of a stop-loss has a structural consequence that removes the need for one — the policy is only ever flat after a win, so re-entry within a window can only follow a profitable exit and a trending window produces exactly one loss rather than a compounding series. A second open position on the same asset and window remains forbidden, because that shape is averaging down. |
+| 2026-08-14 | Launch the long-shot policy with no prior-cycle filter, after measuring both readings of the proposed rule. "Prior cycle reached the high mark" passes 86–92% of candidates and does not improve the hit rate, because every winner passes through the high mark on its way to settlement, making it "did this side win recently" in disguise. "Prior cycle completed the full round trip" occurs in at most 0.39% of cycle-side pairs and produced zero candidates at the launch mark over 3.6 days. Record instead the last three cycles' peak bid per side, whether each had a cheap entry available, the `cycleRegime` block, and the maximum bid reached while each position was open — so every version of the filter and every candidate sell mark stays evaluable from one dataset without re-running or committing now. |
+| 2026-08-14 | Treat the XRP exclusion as policy-specific. It was removed after clearing −2se on both tracks under a directional policy, and unpredictable direction is precisely what would make an asset good for a volatility-harvesting one. The long-shot policy launches with an empty exclusion list. Per-policy exclusion is legitimate; per-track exclusion is what the mirror invariant forbids. |
+| 2026-08-14 | The long-shot policy executes from launch under a bounded learning budget rather than accruing sentinel evidence first — an explicit operator decision, taken with the §12.5 doctrine understood. What that doctrine still governs: no parameter of this policy may be changed on retroactive evidence. The launch marks are fixed until forward evidence over independent settlement windows says otherwise. Screening establishes only that buy-cheap-and-hold has no edge, 20.2% ± 3.7pp of 119 candidates against a 22.2% break-even, and it cannot speak to the exit at all — sampling is provably blind there, observing winners reach 90¢ in 68.4% of cases where the true figure must be 100%. |
 | 2026-08-14 | A monitored candidate may be read only at the independent unit and under the policy proposed for activation. The missed-buy best-per-window action therefore reports its own window standard error. Maker/taker shadows cluster repeated recommendations by settlement window, compare taker with the same intent's actual maker result (zero spend for a maker no-fill), and show the active buy-policy cohort separately from historical policy mixtures. An all-history unclustered mean may remain context but cannot authorize live activation. |
 | 2026-08-14 | Clarify the profit-reversal decision: `profit-reversal-75-v1` continues to arm and record high-water downturns, but execution is withheld by default and explicitly disabled locally. Its 9 exits over 8 live windows support conservative withholding rather than permanent refutation. Strict-value exits remain executable; restoring profit-reversal execution requires a separate manual prospective review. This supersedes the earlier decision-log wording that “stays armed” could be read as “may still sell.” |
 | 2026-08-14 | Re-scope forecast sharding around retained memory, not a misattributed parse stall. The ten-second block was quadratic summary grouping; parsing costs about 1.2 seconds once per process. Build and verify sealed-shard rollups before switching readers, compare counts exactly and floats with a combined absolute/relative tolerance, merge every cycle/window/asset-window independently of shard boundaries, and defer a worker because moving work off-thread does not reduce the roughly 396 MB retained heap. |
