@@ -16,6 +16,21 @@ function isQualified(forecast: TrackedForecast): boolean {
   return forecast.qualified !== false;
 }
 
+/**
+ * Tie-break for every ordering that feeds a reported statistic.
+ *
+ * `Array.prototype.sort` is stable, so rows comparing equal keep their incidental array order. That is
+ * not a harmless detail here: seven correlated assets settle on the same `closesAt`, and repeated
+ * updates share an `issuedAt`, so ties are the common case rather than the rare one. Without a total
+ * order, `timeline`, both streaks, and the per-cycle representative row all depend on the order rows
+ * happen to sit in the durable file — which changes on compaction, on journal replay, and under any
+ * storage layout change. Measured across the sharded layout, `rollingAccuracy` moved by up to 25%.
+ *
+ * Ordering by `id` after the real key makes every one of these deterministic and layout-independent.
+ * See docs/forecast-storage-design.md §4.
+ */
+const byIdTieBreak = (a: TrackedForecast, b: TrackedForecast) => a.id.localeCompare(b.id);
+
 function slices(forecasts: TrackedForecast[], key: (forecast: TrackedForecast) => string): PerformanceSlice[] {
   const groups = new Map<string, TrackedForecast[]>();
   for (const forecast of forecasts.filter((item) => item.status === 'resolved')) {
@@ -24,7 +39,8 @@ function slices(forecasts: TrackedForecast[], key: (forecast: TrackedForecast) =
   return [...groups.entries()].map(([label, items]) => {
     const correct = items.filter((item) => item.correct).length;
     return { label, resolved: items.length, correct, accuracy: correct / items.length };
-  }).sort((a, b) => b.resolved - a.resolved || b.accuracy - a.accuracy);
+  // Equal groups would otherwise be ordered by Map insertion, which is row order.
+  }).sort((a, b) => b.resolved - a.resolved || b.accuracy - a.accuracy || a.label.localeCompare(b.label));
 }
 
 function cycleKey(forecast: TrackedForecast): string {
@@ -220,7 +236,8 @@ function bucketed(dimension: string, description: string, items: TrackedForecast
   }
   return {
     dimension, description,
-    segments: [...groups.entries()].map(([label, group]) => segmentStat(label, group)).sort((a, b) => b.meanRealizedReturn - a.meanRealizedReturn),
+    segments: [...groups.entries()].map(([label, group]) => segmentStat(label, group))
+      .sort((a, b) => b.meanRealizedReturn - a.meanRealizedReturn || a.label.localeCompare(b.label)),
   };
 }
 
@@ -292,7 +309,8 @@ export function summarizePerformance(forecasts: TrackedForecast[]): PerformanceS
   const cycleAccuracies = [...resolvedCycleGroups.values()].map((items) => items.filter((item) => item.correct).length / items.length);
   const cycleBalancedAccuracy = cycleAccuracies.length ? cycleAccuracies.reduce((sum, value) => sum + value, 0) / cycleAccuracies.length : null;
 
-  const orderedResolved = [...resolved].sort((a, b) => new Date(b.resolvedAt ?? b.closesAt).getTime() - new Date(a.resolvedAt ?? a.closesAt).getTime());
+  const orderedResolved = [...resolved].sort((a, b) =>
+    new Date(b.resolvedAt ?? b.closesAt).getTime() - new Date(a.resolvedAt ?? a.closesAt).getTime() || byIdTieBreak(a, b));
   let currentStreak = 0;
   if (orderedResolved.length) {
     const target = Boolean(orderedResolved[0].correct);
@@ -303,8 +321,8 @@ export function summarizePerformance(forecasts: TrackedForecast[]): PerformanceS
   }
   // Update-level streaks over-count a single contract, so cycles are streaked independently.
   const cycleOutcomes = [...resolvedCycleGroups.values()]
-    .map((items) => [...items].sort((a, b) => new Date(a.issuedAt).getTime() - new Date(b.issuedAt).getTime())[0])
-    .sort((a, b) => new Date(b.closesAt).getTime() - new Date(a.closesAt).getTime());
+    .map((items) => [...items].sort((a, b) => new Date(a.issuedAt).getTime() - new Date(b.issuedAt).getTime() || byIdTieBreak(a, b))[0])
+    .sort((a, b) => new Date(b.closesAt).getTime() - new Date(a.closesAt).getTime() || byIdTieBreak(a, b));
   let currentCycleStreak = 0;
   if (cycleOutcomes.length) {
     const target = Boolean(cycleOutcomes[0].correct);
@@ -314,7 +332,8 @@ export function summarizePerformance(forecasts: TrackedForecast[]): PerformanceS
     }
   }
 
-  const chronological = [...resolved].sort((a, b) => new Date(a.resolvedAt ?? a.closesAt).getTime() - new Date(b.resolvedAt ?? b.closesAt).getTime());
+  const chronological = [...resolved].sort((a, b) =>
+    new Date(a.resolvedAt ?? a.closesAt).getTime() - new Date(b.resolvedAt ?? b.closesAt).getTime() || byIdTieBreak(a, b));
   let cumulativeCorrect = 0;
   let cumulativeBrier = 0;
   const timeline = chronological.map((forecast, index) => {
@@ -376,6 +395,8 @@ export function summarizePerformance(forecasts: TrackedForecast[]): PerformanceS
     byModelVersion: slices(resolved, (forecast) => forecast.modelVersion),
     byConfidenceBucket: slices(resolved, (forecast) => forecast.confidence >= 0.75 ? '75%+' : forecast.confidence >= 0.65 ? '65–74%' : forecast.confidence >= 0.57 ? '57–64%' : '<57%'),
     timeline: downsamplePerformanceTimeline(timeline),
-    recent: [...policy].sort((a, b) => new Date(b.resolvedAt ?? b.issuedAt).getTime() - new Date(a.resolvedAt ?? a.issuedAt).getTime()).slice(0, 8),
+    // Ties decide which rows make the top 8 at all, so this needs the total order as much as the streaks do.
+    recent: [...policy].sort((a, b) =>
+      new Date(b.resolvedAt ?? b.issuedAt).getTime() - new Date(a.resolvedAt ?? a.issuedAt).getTime() || byIdTieBreak(a, b)).slice(0, 8),
   };
 }
