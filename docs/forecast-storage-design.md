@@ -1,7 +1,11 @@
-# Forecast storage redesign — sharding, rollups, and a non-blocking I/O boundary
+# Forecast storage redesign — sharding and rollups
 
-> Design proposal · 2026-08-14 · **not yet implemented**
+> Design · 2026-08-14 · **partly implemented, re-scoped after measurement**
 > Companion to [`SPEC.md`](../SPEC.md) §6 Storage. Nothing here changes the model, execution, or any gate.
+>
+> The stall this document was written to fix turned out not to be a storage problem, and is already
+> fixed (§1.1). What survives is a memory-residency problem that sharding genuinely solves (§5.1). The
+> worker boundary in the original title is deferred (§5), and the sequencing in §7 is the current plan.
 
 ## 1. The problem, with evidence
 
@@ -75,7 +79,7 @@ Growth is ~8–10k rows and ~45 MB per day, all of it retained:
 Only `qualified === false` rows are capped (at 20,000). The 27,536 qualified rows are retained
 forever by design — they are the calibration record — so the file only grows.
 
-### Why the cheaper fixes were rejected
+### 1.2 Why the cheaper fixes were rejected
 
 De-duplicating `venueContracts` into registry references was measured end to end: **213.6 MB → 176.3 MB,
 17.5%**, taking the block from ~10s to ~8s. Adding a factors-prose strip reaches ~145 MB and ~7s. A
@@ -90,19 +94,20 @@ no parse should be able to block the loop regardless of size.
 | Consumer | Frequency | Actually needs |
 |---|---|---|
 | Append new forecasts | every cycle | nothing historical |
-| Find due-for-resolution | every cycle | `pending` rows only — currently **8** |
+| Find due-for-resolution | every cycle | `pending` rows only — currently **3** |
 | `summarizePerformance` | cached 60s | lifetime aggregates, not rows |
 | Walk-forward evaluator | every 25 windows | everything; may be slow |
 | `/api/performance` list | on demand | most recent 500 |
 
-Nothing on the 15-second path needs the 47,528 resolved rows, and a resolved row is immutable. We
-re-parse all of them every load only because they share one array.
+Nothing on the 15-second path needs the 49,478 terminal rows, and a terminal row is immutable. We hold
+all of them resident only because they share one array — which is the residency cost in §5.1, and the
+reason this table is the design's real justification now that the stall is gone.
 
 ## 3. Data layout
 
 ```
 data/forecast-history/
-  open.json                 hot set: pending + unresolved rows (~100 rows, KBs)
+  open.json                 hot set: pending + unresolved rows (~205 rows, ~1 MB)
   2026-08-13.json           sealed daily shard, append-only, never rewritten
   2026-08-13.rollup.json    sufficient statistics for that shard
   2026-08-14.json           active shard for today
@@ -148,23 +153,92 @@ merge is a union. Exact, not estimated: these counts gate calibration readiness 
 `missedBuyCounterfactual` runs over all forecasts including unqualified ones, so it needs its own
 additive counters rather than riding on the qualified path.
 
-**Verification gate.** Before anything switches over, compute the summary both ways over the existing
-47,536 rows and assert field-by-field equality. The rollup path does not ship unless it reproduces the
-current numbers exactly.
+**Verification gate.** Before anything switches over, compute the summary both ways over the full
+retained history and assert field-by-field equality.
 
-## 5. Non-blocking I/O boundary
+This gate exists as `npm run verify:forecast-storage` (read-only; `--write` also emits the shards). It
+covers the eight counters in `ForecastStorageVerification`, plus row-count and id-bijection checks.
 
-All shard parse and serialize moves into a `node:worker_threads` worker behind a small async API
-(`readShard`, `writeShard`, `readRollup`, `sealShard`). The main thread never calls `JSON.parse` or
-`JSON.stringify` on a file that can grow.
+**"Byte-identical" is not an achievable bar, and the gate must not be written to demand it.** Measured
+on the full 49,583-row history, comparing `summarizePerformance(original)` against
+`summarizePerformance(open ++ shards)` — the same rows in the layout's order:
 
-This is worth doing even after sharding, because sharding bounds the *hot* path while the archive is
-still large: the evaluator reads every shard every 25 windows, and today's journal compaction would
-serialize the whole history in one blocking write when it crosses 50 MB. With the worker, neither can
-stall a calculation.
+| Class | Result |
+|---|---|
+| Counts, cardinalities, labels, array lengths | **0 differences** — exactly reproduced |
+| Float aggregates (means, Brier, log loss, returns, standard errors) | max relative deviation **7.06e-15**, about 32× double epsilon |
+| `timeline` | max relative deviation **0.25** |
 
-Structured-clone cost of passing rows back is real but bounded — the hot set is small, and bulk
-consumers (evaluator, `/api/performance`) are already off the 15-second path.
+The float aggregates differ because IEEE addition is not associative and the layout sums ~30k terms in
+a different order. No amount of care removes this; a rollup that sums per-shard subtotals will differ
+in the last digits too. The gate should therefore assert **exact** equality for everything countable and
+a **relative tolerance** (1e-12 is ~140× the observed noise and still far tighter than anything that
+could change a decision) for float aggregates.
+
+`timeline` was the real failure, and it is the one this section predicted. **Implemented**, and the
+cause was narrower than "rolling windows are hard": `Array.prototype.sort` is stable, so rows comparing
+equal kept their incidental array order. Ties are the ordinary case here — seven correlated assets share
+a `closesAt`, and repeated updates share an `issuedAt` — so the trailing-row continuation was not needed.
+A total order was. Adding an `id` tie-break to every ordering that feeds a reported statistic makes the
+summary layout-independent, and drops the whole-summary deviation to 6.3e-15 with zero structural
+differences.
+
+Six orderings needed it, and only two were found by reading the code. The gate found the rest:
+`timeline`, `currentStreak`, `currentCycleStreak`, the per-cycle representative row, `recent` (ties
+decide which rows make the top 8 at all), and the grouped `byAsset`/`segments` sorts, which fell back to
+Map insertion order when groups tied.
+
+This is a **behaviour change on ties**, not only a gate fix. Those statistics previously depended on the
+order rows happened to occupy in the durable file, so they could shift across a compaction or a journal
+replay with no data change at all. They are now deterministic.
+
+**Implemented as** `compareSummaries` in `lib/forecast-storage.ts`, wired into
+`verifyForecastStoragePlan`: exact for anything countable, `SUMMARY_FLOAT_TOLERANCE` (1e-12) for float
+aggregates, output capped so a systematic divergence reports its shape rather than thousands of lines.
+Last run over 49,586 live rows: `ok: true`, no errors. This completes the first half of step 1 in §7.
+
+## 5. Non-blocking I/O boundary — deferred, and probably not needed
+
+> **Re-scoped 2026-08-14.** This section originally required a `node:worker_threads` boundary so that
+> "the main thread never calls `JSON.parse` or `JSON.stringify` on a file that can grow." That was
+> written when the parse was believed to cost ten seconds. It costs 1.2 s, once per process, behind a
+> promise cache. The worker would move that 1.2 s off-thread and pay structured-clone to bring the rows
+> back — and it does nothing at all about the constraint that actually binds now, which is memory
+> residency (§5.1). **Do not build it yet.**
+
+The remaining honest arguments for a worker are narrow: the evaluator reads every shard every 25
+windows, and journal compaction serializes the retained set. Both are real, both are off the 15-second
+path already, and both get cheaper — not more expensive — under sharding. Revisit only if a measured
+stall reappears after the hot set is split out.
+
+### 5.1 The constraint that actually binds: residency, not blocking
+
+| | Today |
+|---|---|
+| History on disk | 198 MB / 49,469 rows |
+| **Retained JS heap once parsed** | **396 MB** |
+| RSS while loading | 954 MB |
+| **Rows the hot path needs** | **205 open rows = 1 MB of JSON** |
+| Growth | ~10k rows/day, ~40 MB/day on disk |
+
+The process holds 396 MB resident to serve 1 MB of working set, and that number grows every day. The
+observed 2.97 GB RSS came from this, not from any single operation. Extrapolating the growth rate, the
+heap passes 1 GB in roughly two weeks and the default Node heap ceiling shortly after.
+
+This reorders the design. A worker thread relocates work; it does not reduce residency. Sharding plus a
+hot set *does*: sealed shards are never held, and the cycle keeps 205 rows and seven small rollups in
+memory instead of the archive. **Sharding is now justified by memory, not by event-loop blocking**, and
+that is a stronger and more durable reason than the one it was originally given.
+
+Secondary costs, in the order they will bite:
+
+1. **Residency** — above. Binding in weeks.
+2. **Startup** — parse plus journal replay plus provenance rehydrate; currently 6-11 s to first useful
+   response, growing linearly. Sharding removes almost all of it.
+3. **`summarizePerformance`** — 643 ms today after the §1.1 fix, roughly linear in rows. Returns to
+   seconds around 300-400k rows. Rollups remove it; nothing else needs to.
+4. **Evaluator** — reads everything every 25 windows. Already off the hot path; sharding makes it
+   incremental.
 
 ## 6. Migration and verification
 
@@ -184,12 +258,45 @@ than silently short.
 
 Each step is independently verifiable and independently revertable.
 
-1. **Rollups** over the current single file — no layout change, proves the algebra against live data.
-2. **Sharding** underneath the rollups, with the hot set split out. Biggest win: the cycle stops
-   touching the archive.
-3. **Worker boundary** for all shard I/O.
-4. **Payload split** (already agreed separately): the freshness badge judges only market data, so no
+**Done.**
+
+- **§1.1 quadratic grouping fix.** Removed the actual 9.6-second stall. `summarizePerformance` is 643 ms
+  with byte-identical output; the shared helper is `lib/group.ts`. This was the whole of the emergency.
+- **Plan builder and verification gate.** `buildForecastStoragePlan` / `verifyForecastStoragePlan` and
+  `npm run verify:forecast-storage` reproduce the summary from a sharded plan.
+- **Full field-by-field gate, and the total ordering it required** (§4). The gate now compares the whole
+  summary, not eight counters, and six orderings were made deterministic so it can pass. Last run over
+  49,586 live rows: `ok: true`, no errors. Step 1's first half is complete.
+
+**Next, in order.**
+
+> An earlier draft of this re-scope put sharding first and rollups second. That ordering does not work,
+> for a reason worth recording. Every cycle, `dashboard.ts` → `trackCalculations` → `updateTracking`
+> calls `readForecasts()` for the *whole* array, and `cachedPerformanceSummary` scans all of it every 60
+> seconds. Switching the reader to shards while the summary still needs every row would either keep the
+> archive resident anyway — no win — or re-read 198 MB a minute, which is worse than today. **The
+> residency win is gated on the summary no longer needing sealed rows**, so the rollup algebra comes
+> first even though it is the riskier half.
+
+1. **Rollup algebra, behind the existing gate.** Extend `verifyForecastStoragePlan` to full field-by-
+   field equality — including `cycleBalancedAccuracy`, the streaks, and `timeline`, which it does not
+   cover yet (§4) — then build `summarize(sealedRollups, openRows)` beside the current function. Both
+   run and are compared on live data; nothing switches over. This is the whole correctness risk of the
+   design, isolated from any layout change, and it is verifiable before it is load-bearing.
+2. **Switch the reader.** Once the summary no longer needs sealed rows, `readForecasts()` can return the
+   open set only and sealed shards become lazily loaded for the evaluator and `/api/performance`. This
+   is the step where retained heap and startup time actually drop, and it is measured that way rather
+   than by cycle latency, which is already fixed.
+3. **Payload split** (already agreed separately): the freshness badge judges only market data, so no
    future slow subsystem can blank the trading view.
+
+**Not scheduled.**
+
+- **Worker boundary** — see §5. Deferred indefinitely; revisit only against a measured stall.
+- **De-duplication and factors-prose stripping** — §1.2 rejected these using the ten-second figure, so
+  that rejection no longer holds on its own terms. They are not *needed* now, but if residency ever has
+  to come down without a layout change, they are worth roughly 30% and should be re-measured rather than
+  dismissed by reference to a number that was wrong.
 
 ## 8. Risks and open questions
 
