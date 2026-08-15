@@ -1,5 +1,5 @@
 import 'server-only';
-import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, open, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import readline from 'node:readline';
 import path from 'node:path';
@@ -23,6 +23,20 @@ const JOURNAL_FILE = path.join(DATA_DIR, 'contract-paths.journal.jsonl');
 const CYCLE_DURATION_MS = 15 * 60_000;
 /** Windows are retained for a bounded period after close so a late settlement can still be joined. */
 const ACTIVE_GRACE_MS = 60_000;
+
+/**
+ * Retention. Roughly 672 windows a day at about 700 bytes each is half a megabyte daily, so an unbounded
+ * journal reaches a couple of hundred megabytes within a year — the shape the forecast-storage work is
+ * currently undoing elsewhere in this repo, and not worth recreating here.
+ *
+ * 45 days is deliberately longer than any review this policy has: 60 attempts is days to weeks, and the
+ * entry-window and exit-mark questions are answered from windows near the decision rather than from a full
+ * history. Retention is a bound on observation-only telemetry, never on the sentinels or the order ledger,
+ * which are evidence and are not pruned here.
+ */
+export const CONTRACT_PATH_RETENTION_DAYS = 45;
+/** Compaction is checked by size rather than every append, so the common path stays a plain append. */
+const JOURNAL_COMPACT_BYTES = 32 * 1024 * 1024;
 
 let pathQueue: Promise<void> = Promise.resolve();
 
@@ -56,6 +70,47 @@ async function appendClosed(records: ContractPathRecord[]): Promise<void> {
   await mkdir(DATA_DIR, { recursive: true });
   const lines = records.map((record) => `${JSON.stringify(encodeContractPath(record))}\n`).join('');
   await appendFile(JOURNAL_FILE, lines);
+  await compactJournalIfLarge();
+}
+
+/** Windows closing before this instant are dropped at the next compaction. */
+export function contractPathRetentionCutoffMs(nowMs = Date.now()): number {
+  return nowMs - CONTRACT_PATH_RETENTION_DAYS * 24 * 60 * 60_000;
+}
+
+/**
+ * Rewrites the journal keeping only windows inside the retention horizon.
+ *
+ * Written to a temporary file and renamed, so an interrupted compaction leaves the original intact rather
+ * than a half-written journal. A row that cannot be decoded is dropped rather than carried forward: it
+ * could not be read by any consumer anyway.
+ */
+async function compactJournalIfLarge(nowMs = Date.now()): Promise<void> {
+  let size = 0;
+  try { size = (await stat(JOURNAL_FILE)).size; } catch { return; }
+  if (size < JOURNAL_COMPACT_BYTES) return;
+
+  const cutoff = contractPathRetentionCutoffMs(nowMs);
+  const temporary = `${JOURNAL_FILE}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+  let kept = 0;
+  let dropped = 0;
+  const handle = await open(temporary, 'w');
+  try {
+    const stream = readline.createInterface({ input: createReadStream(JOURNAL_FILE) });
+    for await (const line of stream) {
+      if (!line.trim()) continue;
+      let parsed: unknown;
+      try { parsed = JSON.parse(line); } catch { dropped += 1; continue; }
+      const record = decodeContractPath(parsed);
+      if (!record || Date.parse(record.closesAt) < cutoff) { dropped += 1; continue; }
+      await handle.write(`${line}\n`);
+      kept += 1;
+    }
+  } finally {
+    await handle.close();
+  }
+  await rename(temporary, JOURNAL_FILE);
+  console.log(`Contract path journal compacted: kept ${kept} window(s), dropped ${dropped} older than ${CONTRACT_PATH_RETENTION_DAYS} days.`);
 }
 
 async function updateContractPaths(predictions: Prediction[], observedAt: number): Promise<void> {
