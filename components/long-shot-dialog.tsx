@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Dices, Loader2, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { ChevronDown, Dices, Loader2, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { Badge, inlineTrigger } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
@@ -126,7 +126,9 @@ export function LongShotDialog({ variant = 'button' }: { variant?: 'button' | 'b
   return <Dialog onOpenChange={(open) => { if (open) void load(); }}>
     <DialogTrigger className={variant === 'badge' ? inlineTrigger : undefined} asChild={variant === 'button'}>
       {variant === 'badge'
-        ? <span className="inline-flex items-center gap-1"><Dices className="size-3"/>Long shot</span>
+        ? <button type="button" title="Long-shot round-trip policy — open evidence and arming" className={cn(inlineTrigger, 'text-[9px]')}>
+            <Dices className="size-2.5 shrink-0"/>Long shot<ChevronDown className="size-2.5 shrink-0"/>
+          </button>
         : <button type="button" className="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[10px] hover:bg-muted/40"><Dices className="size-3"/>Long shot</button>}
     </DialogTrigger>
     <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">

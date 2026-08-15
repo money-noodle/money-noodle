@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { AlertTriangle, Layers3, Loader2, Lock, Save } from 'lucide-react';
+import { AlertTriangle, ChevronDown, Layers3, Loader2, Lock, Save } from 'lucide-react';
 import { Badge, inlineTrigger } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
@@ -152,7 +152,9 @@ export function AllocationDialog({ variant = 'badge' }: { variant?: 'button' | '
   return <Dialog onOpenChange={(open) => { if (open) void load(); }}>
     <DialogTrigger className={variant === 'badge' ? inlineTrigger : undefined} asChild={variant === 'button'}>
       {variant === 'badge'
-        ? <span className="inline-flex items-center gap-1"><Layers3 className="size-3"/>Allocation</span>
+        ? <button type="button" title="Budget allocation across provider, market, and strategy" className={cn(inlineTrigger, 'text-[9px]')}>
+            <Layers3 className="size-2.5 shrink-0"/>Allocation<ChevronDown className="size-2.5 shrink-0"/>
+          </button>
         : <button type="button" className="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[10px] hover:bg-muted/40"><Layers3 className="size-3"/>Allocation</button>}
     </DialogTrigger>
     <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">

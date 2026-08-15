@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { CircleDollarSign, FlaskConical, Loader2, Pause, Play, Radio, Save, ShieldAlert, ShieldCheck, WalletCards } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { AllocationDialog } from '@/components/allocation-dialog';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Progress } from '@/components/ui/progress';
@@ -147,6 +148,11 @@ export function TradingControlDialog() {
                 ['researchEnabled', 'Research', provider.capabilities.marketData], ['paperEnabled', 'Paper', provider.capabilities.paper], ['liveEnabled', 'Live', provider.capabilities.live],
               ] as const).map(([field, label, supported]) => { const enabled = provider[field]; return <button type="button" key={field} disabled={loading || data.control.state === 'active' || !data.executionDrain?.restartSafe || !supported} onClick={() => void updateTradingProvider(provider, field, !enabled)} className={cn('rounded border px-1.5 py-1.5 text-[8px] transition disabled:cursor-not-allowed disabled:opacity-40', enabled ? field === 'liveEnabled' ? 'border-red-400/35 bg-red-400/[.06] text-red-300' : 'border-primary/25 bg-primary/[.05] text-primary' : 'text-muted-foreground')}>{label} · {supported ? enabled ? 'on' : 'off' : 'unavailable'}</button>; })}</div></div>)}</div>
               <div className="mt-3"><Button className="w-full" onClick={() => void action('configure')} disabled={loading || data?.control.state === 'active' || Boolean(data?.control.reservedBudgetCents) || !(Number(budget) > 0) || !(Number(perTrade) >= 0.02) || Number(perTrade) > Number(budget)}>{loading ? <Loader2 className="animate-spin"/> : <Save/>}Save budget</Button></div>
+              {/* This dialog sets the size of the pot; splitting it across markets and strategies lives next door. */}
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-dashed p-2.5">
+                <p className="text-[9px] leading-relaxed text-muted-foreground">Split this budget across markets and strategies.</p>
+                <AllocationDialog variant="badge"/>
+              </div>
             </div>
 
             <div className="rounded-xl border p-4">
