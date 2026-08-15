@@ -15,6 +15,9 @@ import { observationBucket } from './observation-window';
 import { selectedSideDepth } from './order-book-depth';
 import { orderMarketId, orderProviderId, orderStrategyId } from './execution-report';
 import { EDGE_BINARY_BUY } from './strategy-registry';
+import { recordContractPaths } from './contract-path-store';
+import { getHoldSentinels, updateHoldSentinelStore } from './hold-sentinel-store';
+import { collectLongShotEvidence, longShotAllocationCents } from './long-shot-execution';
 import { assetAdmitted } from './asset-exclusion';
 import { cycleRegimeFor } from './cycle-path-store';
 import { DEFAULT_MARKET_ID } from './market-registry';
@@ -54,7 +57,6 @@ let automaticReconciliationRequested = false;
 interface PaperBudget { startingCents: number; availableCents: number; realizedPnlCents: number; resets?: number; startedAt?: string }
 export const MAX_PAPER_BANKROLL_CENTS = 1_000_000;
 interface Ledger { version: 6; paperBudget: PaperBudget; orders: PaperOrder[]; signalPersistence: Record<string, SignalPersistenceState>; portfolioDecisions: Record<string, PortfolioDecisionView>; switchPersistence: Record<string, SwitchPersistenceState>; lastLiveSkip?: { reason: string; at: string } }
-interface PaperFill { quantity: number; limitPriceCents: number; purchaseCents: number; feeCents: number; stakeCents: number; potentialPayoutCents: number }
 
 async function readLedger(): Promise<Ledger> {
   try {
@@ -135,37 +137,9 @@ function portfolioConstraints(): PortfolioConstraints {
 }
 
 /** A fill at or above the $1 payout is a guaranteed loss, so it is refused regardless of policy. */
-export const MAX_FILLABLE_ASK = 0.99;
-
-/** Conservative taker-fee reserve; actual maker fees come from Kalshi fill records and unused cash is released. */
-export function venueFeeCents(venue: 'polymarket' | 'kalshi', limitPriceCents: number, quantity: number): number {
-  const price = limitPriceCents / 100;
-  if (venue === 'kalshi') return Math.max(1, Math.ceil(7 * quantity * price * (1 - price)));
-  return Math.max(1, Math.ceil(quantity * limitPriceCents * 0.01));
-}
-
-/**
- * Largest purchase that fits inside an all-in spend cap.
- *
- * The configured per-trade amount is what leaves the account in total, so the value sent to the venue
- * must be lower to leave room for fees. The limit price is rounded up to a whole cent so the order is
- * marketable against the quoted ask, and quantity is reduced until price x count plus fees fits.
- */
-export function estimatePaperFill(stakeLimitCents: number, askPrice: number, venue: 'polymarket' | 'kalshi'): PaperFill | null {
-  if (!Number.isInteger(stakeLimitCents) || stakeLimitCents <= 0 || !Number.isFinite(askPrice) || askPrice <= 0 || askPrice > MAX_FILLABLE_ASK) return null;
-  const limitPriceCents = askPrice * 100;
-  // Kalshi v2 supports 0.01-contract increments. Polymarket remains whole-contract only here.
-  const quantityStep = venue === 'kalshi' ? 0.01 : 1;
-  const maximumUnits = Math.floor((stakeLimitCents / limitPriceCents + 1e-9) / quantityStep);
-  for (let units = maximumUnits; units > 0; units -= 1) {
-    const quantity = Number((units * quantityStep).toFixed(2));
-    const purchaseCents = Math.ceil(quantity * limitPriceCents - 1e-9);
-    const feeCents = venueFeeCents(venue, limitPriceCents, quantity);
-    const stakeCents = purchaseCents + feeCents;
-    if (stakeCents <= stakeLimitCents) return { quantity, limitPriceCents, purchaseCents, feeCents, stakeCents, potentialPayoutCents: Math.round(quantity * 100) };
-  }
-  return null;
-}
+import { MAX_FILLABLE_ASK, estimatePaperFill, venueFeeCents } from './venue-fill';
+import type { PaperFill } from './venue-fill';
+export { MAX_FILLABLE_ASK, estimatePaperFill, venueFeeCents } from './venue-fill';
 
 const baseOrderId = (prediction: Prediction, mode: ExecutionMode, side: PositionSide) => `${mode}:${prediction.symbol}:${side}:${prediction.market.closesAt}`;
 const sideWindowOrders = (ledger: Ledger, prediction: Prediction, mode: ExecutionMode, side: PositionSide) => ledger.orders
@@ -1445,7 +1419,19 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
   void persistenceCandidateCycle(dashboard, ledger, regimeGate.allowsEntries)
     .then((cycle) => updatePersistenceCandidateStore(cycle))
     .catch((error) => console.error('Two-snapshot persistence candidate collection failed:', error));
+  void recordContractPaths(dashboard.predictions ?? [])
+    .catch((error) => console.error('Contract path collection failed:', error));
   const status = await getTradingControl();
+  // Long-shot collection only: this records triggers and outcomes and places no order. It runs detached
+  // and unconditionally, because the evidence is what decides whether to enable the policy, so gating
+  // collection on it being enabled would be circular. See lib/long-shot-execution.ts.
+  void getHoldSentinels()
+    .then((existingSentinels) => collectLongShotEvidence({
+      dashboard, orders: ledger.orders, existingSentinels,
+      startingCents: longShotAllocationCents(status.control.startingBudgetCents),
+    }))
+    .then((cycle) => updateHoldSentinelStore(cycle))
+    .catch((error) => console.error('Long-shot evidence collection failed:', error));
   changed = await observeAndExecuteStandaloneExits(dashboard, status, ledger) || changed;
   changed = updatePortfolioDecisions(dashboard, status, ledger) || changed;
   const previousSkip = ledger.lastLiveSkip?.reason;

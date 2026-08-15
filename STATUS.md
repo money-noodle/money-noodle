@@ -145,11 +145,24 @@ Delivery order:
    than the rewritten array `cycle-path-store` uses, at under 700 KB/day.
 7. ~~Reporting split by entry generation and regime.~~ **Done.** `lib/long-shot-report.ts`.
 
-**Not yet done, and the reason nothing can trade: the policy is not wired into the execution cycle.** Every
-layer above is pure or durable-store code with no caller in `processCycle`. Remaining work is the collector
-integration — evaluating triggers each cycle, submitting entries, running the two-second exit poll,
-recording sentinels and paths, and surfacing the report — plus the durable stores for sentinels and paths.
-That wiring is where the pure rules meet real money and is the part to review before it is written.
+8. ~~Durable stores and collection wiring.~~ **Done, collection only.** `lib/contract-path-store.ts`,
+   `lib/hold-sentinel-store.ts`, and `lib/long-shot-execution.ts` run detached from `processCycle`
+   alongside the calendar and persistence lanes. Contract paths and hold sentinels accumulate from the
+   next cycle onward.
+
+**The policy still places no orders.** Collection was split from execution deliberately: 60 attempts is two
+to three weeks of evidence, which is the longest lead time in this work, so it starts now rather than
+waiting on the part that spends money. Every sentinel records `executed: false` with an explicit reason, so
+the collection-only period stays separable from a later period where the executing lane declined on its own
+merits.
+
+Collection runs unconditionally, including while the policy is disabled or halted. Gating it on being
+enabled would be circular — the evidence is what decides whether to enable it.
+
+Remaining work is the execution path: entry submission against the strategy's own budget slice, the
+two-second exit poll, and the report surface. Two operator actions are also outstanding and neither has
+been taken: writing the 30% allocation into `data/provider-budgets.json`, and resolving the edge policy's
+live loss gate, which is separately blocking its entries at 572¢ against a 500¢ stop.
 
 Done means: the policy trades paper and live under the mirror invariant, the edge policy's behaviour is
 byte-for-byte unchanged, exposure caps and the shared kill switch/reconciliation/drain still bind across
