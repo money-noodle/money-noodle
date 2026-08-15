@@ -126,15 +126,30 @@ than a reason to believe.
 
 Delivery order:
 
-1. Pure rule layer and ticket/cap arithmetic, with tests. No I/O, no execution.
-2. `strategyId` on orders, reservations, audit events, and summaries, with existing rows defaulting to the
-   edge policy exactly as absent `marketId` defaults to `crypto-15m`.
-3. Per-policy budget sub-allocation and the derived halt.
-4. Resting reduce-only GTC limit exits — new machinery beside the existing IOC exit path.
-5. Buy-and-hold sentinels, written at trigger time.
-6. Contract price-path recorder: both sides' Kalshi bid/ask every 15 seconds for every active window,
-   append-only with rollups. Observation only.
-7. Reporting split by entry generation and regime label.
+1. ~~Pure rule layer and ticket/cap arithmetic.~~ **Done.** `lib/long-shot-policy.ts`. Entry rule, ticket
+   sizing, caps, and round-trip economics asserted against the production fee and sizing code rather than a
+   copy, so a fee-model change breaks the test.
+2. ~~`strategyId` on orders and summaries.~~ **Done.** `lib/strategy-registry.ts`, absent meaning the edge
+   policy exactly as absent `marketId` means `crypto-15m`. One ledger, not two, because reconciliation is
+   account-wide and a split file would leave real resting orders unmatched. `lib/strategy-isolation.test.ts`
+   pins the money boundary in both directions.
+3. ~~Per-policy budget sub-allocation and the derived halt.~~ **Done.** `lib/strategy-budget-policy.ts`. The
+   percentage funds a strategy once; its equity then rolls forward on its own P&L. Applying the percentage
+   continuously would size one strategy's ticket from the other's results and dilute its own losses so the
+   halt could never fire on the strategy that earned it.
+4. ~~Resting reduce-only GTC limit exits.~~ **Superseded.** Kalshi refuses `reduce_only` with
+   `good_till_canceled`; verified against the production API. `lib/target-exit-policy.ts` polls the
+   owned-side bid every two seconds and submits a reduce-only IOC at the mark instead.
+5. ~~Buy-and-hold sentinels, written at trigger time.~~ **Done.** `lib/hold-sentinel.ts`.
+6. ~~Contract price-path recorder.~~ **Done.** `lib/contract-path.ts`. Compact per-window triples rather
+   than the rewritten array `cycle-path-store` uses, at under 700 KB/day.
+7. ~~Reporting split by entry generation and regime.~~ **Done.** `lib/long-shot-report.ts`.
+
+**Not yet done, and the reason nothing can trade: the policy is not wired into the execution cycle.** Every
+layer above is pure or durable-store code with no caller in `processCycle`. Remaining work is the collector
+integration — evaluating triggers each cycle, submitting entries, running the two-second exit poll,
+recording sentinels and paths, and surfacing the report — plus the durable stores for sentinels and paths.
+That wiring is where the pure rules meet real money and is the part to review before it is written.
 
 Done means: the policy trades paper and live under the mirror invariant, the edge policy's behaviour is
 byte-for-byte unchanged, exposure caps and the shared kill switch/reconciliation/drain still bind across
