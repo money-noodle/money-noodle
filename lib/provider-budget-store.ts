@@ -2,6 +2,7 @@ import 'server-only';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { DEFAULT_ALLOCATION, allocationsValid } from './provider-budget-policy';
+import { strategyAllocationsValid } from './strategy-budget-policy';
 import { TRADING_PROVIDER_IDS } from './trading-provider-config-store';
 import type { MarketAllocation, ProviderBudget, ProviderBudgetConfiguration, TradingProviderId } from './types';
 
@@ -100,6 +101,13 @@ export async function updateProviderBudget(
     if (changes.allocations && !allocationsValid(changes.allocations)) {
       throw new Error('Market allocations must be non-negative, unique per market, and sum to at most 100%.');
     }
+    // Strategy shares are bounded inside their market exactly as markets are bounded inside the provider.
+    // Unvalidated, two strategies could each be funded a full allowance of the same cash.
+    for (const allocation of changes.allocations ?? []) {
+      if (allocation.strategies && !strategyAllocationsValid(allocation.strategies)) {
+        throw new Error(`${allocation.marketId} strategy allocations must be non-negative, unique per strategy, carry a non-negative starting amount, and sum to at most 100%.`);
+      }
+    }
     for (const key of ['liveLimitCents', 'paperLimitCents'] as const) {
       const value = changes[key];
       if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
@@ -116,7 +124,12 @@ export async function updateProviderBudget(
           ...item,
           liveLimitCents: changes.liveLimitCents ?? item.liveLimitCents,
           paperLimitCents: changes.paperLimitCents ?? item.paperLimitCents,
-          allocations: changes.allocations?.map((entry) => ({ ...entry })) ?? item.allocations,
+          // Strategies are copied too: a shallow copy would leave the caller holding a live reference
+          // into persisted budget state.
+          allocations: changes.allocations?.map((entry) => ({
+            ...entry,
+            ...(entry.strategies ? { strategies: entry.strategies.map((strategy) => ({ ...strategy })) } : {}),
+          })) ?? item.allocations,
           updatedAt: now,
         }
         : item),

@@ -16,6 +16,7 @@
     "analyze:kalshi-weight": "node --max-old-space-size=3072 scripts/analyze-kalshi-forecast-weight.mjs",
     "analyze:time-of-day": "node --max-old-space-size=3072 scripts/analyze-time-of-day.mjs",
     "verify:forecast-storage": "jiti scripts/verify-forecast-storage.ts",
+    "fund:long-shot": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/fund-long-shot.ts",
     "archive:local": "jiti scripts/archive-local-data.ts",
     "generate:brand": "node scripts/generate-brand-assets.mjs"
   },
