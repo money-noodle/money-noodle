@@ -453,6 +453,83 @@ export async function placeKalshiSell(input: { ticker: string; positionSide?: Po
   };
 }
 
+export interface RestingExitPlacement {
+  venueOrderId: string;
+  limitPriceCents: number;
+  requestedCount: number;
+  /** Nonzero only if the book had already moved through the mark when the order was accepted. */
+  filledCount: number;
+  averagePriceCents: number;
+  feeCents: number;
+  status: 'resting' | 'partial' | 'filled';
+}
+
+/**
+ * Places a resting reduce-only limit sell that stays on the book until it fills, is cancelled, or the
+ * contract settles. This is the long-shot policy's only exit.
+ *
+ * Distinct from `placeKalshiSell`, which is an IOC taken at decision time. That shape cannot work here:
+ * the strategy trades transient excursions, and a round trip completing inside 90 seconds is invisible to
+ * a 15-second poll. A resting order fills on the spike whether or not anything was watching.
+ *
+ * `reduce_only` still carries the safety invariant — this can only reduce existing exposure and can never
+ * open or reverse a position — and `cancel_order_on_pause` means a venue pause does not leave a working
+ * order behind for the quiescent drain to discover.
+ *
+ * `post_only` is deliberately false. The order rests far above the market in the ordinary case, but if the
+ * book has already run past the mark, crossing fills at the better price rather than being rejected.
+ */
+export async function placeKalshiRestingSell(input: {
+  ticker: string;
+  positionSide: PositionSide;
+  limitPriceCents: number;
+  count: number;
+  clientOrderId: string;
+  onAccepted?: (venueOrderId: string) => Promise<void>;
+}): Promise<RestingExitPlacement> {
+  if (!liveTradingEnabled()) throw new Error('Live trading is disabled.');
+  const countUnits = Math.round(input.count * 100);
+  if (!Number.isSafeInteger(countUnits) || countUnits < 1 || Math.abs(input.count * 100 - countUnits) > 1e-8) {
+    throw new Error('Resting exit count must be at least 0.01 contract in 0.01 increments.');
+  }
+  if (!Number.isFinite(input.limitPriceCents) || input.limitPriceCents < 0.1 || input.limitPriceCents >= 100) {
+    throw new Error('Resting exit limit must be between 0.1 and 99.9 cents.');
+  }
+  const response = await kalshiRequest<KalshiCreateOrderV2Response>('/portfolio/events/orders', {
+    method: 'POST',
+    body: {
+      ticker: input.ticker,
+      side: kalshiOrderBookSide(input.positionSide, 'exit'),
+      count: input.count.toFixed(2),
+      price: yesPriceFromSelectedSide(input.limitPriceCents / 100, input.positionSide).toFixed(4),
+      time_in_force: 'good_till_canceled',
+      self_trade_prevention_type: 'taker_at_cross',
+      post_only: false,
+      cancel_order_on_pause: true,
+      reduce_only: true,
+      subaccount: 0,
+      exchange_index: 0,
+      client_order_id: input.clientOrderId,
+    },
+  });
+  const venueOrderId = response.order_id;
+  if (!venueOrderId) throw new Error('Kalshi v2 returned no resting reduce-only exit order id.');
+  // Persisted before anything else can throw, so a lost response still leaves a working order that
+  // reconciliation can match rather than an orphan resting on the book.
+  await input.onAccepted?.(venueOrderId);
+  const filledCount = Number(response.fill_count ?? 0);
+  const averagePriceCents = selectedSidePriceFromYes(Number(response.average_fill_price ?? 0), input.positionSide) * 100;
+  const feeCents = Number(response.average_fee_paid ?? 0) * filledCount * 100;
+  if (![filledCount, averagePriceCents, feeCents].every(Number.isFinite)) {
+    throw new Error('Kalshi returned malformed resting exit terms.');
+  }
+  return {
+    venueOrderId, limitPriceCents: input.limitPriceCents, requestedCount: input.count,
+    filledCount, averagePriceCents, feeCents,
+    status: filledCount + 1e-8 >= input.count ? 'filled' : filledCount > 0 ? 'partial' : 'resting',
+  };
+}
+
 export function liveEnvironmentLabel(): 'demo' | 'production' {
   return kalshiEnvironment();
 }

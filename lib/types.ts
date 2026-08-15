@@ -1502,6 +1502,15 @@ export interface PaperOrder {
   exitRequestedAt?: string;
   exitPending?: boolean;
   exitVenueOrderId?: string;
+  /**
+   * Resting reduce-only limit sell, the long-shot policy's only exit. It reuses `exitClientOrderId` and
+   * `exitVenueOrderId` deliberately, so startup and periodic reconciliation already see it as a tracked
+   * order rather than an unknown resting one that would correctly fail closed.
+   */
+  restingExitLimitCents?: number;
+  restingExitCount?: number;
+  restingExitPlacedAt?: string;
+  restingExitCanceledAt?: string;
   exitPrice?: number;
   exitFeeCents?: number;
   saleProceedsCents?: number;
