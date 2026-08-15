@@ -126,9 +126,10 @@ append first, snapshot on compaction. Sealing a shard is the compaction step for
 
 ## 4. Rollup algebra
 
-`summarizePerformance` must produce byte-identical output. Its statistics fall into three classes, and
-each needs a different merge rule. This is the part most likely to be got subtly wrong, so it is
-specified explicitly.
+`summarizePerformance` must reproduce its output under the gate below — exactly for everything
+countable, within a documented float tolerance for the aggregates. Its statistics fall into three
+classes, and each needs a different merge rule. This is the part most likely to be got subtly wrong, so
+it is specified explicitly.
 
 **Additive** — a plain sum per shard: `issued`, `pending`, `resolved`, `correct`, `invalid`,
 `observedCalculations`, `realizedEdgeTrades`, Brier sum, log-loss sum, predicted-edge sum,
@@ -140,18 +141,62 @@ source). Grouped slices — `byAsset`, `byDirection`, `byLeadTime`, `edgeBuckets
 of id sets. Each shard stores its distinct keys (~2k cycle ids/day, far smaller than the rows) and the
 merge is a union. Exact, not estimated: these counts gate calibration readiness and must not drift.
 
-**Non-additive** — three cases needing explicit handling:
+**Non-additive** — four cases needing explicit handling. What each needs was decided by measurement
+rather than by reasoning about worst cases; see §4.1, which removed most of the difficulty this section
+originally anticipated.
 
 - `cycleBalancedAccuracy` is the mean over cycles of per-cycle accuracy, so a shard stores per-cycle
-  `(correct, total)` pairs rather than a ratio. A settlement window can straddle midnight, so pairs
-  merge by cycle key across shards before the mean is taken.
-- `currentStreak` and `currentCycleStreak` depend only on the most recent rows, read from the tail of
-  the newest shards until the streak breaks. No full scan.
-- `timeline` is per-row with a rolling 25-row window. Each shard stores its own timeline segment plus
-  the trailing 24 rows needed to continue the rolling window across the boundary; segments concatenate.
+  `(correct, total)` pairs rather than a ratio. Cycles are shard-local in practice (§4.1), but the pairs
+  still merge by cycle key so that a future straddling cycle degrades to a correct answer rather than a
+  silently wrong one.
+- `currentStreak` and `currentCycleStreak` cannot be read from the tail of the newest shard: the longest
+  streak in the retained history is **268 rows**, which crosses shard boundaries. Each shard instead
+  stores a run monoid — `(count, firstValue, lastValue, prefixRun, suffixRun, uniform)` — over its own
+  rows in the order the statistic reads them. Merging is associative and exact, and the streak is the
+  signed prefix run of the merge.
+- `timeline` is per-row with a rolling 25-row window, and the 500 downsampled points are chosen by index
+  into the whole sequence. No fixed-size per-shard statistic reconstructs that. Each shard therefore
+  stores a **compact chronological column** of `(time, correct, brierScore)` for its resolved qualifying
+  rows — about 60 bytes per row against ~4 KB today, so roughly 2 MB for the whole history against
+  198 MB. This is the one place a rollup is O(rows) rather than O(1), and it buys exactness: `timeline`
+  is reproduced rather than approximated. The alternative — reconstructing it from aggregates — was
+  rejected because it would make `timeline` the only statistic knowingly unequal to the current output.
+- `recent` is a top-8 over qualifying rows including pending ones, so ties decide membership. Each shard
+  stores its own top 8; the merge is a top-k merge and needs no ordering assumption at all.
 
 `missedBuyCounterfactual` runs over all forecasts including unqualified ones, so it needs its own
-additive counters rather than riding on the qualified path.
+counters rather than riding on the qualified path. Its per-(asset, window) nearest-five-minute selection
+and its per-window clustering are both shard-local (§4.1), so a shard stores its clustered per-window
+values and the merge is concatenation.
+
+### 4.1 What the measurements changed
+
+Four properties of the retained history were measured before any of this was built, because each one
+decides a design rather than an implementation detail. Three of them removed difficulty this section had
+assumed.
+
+| Measured | Result | Consequence |
+|---|---|---|
+| Rows resolving on a different day than issued | 648 of 49,526 (1.31%) | Shards are keyed by issuance day but ordered statistics key on `resolvedAt` |
+| **Inversions between `resolvedAt` order and shard order** | **0** | Chronological order is a clean concatenation of shards in shard order — no change of shard key, and prefix sums and run monoids compose |
+| Cycles spanning more than one shard | **0 of 2,432** | `cycleBalancedAccuracy` and the cycle streak are shard-local |
+| Settlement windows spanning more than one shard | **0 of 552** | `segments`' per-window clustering and the counterfactual's per-window selection are shard-local |
+| Longest resolved streak | 268 rows | Streaks cross shards; a tail read is not enough |
+
+The zero-inversion result is the load-bearing one, and it holds because resolution lag is under about
+fifteen minutes while cycles align to quarter-hours: a row issued before midnight resolves in the
+previous day's last window and never overtakes a row issued after it.
+
+**That is a property of the data, not of the code, so the gate asserts it rather than assuming it.** A
+future row with a longer resolution lag would silently corrupt both streaks and `timeline` with nothing
+else to catch it. The gate checks that the per-shard ranges of every ordering key it relies on are
+non-overlapping, and fails loudly if one ever is.
+
+One rollup field was missing and would have drifted silently: `calibrationWindows` counts distinct
+settlement windows over **all** resolved rows including unqualified ones (552), while the stored
+`distinctResolvedWindows` covers only the qualifying set. The two happen to agree on the qualifying
+count — `resolvedWindows` is 520 whether keyed on raw `closesAt` or on the normalised key — but the
+calibration set is genuinely larger and needs its own field. It gates calibration readiness.
 
 **Verification gate.** Before anything switches over, compute the summary both ways over the full
 retained history and assert field-by-field equality.

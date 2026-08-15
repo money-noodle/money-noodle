@@ -30,8 +30,12 @@ describe('forecast storage layout planning', () => {
   it('keeps unresolved rows hot and shards terminal rows by issuance day', () => {
     const rows = [
       forecast({ id: 'pending' }),
-      forecast({ id: 'resolved-a', status: 'resolved', correct: true, outcome: 'UP', issuedAt: '2026-08-13T23:59:00Z' }),
-      forecast({ id: 'resolved-b', status: 'resolved', correct: false, outcome: 'DOWN', issuedAt: '2026-08-14T00:01:00Z' }),
+      // Distinct settlement and resolution times per shard, because that is what the data looks like:
+      // a row issued before midnight settles in that day's last window. Two rows in different shards
+      // resolving at the identical instant would leave the global order decided by the id tie-break
+      // rather than by shard order, which the rollup gate now correctly rejects as ambiguous.
+      forecast({ id: 'resolved-a', status: 'resolved', correct: true, outcome: 'UP', issuedAt: '2026-08-13T23:59:00Z', closesAt: '2026-08-14T00:00:00Z', resolvedAt: '2026-08-14T00:00:30Z' }),
+      forecast({ id: 'resolved-b', status: 'resolved', correct: false, outcome: 'DOWN', issuedAt: '2026-08-14T00:01:00Z', resolvedAt: '2026-08-14T10:15:30Z' }),
       forecast({ id: 'invalid', status: 'invalid', issuedAt: '2026-08-14T00:02:00Z' }),
     ];
     const plan = buildForecastStoragePlan(rows, '2026-08-14T12:00:00Z');
