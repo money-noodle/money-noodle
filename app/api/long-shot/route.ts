@@ -66,6 +66,7 @@ export async function GET(request: Request) {
     return NextResponse.json({
       policyVersion: longShotPolicyVersion(settings),
       enabled: settings.enabled,
+      liveEnabled: settings.liveEnabled,
       settings: {
         entryMarkCents: settings.entryMarkCents,
         exitMarkCents: settings.exitMarkCents,

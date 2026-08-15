@@ -1500,6 +1500,10 @@ async function runLongShot(
   if (funding.sizing.halted) return false;
 
   if (mode === 'live') {
+    // Per-strategy arming, checked before the account-wide controls. Those say whether the desk is armed;
+    // this says whether this strategy is, and conflating them is what put three unintended live orders on
+    // the venue on 2026-08-15.
+    if (!settings.liveEnabled) return false;
     if (liveBlockers().length || status.control.mode !== 'live' || status.control.state !== 'active') return false;
     if (getKalshiReconciliationStatus().phase !== 'ready') return false;
     if (evaluateLiveRisk(status.control, ledger.orders, process.env, LONG_SHOT_ROUND_TRIP).allowed === false) return false;

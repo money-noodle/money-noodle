@@ -32,6 +32,17 @@ export function longShotPolicyVersion(settings: Pick<LongShotSettings, 'entryMar
 
 export interface LongShotSettings {
   enabled: boolean;
+  /**
+   * Arms the live track specifically. Separate from `enabled`, and default false, so a new strategy
+   * collects and trades on paper without a second decision silently arming real money.
+   *
+   * This is not redundant with the account-wide live controls. Those describe whether *the desk* is
+   * armed; this describes whether *this strategy* is. On 2026-08-15 the two were conflated — a shakedown
+   * believed to be paper-only placed three real orders because the account had been resumed to live hours
+   * earlier and nothing in this policy re-checked. Per-strategy arming makes that impossible to repeat by
+   * mistake rather than by memory.
+   */
+  liveEnabled: boolean;
   /** Executable selected-side ask at or below which a candidate exists. */
   entryMarkCents: number;
   /** Resting reduce-only limit sell price. */
@@ -65,6 +76,9 @@ export function longShotSettings(environment: NodeJS.ProcessEnv = process.env): 
   const entryMarkCents = Math.floor(bounded(environment.MONEY_NOODLE_LONG_SHOT_ENTRY_MARK_CENTS, 10, 1, 49));
   return {
     enabled: environment.MONEY_NOODLE_LONG_SHOT_ENABLED === 'true',
+    // Both flags must be explicitly true. Enabling the policy arms paper only.
+    liveEnabled: environment.MONEY_NOODLE_LONG_SHOT_ENABLED === 'true'
+      && environment.MONEY_NOODLE_LONG_SHOT_LIVE_ENABLED === 'true',
     entryMarkCents,
     // Must stay strictly above the entry mark, or the exit would be at or below cost.
     exitMarkCents: Math.floor(bounded(environment.MONEY_NOODLE_LONG_SHOT_EXIT_MARK_CENTS, 90, entryMarkCents + 1, 99)),

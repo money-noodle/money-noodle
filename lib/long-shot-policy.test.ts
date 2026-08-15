@@ -10,7 +10,7 @@ import {
 } from './long-shot-policy';
 
 const settings = (overrides: Partial<LongShotSettings> = {}): LongShotSettings => ({
-  enabled: true, entryMarkCents: 10, exitMarkCents: 90, minimumSecondsRemaining: 720,
+  enabled: true, liveEnabled: false, entryMarkCents: 10, exitMarkCents: 90, minimumSecondsRemaining: 720,
   drawdownDivisor: 30, minimumTicketCents: 10, maximumOpenPerSettlementWindow: 3,
   maximumEntriesPerAssetWindow: 3, dailyLossTickets: 10, excludedAssets: [], ...overrides,
 });
@@ -215,5 +215,26 @@ describe('policy version derivation', () => {
     expect(longShotPolicyVersion(longShotSettings({
       NODE_ENV: 'test', MONEY_NOODLE_LONG_SHOT_ENTRY_MARK_CENTS: '25',
     } as unknown as NodeJS.ProcessEnv))).toContain('buy25-');
+  });
+});
+
+describe('per-strategy live arming', () => {
+  it('arms paper only when the policy is enabled', () => {
+    // Enabling a strategy must not silently arm real money. On 2026-08-15 a shakedown believed to be
+    // paper-only placed three live orders because the account had been resumed hours earlier and nothing
+    // in this policy re-checked.
+    const parsed = longShotSettings({ NODE_ENV: 'test', MONEY_NOODLE_LONG_SHOT_ENABLED: 'true' });
+    expect(parsed.enabled).toBe(true);
+    expect(parsed.liveEnabled).toBe(false);
+  });
+
+  it('requires both flags for the live track', () => {
+    expect(longShotSettings({
+      NODE_ENV: 'test', MONEY_NOODLE_LONG_SHOT_ENABLED: 'true', MONEY_NOODLE_LONG_SHOT_LIVE_ENABLED: 'true',
+    }).liveEnabled).toBe(true);
+    // Arming live without enabling the policy arms nothing.
+    expect(longShotSettings({
+      NODE_ENV: 'test', MONEY_NOODLE_LONG_SHOT_LIVE_ENABLED: 'true',
+    }).liveEnabled).toBe(false);
   });
 });
