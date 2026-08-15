@@ -128,3 +128,29 @@ describe('order construction', () => {
     expect(built.confidence).toBe(0);
   });
 });
+
+describe('funding epochs', () => {
+  const funded = Date.parse('2026-08-15T12:00:00Z');
+  const before = order({ id: 'ls-old', actualPnlCents: -300, createdAt: '2026-08-15T09:00:00Z' });
+  const after = order({ id: 'ls-new', actualPnlCents: -40, createdAt: '2026-08-15T13:00:00Z' });
+
+  it('counts only what was earned since the allocation was last funded', () => {
+    // Re-funding sets a new starting amount. Fund 600c, lose 300c, re-fund at 800c: carrying the old loss
+    // would report 500c of equity against 800c the operator actually committed.
+    expect(longShotRealizedPnlCents([before, after], 'live')).toBe(-340);
+    expect(longShotRealizedPnlCents([before, after], 'live', funded)).toBe(-40);
+    expect(longShotFunding([before, after], 'live', 800, settings, funded).equityCents).toBe(760);
+  });
+
+  it('clears a halt when re-funded, which is the point of a re-fund', () => {
+    // The halt is derived from equity, so re-funding necessarily clears it. That is why every allocation
+    // write requires a paused, quiescent engine rather than being a slider.
+    const halting = order({ id: 'ls-halting', actualPnlCents: -301, createdAt: '2026-08-15T09:00:00Z' });
+    expect(longShotFunding([halting], 'live', 600, settings).sizing.halted).toBe(true);
+    expect(longShotFunding([halting], 'live', 600, settings, funded).sizing.halted).toBe(false);
+  });
+
+  it('treats an unfunded allocation as counting everything', () => {
+    expect(longShotFunding([before, after], 'live', 600, settings, 0).equityCents).toBe(260);
+  });
+});

@@ -1494,14 +1494,14 @@ async function runLongShot(
   if (!isFreshCalculationTimestamp(dashboard.generatedAt)) return false;
   if (getExecutionDrainStatus().phase === 'draining') return false;
 
-  const startingCents = longShotAllocationCents(
-    status.control.startingBudgetCents,
-    (await getProviderBudgets({ revision: status.control.revision })).providers
-      .find((provider) => provider.providerId === 'kalshi')?.allocations
-      .find((allocation) => allocation.marketId === DEFAULT_MARKET_ID)?.strategies
-      ?.find((strategy) => strategy.strategyId === LONG_SHOT_ROUND_TRIP)?.startingCents,
-  );
-  const funding = longShotFunding(ledger.orders, mode, startingCents, settings);
+  const allocation = (await getProviderBudgets({ revision: status.control.revision })).providers
+    .find((provider) => provider.providerId === 'kalshi')?.allocations
+    .find((item) => item.marketId === DEFAULT_MARKET_ID)?.strategies
+    ?.find((strategy) => strategy.strategyId === LONG_SHOT_ROUND_TRIP);
+  const startingCents = longShotAllocationCents(status.control.startingBudgetCents, allocation?.startingCents);
+  // Equity counts only what this strategy earned since it was last funded. Re-funding sets a new starting
+  // amount, so carrying a prior period's losses across would report equity the operator never committed.
+  const funding = longShotFunding(ledger.orders, mode, startingCents, settings, Date.parse(allocation?.fundedAt ?? '') || 0);
   if (funding.sizing.halted) return false;
 
   if (mode === 'live') {

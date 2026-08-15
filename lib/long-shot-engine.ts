@@ -17,12 +17,21 @@ import { longShotPolicyVersion, longShotSizing, type LongShotSettings, type Long
 const SETTLED = new Set(['won', 'lost', 'sold', 'invalid']);
 const COMMITTED = new Set(['open', 'pending_reservation', 'uncertain']);
 
-const mine = (orders: PaperOrder[], mode: ExecutionMode) => orders.filter((order) =>
-  orderStrategyId(order) === LONG_SHOT_ROUND_TRIP && order.executionMode === mode && !order.id.includes(':exit:'));
+/**
+ * This strategy's orders in one track, from a funding epoch onward.
+ *
+ * `sinceMs` is when the allocation was last funded. Re-funding sets a new starting amount, so P&L earned
+ * against the previous one must not carry across: fund 600¢, lose 300¢, re-fund at 800¢, and counting the
+ * old loss again would report 500¢ of equity against 800¢ actually committed. Budget changes require a
+ * paused, quiescent engine with nothing reserved, so no order can straddle the boundary.
+ */
+const mine = (orders: PaperOrder[], mode: ExecutionMode, sinceMs = 0) => orders.filter((order) =>
+  orderStrategyId(order) === LONG_SHOT_ROUND_TRIP && order.executionMode === mode && !order.id.includes(':exit:')
+  && Date.parse(order.createdAt) >= sinceMs);
 
 /** This strategy's realized P&L in one track. Never crosses tracks: `paper − live` must stay readable. */
-export function longShotRealizedPnlCents(orders: PaperOrder[], mode: ExecutionMode): number {
-  return mine(orders, mode)
+export function longShotRealizedPnlCents(orders: PaperOrder[], mode: ExecutionMode, sinceMs = 0): number {
+  return mine(orders, mode, sinceMs)
     .filter((order) => SETTLED.has(order.status))
     .reduce((sum, order) => sum + (order.actualPnlCents ?? order.pnlCents ?? 0), 0);
 }
@@ -51,8 +60,9 @@ export interface LongShotFunding {
  */
 export function longShotFunding(
   orders: PaperOrder[], mode: ExecutionMode, startingCents: number, settings: LongShotSettings,
+  fundedAtMs = 0,
 ): LongShotFunding {
-  const equityCents = Math.max(0, Math.floor(startingCents + longShotRealizedPnlCents(orders, mode)));
+  const equityCents = Math.max(0, Math.floor(startingCents + longShotRealizedPnlCents(orders, mode, fundedAtMs)));
   const reservedCents = longShotReservedCents(orders, mode);
   return {
     equityCents, reservedCents,

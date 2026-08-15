@@ -38,17 +38,16 @@ export async function GET(request: Request) {
       getContractPathRollups(200),
     ]);
 
-    const startingCents = longShotAllocationCents(
-      control.control.startingBudgetCents,
-      budgets.providers.find((provider) => provider.providerId === 'kalshi')?.allocations
-        .find((allocation) => allocation.marketId === DEFAULT_MARKET_ID)?.strategies
-        ?.find((strategy) => strategy.strategyId === LONG_SHOT_ROUND_TRIP)?.startingCents,
-    );
+    const allocation = budgets.providers.find((provider) => provider.providerId === 'kalshi')?.allocations
+      .find((item) => item.marketId === DEFAULT_MARKET_ID)?.strategies
+      ?.find((strategy) => strategy.strategyId === LONG_SHOT_ROUND_TRIP);
+    const startingCents = longShotAllocationCents(control.control.startingBudgetCents, allocation?.startingCents);
+    const fundedAtMs = Date.parse(allocation?.fundedAt ?? '') || 0;
     const mine = strategyOrders(orders, LONG_SHOT_ROUND_TRIP);
 
     // Per track, never blended: `paper − live` is only readable if the two are reported apart.
     const tracks = (['paper', 'live'] as const).map((mode) => {
-      const funding = longShotFunding(orders, mode, startingCents, settings);
+      const funding = longShotFunding(orders, mode, startingCents, settings, fundedAtMs);
       return {
         mode,
         equityCents: funding.equityCents,
@@ -78,7 +77,7 @@ export async function GET(request: Request) {
         dailyLossTickets: settings.dailyLossTickets,
         excludedAssets: settings.excludedAssets,
       },
-      allocation: { startingCents, funded: startingCents > 0 },
+      allocation: { startingCents, funded: startingCents > 0, fundedAt: allocation?.fundedAt ?? null },
       tracks,
       // Approach (ii): the same triggers held to settlement, committed at trigger time so the sample is
       // not conditioned on having successfully bought.
