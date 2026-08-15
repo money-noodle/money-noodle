@@ -12,7 +12,7 @@ export function downsamplePerformanceTimeline(points: PerformanceTimelinePoint[]
 }
 
 /** Records written before all-calculation logging existed were qualifying signals by construction. */
-function isQualified(forecast: TrackedForecast): boolean {
+export function isQualified(forecast: TrackedForecast): boolean {
   return forecast.qualified !== false;
 }
 
@@ -29,7 +29,7 @@ function isQualified(forecast: TrackedForecast): boolean {
  * Ordering by `id` after the real key makes every one of these deterministic and layout-independent.
  * See docs/forecast-storage-design.md §4.
  */
-const byIdTieBreak = (a: TrackedForecast, b: TrackedForecast) => a.id.localeCompare(b.id);
+export const byIdTieBreak = (a: TrackedForecast, b: TrackedForecast) => a.id.localeCompare(b.id);
 
 function slices(forecasts: TrackedForecast[], key: (forecast: TrackedForecast) => string): PerformanceSlice[] {
   const groups = new Map<string, TrackedForecast[]>();
@@ -43,19 +43,52 @@ function slices(forecasts: TrackedForecast[], key: (forecast: TrackedForecast) =
   }).sort((a, b) => b.resolved - a.resolved || b.accuracy - a.accuracy || a.label.localeCompare(b.label));
 }
 
-function cycleKey(forecast: TrackedForecast): string {
+export function cycleKey(forecast: TrackedForecast): string {
   if (forecast.cycleId) return forecast.cycleId;
   const slug = forecast.marketUrl.split('/').filter(Boolean).at(-1) ?? forecast.symbol;
   return `${slug}:${forecast.closesAt}`;
 }
 
 /** Venue/asset identifiers are intentionally excluded: one timestamp is one correlated crypto window. */
-function settlementWindowKey(forecast: TrackedForecast): string {
+export function settlementWindowKey(forecast: TrackedForecast): string {
   const timestamp = Date.parse(forecast.closesAt);
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : forecast.closesAt;
 }
 
-const clampProbability = (value: number) => Math.min(0.999999, Math.max(0.000001, value));
+export const clampProbability = (value: number) => Math.min(0.999999, Math.max(0.000001, value));
+
+/**
+ * The probability sources scored against each other in `benchmarks`.
+ *
+ * Exported as data rather than written inline so the rollup path scores exactly the same sources in
+ * exactly the same order. A second copy of this list would drift, and the drift would show up as a
+ * benchmark that quietly disappeared from the sharded summary.
+ */
+export const BENCHMARK_SOURCES: Array<{ label: string; probability: (forecast: TrackedForecast) => number | undefined }> = [
+  // Scored on the buys taken, which asks the question that matters: on the contracts we chose,
+  // did our estimate beat the price we paid?
+  { label: 'Money Noodle model', probability: (forecast) => forecast.probabilityUp },
+  { label: 'Model + venue blend', probability: (forecast) => forecast.blendedProbabilityUp },
+  { label: 'Contract basis only', probability: (forecast) => forecast.basisProbabilityUp },
+  { label: 'Settlement-average observation model', probability: (forecast) => forecast.settlementAverageEstimate?.probabilityUp },
+  { label: 'Polymarket price', probability: (forecast) => forecast.polymarketProbabilityUp },
+  { label: 'Kalshi price', probability: (forecast) => forecast.kalshiProbabilityUp },
+  { label: 'Coin flip (50/50)', probability: () => 0.5 },
+];
+
+/** Shared with the rollup path; see BENCHMARK_SOURCES on why these are data and not inline literals. */
+export const CALIBRATION_EDGES = [0, 0.2, 0.35, 0.45, 0.55, 0.65, 0.8, 1.0001];
+
+export const EDGE_BUCKETS: Array<{ label: string; min: number; max: number }> = [
+  { label: 'below 0', min: -Infinity, max: 0 },
+  { label: '0–5pp', min: 0, max: 0.05 },
+  { label: '5–10pp', min: 0.05, max: 0.10 },
+  { label: '10–20pp', min: 0.10, max: 0.20 },
+  { label: '20pp+', min: 0.20, max: Infinity },
+];
+
+export const confidenceBucket = (forecast: TrackedForecast): string =>
+  forecast.confidence >= 0.75 ? '75%+' : forecast.confidence >= 0.65 ? '65–74%' : forecast.confidence >= 0.57 ? '57–64%' : '<57%';
 
 function score(label: string, forecasts: TrackedForecast[], probability: (forecast: TrackedForecast) => number | undefined): BenchmarkScore {
   const usable = forecasts.filter((forecast) => Number.isFinite(probability(forecast) as number));
@@ -74,7 +107,7 @@ function score(label: string, forecasts: TrackedForecast[], probability: (foreca
   return { label, resolved: usable.length, accuracy: correct / usable.length, brierScore: brier / usable.length, logLoss: logLoss / usable.length };
 }
 
-const LEAD_BUCKETS: Array<{ label: string; min: number; max: number }> = [
+export const LEAD_BUCKETS: Array<{ label: string; min: number; max: number }> = [
   { label: '0–30s', min: 0, max: 30 },
   { label: '30–120s', min: 30, max: 120 },
   { label: '2–5m', min: 120, max: 300 },
@@ -98,7 +131,7 @@ function leadTimeSlices(resolved: TrackedForecast[]): LeadTimeSlice[] {
 }
 
 function calibrationBins(resolved: TrackedForecast[]): CalibrationBin[] {
-  const edges = [0, 0.2, 0.35, 0.45, 0.55, 0.65, 0.8, 1.0001];
+  const edges = CALIBRATION_EDGES;
   return edges.slice(0, -1).map((low, index) => {
     const high = edges[index + 1];
     const items = resolved.filter((forecast) => forecast.probabilityUp >= low && forecast.probabilityUp < high);
@@ -183,13 +216,7 @@ function missedBuyCounterfactual(forecasts: TrackedForecast[]): MissedBuyCounter
 }
 
 function edgeBuckets(resolved: TrackedForecast[]): EdgeBucket[] {
-  const edges = [
-    { label: 'below 0', min: -Infinity, max: 0 },
-    { label: '0–5pp', min: 0, max: 0.05 },
-    { label: '5–10pp', min: 0.05, max: 0.10 },
-    { label: '10–20pp', min: 0.10, max: 0.20 },
-    { label: '20pp+', min: 0.20, max: Infinity },
-  ];
+  const edges = EDGE_BUCKETS;
   // Only buys the policy would actually have placed. Including rejected calculations was mixing
   // hypothetical negative-edge entries into a metric that answers "did our trades pay".
   const usable = resolved.filter((forecast) => isQualified(forecast) && forecast.predictedEdge !== undefined && forecast.realizedReturn !== undefined);
@@ -248,45 +275,52 @@ const band = (value: number | undefined, edges: Array<{ max: number; label: stri
  * Mines the recorded buys for conditions that actually paid, rather than assuming the model has edge.
  * Every dimension here is observable at decision time, so a segment that proves profitable can be
  * turned directly into a policy rule.
+ *
+ * Held as data rather than written inline so the rollup path buckets on exactly these keys; see
+ * BENCHMARK_SOURCES on why a second copy would drift.
  */
-function buildSegments(resolved: TrackedForecast[]): SegmentGroup[] {
-  const tradable = resolved.filter((forecast) => forecast.realizedReturn !== undefined);
-  if (!tradable.length) return [];
-  return [
-    bucketed('Asset', 'Which markets pay', tradable, (forecast) => forecast.symbol),
-    bucketed('Entry direction', 'Which binary side was purchased', tradable, (forecast) => forecast.entrySide ?? 'UP'),
-    bucketed('Entry venue', 'Where the fill happened', tradable, (forecast) => forecast.entryVenue ?? null),
-    bucketed('Target integrity', 'Whether entry price and settlement outcome come from the same immutable venue contract', tradable, (forecast) => forecast.targetIntegrity ?? 'legacy-polymarket'),
-    bucketed('Entry price', 'Cheap contracts are where model error dominates', tradable, (forecast) => band(forecast.entryAsk, [
+export const SEGMENT_DIMENSIONS: Array<{ dimension: string; description: string; key: (forecast: TrackedForecast) => string | null }> = [
+  { dimension: 'Asset', description: 'Which markets pay', key: (forecast) => forecast.symbol },
+  { dimension: 'Entry direction', description: 'Which binary side was purchased', key: (forecast) => forecast.entrySide ?? 'UP' },
+  { dimension: 'Entry venue', description: 'Where the fill happened', key: (forecast) => forecast.entryVenue ?? null },
+  { dimension: 'Target integrity', description: 'Whether entry price and settlement outcome come from the same immutable venue contract', key: (forecast) => forecast.targetIntegrity ?? 'legacy-polymarket' },
+  { dimension: 'Entry price', description: 'Cheap contracts are where model error dominates', key: (forecast) => band(forecast.entryAsk, [
       { max: 0.10, label: '<10¢' }, { max: 0.25, label: '10–25¢' },
       { max: 0.35, label: '25–35¢' }, { max: 0.45, label: '35–45¢' },
       { max: 0.55, label: '45–55¢' }, { max: 0.65, label: '55–65¢' },
       { max: 0.75, label: '65–75¢' }, { max: Infinity, label: '75¢+' },
-    ])),
-    bucketed('Time to settlement', 'Later entries are more predictable', tradable, (forecast) => band(forecast.secondsRemaining, [
-      { max: 120, label: '<2m' }, { max: 300, label: '2–5m' }, { max: 600, label: '5–10m' }, { max: Infinity, label: '10m+' },
-    ])),
-    bucketed('Volatility ratio', 'Our σ versus the σ the venue price implies', tradable, (forecast) => band(forecast.volatilityRatio, [
-      { max: 0.5, label: '<0.5× (we underestimate)' }, { max: 0.8, label: '0.5–0.8×' }, { max: 1.25, label: '0.8–1.25× (agree)' }, { max: 2, label: '1.25–2×' }, { max: Infinity, label: '2×+ (we overestimate)' },
-    ])),
-    bucketed('Venue divergence', 'Disagreement between Polymarket and Kalshi', tradable, (forecast) =>
-      forecast.kalshiProbabilityUp === undefined ? null : band(Math.abs(forecast.polymarketProbabilityUp - forecast.kalshiProbabilityUp), [
-        { max: 0.05, label: '<5pp' }, { max: 0.20, label: '5–20pp' }, { max: Infinity, label: '20pp+' },
-      ])),
-    bucketed('Settlement-average disagreement', 'Observation model versus production P(UP); not used by the live gate', tradable, (forecast) => forecast.settlementAverageEstimate ? band(Math.abs(forecast.settlementAverageEstimate.probabilityUp - forecast.probabilityUp), [
-      { max: 0.03, label: '<3pp' }, { max: 0.08, label: '3–8pp' }, { max: 0.15, label: '8–15pp' }, { max: Infinity, label: '15pp+' },
-    ]) : null),
-    bucketed('Observed cycle regime', 'Observation-only path shape at issuance; not used by the live gate', tradable, (forecast) => forecast.cycleRegime?.regime ?? null),
-    bucketed('Trend efficiency', 'Net displacement divided by total path movement', tradable, (forecast) => band(forecast.cycleRegime?.trendEfficiency ?? undefined, [
-      { max: 0.25, label: '<0.25 choppy' }, { max: 0.55, label: '0.25–0.55 mixed' }, { max: 0.8, label: '0.55–0.80 directional' }, { max: Infinity, label: '0.80+ efficient trend' },
-    ])),
-    bucketed('Sign-flip rate', 'How often nonzero 15-second moves reverse sign', tradable, (forecast) => band(forecast.cycleRegime?.signFlipRate ?? undefined, [
-      { max: 0.25, label: '<0.25 persistent' }, { max: 0.55, label: '0.25–0.55 mixed' }, { max: 0.8, label: '0.55–0.80 alternating' }, { max: Infinity, label: '0.80+ highly alternating' },
-    ])),
-    bucketed('Cycle-local volatility', 'Quadratic path variation scaled to a 15-minute move', tradable, (forecast) => band(forecast.cycleRegime?.localVolatility15mPercent ?? undefined, [
-      { max: 0.2, label: '<0.20%' }, { max: 0.4, label: '0.20–0.40%' }, { max: 0.7, label: '0.40–0.70%' }, { max: Infinity, label: '0.70%+' },
-    ])),
-  ].filter((group) => group.segments.length > 0);
+    ]) },
+  { dimension: 'Time to settlement', description: 'Later entries are more predictable', key: (forecast) => band(forecast.secondsRemaining, [
+    { max: 120, label: '<2m' }, { max: 300, label: '2–5m' }, { max: 600, label: '5–10m' }, { max: Infinity, label: '10m+' },
+  ]) },
+  { dimension: 'Volatility ratio', description: 'Our σ versus the σ the venue price implies', key: (forecast) => band(forecast.volatilityRatio, [
+    { max: 0.5, label: '<0.5× (we underestimate)' }, { max: 0.8, label: '0.5–0.8×' }, { max: 1.25, label: '0.8–1.25× (agree)' }, { max: 2, label: '1.25–2×' }, { max: Infinity, label: '2×+ (we overestimate)' },
+  ]) },
+  { dimension: 'Venue divergence', description: 'Disagreement between Polymarket and Kalshi', key: (forecast) =>
+    forecast.kalshiProbabilityUp === undefined ? null : band(Math.abs(forecast.polymarketProbabilityUp - forecast.kalshiProbabilityUp), [
+      { max: 0.05, label: '<5pp' }, { max: 0.20, label: '5–20pp' }, { max: Infinity, label: '20pp+' },
+    ]) },
+  { dimension: 'Settlement-average disagreement', description: 'Observation model versus production P(UP); not used by the live gate', key: (forecast) => forecast.settlementAverageEstimate ? band(Math.abs(forecast.settlementAverageEstimate.probabilityUp - forecast.probabilityUp), [
+    { max: 0.03, label: '<3pp' }, { max: 0.08, label: '3–8pp' }, { max: 0.15, label: '8–15pp' }, { max: Infinity, label: '15pp+' },
+  ]) : null },
+  { dimension: 'Observed cycle regime', description: 'Observation-only path shape at issuance; not used by the live gate', key: (forecast) => forecast.cycleRegime?.regime ?? null },
+  { dimension: 'Trend efficiency', description: 'Net displacement divided by total path movement', key: (forecast) => band(forecast.cycleRegime?.trendEfficiency ?? undefined, [
+    { max: 0.25, label: '<0.25 choppy' }, { max: 0.55, label: '0.25–0.55 mixed' }, { max: 0.8, label: '0.55–0.80 directional' }, { max: Infinity, label: '0.80+ efficient trend' },
+  ]) },
+  { dimension: 'Sign-flip rate', description: 'How often nonzero 15-second moves reverse sign', key: (forecast) => band(forecast.cycleRegime?.signFlipRate ?? undefined, [
+    { max: 0.25, label: '<0.25 persistent' }, { max: 0.55, label: '0.25–0.55 mixed' }, { max: 0.8, label: '0.55–0.80 alternating' }, { max: Infinity, label: '0.80+ highly alternating' },
+  ]) },
+  { dimension: 'Cycle-local volatility', description: 'Quadratic path variation scaled to a 15-minute move', key: (forecast) => band(forecast.cycleRegime?.localVolatility15mPercent ?? undefined, [
+    { max: 0.2, label: '<0.20%' }, { max: 0.4, label: '0.20–0.40%' }, { max: 0.7, label: '0.40–0.70%' }, { max: Infinity, label: '0.70%+' },
+  ]) },
+];
+
+function buildSegments(resolved: TrackedForecast[]): SegmentGroup[] {
+  const tradable = resolved.filter((forecast) => forecast.realizedReturn !== undefined);
+  if (!tradable.length) return [];
+  return SEGMENT_DIMENSIONS
+    .map(({ dimension, description, key }) => bucketed(dimension, description, tradable, key))
+    .filter((group) => group.segments.length > 0);
 }
 
 export function summarizePerformance(forecasts: TrackedForecast[]): PerformanceSummary {
@@ -364,17 +398,9 @@ export function summarizePerformance(forecasts: TrackedForecast[]): PerformanceS
     currentCycleStreak,
     observedCalculations: policy.length,
     resolvedCalculations: resolved.length,
-    benchmarks: [
-      // Scored on the buys taken, which asks the question that matters: on the contracts we chose,
-      // did our estimate beat the price we paid?
-      score('Money Noodle model', resolved, (forecast) => forecast.probabilityUp),
-      score('Model + venue blend', resolved, (forecast) => forecast.blendedProbabilityUp),
-      score('Contract basis only', resolved, (forecast) => forecast.basisProbabilityUp),
-      score('Settlement-average observation model', resolved, (forecast) => forecast.settlementAverageEstimate?.probabilityUp),
-      score('Polymarket price', resolved, (forecast) => forecast.polymarketProbabilityUp),
-      score('Kalshi price', resolved, (forecast) => forecast.kalshiProbabilityUp),
-      score('Coin flip (50/50)', resolved, () => 0.5),
-    ].filter((benchmark) => benchmark.resolved > 0),
+    benchmarks: BENCHMARK_SOURCES
+      .map(({ label, probability }) => score(label, resolved, probability))
+      .filter((benchmark) => benchmark.resolved > 0),
     edgeBuckets: edgeBuckets(resolved),
     segments: buildSegments(resolved),
     missedBuyCounterfactual: missedBuyCounterfactual(forecasts),
@@ -393,7 +419,7 @@ export function summarizePerformance(forecasts: TrackedForecast[]): PerformanceS
     byAsset: slices(resolved, (forecast) => forecast.symbol),
     byDirection: slices(resolved, (forecast) => forecast.direction),
     byModelVersion: slices(resolved, (forecast) => forecast.modelVersion),
-    byConfidenceBucket: slices(resolved, (forecast) => forecast.confidence >= 0.75 ? '75%+' : forecast.confidence >= 0.65 ? '65–74%' : forecast.confidence >= 0.57 ? '57–64%' : '<57%'),
+    byConfidenceBucket: slices(resolved, confidenceBucket),
     timeline: downsamplePerformanceTimeline(timeline),
     // Ties decide which rows make the top 8 at all, so this needs the total order as much as the streaks do.
     recent: [...policy].sort((a, b) =>
