@@ -170,18 +170,38 @@ same correlated window would silently multiply intended exposure.
 
 ## 8. Exit
 
-**A resting reduce-only limit sell at the high mark, placed as soon as the entry fills.**
+**A two-second poll of the owned side's bid, submitting a reduce-only IOC at the mark when it is reached.**
 
-The strategy's whole premise is transient excursions. Polling cannot see them — a 5¢→85¢→5¢ round trip
-inside 90 seconds is invisible to a 15-second poll, let alone the 52-second sampling that exists. A resting
-order fills on the spike whether or not anything was watching, and moves the monitoring burden to the venue.
+This was designed as a resting reduce-only GTC limit placed at entry fill, which would have filled on a
+spike unattended. **Kalshi refuses that combination.** Verified against the production API on 2026-08-15
+with a 0.01-contract probe at 95¢ against a 9¢ bid:
 
-This is new machinery: the edge policy exits with reduce-only IOC at decision time, and this is a GTC
-reduce-only limit. It remains strictly reduce-only and so cannot create or reverse exposure.
+```
+400 invalid_order: "reduce_only can only be used with IoC orders"
+```
 
-An unfilled resting sell at close simply expires and the position settles normally. **There is no fallback
-exit and no stop-loss.** A mid-window "sell at any price" would forfeit the thesis, and its absence has a
-useful structural consequence (§9).
+Reduce-only is the invariant that matters most here — a sell that is not capped by the position is a sell
+that can open reverse exposure — so it is the resting order that gives way, not the safety property.
+
+The replacement polls, which the original design rejected on the grounds that a round trip inside 90
+seconds is invisible to a 15-second poll. That objection was to the *cadence*, not to polling: at two
+seconds, a 90-second excursion is sampled roughly 45 times, and only a spike lasting under two seconds is
+missed. Paper maker management already runs on exactly this cadence, so it is a proven load rather than a
+new one, and at most three open positions means at most three quote reads per tick.
+
+Two consequences are worth stating rather than discovering later:
+
+- **The exit now depends on the process being alive.** A resting order would have worked through a crash,
+  a restart, or a network partition; a poller does not. An unfilled position simply settles, so the failure
+  mode is a missed profit rather than an unbounded loss, but it is a real cost of the change.
+- **The reduce-only IOC path already exists and is tested.** `placeKalshiSell` is the same primitive the
+  edge policy's standalone exits and switches use, so this adds a poller rather than new venue machinery.
+
+The submitted limit is the mark, so a bid that retreats between observation and submission produces no fill
+rather than a worse one; the next tick re-evaluates.
+
+An unfilled position at close simply settles. **There is no fallback exit and no stop-loss.** A mid-window
+"sell at any price" would forfeit the thesis, and its absence has a useful structural consequence (§9).
 
 ## 9. Re-entry
 

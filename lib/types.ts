@@ -1503,14 +1503,18 @@ export interface PaperOrder {
   exitPending?: boolean;
   exitVenueOrderId?: string;
   /**
-   * Resting reduce-only limit sell, the long-shot policy's only exit. It reuses `exitClientOrderId` and
-   * `exitVenueOrderId` deliberately, so startup and periodic reconciliation already see it as a tracked
-   * order rather than an unknown resting one that would correctly fail closed.
+   * Long-shot policy exit target in force for this position, recorded so a later mark change cannot be
+   * mistaken for the one this order actually traded under.
    */
-  restingExitLimitCents?: number;
-  restingExitCount?: number;
-  restingExitPlacedAt?: string;
-  restingExitCanceledAt?: string;
+  exitTargetCents?: number;
+  /**
+   * Highest owned-side bid observed while this position was open, sampled every two seconds.
+   *
+   * Recorded on every tick rather than only on a fill: it is what lets every candidate exit mark be
+   * evaluated from one dataset afterwards. Without it the only recoverable fact is whether the single
+   * mark in force was reached, and re-choosing the mark would need another month of collection.
+   */
+  peakOwnedSideBidCents?: number;
   exitPrice?: number;
   exitFeeCents?: number;
   saleProceedsCents?: number;
