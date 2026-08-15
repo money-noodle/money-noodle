@@ -84,6 +84,27 @@ describe('maker first-passage validation report', () => {
     expect(report.adaptiveExecution.meanTakerCounterfactualReturn).toBeCloseTo(11 / 9);
   });
 
+  it('reports matched-live overlays without changing independent paper outcomes', () => {
+    const liveOnly = order(0.5, 0, {
+      executionMode: 'paper', status: 'unfilled', matchedLiveFill: {
+        version: 'matched-live-fill-shadow-v1', liveOrderId: 'live-1', capturedAt: '2026-01-01T00:01:12Z',
+        quantity: 0.2, fillPrice: 0.44, purchaseCents: 8.8, feeCents: 0, stakeCents: 8.8,
+      },
+    });
+    const both = order(0.5, 0.1, {
+      executionMode: 'paper', status: 'open', matchedLiveFill: {
+        version: 'matched-live-fill-shadow-v1', liveOrderId: 'live-2', capturedAt: '2026-01-01T00:01:12Z',
+        quantity: 0.1, fillPrice: 0.46, purchaseCents: 4.6, feeCents: 0, stakeCents: 4.6,
+      },
+    });
+    const matched = buildMakerFillReport([liveOnly, both]).matchedLivePaper;
+    expect(matched).toMatchObject({
+      matchedIntents: 2, independentPaperFills: 1, liveOnlyFills: 1, bothFilled: 1,
+    });
+    expect(matched.meanMatchedQuantity).toBeCloseTo(0.15);
+    expect(matched.meanLiveFillPrice).toBeCloseTo(0.45);
+  });
+
   it('scores DOWN fills against DOWN outcomes and side probability', () => {
     const down = order(0.5, 0.2, {
       side: 'DOWN', modelProbabilityUp: 0.2, status: 'won', outcome: 'DOWN',

@@ -1389,6 +1389,24 @@ export interface PaperOrder {
   shadowTakerAllInCents?: number;
   shadowTakerQuantity?: number;
   /**
+   * Separate authoritative-fill overlay for a contemporaneous paper intent. It never changes the
+   * independent paper status or bankroll; analysts can compare this result with the queue simulation
+   * without pretending live selection/fill evidence was available to every paper signal.
+   */
+  matchedLiveFill?: {
+    version: 'matched-live-fill-shadow-v1';
+    liveOrderId: string;
+    liveVenueOrderId?: string;
+    capturedAt: string;
+    quantity: number;
+    fillPrice: number;
+    purchaseCents: number;
+    feeCents: number;
+    stakeCents: number;
+  };
+  /** Reverse link retained on the live record when a contemporaneous paper intent existed. */
+  matchedPaperOrderId?: string;
+  /**
    * All-in cents actually reserved from the budget at issuance, before any fill revised `stakeCents`
    * down to what the maker really paid. This is the operator's authorization ceiling, so it is what
    * reconciliation compares a recovered venue fill cost against. It is deliberately its own field:
@@ -1490,6 +1508,15 @@ export interface MakerExecutionSegment {
 }
 
 export interface MakerFillReport {
+  /** Authoritative live fills overlaid on contemporaneous paper intents, never mixed into paper P&L. */
+  matchedLivePaper: {
+    matchedIntents: number;
+    independentPaperFills: number;
+    liveOnlyFills: number;
+    bothFilled: number;
+    meanMatchedQuantity: number | null;
+    meanLiveFillPrice: number | null;
+  };
   adaptiveExecution: {
     policyVersion: string;
     shadowEvaluations: number;

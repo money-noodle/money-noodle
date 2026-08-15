@@ -7,14 +7,14 @@
 
 Money Noodle is operational as a local research dashboard, continuous paper shadow trader, public paper-track-record publisher, and explicitly armed live Kalshi trader. Core UP/YES and DOWN/NO entry, managed maker execution, paper maker mirroring, signed Kalshi reconciliation, quiescent pause/drain, loss gates, budget epochs, provider permissions, contract provenance, target integrity, standalone reduce-only exits, protected switching, model evaluation, and immutable promotion accounting are implemented.
 
-The system is mechanically capable. The unresolved question is economic: current evidence does not justify stake expansion, taker execution, looser entry gates, queue-aware execution changes, or adding a second live venue. The next work should prioritize storage residency and decision-grade evidence over new trading features.
+The system is mechanically capable. The unresolved question is economic: current evidence does not justify stake expansion, taker execution, looser entry gates, queue-aware live gates, or adding a second live venue. The next work should prioritize storage residency and decision-grade evidence over new trading features.
 
 | Area | Status |
 | --- | --- |
 | Dashboard and public paper track record | Functional locally and through optional Postgres projection |
 | Forecast and performance tracking | Functional and deterministic; large forecast history is now a memory-residency risk rather than a latency one |
 | Live execution | Kalshi live-capable and active in local control; no current open/working positions in the local ledger snapshot |
-| Paper execution | Continuous, maker-mode mirrored, independently accounted, and no longer limited to one order per cycle |
+| Paper execution | Continuous and independently accounted; exact-contract managed repricing now uses public trade/queue evidence concurrently with live |
 | Model evaluation | Automatic walk-forward scheduler and immutable manual promotion ledger implemented; latest run retained baseline |
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
 | Operational safety | Startup/periodic/manual reconciliation, quiescent drain, guarded auto-resume, loss gates, and failure injection are implemented |
@@ -49,7 +49,8 @@ Interpretation: lifetime live is slightly positive, but the current live budget 
 
 - Signed Kalshi balances, positions, orders, fills, cancellation, and v2 order submission.
 - Managed post-only maker entries for UP/YES and DOWN/NO with passive repricing, bounded retries, cancellation confirmation polling, fill/fee reconciliation, and exact sub-cent accounting.
-- Paper execution now mirrors the managed maker lifecycle instead of assuming immediate ask fills. Paper uses its own two-attempt maker retry ceiling by default and may submit every paper-selected candidate in one cycle until the configured portfolio, correlation, bankroll, or provider-funding constraints bind; live remains serialized one order at a time.
+- Paper execution now mirrors live's exact-contract managed maker pricing instead of assuming immediate ask fills or holding one stale dashboard bid. A shared pure state machine chooses the refreshed initial passive limit and all progressive reprices. Paper polls independently every two seconds while live management runs concurrently, keeps live's issuance-sized quantity, and requires opposite-outcome public taker prints to consume displayed queue-ahead volume; ask touch alone is telemetry, not a fill. Incomplete terminal trade evidence is excluded rather than scored as a miss. The two-attempt paper retry ceiling, portfolio/correlation/funding limits, and separate bankroll remain unchanged.
+- Contemporaneous paper intents receive a separate `matched-live-fill-shadow-v1` overlay when live fills authoritatively. It is capped at observed live and requested paper quantity and records exact live price/fee terms, but cannot alter the independent paper status, budget, P&L, or public track record. The maker report exposes matched, both-filled, and live-only counts without blending the lanes.
 - Explicit live arming, environment opt-in, kill switch, pause/resume, per-trade cap, order-rate cap, budget allocation, loss stops, and automatic safety suspension on ambiguous failures.
 - Pause is a quiescent drain: withdraw intent, serialize behind execution, cancel/confirm managed remainders, reconcile authoritatively, and report restart-safe only when no working or uncertain transaction remains.
 - Startup and periodic reconciliation read venue orders, fills, positions, resting orders, and cash before live execution. Managed remainders are canceled/confirmed; contradictory state fails closed. Prior partial reduce-only exits are included when validating original entry fills, so reconciliation does not replay the same exit or compare full acquisition history against only the open remainder. The fill-cost ceiling is the `reservedStakeCents` authorization captured at issuance, so repricing a reporting-only shadow field cannot move a fail-closed safety threshold.
@@ -130,13 +131,14 @@ No behavior change is justified solely from the small live profit-reversal cohor
 
 ### 4. Accumulate and Evaluate Maker Queue/Depth Evidence
 
-Instrumentation is implemented; the next step is evidence, not execution changes.
+Instrumentation and the queue-aware paper simulator are implemented; the next step is held-out evidence, not live execution changes. Before this deployment, same-signal paper/live maker agreement was only 29.7% across 37 paired attempts (19 live-only fills and 7 paper-only fills), which is the baseline the new independent and matched-live lanes must improve on prospectively.
 
 Remaining work:
 
 - Segment fill and return by displayed-ahead proxy, imbalance, repricing path, resting duration, profit state, probability deterioration, asset, side, and time remaining.
 - Compare accepted filled orders with accepted no-fills by settlement window.
-- Recalibrate maker fill probability only after enough prospective fills and no-fills exist.
+- Measure independent-paper/live agreement and disagreements against the separately stored matched-live overlay; never substitute the selected live fill for the independent paper result.
+- Recalibrate maker fill probability only after enough prospective fills and no-fills exist under `paper-managed-maker-trade-queue-v2`.
 - Keep production `maker` execution unless maker/taker shadow results pass strict held-out gates.
 
 Forbidden for now: depth-aware sizing, more retries, taker promotion, stale maker-to-taker fallback, or queue-aware live gates.
@@ -193,7 +195,7 @@ These are useful, but lower priority than storage, evaluation, exits, and maker 
 These were previously listed as remaining work and are now implemented:
 
 - Accepted-order `not_found` consistency handling and separated issuance/approved/submitted/amended/fill prices.
-- Maker-execution paper shadow and maker-shadow correction.
+- Exact-contract maker-execution paper shadow, shared live/paper repricing transitions, public trade/queue fill evidence, and separate matched-live overlays.
 - Explicit averaging-window parsing, Kraken-to-venue reference drift, and target-integrity reporting.
 - Complete position-lifecycle, liquidation, queue/depth, and path observations.
 - Versioned HOLD/EXIT/SWITCH action counterfactuals.

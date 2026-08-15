@@ -215,7 +215,19 @@ export function buildMakerFillReport(orders: PaperOrder[], forecasts: TrackedFor
   const restingObservations = auditedAttempts.flatMap((order) => order.entryExecutionObservations ?? [])
     .filter((observation) => observation.restingDurationMs !== undefined);
   const lifecycleOrders = orders.filter((order) => order.executionMode === 'live' && order.positionObservations?.length);
+  const matchedPaper = orders.filter((order) => order.executionMode === 'paper' && Boolean(order.matchedLiveFill));
+  const independentlyFilledMatchedPaper = matchedPaper.filter((order) => (order.filledCount ?? 0) > 0);
   return {
+    matchedLivePaper: {
+      matchedIntents: matchedPaper.length,
+      independentPaperFills: independentlyFilledMatchedPaper.length,
+      liveOnlyFills: matchedPaper.length - independentlyFilledMatchedPaper.length,
+      bothFilled: independentlyFilledMatchedPaper.length,
+      meanMatchedQuantity: matchedPaper.length
+        ? matchedPaper.reduce((sum, order) => sum + order.matchedLiveFill!.quantity, 0) / matchedPaper.length : null,
+      meanLiveFillPrice: matchedPaper.length
+        ? matchedPaper.reduce((sum, order) => sum + order.matchedLiveFill!.fillPrice, 0) / matchedPaper.length : null,
+    },
     adaptiveExecution: {
       policyVersion: shadowEvaluations.at(-1)?.entryExecutionDecision?.policyVersion ?? 'maker-taker-adaptive-shadow-v1',
       shadowEvaluations: shadowEvaluations.length, takerRecommendations: takerRecommendations.length,

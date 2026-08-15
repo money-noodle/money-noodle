@@ -1,0 +1,156 @@
+import { initialManagedMakerPrice, MAKER_MANAGEMENT_CHECKS, MAKER_MANAGEMENT_POLL_MS, nextManagedMakerPrice, type ManagedMakerQuote } from './managed-maker';
+import { selectedSideDepth } from './order-book-depth';
+import type { EntryExecutionObservation, PositionSide } from './types';
+import type { KalshiTradePrint } from './kalshi-market-data';
+
+export interface PaperMakerQueueState {
+  side: PositionSide;
+  requestedCount: number;
+  currentLimit: number;
+  queueAhead?: number;
+  filledCount: number;
+  purchaseCents: number;
+  observedTradeIds: Set<string>;
+}
+
+export interface PaperMakerSimulationResult {
+  submittedAt: string;
+  completedAt: string;
+  restingUntil: string;
+  initialPrice: number;
+  finalPrice: number;
+  filledCount: number;
+  averagePrice: number;
+  purchaseCents: number;
+  evidenceComplete: boolean;
+  observations: EntryExecutionObservation[];
+}
+
+export interface PaperMakerSimulationDependencies {
+  quote: () => Promise<ManagedMakerQuote>;
+  tradesSince: (sinceMs: number) => Promise<KalshiTradePrint[]>;
+  wait?: (milliseconds: number) => Promise<unknown>;
+  now?: () => number;
+  checks?: number;
+  pollMs?: number;
+}
+
+/**
+ * Applies aggressive public trade prints to our conservative queue proxy. A selected-side resting bid
+ * is consumed by a taker buying the opposite outcome. Ask touch alone is deliberately not a fill.
+ */
+export function applyTradePrintsToPaperQueue(state: PaperMakerQueueState, trades: KalshiTradePrint[], acceptedAtMs: number): void {
+  const consumingTakerSide = state.side === 'UP' ? 'no' : 'yes';
+  for (const trade of [...trades].sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.id.localeCompare(b.id))) {
+    if (state.observedTradeIds.has(trade.id)) continue;
+    state.observedTradeIds.add(trade.id);
+    if (Date.parse(trade.at) + 1e-6 < acceptedAtMs || trade.takerSide !== consumingTakerSide) continue;
+    const selectedTradePrice = state.side === 'UP' ? trade.yesPrice : trade.noPrice;
+    if (selectedTradePrice > state.currentLimit + 1e-9 || state.queueAhead === undefined) continue;
+    let available = trade.count;
+    const ahead = Math.min(state.queueAhead, available);
+    state.queueAhead = Math.max(0, state.queueAhead - ahead);
+    available -= ahead;
+    if (available <= 1e-8) continue;
+    const fill = Math.min(available, state.requestedCount - state.filledCount);
+    if (fill <= 1e-8) continue;
+    // Had our superior/equal bid really been present, an aggressive seller would execute at our limit,
+    // not at the lower print produced by a book that necessarily omits the hypothetical paper order.
+    state.filledCount += fill;
+    state.purchaseCents += fill * state.currentLimit * 100;
+    if (state.filledCount + 1e-8 >= state.requestedCount) {
+      state.filledCount = state.requestedCount;
+      break;
+    }
+  }
+}
+
+/** Independent two-second paper manager using live's exact pricing path and public queue/trade evidence. */
+export async function simulateManagedPaperMaker(input: {
+  side: PositionSide;
+  requestedCount: number;
+  maximumPrice: number;
+  requestedStart?: number;
+}, dependencies: PaperMakerSimulationDependencies): Promise<PaperMakerSimulationResult> {
+  const now = dependencies.now ?? Date.now;
+  const wait = dependencies.wait ?? ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  const checks = dependencies.checks ?? MAKER_MANAGEMENT_CHECKS;
+  const pollMs = dependencies.pollMs ?? MAKER_MANAGEMENT_POLL_MS;
+  const initialQuote = await dependencies.quote();
+  const initialPrice = initialManagedMakerPrice({
+    quote: initialQuote, maximumPrice: input.maximumPrice, requestedStart: input.requestedStart,
+  });
+  if (!(initialPrice > 0)) throw new Error(`No passive paper ${input.side} bid fits below the exact-contract ask.`);
+  const acceptedAtMs = now();
+  const submittedAt = new Date(acceptedAtMs).toISOString();
+  const restingUntil = new Date(acceptedAtMs + checks * pollMs).toISOString();
+  const initialDepth = selectedSideDepth(initialQuote.orderBook, input.side, initialQuote.bid, initialQuote.ask, initialPrice);
+  const observations: EntryExecutionObservation[] = [{
+    at: submittedAt, event: 'paper_submitted', selectedBid: initialQuote.bid, selectedAsk: initialQuote.ask,
+    spread: initialQuote.ask - initialQuote.bid, limitPrice: initialPrice, remainingCount: input.requestedCount,
+    touched: initialQuote.ask <= initialPrice + 1e-9, ...initialDepth,
+  }];
+  const state: PaperMakerQueueState = {
+    side: input.side, requestedCount: input.requestedCount, currentLimit: initialPrice,
+    queueAhead: initialDepth.displayedAhead, filledCount: 0, purchaseCents: 0, observedTradeIds: new Set(),
+  };
+  let latestQuote = initialQuote;
+  let finalTradeReadSucceeded = false;
+
+  for (let attempt = 0; attempt < checks; attempt += 1) {
+    await wait(pollMs);
+    const tradeRead = dependencies.tradesSince(acceptedAtMs);
+    const quoteRead = attempt < checks - 1 ? dependencies.quote() : Promise.resolve<ManagedMakerQuote | undefined>(undefined);
+    const [tradeResult, quoteResult] = await Promise.allSettled([tradeRead, quoteRead]);
+    finalTradeReadSucceeded = tradeResult.status === 'fulfilled';
+    if (tradeResult.status === 'fulfilled') applyTradePrintsToPaperQueue(state, tradeResult.value, acceptedAtMs);
+    if (state.filledCount + 1e-8 >= state.requestedCount) break;
+    if (attempt >= checks - 1 || quoteResult.status !== 'fulfilled' || !quoteResult.value) continue;
+
+    latestQuote = quoteResult.value;
+    const depth = selectedSideDepth(latestQuote.orderBook, input.side, latestQuote.bid, latestQuote.ask, state.currentLimit);
+    observations.push({
+      at: new Date(now()).toISOString(), event: 'management_quote', selectedBid: latestQuote.bid,
+      selectedAsk: latestQuote.ask, spread: latestQuote.ask - latestQuote.bid, limitPrice: state.currentLimit,
+      filledCount: Number(state.filledCount.toFixed(2)), remainingCount: Number((input.requestedCount - state.filledCount).toFixed(2)),
+      touched: latestQuote.ask <= state.currentLimit + 1e-9, ...depth,
+    });
+    if (state.queueAhead === undefined && depth.displayedAhead !== undefined) state.queueAhead = depth.displayedAhead;
+    const nextPrice = nextManagedMakerPrice({
+      quote: latestQuote, maximumPrice: input.maximumPrice, currentPrice: state.currentLimit,
+      managementAttempt: attempt, managementChecks: checks,
+    });
+    if (nextPrice <= state.currentLimit + 1e-10) continue;
+    state.currentLimit = nextPrice;
+    const amendedDepth = selectedSideDepth(latestQuote.orderBook, input.side, latestQuote.bid, latestQuote.ask, nextPrice);
+    // Moving up loses the old queue position and joins behind every displayed bid at the new price or
+    // better. This is intentionally conservative; private queue rank is not observable.
+    state.queueAhead = amendedDepth.displayedAhead;
+    observations.push({
+      at: new Date(now()).toISOString(), event: 'amend_accepted', selectedBid: latestQuote.bid,
+      selectedAsk: latestQuote.ask, spread: latestQuote.ask - latestQuote.bid, limitPrice: nextPrice,
+      filledCount: Number(state.filledCount.toFixed(2)), remainingCount: Number((input.requestedCount - state.filledCount).toFixed(2)),
+      touched: latestQuote.ask <= nextPrice + 1e-9, ...amendedDepth,
+    });
+  }
+
+  const completedAtMs = now();
+  const filledCount = Number(state.filledCount.toFixed(2));
+  const averagePrice = state.filledCount > 0 ? state.purchaseCents / state.filledCount / 100 : 0;
+  observations.push(filledCount > 0 ? {
+    at: new Date(completedAtMs).toISOString(), event: 'paper_fill', selectedBid: latestQuote.bid,
+    selectedAsk: latestQuote.ask, spread: latestQuote.ask - latestQuote.bid, limitPrice: state.currentLimit,
+    filledCount, remainingCount: 0, restingDurationMs: completedAtMs - acceptedAtMs,
+    touched: latestQuote.ask <= state.currentLimit + 1e-9,
+  } : {
+    at: new Date(completedAtMs).toISOString(), event: 'paper_expired', limitPrice: state.currentLimit,
+    filledCount: 0, remainingCount: 0, restingDurationMs: completedAtMs - acceptedAtMs,
+    reason: finalTradeReadSucceeded ? 'No queue-qualified aggressive trade volume reached the simulated order.' : 'Final public trade evidence was unavailable; this attempt is not classified as a fill miss.',
+  });
+  return {
+    submittedAt, completedAt: new Date(completedAtMs).toISOString(), restingUntil,
+    initialPrice, finalPrice: state.currentLimit, filledCount,
+    averagePrice, purchaseCents: state.purchaseCents, evidenceComplete: finalTradeReadSucceeded,
+    observations,
+  };
+}

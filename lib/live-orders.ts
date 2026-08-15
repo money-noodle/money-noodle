@@ -1,8 +1,14 @@
 import 'server-only';
 import { kalshiConfigured, kalshiEnvironment, kalshiRequest } from './kalshi-api';
-import { MANAGED_MAKER_HORIZON_SECONDS } from './maker-fill-model';
 import { observeKalshiOrderBook } from './kalshi-depth';
+import {
+  MAKER_MANAGEMENT_CHECKS, MAKER_MANAGEMENT_POLL_MS, floorToValidKalshiPrice,
+  initialManagedMakerPrice, nextManagedMakerPrice,
+  selectedManagedMakerQuote,
+} from './managed-maker';
 import { selectedSideDepth } from './order-book-depth';
+
+export { backOffValidKalshiPrice, floorToValidKalshiPrice } from './managed-maker';
 import type { BinaryOrderBook, EntryExecutionObservation, PositionSide } from './types';
 
 /**
@@ -75,8 +81,6 @@ interface KalshiFill {
 interface KalshiFillsResponse { fills?: KalshiFill[] }
 
 const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-const MAKER_MANAGEMENT_CHECKS = 6;
-const MAKER_MANAGEMENT_POLL_MS = MANAGED_MAKER_HORIZON_SECONDS * 1000 / MAKER_MANAGEMENT_CHECKS;
 const CANCELLATION_CONFIRMATION_DELAYS_MS = [0, 250, 750, 1_500, 2_500];
 
 /**
@@ -102,32 +106,6 @@ export async function confirmKalshiCancellation(
     }
   }
   throw new Error(`Kalshi cancellation remains uncertain for ${venueOrderId}.`);
-}
-
-/**
- * Highest valid market price at or below a target across Kalshi's tapered ranges.
- *
- * Crypto books use 0.1c ticks below 10c, 1c ticks in the middle, then 0.1c above 90c. Reusing the
- * bid's tick after a reprice crosses 10c/90c creates an invalid price even though each side looked
- * valid independently.
- */
-export function floorToValidKalshiPrice(priceDollars: number, ranges?: Array<{ start: string; end: string; step: string }>): number {
-  let best = 0;
-  for (const item of ranges ?? [{ start: '0', end: '1', step: '0.01' }]) {
-    const start = Number(item.start), end = Number(item.end), step = Number(item.step);
-    if (![start, end, step].every(Number.isFinite) || step <= 0 || priceDollars + 1e-10 < start) continue;
-    const ceiling = Math.min(priceDollars, end);
-    const candidate = start + Math.floor((ceiling - start + 1e-10) / step) * step;
-    if (candidate <= priceDollars + 1e-9 && candidate <= end + 1e-9) best = Math.max(best, candidate);
-  }
-  return Number(best.toFixed(6));
-}
-
-/** Moves down by exact venue ticks, including across tapered 10c/90c boundaries. */
-export function backOffValidKalshiPrice(priceDollars: number, ticks: number, ranges?: Array<{ start: string; end: string; step: string }>): number {
-  let result = floorToValidKalshiPrice(priceDollars, ranges);
-  for (let index = 0; index < ticks && result > 0; index += 1) result = floorToValidKalshiPrice(result - 1e-8, ranges);
-  return result;
 }
 
 interface KalshiBookQuote { yesBid: number; yesAsk: number; ranges?: Array<{ start: string; end: string; step: string }>; orderBook?: BinaryOrderBook }
@@ -159,17 +137,10 @@ export function kalshiOrderBookSide(positionSide: PositionSide, operation: 'entr
   return positionSide === 'UP' ? 'ask' : 'bid';
 }
 
-function selectedRanges(side: PositionSide, ranges?: Array<{ start: string; end: string; step: string }>): Array<{ start: string; end: string; step: string }> | undefined {
-  if (side === 'UP' || !ranges) return ranges;
-  return ranges.map((range) => ({
-    start: String(1 - Number(range.end)), end: String(1 - Number(range.start)), step: range.step,
-  })).sort((a, b) => Number(a.start) - Number(b.start));
-}
-
-function selectedQuote(quote: KalshiBookQuote, side: PositionSide): { bid: number; ask: number; ranges?: Array<{ start: string; end: string; step: string }>; orderBook?: BinaryOrderBook } {
-  return side === 'UP'
-    ? { bid: quote.yesBid, ask: quote.yesAsk, ranges: selectedRanges(side, quote.ranges), orderBook: quote.orderBook }
-    : { bid: 1 - quote.yesAsk, ask: 1 - quote.yesBid, ranges: selectedRanges(side, quote.ranges), orderBook: quote.orderBook };
+function selectedQuote(quote: KalshiBookQuote, side: PositionSide) {
+  return selectedManagedMakerQuote({
+    yesBid: quote.yesBid, yesAsk: quote.yesAsk, side, ranges: quote.ranges, orderBook: quote.orderBook,
+  });
 }
 
 export function kalshiTakerEntryOrderBody(input: { ticker: string; positionSide: PositionSide; selectedLimit: number; count: number; clientOrderId: string }) {
@@ -231,12 +202,11 @@ export async function placeKalshiBuy(input: {
   let created: KalshiCreateOrderV2Response | undefined;
   for (let createAttempt = 0; createAttempt < 3 && !created; createAttempt += 1) {
     const quote = selectedQuote(await marketQuote(input.ticker), positionSide);
-    const passiveCeiling = floorToValidKalshiPrice(Math.min(maximumDollars, quote.ask - 1e-8), quote.ranges);
-    if (!(passiveCeiling > 0)) throw new Error(`No passive Kalshi ${positionSide} bid fits below the ${positionSide} ask.`);
-    const highestRequestedPassive = floorToValidKalshiPrice(Math.min(passiveCeiling, Math.max(quote.bid, requestedStart)), quote.ranges);
     // After each acknowledgement race, concede one more valid tick rather than repeatedly chasing
-    // the moving ask at the highest passive level.
-    orderPrice = backOffValidKalshiPrice(highestRequestedPassive, createAttempt, quote.ranges);
+    // the moving ask at the highest passive level. Paper calls this same pure decision.
+    orderPrice = initialManagedMakerPrice({
+      quote, maximumPrice: maximumDollars, requestedStart, createAttempt,
+    });
     if (!(orderPrice > 0)) throw new Error('No backed-off passive Kalshi bid fits below the ask.');
     await emit(quoteObservation('create_quote', quote, orderPrice));
     try {
@@ -286,12 +256,10 @@ export async function placeKalshiBuy(input: {
       if (attempt === MAKER_MANAGEMENT_CHECKS - 1) break;
 
       const quote = selectedQuote(await marketQuote(input.ticker), positionSide);
-      const passiveCeiling = floorToValidKalshiPrice(Math.min(maximumDollars, quote.ask - 1e-8), quote.ranges);
-      // Progressively traverse the passive spread; later checks follow the highest valid passive
-      // level. Quantize each target in its own tapered range, not the prior bid's range.
-      const progress = (attempt + 1) / (MAKER_MANAGEMENT_CHECKS - 1);
-      const target = Math.min(passiveCeiling, quote.bid + (passiveCeiling - quote.bid) * progress);
-      const nextPrice = floorToValidKalshiPrice(target, quote.ranges);
+      // Progressively traverse the passive spread using the same pure state transition as paper.
+      const nextPrice = nextManagedMakerPrice({
+        quote, maximumPrice: maximumDollars, currentPrice: orderPrice, managementAttempt: attempt,
+      });
       await emit(quoteObservation('management_quote', quote, orderPrice, { filledCount: filled, remainingCount: Math.max(0, input.count - filled) }));
       if (nextPrice <= orderPrice + 1e-10) continue;
       try {

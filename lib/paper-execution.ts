@@ -6,8 +6,10 @@ import { CALENDAR_EVALUATION_VERSION, calendarFixedSnapshotDue, updateCalendarEv
 import { reconcileExecutionLedger } from './execution-reconciliation';
 import { ENTRY_EXECUTION_POLICY_VERSION, entrySideProbability, evaluateEntryExecutionPolicy, makerCohortEvidence, parseEntryExecutionMode, type EntryExecutionDecision } from './entry-execution-policy';
 import { POST_EXIT_REENTRY_COOLDOWN_MS, evaluateExitPolicy } from './exit-policy';
-import { estimateMakerFill, MANAGED_MAKER_HORIZON_SECONDS } from './maker-fill-model';
+import { estimateMakerFill } from './maker-fill-model';
+import { fetchKalshiManagedMakerQuote, fetchKalshiTradePrintsSince } from './kalshi-market-data';
 import { observeKalshiOrderBook } from './kalshi-depth';
+import { simulateManagedPaperMaker, type PaperMakerSimulationResult } from './paper-maker-simulation';
 import { isFreshCalculationTimestamp } from './freshness';
 import { observationBucket } from './observation-window';
 import { selectedSideDepth } from './order-book-depth';
@@ -463,7 +465,7 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
       providerId: selected.venue,
       providerVariantId: status.tradingProviders?.find((provider) => provider.id === selected.venue)?.selectedVariantId,
       forecastModelVersion: modelVersion,
-      executionPolicyVersion: mode === 'live' ? ENTRY_EXECUTION_POLICY_VERSION : 'paper-immediate-ask-v1',
+      executionPolicyVersion: mode === 'live' ? ENTRY_EXECUTION_POLICY_VERSION : 'paper-managed-maker-trade-queue-v2',
       policyVersion: BUY_POLICY_VERSION, calculationAt, side,
       probabilityUp: prediction.modelProbabilityUp, probabilityDown: 1 - prediction.modelProbabilityUp,
       selectedSideProbability: sideProbability(prediction, side), confidence: prediction.confidence,
@@ -683,84 +685,101 @@ function marketFundingFor(
 
 /** Paper trading is a continuous shadow: it keeps running while live automation is paused. */
 /**
- * Re-prices a paper candidate as a resting maker order at the bid.
- *
- * Qualification still uses the actionable ask, because that is the price the edge gate must clear —
- * posting passively does not entitle the desk to assume a better entry. Only the simulated execution
- * moves to the bid, so a paper order that never gets there simply does not fill, exactly as live's do.
+ * Crash recovery for a paper manager that never reached a terminal write. A dashboard ask touch is no
+ * longer fill evidence: orphaned attempts expire and return their reservation conservatively.
  */
-export function restAtBid(order: PaperOrder, stakeLimitCents: number): PaperOrder | undefined {
-  const bid = order.bidPrice;
-  if (!(bid > 0) || !(bid < 1)) return undefined;
-  const fill = estimatePaperFill(stakeLimitCents, bid, order.venue);
-  if (!fill) return undefined;
-  const submittedAt = new Date().toISOString();
-  const submittedPrice = fill.limitPriceCents / 100;
-  return {
-    ...order,
-    status: 'pending_reservation',
-    liquidityRole: 'maker',
-    restingUntil: new Date(Date.now() + MANAGED_MAKER_HORIZON_SECONDS * 1000).toISOString(),
-    initialSubmittedPrice: submittedPrice,
-    entryExecutionObservations: [...(order.entryExecutionObservations ?? []), {
-      at: submittedAt, event: 'paper_submitted', selectedBid: order.bidPrice,
-      selectedAsk: order.issuanceAskPrice ?? order.askPrice, spread: order.issuanceSpread ?? order.spread,
-      limitPrice: submittedPrice, remainingCount: fill.quantity,
-    }],
-    quantity: fill.quantity, requestedQuantity: fill.quantity,
-    feeCents: fill.feeCents,
-    stakeCents: fill.stakeCents, potentialPayoutCents: fill.potentialPayoutCents,
-  };
-}
-
-/**
- * Advances resting paper orders against the current book: filled when the ask reaches the resting
- * limit, unfilled when the horizon expires or the contract closes first. The reserved stake is
- * returned on a miss, so an unfilled attempt costs the mirror nothing but the opportunity.
- */
-export function resolveRestingPaperOrders(dashboard: DashboardData, ledger: Ledger): boolean {
+export function resolveRestingPaperOrders(_dashboard: DashboardData, ledger: Ledger): boolean {
   const now = Date.now();
   let changed = false;
   for (const order of ledger.orders) {
     if (order.executionMode !== 'paper' || order.status !== 'pending_reservation') continue;
-    const prediction = dashboard.predictions.find((item) => item.symbol === order.symbol);
-    const quote = prediction ? venueQuote(prediction, order.venue, order.side) : undefined;
-    const submittedPrice = order.initialSubmittedPrice ?? order.askPrice;
-    const submittedAtMs = Date.parse(order.entryExecutionObservations?.find((item) => item.event === 'paper_submitted')?.at ?? order.createdAt);
-    const restingDurationMs = Number.isFinite(submittedAtMs) ? Math.max(0, now - submittedAtMs) : undefined;
-    const reached = quote && quote.closesAt === order.closesAt && quote.ask <= submittedPrice + 1e-9;
-    if (reached) {
-      order.status = 'open';
-      order.filledCount = order.quantity;
-      order.authoritativeFillPrice = submittedPrice;
-      const depth = order.venue === 'kalshi'
-        ? selectedSideDepth(observeKalshiOrderBook(order.contractId), order.side, quote.bid, quote.ask, submittedPrice) : {};
-      order.entryExecutionObservations = [...(order.entryExecutionObservations ?? []), {
-        at: dashboard.generatedAt, event: 'paper_fill', selectedBid: quote.bid, selectedAsk: quote.ask,
-        spread: quote.ask - quote.bid, limitPrice: submittedPrice, filledCount: order.quantity, remainingCount: 0,
-        restingDurationMs, touched: true, ...depth,
-      }];
-      changed = true;
-      continue;
-    }
     const expired = (order.restingUntil ? Date.parse(order.restingUntil) <= now : true)
       || Date.parse(order.closesAt) <= now;
-    if (expired) {
-      order.status = 'unfilled';
-      order.noFillReason = 'rested_no_fill';
-      order.makerCompletedAt = new Date(now).toISOString();
-      order.entryExecutionObservations = [...(order.entryExecutionObservations ?? []), {
-        at: order.makerCompletedAt, event: 'paper_expired', limitPrice: submittedPrice,
-        filledCount: 0, remainingCount: 0, restingDurationMs,
-      }];
-      ledger.paperBudget.availableCents += order.stakeCents;
-      changed = true;
-    }
+    if (!expired) continue;
+    const submittedPrice = order.initialSubmittedPrice ?? order.bidPrice;
+    const submittedAtMs = Date.parse(order.entryExecutionObservations?.find((item) => item.event === 'paper_submitted')?.at ?? order.createdAt);
+    order.status = 'unfilled';
+    order.noFillReason = 'rested_no_fill';
+    order.makerCompletedAt = new Date(now).toISOString();
+    order.reason = 'Paper manager was interrupted; no complete public trade/queue evidence survived, so no fill was manufactured.';
+    order.entryExecutionObservations = [...(order.entryExecutionObservations ?? []), {
+      at: order.makerCompletedAt, event: 'paper_expired', limitPrice: submittedPrice,
+      filledCount: 0, remainingCount: 0,
+      restingDurationMs: Number.isFinite(submittedAtMs) ? Math.max(0, now - submittedAtMs) : undefined,
+      reason: order.reason,
+    }];
+    ledger.paperBudget.availableCents += order.stakeCents;
+    changed = true;
   }
   return changed;
 }
 
-async function runPaper(dashboard: DashboardData, status: TradingControlData, ledger: Ledger, regimeGate: RegimeGateStatus, budgets: ProviderBudgetConfiguration): Promise<boolean> {
+export function applyPaperMakerSimulation(order: PaperOrder, result: PaperMakerSimulationResult, ledger: Ledger): void {
+  const reservedCents = order.stakeCents;
+  order.initialSubmittedPrice = result.initialPrice;
+  order.restingUntil = result.restingUntil;
+  order.makerCompletedAt = result.completedAt;
+  order.entryExecutionObservations = result.observations;
+  order.liquidityRole = 'maker';
+  if (result.filledCount <= 0) {
+    ledger.paperBudget.availableCents += reservedCents;
+    if (!result.evidenceComplete) {
+      order.status = 'rejected';
+      order.reason = 'Paper execution evidence was incomplete; the reservation was returned and the attempt was excluded rather than recorded as a maker miss.';
+      return;
+    }
+    order.status = 'unfilled';
+    order.noFillReason = 'rested_no_fill';
+    order.reason = 'Exact-contract paper maker received no queue-qualified aggressive trade volume during live’s managed horizon.';
+    return;
+  }
+
+  const purchaseCents = Math.ceil(result.purchaseCents - 1e-9);
+  const feeCents = venueFeeCents(order.venue, result.averagePrice * 100, result.filledCount);
+  const accountedStakeCents = purchaseCents + feeCents;
+  if (accountedStakeCents > reservedCents) throw new Error(`Simulated paper fill cost ${accountedStakeCents}c exceeded its ${reservedCents}c reservation.`);
+  order.status = 'open';
+  order.filledCount = result.filledCount;
+  order.quantity = result.filledCount;
+  order.authoritativeFillPrice = result.averagePrice;
+  order.feeCents = feeCents;
+  order.stakeCents = accountedStakeCents;
+  order.potentialPayoutCents = Math.round(result.filledCount * 100);
+  order.reason = `${result.evidenceComplete ? 'Complete' : 'Partial'} public trade-print and displayed-queue evidence simulated the managed maker fill independently of live execution.`;
+  ledger.paperBudget.availableCents += reservedCents - accountedStakeCents;
+}
+
+async function managePaperMakerOrder(order: PaperOrder, ledger: Ledger): Promise<void> {
+  try {
+    const result = await simulateManagedPaperMaker({
+      side: order.side, requestedCount: order.quantity,
+      maximumPrice: order.approvedMaximumPrice ?? order.askPrice,
+      requestedStart: order.issuanceBidPrice ?? order.bidPrice,
+    }, {
+      quote: () => fetchKalshiManagedMakerQuote(order.contractId, order.side),
+      tradesSince: (sinceMs) => fetchKalshiTradePrintsSince(order.contractId, sinceMs),
+    });
+    applyPaperMakerSimulation(order, result, ledger);
+  } catch (error) {
+    const reservedCents = order.stakeCents;
+    order.status = 'rejected';
+    order.makerCompletedAt = new Date().toISOString();
+    order.reason = `Independent paper maker simulation unavailable; reservation returned without classifying a fill miss. ${error instanceof Error ? error.message : 'Unknown simulation error'}`;
+    order.entryExecutionObservations = [...(order.entryExecutionObservations ?? []), {
+      at: order.makerCompletedAt, event: 'paper_expired', limitPrice: order.initialSubmittedPrice,
+      filledCount: 0, remainingCount: 0, reason: order.reason,
+    }];
+    ledger.paperBudget.availableCents += reservedCents;
+  }
+}
+
+async function managePaperMakerOrders(orders: PaperOrder[], ledger: Ledger): Promise<boolean> {
+  if (!orders.length) return false;
+  await Promise.all(orders.map((order) => managePaperMakerOrder(order, ledger)));
+  return true;
+}
+
+async function runPaper(dashboard: DashboardData, status: TradingControlData, ledger: Ledger, regimeGate: RegimeGateStatus, budgets: ProviderBudgetConfiguration, startedOrders: PaperOrder[] = []): Promise<boolean> {
   if (ledger.paperBudget.availableCents <= 0) return false;
   // The mirror obeys policy-level live entry rules, the adaptive regime gate included. It remains
   // independent from live operational switches so simulation continues while real-money trading is off.
@@ -814,28 +833,46 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
     if (open.length + placed >= maximumOpenPositions()) break;
     const built = eligible.find(({ order }) => order.id === choice.id);
     if (!built || ledger.paperBudget.availableCents <= 0) continue;
-    // Paper posts the same resting maker order live posts, at the bid, and fills only when the recorded
-    // ask actually reaches it. Filling at the ask was taker execution: it charged the mirror a spread and
-    // a fee live does not pay, on every trade, while missing none of the trades live misses. The
-    // always-fills benchmark is not lost — buildMakerShadow scores these same signals at the ask.
-    const currentStakeLimit = Math.min(status.control.perTradeCents, maximumPaperStakeCents(), ledger.paperBudget.availableCents);
-    const resting = restAtBid(built.order, currentStakeLimit);
-    if (!resting) continue;
+    // Reserve the same issuance-sized quantity live would submit. The independent manager refreshes
+    // the exact contract before choosing its first limit; unlike the old `restAtBid` path it does not
+    // buy extra paper quantity merely because the passive limit is cheaper than the issuance ask.
+    const resting: PaperOrder = { ...built.order, status: 'pending_reservation', liquidityRole: 'maker' };
     const funding = marketFundingFor(budgets, 'paper', orderProviderId(resting), orderMarketId(resting), ledger,
       ledger.paperBudget.availableCents, ledger.paperBudget.availableCents);
     if (resting.stakeCents > funding.spendableCents) continue;
-    if (resting.venue === 'kalshi' && resting.entryExecutionObservations?.length) {
-      Object.assign(resting.entryExecutionObservations.at(-1)!, selectedSideDepth(
-        observeKalshiOrderBook(resting.contractId), resting.side,
-        resting.issuanceBidPrice ?? resting.bidPrice, resting.issuanceAskPrice ?? resting.askPrice,
-        resting.initialSubmittedPrice,
-      ));
-    }
     ledger.paperBudget.availableCents -= resting.stakeCents;
     ledger.orders.push(resting);
+    startedOrders.push(resting);
     placed += 1;
   }
   return placed > 0;
+}
+
+/**
+ * Adds an authoritative matched-live overlay without changing the independent paper execution result.
+ * Quantity is capped at both observed live fill and the paper intent's original requested quantity.
+ */
+export function attachMatchedLiveFillShadow(orders: PaperOrder[], liveOrder: PaperOrder, capturedAt = new Date().toISOString()): boolean {
+  if (liveOrder.executionMode !== 'live' || (liveOrder.filledCount ?? 0) <= 0 || liveOrder.authoritativeFillPrice === undefined) return false;
+  const candidates = orders.filter((order) => order.executionMode === 'paper' && !order.id.includes(':exit:')
+    && order.symbol === liveOrder.symbol && order.side === liveOrder.side && order.closesAt === liveOrder.closesAt
+    && Math.abs(Date.parse(order.createdAt) - Date.parse(liveOrder.createdAt)) <= 60_000)
+    .sort((a, b) => Math.abs(Date.parse(a.createdAt) - Date.parse(liveOrder.createdAt)) - Math.abs(Date.parse(b.createdAt) - Date.parse(liveOrder.createdAt)));
+  const paperOrder = candidates[0];
+  if (!paperOrder) return false;
+  const quantity = Number(Math.min(liveOrder.filledCount ?? 0, paperOrder.requestedQuantity ?? paperOrder.quantity).toFixed(2));
+  if (!(quantity > 0)) return false;
+  const liveQuantity = liveOrder.filledCount ?? quantity;
+  const feeCents = (liveOrder.actualFeeCents ?? liveOrder.feeCents) * quantity / liveQuantity;
+  const purchaseCents = quantity * liveOrder.authoritativeFillPrice * 100;
+  paperOrder.matchedLiveFill = {
+    version: 'matched-live-fill-shadow-v1', liveOrderId: liveOrder.id,
+    liveVenueOrderId: liveOrder.venueOrderId, capturedAt, quantity,
+    fillPrice: liveOrder.authoritativeFillPrice, purchaseCents, feeCents,
+    stakeCents: purchaseCents + feeCents,
+  };
+  liveOrder.matchedPaperOrderId = paperOrder.id;
+  return true;
 }
 
 async function executePreparedLiveBuy(order: PaperOrder, status: TradingControlData, ledger: Ledger): Promise<void> {
@@ -893,6 +930,7 @@ async function executePreparedLiveBuy(order: PaperOrder, status: TradingControlD
       order.potentialPayoutCents = Math.round(fill.filledCount * 100);
       order.status = 'open';
       if (reservedCents > accountedStakeCents) await releaseTradingBudget(reservedCents - accountedStakeCents, order.venue, order.id);
+      attachMatchedLiveFillShadow(ledger.orders, order);
     } else {
       order.status = 'unfilled';
       order.noFillReason = executionStyle === 'taker' ? 'ioc_no_fill' : 'rested_no_fill';
@@ -1410,8 +1448,16 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
   // Read once per cycle: a ceiling that changed mid-cycle would size one order against the old value.
   const budgets = await getProviderBudgets({ revision: status.control.revision });
   changed = resolveRestingPaperOrders(dashboard, ledger) || changed;
-  changed = await runPaper(dashboard, status, ledger, regimeGate, budgets) || changed;
-  changed = await runLive(dashboard, status, ledger, regimeGate, budgets) || changed;
+  const startedPaperOrders: PaperOrder[] = [];
+  changed = await runPaper(dashboard, status, ledger, regimeGate, budgets, startedPaperOrders) || changed;
+  // Persist paper intent and its reservation before either manager starts. Paper then polls exact public
+  // evidence concurrently with live's signed order lifecycle, so a twelve-second live order can no
+  // longer starve a twelve-second paper order of every intermediate observation.
+  if (startedPaperOrders.length) await writeLedger(ledger);
+  const paperManagement = managePaperMakerOrders(startedPaperOrders, ledger);
+  const liveManagement = runLive(dashboard, status, ledger, regimeGate, budgets);
+  const [paperChanged, liveChanged] = await Promise.all([paperManagement, liveManagement]);
+  changed = paperChanged || liveChanged || changed;
   if (changed || ledger.lastLiveSkip?.reason !== previousSkip) await writeLedger(ledger);
 }
 
@@ -1480,7 +1526,10 @@ export function reconcileLiveExecution(options: { trigger?: 'startup' | 'manual'
         }
         if (!snapshot || !result) throw new Error('Kalshi reconciliation did not produce an authoritative snapshot.');
         if (result.issues.length) throw new Error(result.issues.join(' '));
+        const previousEntryStatus = new Map(ledger.orders.map((order) => [order.id, order.status]));
         ledger.orders = result.orders;
+        for (const recovered of ledger.orders.filter((order) => order.executionMode === 'live' && order.status === 'open'
+          && previousEntryStatus.get(order.id) !== 'open')) attachMatchedLiveFillShadow(ledger.orders, recovered);
         await writeLedger(ledger);
         // Recovered exits use the same deterministic settlement ids as normal execution. Calls are
         // idempotent against the control audit, including a crash between ledger and budget writes.
