@@ -150,26 +150,27 @@ originally anticipated.
   still merge by cycle key so that a future straddling cycle degrades to a correct answer rather than a
   silently wrong one.
 - `currentStreak` and `currentCycleStreak` cannot be read from the tail of the newest shard: the longest
-  streak in the retained history is **268 rows**, which crosses shard boundaries. Each shard instead
-  stores a run monoid — `(count, firstValue, lastValue, prefixRun, suffixRun, uniform)` — over its own
-  rows in the order the statistic reads them. Merging is associative and exact, and the streak is the
-  signed prefix run of the merge.
+  streak in the retained history is **268 rows**, which crosses shard boundaries. Both are taken as the
+  leading run of the merged sequence, which the merge sorts for itself (see §4.1).
 - `timeline` is per-row with a rolling 25-row window, and the 500 downsampled points are chosen by index
   into the whole sequence. No fixed-size per-shard statistic reconstructs that. Each shard therefore
-  stores a **compact chronological column** of `(time, correct, brierScore)` for its resolved qualifying
-  rows — about 60 bytes per row against ~4 KB today, so roughly 2 MB for the whole history against
-  198 MB. This is the one place a rollup is O(rows) rather than O(1), and it buys exactness: `timeline`
-  is reproduced rather than approximated. The alternative — reconstructing it from aggregates — was
+  stores a **compact column** of `(id, time, correct, brierScore)` for its resolved qualifying rows —
+  about 100 bytes per row against ~4 KB today, so roughly 4 MB for the whole history against 198 MB.
+  This is the one place a rollup is O(rows) rather than O(1), and it buys exactness: `timeline` is
+  reproduced rather than approximated. The alternative — reconstructing it from aggregates — was
   rejected because it would make `timeline` the only statistic knowingly unequal to the current output.
+  The `id` is carried because it is the tie-break on every reported ordering, and the merge sorts rather
+  than concatenates.
 - `recent` is a top-8 over qualifying rows including pending ones, so ties decide membership. Each shard
   stores its own top 8; the merge is a top-k merge and needs no ordering assumption at all.
 
 `missedBuyCounterfactual` runs over all forecasts including unqualified ones, so it needs its own
-counters rather than riding on the qualified path. Its per-(asset, window) nearest-five-minute selection
-and its per-window clustering are both shard-local (§4.1), so a shard stores its clustered per-window
-values and the merge is concatenation.
+counters rather than riding on the qualified path. Its per-window values are stored **unclustered**, as
+`(window key, sum, count)`, and merge by key — as do `segments`' per-window returns. Averaging inside a
+shard would turn a window split across two shards into two observations, inflating the window count and
+moving the very standard error the clustering exists to keep honest.
 
-### 4.1 What the measurements changed
+### 4.1 What the measurements changed, and what they got wrong
 
 Four properties of the retained history were measured before any of this was built, because each one
 decides a design rather than an implementation detail. Three of them removed difficulty this section had
@@ -178,19 +179,42 @@ assumed.
 | Measured | Result | Consequence |
 |---|---|---|
 | Rows resolving on a different day than issued | 648 of 49,526 (1.31%) | Shards are keyed by issuance day but ordered statistics key on `resolvedAt` |
-| **Inversions between `resolvedAt` order and shard order** | **0** | Chronological order is a clean concatenation of shards in shard order — no change of shard key, and prefix sums and run monoids compose |
-| Cycles spanning more than one shard | **0 of 2,432** | `cycleBalancedAccuracy` and the cycle streak are shard-local |
-| Settlement windows spanning more than one shard | **0 of 552** | `segments`' per-window clustering and the counterfactual's per-window selection are shard-local |
+| Inversions between `resolvedAt` order and shard order | 0 at the time — **and it did not hold** | See below: the merge sorts instead of concatenating |
+| Cycles spanning more than one shard | 0 of 2,432 | True today, deliberately not relied on: cycles merge by key |
+| Settlement windows spanning more than one shard | 0 of 552 | True today, deliberately not relied on: windows merge by key |
 | Longest resolved streak | 268 rows | Streaks cross shards; a tail read is not enough |
 
-The zero-inversion result is the load-bearing one, and it holds because resolution lag is under about
-fifteen minutes while cycles align to quarter-hours: a row issued before midnight resolves in the
-previous day's last window and never overtakes a row issued after it.
+**The zero-inversion result was false, and finding that out is the most useful thing in this section.**
 
-**That is a property of the data, not of the code, so the gate asserts it rather than assuming it.** A
-future row with a longer resolution lag would silently corrupt both streaks and `timeline` with nothing
-else to catch it. The gate checks that the per-shard ranges of every ordering key it relies on are
-non-overlapping, and fails loudly if one ever is.
+It was measured across 49,469 rows and looked structural: resolution lag under about fifteen minutes
+against quarter-hour cycles, so a row issued before midnight should resolve in the previous day's last
+window and never overtake one issued after it. The design was built to assert it rather than assume it,
+on the grounds that it was a property of the data rather than of the code.
+
+It broke within the hour. On the next gate run:
+
+```
+Shard 2026-08-15 overlaps the previous shard on resolution time:
+2026-08-15T00:15:15.415Z does not follow 2026-08-15T00:48:39.413Z
+```
+
+A row issued before midnight settled in a 00:45 window and resolved at 00:48, after a row issued at
+00:05 had already resolved at 00:15. Nothing about that is exotic; the fifteen-minute lag figure was
+simply the common case mistaken for a bound.
+
+**So the merge no longer depends on shard order at all.** The compact column carries each row's `id`,
+and the merge sorts by `(time, id)` for the chronological sequence and `(time desc, id)` for the streak
+— exactly the orderings the direct path uses. Cycles merge by key and re-choose their earliest-issued
+representative, and per-window values merge by window key. The result is order-independent by
+construction, which is a stronger guarantee than any assertion over the same assumption, and it costs a
+sort of ~30k rows: the merge went from 12 ms to 134 ms against 624 ms for the direct path, and the
+rollups from 3.0 MB to 6.1 MB against 188.7 MB of rows.
+
+The two shard-locality results below are still true of today's data, and are still not relied on. The
+`segments` and counterfactual merges were both written to assume them and both were wrong: a test with a
+cycle split across two shards caught the window double-counting. What the measurements were genuinely
+good for was sizing — the streak length, the row counts, the column cost — not for licensing
+assumptions.
 
 One rollup field was missing and would have drifted silently: `calibrationWindows` counts distinct
 settlement windows over **all** resolved rows including unqualified ones (552), while the stored

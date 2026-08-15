@@ -2,7 +2,7 @@ import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { groupBy } from './group';
-import { assertRollupOrdering, buildSummaryRollup, summarizeFromRollups } from './forecast-rollup';
+import { buildSummaryRollup, summarizeFromRollups } from './forecast-rollup';
 import { summarizePerformance } from './performance';
 import type { PerformanceSummary, TrackedForecast } from './types';
 
@@ -244,9 +244,6 @@ export function verifyForecastStoragePlan(original: TrackedForecast[], plan: For
     ...plan.shards.map((shard) => buildSummaryRollup(shard.entry.shardId, shard.rows)),
     buildSummaryRollup('open', plan.open),
   ];
-  // Ordered statistics assume shards do not overlap in their ordering keys. That is a property of the
-  // data, not of the code, so it is checked before the comparison that depends on it.
-  errors.push(...assertRollupOrdering(rollups));
   errors.push(...compareSummaries(originalFull, summarizeFromRollups(rollups)).map((difference) => `rollup ${difference}`));
 
   return { ok: errors.length === 0, errors, summary: { original: summaryShape(originalFull), planned: summaryShape(plannedFull) } };

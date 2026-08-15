@@ -28,24 +28,11 @@ import type { PerformanceSlice, PerformanceSummary, PerformanceTimelinePoint, Se
  */
 export const FORECAST_ROLLUP_VERSION = 'forecast-rollup-v1';
 
-/**
- * Run-length structure over a boolean sequence, enough to answer "how long is the run at the front"
- * after any number of merges.
- *
- * A streak cannot be read from the tail of the newest shard: the longest in the retained history is 268
- * rows and crosses shard boundaries. This monoid is exact and associative, so the answer does not depend
- * on how the history happens to be split.
- */
-export interface RunMonoid {
+/** One settlement window's contribution, kept unaveraged so windows split across shards can merge. */
+export interface WindowTotal {
+  key: string;
+  sum: number;
   count: number;
-  first: boolean;
-  last: boolean;
-  /** Length of the run at the start of the sequence. */
-  prefix: number;
-  /** Length of the run at the end, needed to join with whatever follows. */
-  suffix: number;
-  /** Whether the whole sequence is one run, in which case a merge can extend straight through it. */
-  uniform: boolean;
 }
 
 export interface LabelledCount {
@@ -55,34 +42,43 @@ export interface LabelledCount {
 }
 
 /**
- * One point of the compact chronological column that reproduces `timeline`.
+ * One row of the compact column that reproduces `timeline` and both streaks.
  *
  * `timeline` is per-row with a rolling 25-row window and its 500 reported points are chosen by index
- * into the whole sequence, so no fixed-size statistic reconstructs it. Storing three fields per row
- * costs about 60 bytes against the ~4 KB of a full row — roughly 2 MB for the whole history against
+ * into the whole sequence, so no fixed-size statistic reconstructs it. Storing four fields per row
+ * costs about 100 bytes against the ~4 KB of a full row — roughly 3 MB for the whole history against
  * 198 MB — and buys exactness rather than an approximation.
+ *
+ * `id` is carried because it is the tie-break on every ordering that feeds a reported statistic, and
+ * ties are the ordinary case here. Without it the merge would have to assume shards do not overlap in
+ * resolution time, which is not true: a row issued before midnight can resolve after one issued the
+ * following day. Carrying the id makes the merge sort the rows itself and depend on nothing.
  */
 export interface TimelineCell {
+  id: string;
   time: string;
   correct: 0 | 1;
   brier: number;
 }
 
+/**
+ * Per-cycle outcome, carrying the representative row's identity so cycles that span shards merge
+ * correctly. The representative is the earliest-issued row of the cycle, and it decides both the
+ * ordering and the outcome the cycle streak reads.
+ */
+export interface CycleOutcome {
+  cycleId: string;
+  correct: number;
+  total: number;
+  closesAt: string;
+  representativeIssuedAt: string;
+  representativeId: string;
+  representativeCorrect: boolean;
+}
+
 export interface ForecastSummaryRollup {
   version: typeof FORECAST_ROLLUP_VERSION;
   shardId: string;
-
-  /**
-   * Ranges of every ordering key the merge relies on, so the gate can assert that shards do not
-   * overlap. Chronological order being a clean concatenation of issuance-day shards is a property of
-   * the data (resolution lag under ~15 minutes against quarter-hour cycles), not of the code.
-   */
-  bounds: {
-    resolvedFirst?: string;
-    resolvedLast?: string;
-    cycleClosesFirst?: string;
-    cycleClosesLast?: string;
-  };
 
   qualified: number;
   pending: number;
@@ -103,12 +99,7 @@ export interface ForecastSummaryRollup {
   /** Normalised key over *all* resolved rows including unqualified ones, which is a larger set. */
   calibrationWindowKeys: string[];
 
-  cycleOutcomes: Array<{ cycleId: string; correct: number; total: number }>;
-
-  /** In `orderedResolved` order: resolution time descending, id ascending. */
-  resolvedRun: RunMonoid;
-  /** In `cycleOutcomes` order: close time descending, id ascending. */
-  cycleRun: RunMonoid;
+  cycleOutcomes: CycleOutcome[];
 
   benchmarks: Array<{ label: string; resolved: number; correct: number; brierSum: number; logLossSum: number }>;
   edgeBuckets: Array<{ label: string; trades: number; edgeSum: number; returnSum: number; wins: number }>;
@@ -120,16 +111,20 @@ export interface ForecastSummaryRollup {
   byConfidenceBucket: LabelledCount[];
 
   /**
-   * Per (dimension, label). `windowMeans` holds one entry per settlement window in this shard, already
-   * clustered, because windows never span shards (§4.1) and the standard error is taken across windows.
+   * Per (dimension, label), with one entry per settlement window keyed by the window itself.
+   *
+   * Deliberately not pre-averaged. Clustering inside the shard would treat a window split across two
+   * shards as two observations, which both inflates the window count and moves the standard error the
+   * clustering exists to keep honest.
    */
-  segments: Array<{ dimension: string; label: string; trades: number; predictedEdgeSum: number; wins: number; windowMeans: number[] }>;
+  segments: Array<{ dimension: string; label: string; trades: number; predictedEdgeSum: number; wins: number; windows: WindowTotal[] }>;
 
   counterfactual: {
     candidates: number;
     profitableCandidates: number;
-    windowMeans: number[];
-    bestPerWindow: number[];
+    windows: WindowTotal[];
+    /** Best candidate per window, merged by window so a split window keeps only its strongest. */
+    bestPerWindow: Array<{ key: string; edge: number; returnValue: number }>;
   };
 
   timeline: TimelineCell[];
@@ -137,37 +132,15 @@ export interface ForecastSummaryRollup {
   recent: TrackedForecast[];
 }
 
-const EMPTY_RUN: RunMonoid = { count: 0, first: false, last: false, prefix: 0, suffix: 0, uniform: true };
-
-export function runFromSequence(values: boolean[]): RunMonoid {
-  if (!values.length) return { ...EMPTY_RUN };
-  let prefix = 1;
-  while (prefix < values.length && values[prefix] === values[0]) prefix += 1;
-  let suffix = 1;
-  while (suffix < values.length && values[values.length - 1 - suffix] === values[values.length - 1]) suffix += 1;
-  return {
-    count: values.length,
-    first: values[0],
-    last: values[values.length - 1],
-    prefix,
-    suffix,
-    uniform: prefix === values.length,
-  };
-}
-
-export function mergeRuns(left: RunMonoid, right: RunMonoid): RunMonoid {
-  if (!left.count) return { ...right };
-  if (!right.count) return { ...left };
-  const joins = left.last === right.first;
-  return {
-    count: left.count + right.count,
-    first: left.first,
-    last: right.last,
-    // A prefix only grows past the boundary if the left side is entirely one run and the join matches.
-    prefix: left.uniform && joins ? left.count + right.prefix : left.prefix,
-    suffix: right.uniform && joins ? right.count + left.suffix : right.suffix,
-    uniform: left.uniform && right.uniform && joins,
-  };
+/**
+ * Length of the leading run of a sequence, signed the way both streaks report it: positive while the
+ * most recent outcomes are correct, negative while they are wrong.
+ */
+export function leadingStreak(values: boolean[]): number {
+  if (!values.length) return 0;
+  let run = 1;
+  while (run < values.length && values[run] === values[0]) run += 1;
+  return values[0] ? run : -run;
 }
 
 const resolutionTime = (forecast: TrackedForecast) => forecast.resolvedAt ?? forecast.closesAt;
@@ -215,16 +188,18 @@ function counterfactualRollup(forecasts: TrackedForecast[]): ForecastSummaryRoll
   }
   const windowValues = new Map<string, number[]>();
   for (const candidate of candidates) pushInto(windowValues, candidate.closesAt, candidate.returnValue);
-  const best = new Map<string, { edge: number; returnValue: number }>();
+  const best = new Map<string, { key: string; edge: number; returnValue: number }>();
   for (const candidate of candidates) {
     const prior = best.get(candidate.closesAt);
-    if (!prior || candidate.edge > prior.edge) best.set(candidate.closesAt, candidate);
+    if (!prior || candidate.edge > prior.edge) best.set(candidate.closesAt, { key: candidate.closesAt, edge: candidate.edge, returnValue: candidate.returnValue });
   }
   return {
     candidates: candidates.length,
     profitableCandidates: candidates.filter((item) => item.returnValue > 0).length,
-    windowMeans: [...windowValues.values()].map((values) => values.reduce((sum, value) => sum + value, 0) / values.length),
-    bestPerWindow: [...best.values()].map((item) => item.returnValue),
+    windows: [...windowValues.entries()].map(([key, values]) => ({
+      key, sum: values.reduce((sum, value) => sum + value, 0), count: values.length,
+    })),
+    bestPerWindow: [...best.values()],
   };
 }
 
@@ -245,7 +220,9 @@ function segmentRollups(resolved: TrackedForecast[]): ForecastSummaryRollup['seg
         dimension, label, trades: items.length,
         predictedEdgeSum: items.reduce((sum, item) => sum + (item.predictedEdge ?? 0), 0),
         wins: items.filter(won).length,
-        windowMeans: [...windows.values()].map((group) => group.reduce((sum, item) => sum + (item.realizedReturn ?? 0), 0) / group.length),
+        windows: [...windows.entries()].map(([key, group]) => ({
+          key, sum: group.reduce((sum, item) => sum + (item.realizedReturn ?? 0), 0), count: group.length,
+        })),
       });
     }
   }
@@ -259,35 +236,26 @@ export function buildSummaryRollup(shardId: string, rows: TrackedForecast[]): Fo
   const resolved = policy.filter((forecast) => forecast.status === 'resolved');
   const withRealized = resolved.filter((forecast) => forecast.predictedEdge !== undefined && forecast.realizedReturn !== undefined);
 
-  const resolvedCycles = new Map<string, { correct: number; total: number }>();
   const cycleGroups = new Map<string, TrackedForecast[]>();
-  for (const forecast of resolved) {
-    const key = cycleKey(forecast);
-    const current = resolvedCycles.get(key) ?? { correct: 0, total: 0 };
-    resolvedCycles.set(key, { correct: current.correct + (forecast.correct ? 1 : 0), total: current.total + 1 });
-    pushInto(cycleGroups, key, forecast);
-  }
+  for (const forecast of resolved) pushInto(cycleGroups, cycleKey(forecast), forecast);
 
-  // Descending resolution time with an ascending id tie-break: this is the order `currentStreak` reads,
-  // and it is deliberately not the reverse of the chronological order, which breaks ties the same way.
-  const orderedResolved = [...resolved].sort((a, b) =>
-    new Date(resolutionTime(b)).getTime() - new Date(resolutionTime(a)).getTime() || byIdTieBreak(a, b));
-  const cycleOutcomeRows = [...cycleGroups.values()]
-    .map((items) => [...items].sort((a, b) => new Date(a.issuedAt).getTime() - new Date(b.issuedAt).getTime() || byIdTieBreak(a, b))[0])
-    .sort((a, b) => new Date(b.closesAt).getTime() - new Date(a.closesAt).getTime() || byIdTieBreak(a, b));
-
-  const chronological = [...resolved].sort((a, b) =>
-    new Date(resolutionTime(a)).getTime() - new Date(resolutionTime(b)).getTime() || byIdTieBreak(a, b));
+  const cycleOutcomes: CycleOutcome[] = [...cycleGroups.entries()].map(([cycleId, items]) => {
+    const representative = [...items].sort((a, b) =>
+      new Date(a.issuedAt).getTime() - new Date(b.issuedAt).getTime() || byIdTieBreak(a, b))[0];
+    return {
+      cycleId,
+      correct: items.filter((item) => item.correct).length,
+      total: items.length,
+      closesAt: representative.closesAt,
+      representativeIssuedAt: representative.issuedAt,
+      representativeId: representative.id,
+      representativeCorrect: Boolean(representative.correct),
+    };
+  }).sort((a, b) => a.cycleId.localeCompare(b.cycleId));
 
   return {
     version: FORECAST_ROLLUP_VERSION,
     shardId,
-    bounds: {
-      resolvedFirst: chronological.length ? resolutionTime(chronological[0]) : undefined,
-      resolvedLast: chronological.length ? resolutionTime(chronological[chronological.length - 1]) : undefined,
-      cycleClosesFirst: cycleOutcomeRows.length ? cycleOutcomeRows[cycleOutcomeRows.length - 1].closesAt : undefined,
-      cycleClosesLast: cycleOutcomeRows.length ? cycleOutcomeRows[0].closesAt : undefined,
-    },
     qualified: policy.length,
     pending: policy.filter((forecast) => forecast.status === 'pending').length,
     resolved: resolved.length,
@@ -301,16 +269,11 @@ export function buildSummaryRollup(shardId: string, rows: TrackedForecast[]): Fo
     realizedReturnSum: withRealized.reduce((sum, item) => sum + item.realizedReturn!, 0),
 
     cycleKeys: [...new Set(policy.map(cycleKey))].sort(),
-    resolvedCycleKeys: [...resolvedCycles.keys()].sort(),
+    resolvedCycleKeys: [...cycleGroups.keys()].sort(),
     resolvedWindowKeys: [...new Set(resolved.map((forecast) => forecast.closesAt))].sort(),
     calibrationWindowKeys: [...new Set(allResolved.map(settlementWindowKey))].sort(),
 
-    cycleOutcomes: [...resolvedCycles.entries()]
-      .map(([cycleId, counts]) => ({ cycleId, ...counts }))
-      .sort((a, b) => a.cycleId.localeCompare(b.cycleId)),
-
-    resolvedRun: runFromSequence(orderedResolved.map((forecast) => Boolean(forecast.correct))),
-    cycleRun: runFromSequence(cycleOutcomeRows.map((forecast) => Boolean(forecast.correct))),
+    cycleOutcomes,
 
     benchmarks: BENCHMARK_SOURCES.map(({ label, probability }) => {
       const usable = resolved.filter((forecast) => Number.isFinite(probability(forecast) as number));
@@ -367,7 +330,9 @@ export function buildSummaryRollup(shardId: string, rows: TrackedForecast[]): Fo
     segments: segmentRollups(resolved),
     counterfactual: counterfactualRollup(rows),
 
-    timeline: chronological.map((forecast) => ({
+    // Stored unordered; the merge sorts, because a shard's rows can interleave with another shard's.
+    timeline: resolved.map((forecast) => ({
+      id: forecast.id,
       time: resolutionTime(forecast),
       correct: forecast.correct ? 1 : 0,
       brier: forecast.brierScore ?? 0,
@@ -392,6 +357,18 @@ function mergeCounts<T extends { label: string }>(rollups: T[][], merge: (into: 
 }
 
 const ratio = (numerator: number, denominator: number) => (denominator ? numerator / denominator : null);
+
+/** Merges window totals by key, then clusters, so a window split across shards stays one observation. */
+function mergeWindows(lists: WindowTotal[][]): number[] {
+  const totals = new Map<string, { sum: number; count: number }>();
+  for (const list of lists) {
+    for (const window of list) {
+      const current = totals.get(window.key) ?? { sum: 0, count: 0 };
+      totals.set(window.key, { sum: current.sum + window.sum, count: current.count + window.count });
+    }
+  }
+  return [...totals.values()].map((total) => total.sum / total.count);
+}
 
 function meanAndStandardError(values: number[]): { mean: number | null; standardError: number | null } {
   if (!values.length) return { mean: null, standardError: null };
@@ -441,38 +418,65 @@ export function summarizeFromRollups(rollups: ForecastSummaryRollup[]): Performa
   const resolvedWindows = union((rollup) => rollup.resolvedWindowKeys);
   const calibrationWindows = union((rollup) => rollup.calibrationWindowKeys);
 
-  const cycleTotals = new Map<string, { correct: number; total: number }>();
+  // Cycles merge by key rather than being assumed shard-local, and the representative is re-chosen
+  // across the merge so a cycle split over two shards still reports the earliest-issued row.
+  const cycleTotals = new Map<string, CycleOutcome>();
   for (const rollup of rollups) {
     for (const outcome of rollup.cycleOutcomes) {
-      const current = cycleTotals.get(outcome.cycleId) ?? { correct: 0, total: 0 };
-      cycleTotals.set(outcome.cycleId, { correct: current.correct + outcome.correct, total: current.total + outcome.total });
+      const current = cycleTotals.get(outcome.cycleId);
+      if (!current) {
+        cycleTotals.set(outcome.cycleId, { ...outcome });
+        continue;
+      }
+      const earlier = outcome.representativeIssuedAt < current.representativeIssuedAt
+        || (outcome.representativeIssuedAt === current.representativeIssuedAt && outcome.representativeId < current.representativeId)
+        ? outcome : current;
+      cycleTotals.set(outcome.cycleId, {
+        ...earlier,
+        correct: current.correct + outcome.correct,
+        total: current.total + outcome.total,
+      });
     }
   }
   const cycleAccuracies = [...cycleTotals.values()].map((counts) => counts.correct / counts.total);
 
-  // Both streaks read newest-first, so the runs merge in reverse chronological order and the answer is
-  // the signed prefix of the merge.
-  const reversed = [...rollups].reverse();
-  const resolvedRun = reversed.map((rollup) => rollup.resolvedRun).reduce(mergeRuns, { ...EMPTY_RUN });
-  const cycleRun = reversed.map((rollup) => rollup.cycleRun).reduce(mergeRuns, { ...EMPTY_RUN });
+  // Both streaks read newest-first. The merged column is sorted here rather than concatenated in shard
+  // order, because shards genuinely do overlap in resolution time: a row issued before midnight can
+  // resolve after one issued the following day. Ties fall to the id, exactly as the direct path does.
+  const column = rollups.flatMap((rollup) => rollup.timeline);
+  const chronological = [...column].sort((a, b) =>
+    new Date(a.time).getTime() - new Date(b.time).getTime() || a.id.localeCompare(b.id));
+  const newestFirst = [...column].sort((a, b) =>
+    new Date(b.time).getTime() - new Date(a.time).getTime() || a.id.localeCompare(b.id));
+  const cycleNewestFirst = [...cycleTotals.values()].sort((a, b) =>
+    new Date(b.closesAt).getTime() - new Date(a.closesAt).getTime() || a.representativeId.localeCompare(b.representativeId));
 
   const realizedEdgeTrades = sum((rollup) => rollup.realizedEdgeTrades);
-  const counterfactualWindows = rollups.flatMap((rollup) => rollup.counterfactual.windowMeans);
-  const counterfactualBest = rollups.flatMap((rollup) => rollup.counterfactual.bestPerWindow);
+  const counterfactualWindows = mergeWindows(rollups.map((rollup) => rollup.counterfactual.windows));
+  // Best-per-window merges by window: a window split across shards keeps its single strongest candidate
+  // rather than contributing one from each shard.
+  const bestByWindow = new Map<string, { key: string; edge: number; returnValue: number }>();
+  for (const rollup of rollups) {
+    for (const candidate of rollup.counterfactual.bestPerWindow) {
+      const prior = bestByWindow.get(candidate.key);
+      if (!prior || candidate.edge > prior.edge) bestByWindow.set(candidate.key, candidate);
+    }
+  }
+  const counterfactualBest = [...bestByWindow.values()].map((item) => item.returnValue);
   const counterfactual = meanAndStandardError(counterfactualWindows);
 
-  const segments = new Map<string, Map<string, { trades: number; predictedEdgeSum: number; wins: number; windowMeans: number[] }>>();
+  const segments = new Map<string, Map<string, { trades: number; predictedEdgeSum: number; wins: number; windows: WindowTotal[] }>>();
   for (const rollup of rollups) {
     for (const segment of rollup.segments) {
       if (!segments.has(segment.dimension)) segments.set(segment.dimension, new Map());
       const labels = segments.get(segment.dimension)!;
       const existing = labels.get(segment.label);
-      if (!existing) labels.set(segment.label, { trades: segment.trades, predictedEdgeSum: segment.predictedEdgeSum, wins: segment.wins, windowMeans: [...segment.windowMeans] });
+      if (!existing) labels.set(segment.label, { trades: segment.trades, predictedEdgeSum: segment.predictedEdgeSum, wins: segment.wins, windows: [...segment.windows] });
       else {
         existing.trades += segment.trades;
         existing.predictedEdgeSum += segment.predictedEdgeSum;
         existing.wins += segment.wins;
-        existing.windowMeans.push(...segment.windowMeans);
+        existing.windows.push(...segment.windows);
       }
     }
   }
@@ -482,9 +486,10 @@ export function summarizeFromRollups(rollups: ForecastSummaryRollup[]): Performa
       description,
       segments: [...(segments.get(dimension) ?? new Map()).entries()]
         .map(([label, stat]) => {
-          const { mean, standardError } = meanAndStandardError(stat.windowMeans);
+          const windowReturns = mergeWindows([stat.windows]);
+          const { mean, standardError } = meanAndStandardError(windowReturns);
           return {
-            label, trades: stat.trades, windows: stat.windowMeans.length,
+            label, trades: stat.trades, windows: windowReturns.length,
             meanPredictedEdge: stat.predictedEdgeSum / stat.trades,
             meanRealizedReturn: mean as number, standardError,
             winRate: stat.wins / stat.trades,
@@ -509,8 +514,8 @@ export function summarizeFromRollups(rollups: ForecastSummaryRollup[]): Performa
     accuracy: ratio(correct, resolved),
     brierScore: ratio(brierSum, resolved),
     logLoss: ratio(logLossSum, resolved),
-    currentStreak: resolvedRun.count ? (resolvedRun.first ? resolvedRun.prefix : -resolvedRun.prefix) : 0,
-    currentCycleStreak: cycleRun.count ? (cycleRun.first ? cycleRun.prefix : -cycleRun.prefix) : 0,
+    currentStreak: leadingStreak(newestFirst.map((cell) => cell.correct === 1)),
+    currentCycleStreak: leadingStreak(cycleNewestFirst.map((cycle) => cycle.representativeCorrect)),
     observedCalculations: issued,
     resolvedCalculations: resolved,
     benchmarks: mergeCounts(rollups.map((rollup) => rollup.benchmarks), (into, from) => {
@@ -579,36 +584,10 @@ export function summarizeFromRollups(rollups: ForecastSummaryRollup[]): Performa
     byDirection: slicesFrom(mergeCounts(rollups.map((rollup) => rollup.byDirection), (into, from) => { into.resolved += from.resolved; into.correct += from.correct; })),
     byModelVersion: slicesFrom(mergeCounts(rollups.map((rollup) => rollup.byModelVersion), (into, from) => { into.resolved += from.resolved; into.correct += from.correct; })),
     byConfidenceBucket: slicesFrom(mergeCounts(rollups.map((rollup) => rollup.byConfidenceBucket), (into, from) => { into.resolved += from.resolved; into.correct += from.correct; })),
-    timeline: timelineFrom(rollups.flatMap((rollup) => rollup.timeline)),
+    timeline: timelineFrom(chronological),
     recent: rollups.flatMap((rollup) => rollup.recent)
       .sort((a, b) => new Date(b.resolvedAt ?? b.issuedAt).getTime() - new Date(a.resolvedAt ?? a.issuedAt).getTime() || byIdTieBreak(a, b))
       .slice(0, 8),
   };
 }
 
-/**
- * Checks the property the ordered statistics depend on: that shards do not overlap in any ordering key
- * the merge reads. Chronological order being a clean concatenation of issuance-day shards holds because
- * resolution lag is under about fifteen minutes while cycles align to quarter-hours — a property of the
- * data, not of the code, so a future row with a longer lag must fail loudly rather than silently
- * corrupt both streaks and `timeline`. See docs/forecast-storage-design.md §4.1.
- */
-export function assertRollupOrdering(rollups: ForecastSummaryRollup[]): string[] {
-  const errors: string[] = [];
-  const check = (label: string, last?: string, next?: string, shard?: string) => {
-    if (last === undefined || next === undefined) return;
-    // Ties fail as well as inversions. When two shards share a boundary timestamp the id tie-break
-    // decides the global order, so it can interleave rows across the boundary and shard order stops
-    // determining the sequence — which is exactly the assumption the run monoids rest on.
-    if (next <= last) errors.push(`Shard ${shard} overlaps the previous shard on ${label}: ${next} does not follow ${last}.`);
-  };
-  let previous: ForecastSummaryRollup | undefined;
-  for (const rollup of rollups) {
-    if (previous) {
-      check('resolution time', previous.bounds.resolvedLast, rollup.bounds.resolvedFirst, rollup.shardId);
-      check('cycle close time', previous.bounds.cycleClosesLast, rollup.bounds.cycleClosesFirst, rollup.shardId);
-    }
-    if (rollup.bounds.resolvedFirst !== undefined || rollup.bounds.resolvedLast !== undefined) previous = rollup;
-  }
-  return errors;
-}
