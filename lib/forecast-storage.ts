@@ -142,6 +142,60 @@ export function buildForecastStoragePlan(forecasts: TrackedForecast[], generated
   };
 }
 
+/**
+ * Relative tolerance for float aggregates when comparing two summaries of the same rows.
+ *
+ * Byte-identical output is not achievable and the gate must not demand it. IEEE addition is not
+ * associative, so summing ~30k terms in a different row order moves the last digits; a rollup that sums
+ * per-shard subtotals will do the same. Measured across the sharded layout the largest relative
+ * deviation is 6.3e-15, about 28x double epsilon. This bound is ~160x that observed noise and still far
+ * tighter than anything that could change a reading, let alone a decision.
+ *
+ * It applies only to non-integer numbers. Counts, cardinalities, labels, and array lengths are compared
+ * exactly, because those are the values that gate calibration readiness and must never drift.
+ */
+export const SUMMARY_FLOAT_TOLERANCE = 1e-12;
+
+/**
+ * Field-by-field comparison of two performance summaries: exact for anything countable, tolerant for
+ * float aggregates. Returns one message per difference, deepest path first, capped so a systematic
+ * divergence reports its shape rather than thousands of lines.
+ */
+export function compareSummaries(
+  original: PerformanceSummary, planned: PerformanceSummary, tolerance = SUMMARY_FLOAT_TOLERANCE, limit = 20,
+): string[] {
+  const differences: string[] = [];
+  const visit = (left: unknown, right: unknown, path: string): void => {
+    if (differences.length >= limit) return;
+    if (typeof left === 'number' && typeof right === 'number') {
+      if (Number.isInteger(left) && Number.isInteger(right)) {
+        if (left !== right) differences.push(`${path}: ${left} != ${right}`);
+        return;
+      }
+      if (Number.isNaN(left) && Number.isNaN(right)) return;
+      const scale = Math.max(Math.abs(left), Math.abs(right));
+      const relative = scale === 0 ? Math.abs(left - right) : Math.abs(left - right) / scale;
+      if (!(relative <= tolerance)) differences.push(`${path}: ${left} != ${right} (relative ${relative.toExponential(2)} exceeds ${tolerance.toExponential(2)})`);
+      return;
+    }
+    if (Array.isArray(left) || Array.isArray(right)) {
+      if (!Array.isArray(left) || !Array.isArray(right)) return void differences.push(`${path}: array shape differs`);
+      if (left.length !== right.length) return void differences.push(`${path}: length ${left.length} != ${right.length}`);
+      left.forEach((item, index) => visit(item, right[index], `${path}[${index}]`));
+      return;
+    }
+    if (left && right && typeof left === 'object' && typeof right === 'object') {
+      for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
+        visit((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key], `${path}.${key}`);
+      }
+      return;
+    }
+    if (left !== right) differences.push(`${path}: ${JSON.stringify(left)} != ${JSON.stringify(right)}`);
+  };
+  visit(original, planned, 'summary');
+  return differences;
+}
+
 function summaryShape(summary: PerformanceSummary): ForecastStorageVerification['summary']['original'] {
   return {
     issued: summary.issued,
@@ -174,11 +228,15 @@ export function verifyForecastStoragePlan(original: TrackedForecast[], plan: For
     if (!plannedIds.has(forecast.id)) errors.push(`Original forecast id ${forecast.id} is missing from planned storage.`);
   }
 
-  const originalSummary = summaryShape(summarizePerformance(original));
-  const plannedSummary = summaryShape(summarizePerformance(planned));
-  if (JSON.stringify(originalSummary) !== JSON.stringify(plannedSummary)) errors.push('Planned rows did not reproduce the current summary counters.');
+  // Full field-by-field equality, not just the headline counters: the statistics most likely to be got
+  // wrong by a layout change are the order-dependent ones (`timeline`, both streaks), and they are
+  // invisible in the counters. Countable values must match exactly; float aggregates get the documented
+  // tolerance because summation order legitimately differs. See docs/forecast-storage-design.md §4.
+  const originalFull = summarizePerformance(original);
+  const plannedFull = summarizePerformance(planned);
+  errors.push(...compareSummaries(originalFull, plannedFull));
 
-  return { ok: errors.length === 0, errors, summary: { original: originalSummary, planned: plannedSummary } };
+  return { ok: errors.length === 0, errors, summary: { original: summaryShape(originalFull), planned: summaryShape(plannedFull) } };
 }
 
 async function atomicWrite(file: string, content: string): Promise<void> {
