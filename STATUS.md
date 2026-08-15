@@ -150,19 +150,33 @@ Delivery order:
    alongside the calendar and persistence lanes. Contract paths and hold sentinels accumulate from the
    next cycle onward.
 
-**The policy still places no orders.** Collection was split from execution deliberately: 60 attempts is two
-to three weeks of evidence, which is the longest lead time in this work, so it starts now rather than
-waiting on the part that spends money. Every sentinel records `executed: false` with an explicit reason, so
-the collection-only period stays separable from a later period where the executing lane declined on its own
-merits.
+9. ~~Execution.~~ **Done.** `runLongShot` and `runLongShotExits` in `paper-execution.ts`, inside the
+   serialized engine queue and deliberately separate from `runPaper`/`runLive` — threading a second policy
+   through the edge policy's selection, persistence, maker-retry, portfolio-ranking and regime-gate path
+   would change behaviour the mirror invariant depends on. Exits run before entries so a position that
+   reaches its mark frees its slot for a same-cycle re-entry.
+10. ~~Two-second exit poll.~~ **Done.** Quotes are fetched outside the write queue and only the ledger
+    mutation is queued, per the 2026-08-14 decision that upstream waits must not sit inside the queue they
+    serve. A tick never queues behind itself, so a slow venue produces fewer polls rather than a backlog.
 
-Collection runs unconditionally, including while the policy is disabled or halted. Gating it on being
-enabled would be circular — the evidence is what decides whether to enable it.
+Enabled and running as of 2026-08-15. Entry is a price-capped taker IOC at the mark — an explicit exception
+to maker-only production execution, because the trigger is defined as the ask reaching the mark. Every
+account-wide protection still applies unchanged: kill switch, live arming, the reconciliation barrier, the
+drain, and the shared hourly filled-order ceiling.
 
-Remaining work is the execution path: entry submission against the strategy's own budget slice, the
-two-second exit poll, and the report surface. Two operator actions are also outstanding and neither has
-been taken: writing the 30% allocation into `data/provider-budgets.json`, and resolving the edge policy's
-live loss gate, which is separately blocking its entries at 572¢ against a 500¢ stop.
+Funded at 30% of the Kalshi `crypto-15m` cap: 600¢, a 20¢ ticket, halting below 300¢. `npm run fund:long-shot`
+reports and re-applies it, refusing unless automation is paused with nothing reserved or open.
+
+Current state: the paper lane is live and the live lane is blocked by ordinary controls (`state: paused`,
+`mode: paper`) rather than by any breaker — the edge policy's loss gate is clear at 0¢ current-epoch
+drawdown and +225.85¢ lifetime. Contract paths are accumulating across all seven assets. No trigger has
+fired yet, which matches the ~4/day the screening measured.
+
+First live observation worth recording: cheap sides are common but cheap sides **early** are rare. ETH at
+6.1¢ and SOL at 5.0¢ were both correctly refused at eight minutes into their cycle. The entry window, not
+the price mark, is the binding constraint on candidate flow.
+
+Remaining: the report surface, and the durable stores' retention policy once the journal starts growing.
 
 Done means: the policy trades paper and live under the mirror invariant, the edge policy's behaviour is
 byte-for-byte unchanged, exposure caps and the shared kill switch/reconciliation/drain still bind across
