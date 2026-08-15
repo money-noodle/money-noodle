@@ -972,6 +972,27 @@ export interface BudgetControl {
 export interface MarketAllocation {
   marketId: MarketId;
   percent: number;
+  /**
+   * Strategies funded within this market. Absent means the whole market allocation belongs to
+   * `edge-binary-buy`, which is what every configuration written before 2026-08-15 meant.
+   */
+  strategies?: StrategyAllocation[];
+}
+
+/**
+ * A strategy's share of one (provider, market) allocation. `percent` funds it once, at configuration
+ * time; `startingCents` is the resulting cash and is what the strategy's own equity rolls forward from.
+ *
+ * The percentage is deliberately not re-applied continuously. Doing so would size one strategy's ticket
+ * from the other's results — a run of edge-policy wins would raise the long-shot ticket, and its own
+ * losses would only reach it diluted by its share, so the drawdown halt could never fire on the strategy
+ * that earned it.
+ */
+export interface StrategyAllocation {
+  strategyId: StrategyId;
+  percent: number;
+  startingCents: number;
+  fundedAt: string;
 }
 
 /**
@@ -1012,6 +1033,26 @@ export interface MarketFunding {
   reservedCents: number;
   /** cap − own reservations, further bounded by cash actually available. */
   spendableCents: number;
+  reason: string;
+}
+
+/** What one strategy within a (provider, market) pair may commit right now, and whether it has halted. */
+export interface StrategyFunding {
+  strategyId: StrategyId;
+  marketId: MarketId;
+  mode: ExecutionMode;
+  percent: number;
+  /** Cash this strategy was funded with, which its equity rolls forward from. */
+  startingCents: number;
+  /** This strategy's own settled P&L, read from the shared ledger. */
+  realizedPnlCents: number;
+  /** starting + own realized P&L: the figure the ticket is sized from. */
+  equityCents: number;
+  /** This strategy's own open commitments. */
+  reservedCents: number;
+  spendableCents: number;
+  ticketCents: number;
+  halted: boolean;
   reason: string;
 }
 

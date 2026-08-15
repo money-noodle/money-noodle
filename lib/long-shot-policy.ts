@@ -82,7 +82,7 @@ export function longShotSizing(equityCents: number, settings: LongShotSettings):
   if (!Number.isFinite(equityCents) || equityCents < haltThresholdCents) {
     return {
       ticketCents: 0, halted: true, haltThresholdCents,
-      reason: `Long-shot equity ${Math.max(0, Math.floor(equityCents || 0))}c is below the ${haltThresholdCents}c required to fund a ${settings.minimumTicketCents}c ticket with ${settings.drawdownDivisor} losses of runway.`,
+      reason: `Long-shot equity ${Math.max(0, Math.floor(equityCents || 0))}¢ is below the ${haltThresholdCents}¢ required to fund a ${settings.minimumTicketCents}¢ ticket with ${settings.drawdownDivisor} losses of runway.`,
     };
   }
   return { ticketCents: Math.floor(equityCents / settings.drawdownDivisor), halted: false, haltThresholdCents };
@@ -132,7 +132,7 @@ export function evaluateLongShotEntry(
 
   const dailyCapCents = longShotDailyLossCapCents(sizing.ticketCents, settings);
   if (input.dailyNetLossCents >= dailyCapCents) {
-    return { qualifies: false, reason: `Long-shot daily net loss ${input.dailyNetLossCents}c reached the ${dailyCapCents}c (${settings.dailyLossTickets} ticket) cap.` };
+    return { qualifies: false, reason: `Long-shot daily net loss ${input.dailyNetLossCents}¢ reached the ${dailyCapCents}¢ (${settings.dailyLossTickets} ticket) cap.` };
   }
 
   // Fail closed on a missing or nonsensical quote rather than treating absence as cheapness.
@@ -141,7 +141,7 @@ export function evaluateLongShotEntry(
   }
   const askCents = input.askPrice * 100;
   if (askCents > settings.entryMarkCents) {
-    return { qualifies: false, reason: `${input.side} ask ${askCents.toFixed(1)}c is above the ${settings.entryMarkCents}c mark.` };
+    return { qualifies: false, reason: `${input.side} ask ${askCents.toFixed(1)}¢ is above the ${settings.entryMarkCents}¢ mark.` };
   }
   if (!Number.isFinite(input.secondsRemaining) || input.secondsRemaining < settings.minimumSecondsRemaining) {
     return { qualifies: false, reason: `${Math.max(0, Math.floor(input.secondsRemaining || 0))}s remaining is below the ${settings.minimumSecondsRemaining}s entry window.` };
