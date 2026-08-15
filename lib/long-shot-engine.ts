@@ -1,7 +1,7 @@
 import type { ExecutionMode, PaperOrder, PositionSide } from './types';
 import { orderStrategyId } from './execution-report';
 import { LONG_SHOT_ROUND_TRIP } from './strategy-registry';
-import { longShotSizing, type LongShotSettings, type LongShotSizing } from './long-shot-policy';
+import { longShotPolicyVersion, longShotSizing, type LongShotSettings, type LongShotSizing } from './long-shot-policy';
 
 /**
  * Money accounting for the long-shot policy, kept separate from the edge policy's without adding a second
@@ -92,6 +92,7 @@ export interface LongShotOrderInput {
   oppositeAsk: number;
   entryGeneration: number;
   exitMarkCents: number;
+  settings: LongShotSettings;
   budgetEpochId?: string;
   fill: { quantity: number; limitPriceCents: number; feeCents: number; stakeCents: number; potentialPayoutCents: number };
 }
@@ -132,6 +133,7 @@ export function buildLongShotOrder(input: LongShotOrderInput): PaperOrder {
     potentialPayoutCents: input.fill.potentialPayoutCents,
     entryGeneration: input.entryGeneration,
     exitTargetCents: input.exitMarkCents,
+    strategyPolicyVersion: longShotPolicyVersion(input.settings),
     peakOwnedSideBidCents: Math.round((1 - input.oppositeAsk) * 100),
   };
 }

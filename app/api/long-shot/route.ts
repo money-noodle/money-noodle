@@ -5,9 +5,9 @@ import { getExecutionOrders } from '@/lib/paper-execution';
 import { getHoldSentinelReport } from '@/lib/hold-sentinel-store';
 import { getContractPathRollups } from '@/lib/contract-path-store';
 import { buildLongShotReport } from '@/lib/long-shot-report';
-import { longShotExitFeeCents, LONG_SHOT_POLICY_VERSION, longShotAllocationCents } from '@/lib/long-shot-execution';
+import { longShotExitFeeCents, longShotAllocationCents } from '@/lib/long-shot-execution';
 import { longShotFunding } from '@/lib/long-shot-engine';
-import { longShotDailyLossCapCents, longShotSettings } from '@/lib/long-shot-policy';
+import { longShotDailyLossCapCents, longShotPolicyVersion, longShotSettings } from '@/lib/long-shot-policy';
 import { strategyOrders } from '@/lib/execution-report';
 import { LONG_SHOT_ROUND_TRIP } from '@/lib/strategy-registry';
 import { getProviderBudgets } from '@/lib/provider-budget-store';
@@ -34,7 +34,7 @@ export async function GET(request: Request) {
     const settings = longShotSettings();
     const [orders, control, budgets, sentinels, paths] = await Promise.all([
       getExecutionOrders(), getTradingControl(), getProviderBudgets(),
-      getHoldSentinelReport(LONG_SHOT_POLICY_VERSION, longShotExitFeeCents),
+      getHoldSentinelReport(longShotPolicyVersion(longShotSettings()), longShotExitFeeCents),
       getContractPathRollups(200),
     ]);
 
@@ -59,12 +59,12 @@ export async function GET(request: Request) {
         haltThresholdCents: funding.sizing.haltThresholdCents,
         haltReason: funding.sizing.reason,
         dailyLossCapCents: longShotDailyLossCapCents(funding.sizing.ticketCents, settings),
-        report: buildLongShotReport({ orders: mine, mode }),
+        report: buildLongShotReport({ orders: mine, mode, policyVersion: longShotPolicyVersion(settings) }),
       };
     });
 
     return NextResponse.json({
-      policyVersion: LONG_SHOT_POLICY_VERSION,
+      policyVersion: longShotPolicyVersion(settings),
       enabled: settings.enabled,
       settings: {
         entryMarkCents: settings.entryMarkCents,

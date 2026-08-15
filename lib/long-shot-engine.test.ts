@@ -93,7 +93,7 @@ describe('order construction', () => {
   const built = buildLongShotOrder({
     mode: 'live', symbol: 'BTC', side: 'UP', contractId: 'KXBTC15M-TEST',
     closesAt: '2026-08-15T00:15:00Z', calculationAt: '2026-08-15T00:01:00Z',
-    entryAsk: 0.10, oppositeAsk: 0.91, entryGeneration: 1, exitMarkCents: 90,
+    entryAsk: 0.10, oppositeAsk: 0.91, entryGeneration: 1, exitMarkCents: 90, settings,
     fill: { quantity: 1.8, limitPriceCents: 10, feeCents: 2, stakeCents: 20, potentialPayoutCents: 180 },
   });
 
@@ -114,7 +114,7 @@ describe('order construction', () => {
     const reentry = buildLongShotOrder({
       mode: 'live', symbol: 'BTC', side: 'UP', contractId: 'KXBTC15M-TEST',
       closesAt: '2026-08-15T00:15:00Z', calculationAt: '2026-08-15T00:01:00Z',
-      entryAsk: 0.10, oppositeAsk: 0.91, entryGeneration: 2, exitMarkCents: 90,
+      entryAsk: 0.10, oppositeAsk: 0.91, entryGeneration: 2, exitMarkCents: 90, settings,
       fill: { quantity: 1.8, limitPriceCents: 10, feeCents: 2, stakeCents: 20, potentialPayoutCents: 180 },
     });
     expect(reentry.id).not.toBe(built.id);

@@ -32,6 +32,7 @@ export interface LongShotSegment {
 export interface LongShotReport {
   reportVersion: string;
   mode: ExecutionMode;
+  policyVersion?: string;
   /** Attempts that reached the venue, whether or not they filled. */
   submitted: number;
   filled: number;
@@ -110,9 +111,14 @@ function groupBy(orders: PaperOrder[], key: (order: PaperOrder) => string | unde
 export function buildLongShotReport(input: {
   orders: PaperOrder[];
   mode: ExecutionMode;
+  /** Scopes the cohort. Omit only where every order is known to share one rule set, such as in tests. */
+  policyVersion?: string;
   peakBidThresholdsCents?: number[];
 }): LongShotReport {
-  const mine = input.orders.filter((order) => order.executionMode === input.mode && !order.id.includes(':exit:'));
+  // A parameter change starts a fresh cohort. Results produced under different marks or a different entry
+  // window cannot be credited to the current rules, and blending them is silent rather than loud.
+  const mine = input.orders.filter((order) => order.executionMode === input.mode && !order.id.includes(':exit:')
+    && (!input.policyVersion || (order.strategyPolicyVersion ?? input.policyVersion) === input.policyVersion));
   const filled = mine.filter((order) => (order.filledCount ?? 0) > 0 || settledStatuses.has(order.status) || order.status === 'open');
   const settled = mine.filter((order) => settledStatuses.has(order.status));
 
@@ -124,6 +130,7 @@ export function buildLongShotReport(input: {
   return {
     reportVersion: LONG_SHOT_REPORT_VERSION,
     mode: input.mode,
+    policyVersion: input.policyVersion,
     submitted: mine.length,
     filled: filled.length,
     unfilled: mine.filter((order) => order.status === 'unfilled' || order.status === 'rejected').length,

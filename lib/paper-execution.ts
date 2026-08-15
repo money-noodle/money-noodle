@@ -1540,7 +1540,7 @@ async function runLongShot(
       const order = buildLongShotOrder({
         mode, symbol: prediction.symbol, side, contractId: quote.ticker, closesAt: quote.closesAt,
         calculationAt: dashboard.generatedAt, entryAsk: ask, oppositeAsk,
-        entryGeneration: generation, exitMarkCents: settings.exitMarkCents,
+        entryGeneration: generation, exitMarkCents: settings.exitMarkCents, settings,
         budgetEpochId: status.control.epochId, fill,
       });
       order.entryCycleRegime = (await cycleRegimeFor(order.symbol, order.closesAt))?.regime;

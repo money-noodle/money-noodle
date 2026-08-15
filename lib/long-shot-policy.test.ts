@@ -4,7 +4,8 @@ vi.mock('server-only', () => ({}));
 
 import { estimatePaperFill, venueFeeCents } from './paper-execution';
 import {
-  evaluateLongShotEntry, longShotDailyLossCapCents, longShotRoundTrip, longShotSettings, longShotSizing,
+  evaluateLongShotEntry, longShotDailyLossCapCents, longShotPolicyVersion, longShotRoundTrip,
+  longShotSettings, longShotSizing,
   type LongShotEntryInput, type LongShotSettings,
 } from './long-shot-policy';
 
@@ -194,5 +195,25 @@ describe('mirror invariant: the long-shot rule layer takes no execution mode', (
         }
       }
     }
+  });
+});
+
+describe('policy version derivation', () => {
+  it('changes when a cohort-defining parameter changes', () => {
+    // A hardcoded string was the first attempt and it was wrong: widening the entry window left the
+    // version unchanged, so two rule sets would have blended silently.
+    const base = longShotPolicyVersion({ entryMarkCents: 10, exitMarkCents: 90, minimumSecondsRemaining: 600 });
+    expect(base).toBe('long-shot-round-trip-buy10-sell90-win600-v1');
+    expect(longShotPolicyVersion({ entryMarkCents: 10, exitMarkCents: 90, minimumSecondsRemaining: 720 })).not.toBe(base);
+    expect(longShotPolicyVersion({ entryMarkCents: 15, exitMarkCents: 90, minimumSecondsRemaining: 600 })).not.toBe(base);
+    expect(longShotPolicyVersion({ entryMarkCents: 10, exitMarkCents: 85, minimumSecondsRemaining: 600 })).not.toBe(base);
+  });
+
+  it('tracks the live settings, so an env change cannot leave it stale', () => {
+    expect(longShotPolicyVersion(longShotSettings({ NODE_ENV: 'test' })))
+      .toBe('long-shot-round-trip-buy10-sell90-win600-v1');
+    expect(longShotPolicyVersion(longShotSettings({
+      NODE_ENV: 'test', MONEY_NOODLE_LONG_SHOT_ENTRY_MARK_CENTS: '25',
+    } as unknown as NodeJS.ProcessEnv))).toContain('buy25-');
   });
 });

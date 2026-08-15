@@ -1,6 +1,6 @@
 import 'server-only';
 import {
-  evaluateLongShotEntry, longShotSettings, longShotSizing,
+  evaluateLongShotEntry, longShotPolicyVersion, longShotSettings, longShotSizing,
   type LongShotSettings, type LongShotSizing,
 } from './long-shot-policy';
 import { HOLD_SENTINEL_VERSION, type HoldSentinel } from './hold-sentinel';
@@ -19,7 +19,7 @@ import type { DashboardData, PaperOrder, PositionSide, Prediction } from './type
  * of anything in this policy — 60 attempts is two to three weeks — so it is deliberately not blocked on
  * the part that spends money.
  */
-export const LONG_SHOT_POLICY_VERSION = 'long-shot-round-trip-buy10-sell90-v1';
+export { longShotPolicyVersion } from './long-shot-policy';
 
 /** Reason recorded on every sentinel until the execution path exists, so the gap is explicit in the data. */
 const COLLECTION_ONLY = 'Collection only: the long-shot execution path is not wired in yet.';
@@ -128,7 +128,7 @@ export function longShotCycle(
       sentinels.push({
         id: holdSentinelId({ symbol: prediction.symbol, side, closesAt: quote.closesAt, entryGeneration: generation }),
         sentinelVersion: HOLD_SENTINEL_VERSION,
-        policyVersion: LONG_SHOT_POLICY_VERSION,
+        policyVersion: longShotPolicyVersion(settings),
         observedAt,
         symbol: prediction.symbol,
         side,

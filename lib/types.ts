@@ -1508,6 +1508,11 @@ export interface PaperOrder {
    */
   exitTargetCents?: number;
   /**
+   * Policy version this order was placed under, derived from the settings that define a cohort. Read by
+   * the report so a parameter change starts a fresh cohort instead of blending two rule sets.
+   */
+  strategyPolicyVersion?: string;
+  /**
    * Entry generation within this asset and settlement window; 1 is the first, above 1 is a re-entry.
    *
    * A re-entry can only follow a profitable exit, so it carries direct evidence that this window whipsaws

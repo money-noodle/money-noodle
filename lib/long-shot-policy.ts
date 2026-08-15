@@ -8,7 +8,27 @@ import type { PositionSide } from './types';
  * layer, paper and live must be unable to express a different decision (SPEC 12.3). `lib/mirror-invariant.test.ts`
  * asserts that by arity.
  */
-export const LONG_SHOT_POLICY_VERSION = 'long-shot-round-trip-buy10-sell90-v1';
+/**
+ * Scheme version. Bumped when the *shape* of the policy changes — a new gate, a different exit mechanism —
+ * rather than when a parameter moves, which the derived version below already captures.
+ */
+export const LONG_SHOT_POLICY_SCHEME = 'v1';
+
+/**
+ * Policy version, **derived from the settings that define a cohort** rather than typed by hand.
+ *
+ * A hardcoded string was the first attempt and it was wrong: widening the entry window from three minutes
+ * to five left the version unchanged, so evidence collected under two different rules would have blended
+ * silently. §12.5 requires evidence to be scoped by policy version and to reset when the policy changes,
+ * and a constant someone must remember to edit cannot deliver that.
+ *
+ * The three parameters here are the ones that decide what a candidate *is* and what a win *is*. Caps and
+ * sizing are deliberately excluded: they change which candidates get taken and at what stake, not whether a
+ * given candidate would have reached its mark, and returns are reported per $1 staked.
+ */
+export function longShotPolicyVersion(settings: Pick<LongShotSettings, 'entryMarkCents' | 'exitMarkCents' | 'minimumSecondsRemaining'>): string {
+  return `long-shot-round-trip-buy${settings.entryMarkCents}-sell${settings.exitMarkCents}-win${settings.minimumSecondsRemaining}-${LONG_SHOT_POLICY_SCHEME}`;
+}
 
 export interface LongShotSettings {
   enabled: boolean;
