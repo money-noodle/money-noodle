@@ -95,6 +95,53 @@ describe('Kalshi execution ledger reconciliation', () => {
     expect(unsafe.issues.join(' ')).toContain('exceed local requested quantity');
   });
 
+  describe('the reservation ceiling', () => {
+    // A fill that costs more than `stakeCents` but no more than what was reserved is legitimate:
+    // `stakeCents` is revised down to what the maker actually paid, so it is not the authorization.
+    const dearFill = { ...venueFill, yesPriceDollars: 0.5 };
+
+    it('admits a recovered fill costing up to the issuance reservation', () => {
+      const result = reconcileExecutionLedger([local({ reservedStakeCents: 20 })], snapshot({
+        orders: [venueOrder], fills: [dearFill],
+        positions: [{ ticker: 'KXBTC-TEST', quantity: 0.3, exposureDollars: 0.15 }],
+      }), now);
+      expect(result.issues).toEqual([]);
+    });
+
+    it('blocks a recovered fill that exceeds the issuance reservation', () => {
+      const result = reconcileExecutionLedger([local({ reservedStakeCents: 10 })], snapshot({
+        orders: [venueOrder], fills: [dearFill],
+        positions: [{ ticker: 'KXBTC-TEST', quantity: 0.3, exposureDollars: 0.15 }],
+      }), now);
+      expect(result.issues.join(' ')).toContain('exceeds its 10c reservation');
+    });
+
+    // The whole point of giving the guard its own field: the taker shadow is reporting, and repricing
+    // it must not move a fail-closed threshold in either direction.
+    it('ignores the taker shadow when deciding the ceiling', () => {
+      const generous = reconcileExecutionLedger([local({ reservedStakeCents: 10, shadowTakerAllInCents: 500 })], snapshot({
+        orders: [venueOrder], fills: [dearFill],
+        positions: [{ ticker: 'KXBTC-TEST', quantity: 0.3, exposureDollars: 0.15 }],
+      }), now);
+      expect(generous.issues.join(' ')).toContain('exceeds its 10c reservation');
+
+      const stingy = reconcileExecutionLedger([local({ reservedStakeCents: 20, shadowTakerAllInCents: 1 })], snapshot({
+        orders: [venueOrder], fills: [dearFill],
+        positions: [{ ticker: 'KXBTC-TEST', quantity: 0.3, exposureDollars: 0.15 }],
+      }), now);
+      expect(stingy.issues).toEqual([]);
+    });
+
+    // 452 live orders predate the field; they must keep the behaviour they already had.
+    it('falls back to the locally acquired total for orders issued before the field existed', () => {
+      const result = reconcileExecutionLedger([local({ stakeCents: 20 })], snapshot({
+        orders: [venueOrder], fills: [dearFill],
+        positions: [{ ticker: 'KXBTC-TEST', quantity: 0.3, exposureDollars: 0.15 }],
+      }), now);
+      expect(result.issues).toEqual([]);
+    });
+  });
+
   it('blocks when authoritative position quantity contradicts recovered fills', () => {
     const result = reconcileExecutionLedger([local()], snapshot({
       orders: [venueOrder], fills: [venueFill],

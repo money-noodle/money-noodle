@@ -82,13 +82,19 @@ export function reconcileExecutionLedger(localOrders: PaperOrder[], snapshot: Ka
     if (!isTerminal(order.status) && totals.count > 1e-8) {
       const realizedEntry = realizedEntryPortion(order, orders);
       const localAcquiredQuantity = order.quantity + realizedEntry.quantity;
-      const acquiredQuantityLimit = Math.max(order.requestedQuantity ?? 0, order.shadowTakerQuantity ?? 0, localAcquiredQuantity);
+      // `requestedQuantity` is the quantity actually submitted and dominates `shadowTakerQuantity` on
+      // every order that carries both, so the guard takes its bound from the order rather than a shadow.
+      const acquiredQuantityLimit = Math.max(order.requestedQuantity ?? 0, localAcquiredQuantity);
       if (totals.count > acquiredQuantityLimit + 0.011) issues.push(`${order.id}: venue buy fills ${totals.count.toFixed(2)} exceed local requested quantity ${acquiredQuantityLimit.toFixed(2)}.`);
       const remainingCount = Math.max(0, totals.count - realizedEntry.quantity);
       const wasMissing = !order.venueOrderId || localAcquiredQuantity + 1e-8 < totals.count || order.status !== 'open';
       const accountedStakeCents = Math.ceil(totals.purchaseCents + totals.feeCents - 1e-9);
       const localAcquiredStakeCents = (order.actualStakeCents ?? order.stakeCents) + realizedEntry.stakeCents;
-      const acquiredStakeLimitCents = Math.max(order.shadowTakerAllInCents ?? 0, Math.ceil(localAcquiredStakeCents - 1e-9));
+      // The ceiling is what was authorized at issuance, because a fill legitimately costs up to the
+      // reservation even after `stakeCents` has been revised down to what was really paid. Orders
+      // predating `reservedStakeCents` fall back to the locally acquired total, which is the behaviour
+      // they already had; the taker shadow is never consulted, so repricing it cannot move this gate.
+      const acquiredStakeLimitCents = Math.max(order.reservedStakeCents ?? 0, Math.ceil(localAcquiredStakeCents - 1e-9));
       if (accountedStakeCents > acquiredStakeLimitCents) issues.push(`${order.id}: recovered fill cost ${accountedStakeCents}c exceeds its ${acquiredStakeLimitCents}c reservation.`);
       const filledVenueOrder = venueOrders.find((item) => buyFills.some((fill) => fill.orderId === item.orderId)) ?? venueOrders[0];
       const remainingPurchaseCents = Math.max(0, totals.purchaseCents - realizedEntry.purchaseCents);

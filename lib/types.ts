@@ -1388,6 +1388,17 @@ export interface PaperOrder {
   };
   shadowTakerAllInCents?: number;
   shadowTakerQuantity?: number;
+  /**
+   * All-in cents actually reserved from the budget at issuance, before any fill revised `stakeCents`
+   * down to what the maker really paid. This is the operator's authorization ceiling, so it is what
+   * reconciliation compares a recovered venue fill cost against. It is deliberately its own field:
+   * the guard previously read `shadowTakerAllInCents`, which holds the same number today only because
+   * the taker shadow is currently priced from the issuance stake. That is a reporting field, and a
+   * change to how the taker counterfactual is priced must not silently move a fail-closed safety
+   * threshold. Absent on orders issued before this field existed; see the fallback in
+   * `reconcileExecutionLedger`.
+   */
+  reservedStakeCents?: number;
   /** Durable standalone-exit observation state; all values use executable owned-side bids. */
   profitLockArmedAt?: string;
   peakNetLiquidationCents?: number;

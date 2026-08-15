@@ -1377,6 +1377,9 @@ async function runLive(dashboard: DashboardData, status: TradingControlData, led
   built.order.entryExecutionDecision = entryExecutionDecision(prediction, side, built.order, ledger);
   // Record the path label that admitted this live candidate so later cohorts can be audited.
   built.order.entryCycleRegime = (await cycleRegimeFor(prediction.symbol, prediction.market.closesAt))?.regime;
+  // The authorization ceiling, captured before a fill can revise `stakeCents` down. Reconciliation
+  // compares recovered venue cost against this; the shadow fields below are reporting only.
+  built.order.reservedStakeCents = built.order.stakeCents;
   built.order.shadowTakerAllInCents = built.order.stakeCents;
   built.order.shadowTakerQuantity = built.order.quantity;
   ledger.lastLiveSkip = undefined;
