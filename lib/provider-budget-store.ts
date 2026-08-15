@@ -44,8 +44,19 @@ export function normalizeProviderBudgets(input: Partial<ProviderBudgetConfigurat
     providers: TRADING_PROVIDER_IDS.map((id) => {
       const item = stored.get(id);
       if (!item) return budget(id, now);
+      // Strategy funding is carried through, not rebuilt away. Reconstructing each allocation from
+      // `marketId` and `percent` alone silently discarded it on every read: the funded amounts were written
+      // to disk and never seen again, so the long-shot policy ran on its fallback default rather than its
+      // configured allocation, and `fundedAt` — which scopes a strategy's equity to its funding epoch —
+      // was lost with it. An invalid block is dropped rather than trusted.
       const allocations = Array.isArray(item.allocations) && allocationsValid(item.allocations)
-        ? item.allocations.map((entry) => ({ marketId: entry.marketId, percent: entry.percent }))
+        ? item.allocations.map((entry) => ({
+          marketId: entry.marketId,
+          percent: entry.percent,
+          ...(entry.strategies && strategyAllocationsValid(entry.strategies)
+            ? { strategies: entry.strategies.map((strategy) => ({ ...strategy })) }
+            : {}),
+        }))
         : DEFAULT_ALLOCATION.map((entry) => ({ ...entry }));
       const cents = (value: unknown) => Number.isSafeInteger(value) && (value as number) >= 0 ? value as number : 0;
       return {

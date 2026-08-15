@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('server-only', () => ({}));
 import { longShotSettings, longShotSizing } from './long-shot-policy';
 import { marketFunding } from './provider-budget-policy';
 import {
@@ -129,5 +131,46 @@ describe('strategy funding', () => {
     expect(absent.percent).toBe(0);
     expect(absent.spendableCents).toBe(0);
     expect(absent.reason).toContain('No long-shot-round-trip allocation configured');
+  });
+});
+
+describe('strategy funding survives a read', () => {
+  it('carries the funded block through normalization', async () => {
+    // Normalization rebuilt each allocation from marketId and percent alone, silently discarding the
+    // strategy block on every read. The amounts were written to disk and never seen again: the long-shot
+    // policy ran on its fallback default rather than its configured allocation, and `fundedAt` — which
+    // scopes equity to a funding epoch — was lost with it. Same number by coincidence, so it was invisible.
+    const { normalizeProviderBudgets } = await import('./provider-budget-store');
+    const normalized = normalizeProviderBudgets({
+      version: 'provider-budget-v1', revision: 2, updatedAt: '2026-08-15T00:00:00Z',
+      providers: [{
+        providerId: 'kalshi', liveLimitCents: 0, paperLimitCents: 0, updatedAt: '2026-08-15T00:00:00Z',
+        allocations: [{
+          marketId: 'crypto-15m', percent: 100,
+          strategies: [
+            { strategyId: EDGE_BINARY_BUY, percent: 70, startingCents: 1_400, fundedAt: '2026-08-15T08:20:34.848Z' },
+            allocation(30, 600),
+          ],
+        }],
+      }],
+    });
+    const kalshi = normalized.providers.find((item) => item.providerId === 'kalshi')!;
+    const strategies = kalshi.allocations.find((item) => item.marketId === 'crypto-15m')?.strategies;
+    expect(strategies).toHaveLength(2);
+    expect(strategies?.find((item) => item.strategyId === LONG_SHOT_ROUND_TRIP))
+      .toMatchObject({ percent: 30, startingCents: 600, fundedAt: '2026-08-15T00:00:00Z' });
+  });
+
+  it('drops an over-allocated strategy block rather than trusting it', async () => {
+    const { normalizeProviderBudgets } = await import('./provider-budget-store');
+    const normalized = normalizeProviderBudgets({
+      version: 'provider-budget-v1', revision: 2, updatedAt: '2026-08-15T00:00:00Z',
+      providers: [{
+        providerId: 'kalshi', liveLimitCents: 0, paperLimitCents: 0, updatedAt: '2026-08-15T00:00:00Z',
+        allocations: [{ marketId: 'crypto-15m', percent: 100, strategies: [allocation(80, 1_600), allocation(80, 1_600)] }],
+      }],
+    });
+    expect(normalized.providers.find((item) => item.providerId === 'kalshi')!
+      .allocations[0].strategies).toBeUndefined();
   });
 });
