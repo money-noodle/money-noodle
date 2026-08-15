@@ -702,6 +702,7 @@ export interface MissedBuyCounterfactual {
   bestPerWindowCandidates: number;
   bestPerWindowWins: number;
   bestPerWindowMeanReturn: number | null;
+  bestPerWindowStandardError: number | null;
   bestPerWindowTotalReturn: number | null;
 }
 
@@ -1522,7 +1523,24 @@ export interface MakerFillReport {
     shadowEvaluations: number;
     takerRecommendations: number;
     resolvedTakerRecommendations: number;
+    resolvedTakerWindows: number;
+    /** Window-clustered return; repeated assets and attempts in one settlement window are not independent. */
     meanTakerCounterfactualReturn: number | null;
+    takerCounterfactualReturnStandardError: number | null;
+    pairedMakerComparisonWindows: number;
+    meanTakerAdvantageOverMaker: number | null;
+    takerAdvantageOverMakerStandardError: number | null;
+    /** Prospective cohort under the currently active buy policy; historical policy mixtures are context only. */
+    currentPolicy: {
+      buyPolicyVersion: string;
+      recommendations: number;
+      resolvedRecommendations: number;
+      resolvedWindows: number;
+      meanTakerCounterfactualReturn: number | null;
+      takerCounterfactualReturnStandardError: number | null;
+      meanTakerAdvantageOverMaker: number | null;
+      takerAdvantageOverMakerStandardError: number | null;
+    };
     actualTakerOrders: number;
     actualTakerFills: number;
     resolvedActualTakerFills: number;

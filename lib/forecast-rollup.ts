@@ -494,6 +494,7 @@ export function summarizeFromRollups(rollups: ForecastSummaryRollup[]): Performa
   }
   const counterfactualBest = [...bestByWindow.values()].map((item) => item.returnValue);
   const counterfactual = meanAndStandardError(counterfactualWindowReturns);
+  const counterfactualBestStats = meanAndStandardError(counterfactualBest);
 
   const segments = new Map<string, Map<string, { trades: number; predictedEdgeSum: number; wins: number; windows: WindowTotal[] }>>();
   for (const rollup of rollups) {
@@ -579,7 +580,8 @@ export function summarizeFromRollups(rollups: ForecastSummaryRollup[]): Performa
       standardError: counterfactual.standardError,
       bestPerWindowCandidates: counterfactualBest.length,
       bestPerWindowWins: counterfactualBest.filter((value) => value > 0).length,
-      bestPerWindowMeanReturn: counterfactualBest.length ? counterfactualBest.reduce((total, value) => total + value, 0) / counterfactualBest.length : null,
+      bestPerWindowMeanReturn: counterfactualBestStats.mean,
+      bestPerWindowStandardError: counterfactualBestStats.standardError,
       bestPerWindowTotalReturn: counterfactualBest.length ? counterfactualBest.reduce((total, value) => total + value, 0) : null,
     },
     resolvedWindows,

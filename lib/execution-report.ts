@@ -1,5 +1,6 @@
 import { ACTION_COUNTERFACTUAL_VERSION, buildActionCounterfactuals, clusterByWindow } from './action-counterfactual';
 import { normalizeMarketId } from './market-registry';
+import { BUY_POLICY_VERSION } from './prediction-policy';
 import type { ExecutionMode, MakerExecutionSegment, MakerFillReport, MarketId, PaperOrder, ProviderTradeRecord, SegmentGroup, SegmentStat, TrackedForecast, TradeTrackRecord, TradingProviderId } from './types';
 
 const settledStatuses = new Set(['won', 'lost', 'invalid', 'sold']);
@@ -193,20 +194,32 @@ export function buildMakerFillReport(orders: PaperOrder[], forecasts: TrackedFor
   const fills = attempts.filter((order) => (order.filledCount ?? 0) > 0).length;
   const shadowEvaluations = orders.filter((order) => order.executionMode === 'live' && Boolean(order.entryExecutionDecision));
   const takerRecommendations = shadowEvaluations.filter((order) => order.entryExecutionDecision?.recommendedStyle === 'taker');
-  const resolvedShadowTakerReturns = takerRecommendations.flatMap((order) => {
+  const resolvedShadowTakers = takerRecommendations.flatMap((order) => {
     const outcome = outcomeFor(order), stake = order.shadowTakerAllInCents, quantity = order.shadowTakerQuantity;
     if (!outcome || !(stake && stake > 0) || !(quantity && quantity > 0)) return [];
     const payout = outcome === order.side ? quantity * 100 : 0;
-    return [(payout - stake) / stake];
+    const takerReturn = (payout - stake) / stake;
+    // A same-intent maker no-fill returns zero cash rather than the hypothetical settlement return.
+    // Filled maker attempts use their authoritative terms. This keeps the comparison about execution
+    // style rather than comparing taker execution with a maker order that never spent any money.
+    const makerExecutionReturn = (order.filledCount ?? 0) > 0 ? makerReturn(order, outcome, true) ?? 0 : 0;
+    return [{ order, takerReturn, takerAdvantage: takerReturn - makerExecutionReturn }];
   });
+  const shadowTakerStats = clusterByWindow(resolvedShadowTakers, (item) => normalizedClose(item.order.closesAt), (item) => item.takerReturn);
+  const shadowAdvantageStats = clusterByWindow(resolvedShadowTakers, (item) => normalizedClose(item.order.closesAt), (item) => item.takerAdvantage);
+  const currentPolicyRecommendations = takerRecommendations.filter((order) => order.entryDecision?.policyVersion === BUY_POLICY_VERSION);
+  const currentPolicyResolved = resolvedShadowTakers.filter((item) => item.order.entryDecision?.policyVersion === BUY_POLICY_VERSION);
+  const currentPolicyTakerStats = clusterByWindow(currentPolicyResolved, (item) => normalizedClose(item.order.closesAt), (item) => item.takerReturn);
+  const currentPolicyAdvantageStats = clusterByWindow(currentPolicyResolved, (item) => normalizedClose(item.order.closesAt), (item) => item.takerAdvantage);
   const actualTakerOrders = orders.filter((order) => order.executionMode === 'live' && !order.id.includes(':exit:')
     && order.entryExecutionDecision?.executedStyle === 'taker');
   const actualTakerFills = actualTakerOrders.filter((order) => (order.filledCount ?? 0) > 0);
-  const resolvedActualTakerReturns = actualTakerFills.flatMap((order) => {
+  const resolvedActualTakers = actualTakerFills.flatMap((order) => {
     const outcome = outcomeFor(order);
     const value = outcome ? makerReturn(order, outcome, true) : null;
-    return value === null ? [] : [value];
+    return value === null ? [] : [{ order, value }];
   });
+  const actualTakerStats = clusterByWindow(resolvedActualTakers, (item) => normalizedClose(item.order.closesAt), (item) => item.value);
   const auditedAttempts = makerEntries.filter((order) => order.entryExecutionObservations?.length);
   const depthObservations = auditedAttempts.flatMap((order) => order.entryExecutionObservations ?? [])
     .filter((observation) => observation.displayedAhead !== undefined);
@@ -231,11 +244,26 @@ export function buildMakerFillReport(orders: PaperOrder[], forecasts: TrackedFor
     adaptiveExecution: {
       policyVersion: shadowEvaluations.at(-1)?.entryExecutionDecision?.policyVersion ?? 'maker-taker-adaptive-shadow-v1',
       shadowEvaluations: shadowEvaluations.length, takerRecommendations: takerRecommendations.length,
-      resolvedTakerRecommendations: resolvedShadowTakerReturns.length,
-      meanTakerCounterfactualReturn: resolvedShadowTakerReturns.length ? resolvedShadowTakerReturns.reduce((sum, value) => sum + value, 0) / resolvedShadowTakerReturns.length : null,
+      resolvedTakerRecommendations: resolvedShadowTakers.length,
+      resolvedTakerWindows: shadowTakerStats.windows,
+      meanTakerCounterfactualReturn: shadowTakerStats.mean,
+      takerCounterfactualReturnStandardError: shadowTakerStats.standardError,
+      pairedMakerComparisonWindows: shadowAdvantageStats.windows,
+      meanTakerAdvantageOverMaker: shadowAdvantageStats.mean,
+      takerAdvantageOverMakerStandardError: shadowAdvantageStats.standardError,
+      currentPolicy: {
+        buyPolicyVersion: BUY_POLICY_VERSION,
+        recommendations: currentPolicyRecommendations.length,
+        resolvedRecommendations: currentPolicyResolved.length,
+        resolvedWindows: currentPolicyTakerStats.windows,
+        meanTakerCounterfactualReturn: currentPolicyTakerStats.mean,
+        takerCounterfactualReturnStandardError: currentPolicyTakerStats.standardError,
+        meanTakerAdvantageOverMaker: currentPolicyAdvantageStats.mean,
+        takerAdvantageOverMakerStandardError: currentPolicyAdvantageStats.standardError,
+      },
       actualTakerOrders: actualTakerOrders.length, actualTakerFills: actualTakerFills.length,
-      resolvedActualTakerFills: resolvedActualTakerReturns.length,
-      meanActualTakerReturn: resolvedActualTakerReturns.length ? resolvedActualTakerReturns.reduce((sum, value) => sum + value, 0) / resolvedActualTakerReturns.length : null,
+      resolvedActualTakerFills: resolvedActualTakers.length,
+      meanActualTakerReturn: actualTakerStats.mean,
     },
     attempts: attempts.length, fills,
     meanPredictedProbability: attempts.length ? attempts.reduce((sum, order) => sum + order.makerFillEstimate!.probability, 0) / attempts.length : null,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildMakerFillReport, buildTradeRecord } from './execution-report';
-import type { PaperOrder, TrackedForecast } from './types';
+import { BUY_POLICY_VERSION } from './prediction-policy';
+import type { EntryDecisionSnapshot, PaperOrder, TrackedForecast } from './types';
 
 function order(probability: number, filledCount: number, patch: Partial<PaperOrder> = {}): PaperOrder {
   return {
@@ -72,7 +73,8 @@ describe('maker first-passage validation report', () => {
 
   it('reports shadow taker recommendations without blending them into actual taker fills', () => {
     const shadow = order(0.5, 0, {
-      symbol: 'BNB', shadowTakerAllInCents: 9, shadowTakerQuantity: 0.2,
+      symbol: 'BNB', entryDecision: { policyVersion: BUY_POLICY_VERSION } as EntryDecisionSnapshot,
+      shadowTakerAllInCents: 9, shadowTakerQuantity: 0.2,
       entryExecutionDecision: {
         policyVersion: 'maker-taker-adaptive-shadow-v1', configuredMode: 'maker', executedStyle: 'maker', recommendedStyle: 'taker',
         reason: 'shadow', takerNetEdge: 0.18, medianNetEdge: 0.14, makerNetEdge: 0.2,
@@ -80,8 +82,35 @@ describe('maker first-passage validation report', () => {
       },
     });
     const report = buildMakerFillReport([shadow], [outcome('BNB', shadow.closesAt, 'UP')]);
-    expect(report.adaptiveExecution).toMatchObject({ shadowEvaluations: 1, takerRecommendations: 1, resolvedTakerRecommendations: 1, actualTakerOrders: 0 });
+    expect(report.adaptiveExecution).toMatchObject({
+      shadowEvaluations: 1, takerRecommendations: 1, resolvedTakerRecommendations: 1,
+      resolvedTakerWindows: 1, actualTakerOrders: 0,
+      currentPolicy: { buyPolicyVersion: BUY_POLICY_VERSION, recommendations: 1, resolvedRecommendations: 1, resolvedWindows: 1 },
+    });
     expect(report.adaptiveExecution.meanTakerCounterfactualReturn).toBeCloseTo(11 / 9);
+    expect(report.adaptiveExecution.meanTakerAdvantageOverMaker).toBeCloseTo(11 / 9);
+  });
+
+  it('clusters taker shadows by window and keeps the current buy policy separate', () => {
+    const decision: NonNullable<PaperOrder['entryExecutionDecision']> = {
+      policyVersion: 'maker-taker-adaptive-shadow-v1', configuredMode: 'maker', executedStyle: 'maker', recommendedStyle: 'taker',
+      reason: 'shadow', takerNetEdge: 0.18, medianNetEdge: 0.14, makerNetEdge: 0.2,
+      makerExpectedCapturedEdge: 0.1, takerAdvantage: 0.08, makerCohort: '25-50c · 1-2c', makerSamples: 40, makerFillRate: 0.5,
+    };
+    const entryDecision = { policyVersion: BUY_POLICY_VERSION } as EntryDecisionSnapshot;
+    const first = order(0.5, 0, { symbol: 'BTC', entryDecision, shadowTakerAllInCents: 10, shadowTakerQuantity: 0.2, entryExecutionDecision: decision });
+    const correlatedLoss = order(0.5, 0, { symbol: 'ETH', entryDecision, shadowTakerAllInCents: 10, shadowTakerQuantity: 0.2, entryExecutionDecision: decision });
+    const later = order(0.5, 0, { symbol: 'SOL', entryDecision, closesAt: '2026-01-01T00:30:00Z', shadowTakerAllInCents: 10, shadowTakerQuantity: 0.2, entryExecutionDecision: decision });
+    const report = buildMakerFillReport([first, correlatedLoss, later], [
+      outcome('BTC', first.closesAt, 'UP'), outcome('ETH', correlatedLoss.closesAt, 'DOWN'), outcome('SOL', later.closesAt, 'UP'),
+    ]).adaptiveExecution;
+    expect(report.resolvedTakerRecommendations).toBe(3);
+    expect(report.resolvedTakerWindows).toBe(2);
+    expect(report.meanTakerCounterfactualReturn).toBeCloseTo(0.5);
+    expect(report.takerCounterfactualReturnStandardError).toBeCloseTo(0.5);
+    expect(report.meanTakerAdvantageOverMaker).toBeCloseTo(0.5);
+    expect(report.currentPolicy).toMatchObject({ recommendations: 3, resolvedRecommendations: 3, resolvedWindows: 2 });
+    expect(report.currentPolicy.meanTakerCounterfactualReturn).toBeCloseTo(0.5);
   });
 
   it('reports matched-live overlays without changing independent paper outcomes', () => {

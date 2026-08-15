@@ -212,13 +212,18 @@ function missedBuyCounterfactual(forecasts: TrackedForecast[]): MissedBuyCounter
     }
   }
   const bestValues = [...best.values()].map((item) => item.returnValue);
+  const bestMean = bestValues.length ? bestValues.reduce((sum, value) => sum + value, 0) / bestValues.length : null;
+  const bestStandardError = bestMean !== null && bestValues.length > 1
+    ? Math.sqrt(bestValues.reduce((sum, value) => sum + (value - bestMean) ** 2, 0) / (bestValues.length - 1) / bestValues.length)
+    : null;
   return {
     label, description, candidates: candidates.length, windows: windowValues.size,
     profitableCandidates: candidates.filter((item) => item.returnValue > 0).length,
     meanCandidateReturn: mean, standardError,
     bestPerWindowCandidates: bestValues.length,
     bestPerWindowWins: bestValues.filter((value) => value > 0).length,
-    bestPerWindowMeanReturn: bestValues.length ? bestValues.reduce((sum, value) => sum + value, 0) / bestValues.length : null,
+    bestPerWindowMeanReturn: bestMean,
+    bestPerWindowStandardError: bestStandardError,
     bestPerWindowTotalReturn: bestValues.length ? bestValues.reduce((sum, value) => sum + value, 0) : null,
   };
 }

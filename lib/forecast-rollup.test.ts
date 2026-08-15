@@ -208,10 +208,10 @@ describe('the missed-buy counterfactual', () => {
       counterfactualRow({ id: 'cf-2', symbol: 'ETH', closesAt: '2026-08-14T00:15:00Z', price: 0.35, outcome: 'DOWN' }),
       counterfactualRow({ id: 'cf-3', symbol: 'SOL', closesAt: '2026-08-14T00:30:00Z', price: 0.30 }),
     ];
-    expect(compareSummaries(
-      summarizePerformance(rows),
-      summarizeFromRollups(rollupsFor([['2026-08-14', rows]])),
-    )).toEqual([]);
+    const direct = summarizePerformance(rows);
+    const merged = summarizeFromRollups(rollupsFor([['2026-08-14', rows]]));
+    expect(direct.missedBuyCounterfactual.bestPerWindowStandardError).not.toBeNull();
+    expect(compareSummaries(direct, merged)).toEqual([]);
   });
 
   it('selects one nearest snapshot when the same asset/window is split across shards', () => {

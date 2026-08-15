@@ -28,10 +28,10 @@ Snapshot from local durable files on 2026-08-14:
 - Paper ledger lifetime: 781 non-exit orders, 746 settled entries, 332 settled windows, +366.70 cents exact realized P&L on 27,600 cents stake, 0 open and 0 working orders, 35 unfilled entries.
 - Current live budget control: active, live mode, 2,000 cents starting budget, 679 cents available, 171 cents reserved, -1,150 cents current-epoch whole-cent realized P&L, 2,000 cents peak-equity reference.
 - Budget audit: live control roll-forward matches the durable budget audit and current open reservation exactly. The 2026-08-14 BNB partial-exit chain is balanced: 200c reserved, 13c released, 108c partial exit settled for 126c, and the 79c remainder settled for 0c. Paper spendable budget matches the current reset epoch using whole-cent `pnlCents`; exact sold-exit `payoutCents` remain a reporting/accounting view and explain the apparent lifetime difference.
-- Latest walk-forward run: `walk-forward:500:fnv1a-26981834`, generated 2026-08-14T17:26:16.618Z, 500 checkpoint windows, decision `baseline_retained`. Candidate mean window return was 3.07% versus baseline 3.89%; candidate had 3 positive folds and beat baseline in 3 folds, below promotion criteria.
+- Latest reviewed walk-forward run: `walk-forward:550:fnv1a-866cfdc4`, generated 2026-08-15T00:00:23.891Z, 550 checkpoint windows, decision `baseline_retained`. Candidate mean window return was 4.37% versus baseline 4.81%; it beat baseline in only 2 of 5 folds and had a larger maximum drawdown, so it is not citable for promotion.
 - Forecast storage is a memory-residency risk, not a cadence risk. `data/forecast-history.json` is 188.7 MB and `data/forecast-history.journal.jsonl` is 12.2 MB. The parse itself costs ~1.2 s once per process behind a promise cache; the ~10 s blocks previously attributed to it were quadratic grouping in `summarizePerformance`, now fixed and 643 ms. What binds is that the process holds ~396 MB of retained heap to serve a hot set of 135 rows, and grows ~40 MB a day.
 
-Interpretation: lifetime live is slightly positive, but the current live budget epoch is down materially. Stake expansion must use both views, plus drawdown, maker-fill quality, model evaluation, and reconciliation health. Do not treat lifetime positive P&L alone as readiness.
+Interpretation: the newer exact ledger snapshot is slightly negative lifetime and the current live budget epoch is down materially. Stake expansion must use both views, plus drawdown, maker-fill quality, model evaluation, and reconciliation health. Do not treat a near-flat lifetime P&L alone as readiness. The fresh evidence-by-feature review is recorded in [reports/monitoring-review-2026-08-14.md](reports/monitoring-review-2026-08-14.md); it authorizes no new live feature.
 
 ## Implemented
 
@@ -118,20 +118,20 @@ Current stance: baseline retained. No automatic evaluator result may change prod
 
 ### 3. Decide the Profit-Reversal Exit Policy From Prospective Evidence
 
-Strict value exits and the 75% profit-reversal lock are now measured separately. The latest exit analysis showed strict value helping more than profit reversal, but the live profit-reversal sample remains small.
+Strict value exits and the 75% profit-reversal lock are measured separately. Strict value remains executable. `profit-reversal-75-v1` is already withheld from execution by default on its own negative evidence; arming and high-water observations continue so the counterfactual remains prospective. The local environment explicitly keeps it disabled.
 
 Remaining work:
 
 - Keep collecting complete position paths so HOLD arms are no longer approximate.
-- Re-run exit policy reports after enough new windows under the current implementation.
-- Decide whether `profit-reversal-75-v1` should remain live, be disabled, or be replaced by a different reduce-only rule.
+- Re-run exit policy reports after enough new armed downturns under the current implementation.
+- Require a separate manual evidence review before `MONEY_NOODLE_PROFIT_REVERSAL_EXIT=true` may restore execution or before a replacement reduce-only rule is introduced.
 - Preserve strict reduce-only semantics: exits reduce only existing exposure and never become opposite-side buys.
 
-No behavior change is justified solely from the small live profit-reversal cohort.
+The small historical live cohort supports conservative withholding, not permanent refutation or a replacement rule.
 
 ### 4. Accumulate and Evaluate Maker Queue/Depth Evidence
 
-Instrumentation and the queue-aware paper simulator are implemented; the next step is held-out evidence, not live execution changes. Before this deployment, same-signal paper/live maker agreement was only 29.7% across 37 paired attempts (19 live-only fills and 7 paper-only fills), which is the baseline the new independent and matched-live lanes must improve on prospectively.
+Instrumentation and the queue-aware paper simulator are implemented; the next step is held-out evidence, not live execution changes. Before this deployment, same-signal paper/live maker agreement was only 29.7% across 37 paired attempts (19 live-only fills and 7 paper-only fills), which is the baseline the new independent and matched-live lanes must improve on prospectively. The first post-deployment review has only 2 matched intents.
 
 Remaining work:
 
@@ -139,7 +139,7 @@ Remaining work:
 - Compare accepted filled orders with accepted no-fills by settlement window.
 - Measure independent-paper/live agreement and disagreements against the separately stored matched-live overlay; never substitute the selected live fill for the independent paper result.
 - Recalibrate maker fill probability only after enough prospective fills and no-fills exist under `paper-managed-maker-trade-queue-v2`.
-- Keep production `maker` execution unless maker/taker shadow results pass strict held-out gates.
+- Keep production `maker` execution unless maker/taker shadow results pass strict held-out gates. The review surface now clusters taker shadows by settlement window, compares them with the same intents' actual maker execution, and separates the active buy-policy cohort from historical policy mixtures; the prior unclustered +24.7% headline was not deployment-grade evidence.
 
 Forbidden for now: depth-aware sizing, more retries, taker promotion, stale maker-to-taker fallback, or queue-aware live gates.
 
