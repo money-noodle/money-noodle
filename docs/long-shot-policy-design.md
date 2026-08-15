@@ -174,6 +174,21 @@ same correlated window would silently multiply intended exposure.
 2. **Time remaining** is at or above the entry threshold — expressed as time remaining, not time elapsed,
    because what makes a comeback possible is how much clock is left for it. Identical to "first N minutes"
    on a first entry, and correct for re-entries, which time-elapsed is not.
+
+   **The threshold is 600 seconds: the first five minutes**, widened from three after measurement. The
+   first hour of live collection suggested the window rather than the price mark was throttling flow —
+   cheap sides were common, cheap sides *early* were not — and screening confirmed it. At the 10¢ mark,
+   moving from three minutes to five raises candidates from 2.9/day to **15.9/day**, which turns 60
+   attempts from roughly three weeks into about four days.
+
+   The surprise is that quality does not pay for it. Bucketed by when the entry appeared, the rate of
+   reaching 90¢ is flat from three minutes onward — 4.2% entering at 180–300s, 5.0% at 300–420s, 4.6% at
+   420–600s — against a noisy 15% (n=20) at 120–180s. The intuition that a comeback needs more clock is
+   not visible in the data out to ten minutes remaining. If flow is still short later, the same evidence
+   would support going wider; it does not support going narrower.
+
+   These touch rates remain floors, and all of them sit below the 12.5% break-even. That is the honest
+   state of the evidence and the reason the policy is collecting rather than being judged on it.
 3. No open long-shot position on the same asset and window (§9).
 4. Global exposure caps, provider funding, reconciliation health and the kill switch all pass.
 5. **No prior-cycle filter at launch.** Both readings were measured and failed, and at the 10¢ mark the

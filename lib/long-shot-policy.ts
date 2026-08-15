@@ -48,7 +48,9 @@ export function longShotSettings(environment: NodeJS.ProcessEnv = process.env): 
     entryMarkCents,
     // Must stay strictly above the entry mark, or the exit would be at or below cost.
     exitMarkCents: Math.floor(bounded(environment.MONEY_NOODLE_LONG_SHOT_EXIT_MARK_CENTS, 90, entryMarkCents + 1, 99)),
-    minimumSecondsRemaining: Math.floor(bounded(environment.MONEY_NOODLE_LONG_SHOT_MIN_SECONDS_REMAINING, 720, 120, 899)),
+    // 600 = the first five minutes. Widened from three on measurement: candidate flow rose 5.5x
+    // (2.9/day to 15.9/day at the 10¢ mark) while the touch rate did not fall — see §7.
+    minimumSecondsRemaining: Math.floor(bounded(environment.MONEY_NOODLE_LONG_SHOT_MIN_SECONDS_REMAINING, 600, 120, 899)),
     drawdownDivisor: Math.floor(bounded(environment.MONEY_NOODLE_LONG_SHOT_DRAWDOWN_DIVISOR, 30, 5, 500)),
     minimumTicketCents: Math.floor(bounded(environment.MONEY_NOODLE_LONG_SHOT_MIN_TICKET_CENTS, 10, 2, 1000)),
     maximumOpenPerSettlementWindow: Math.floor(bounded(environment.MONEY_NOODLE_LONG_SHOT_MAX_OPEN_PER_WINDOW, 3, 1, 10)),

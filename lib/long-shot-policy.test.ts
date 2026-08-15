@@ -38,6 +38,12 @@ describe('long-shot settings', () => {
     expect(parsed.exitMarkCents).toBe(41);
   });
 
+  it('opens the entry window for the first five minutes by default', () => {
+    // Widened from three on measurement: flow rose 5.5x at the 10c mark while the rate of reaching 90c
+    // stayed flat from three minutes onward, so the wider window buys candidates without buying worse ones.
+    expect(longShotSettings({ NODE_ENV: 'test' }).minimumSecondsRemaining).toBe(600);
+  });
+
   it('bounds every numeric setting against nonsense input', () => {
     const parsed = longShotSettings({
       NODE_ENV: 'test',
