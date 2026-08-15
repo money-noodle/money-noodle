@@ -7,12 +7,12 @@
 
 Money Noodle is operational as a local research dashboard, continuous paper shadow trader, public paper-track-record publisher, and explicitly armed live Kalshi trader. Core UP/YES and DOWN/NO entry, managed maker execution, paper maker mirroring, signed Kalshi reconciliation, quiescent pause/drain, loss gates, budget epochs, provider permissions, contract provenance, target integrity, standalone reduce-only exits, protected switching, model evaluation, and immutable promotion accounting are implemented.
 
-The system is mechanically capable. The unresolved question is economic: current evidence does not justify stake expansion, taker execution, looser entry gates, queue-aware execution changes, or adding a second live venue. The next work should prioritize event-loop/storage durability and decision-grade evidence over new trading features.
+The system is mechanically capable. The unresolved question is economic: current evidence does not justify stake expansion, taker execution, looser entry gates, queue-aware execution changes, or adding a second live venue. The next work should prioritize storage residency and decision-grade evidence over new trading features.
 
 | Area | Status |
 | --- | --- |
 | Dashboard and public paper track record | Functional locally and through optional Postgres projection |
-| Forecast and performance tracking | Functional; large forecast history is now the main latency risk |
+| Forecast and performance tracking | Functional and deterministic; large forecast history is now a memory-residency risk rather than a latency one |
 | Live execution | Kalshi live-capable and active in local control; no current open/working positions in the local ledger snapshot |
 | Paper execution | Continuous, maker-mode mirrored, independently accounted, and no longer limited to one order per cycle |
 | Model evaluation | Automatic walk-forward scheduler and immutable manual promotion ledger implemented; latest run retained baseline |
@@ -23,13 +23,13 @@ The system is mechanically capable. The unresolved question is economic: current
 
 Snapshot from local durable files on 2026-08-14:
 
-- Forecast history: 48,291 rows, 28,291 qualifying rows, 27,625 resolved qualifying rows, 2,191 resolved asset-cycles, and 463 resolved qualifying close windows.
+- Forecast history: 49,600 rows, 29,600 qualifying rows, 29,577 resolved qualifying rows, 2,426 resolved asset-cycles, and 519 resolved qualifying close windows.
 - Live ledger lifetime: 821 non-exit orders, 396 settled entries, 230 settled windows, -112.11 cents exact realized P&L on 12,128.40 cents exact stake, 1 open and 0 working orders, 420 unfilled entries.
 - Paper ledger lifetime: 781 non-exit orders, 746 settled entries, 332 settled windows, +366.70 cents exact realized P&L on 27,600 cents stake, 0 open and 0 working orders, 35 unfilled entries.
 - Current live budget control: active, live mode, 2,000 cents starting budget, 679 cents available, 171 cents reserved, -1,150 cents current-epoch whole-cent realized P&L, 2,000 cents peak-equity reference.
 - Budget audit: live control roll-forward matches the durable budget audit and current open reservation exactly. The 2026-08-14 BNB partial-exit chain is balanced: 200c reserved, 13c released, 108c partial exit settled for 126c, and the 79c remainder settled for 0c. Paper spendable budget matches the current reset epoch using whole-cent `pnlCents`; exact sold-exit `payoutCents` remain a reporting/accounting view and explain the apparent lifetime difference.
 - Latest walk-forward run: `walk-forward:500:fnv1a-26981834`, generated 2026-08-14T17:26:16.618Z, 500 checkpoint windows, decision `baseline_retained`. Candidate mean window return was 3.07% versus baseline 3.89%; candidate had 3 positive folds and beat baseline in 3 folds, below promotion criteria.
-- Forecast storage remains the dominant cadence risk: `data/forecast-history.json` is 228.8 MB and `data/forecast-history.journal.jsonl` is 39.1 MB. Full parse/stringify work can still block the event loop for seconds.
+- Forecast storage is a memory-residency risk, not a cadence risk. `data/forecast-history.json` is 188.7 MB and `data/forecast-history.journal.jsonl` is 12.2 MB. The parse itself costs ~1.2 s once per process behind a promise cache; the ~10 s blocks previously attributed to it were quadratic grouping in `summarizePerformance`, now fixed and 643 ms. What binds is that the process holds ~396 MB of retained heap to serve a hot set of 135 rows, and grows ~40 MB a day.
 
 Interpretation: lifetime live is slightly positive, but the current live budget epoch is down materially. Stake expansion must use both views, plus drawdown, maker-fill quality, model evaluation, and reconciliation health. Do not treat lifetime positive P&L alone as readiness.
 
@@ -52,7 +52,7 @@ Interpretation: lifetime live is slightly positive, but the current live budget 
 - Paper execution now mirrors the managed maker lifecycle instead of assuming immediate ask fills. Paper uses its own two-attempt maker retry ceiling by default and may submit every paper-selected candidate in one cycle until the configured portfolio, correlation, bankroll, or provider-funding constraints bind; live remains serialized one order at a time.
 - Explicit live arming, environment opt-in, kill switch, pause/resume, per-trade cap, order-rate cap, budget allocation, loss stops, and automatic safety suspension on ambiguous failures.
 - Pause is a quiescent drain: withdraw intent, serialize behind execution, cancel/confirm managed remainders, reconcile authoritatively, and report restart-safe only when no working or uncertain transaction remains.
-- Startup and periodic reconciliation read venue orders, fills, positions, resting orders, and cash before live execution. Managed remainders are canceled/confirmed; contradictory state fails closed. Prior partial reduce-only exits are included when validating original entry fills, so reconciliation does not replay the same exit or compare full acquisition history against only the open remainder.
+- Startup and periodic reconciliation read venue orders, fills, positions, resting orders, and cash before live execution. Managed remainders are canceled/confirmed; contradictory state fails closed. Prior partial reduce-only exits are included when validating original entry fills, so reconciliation does not replay the same exit or compare full acquisition history against only the open remainder. The fill-cost ceiling is the `reservedStakeCents` authorization captured at issuance, so repricing a reporting-only shadow field cannot move a fail-closed safety threshold.
 - Operator intent is separated from operational state. Manual pause/kill/config changes never auto-resume; system suspensions may guarded-auto-resume only after authoritative reconciliation and normal readiness checks pass.
 - Side-aware standalone reduce-only exits and protected live switching are implemented. Sell paths cannot create reverse exposure; partial/uncertain exits stop and reconcile rather than auto-chasing.
 - Budget epochs, peak-equity drawdown accounting, current-epoch/lifetime P&L separation, and explicit stake-expansion criteria are implemented.
@@ -74,26 +74,32 @@ Interpretation: lifetime live is slightly positive, but the current live budget 
 
 ## Prioritized Plan
 
-### 1. Fix Forecast Storage and Event-Loop Blocking
+### 1. Reduce Forecast Storage Residency
 
-Why this is first: the trading cadence and dashboard freshness now depend more on local file size than on upstream feeds. A 15-second system cannot keep full-history parse/stringify in the request or collector path.
+Why this is first: the process holds ~396 MB of retained heap to serve a working set of 135 rows, and adds ~40 MB a day. Extrapolated, the heap passes 1 GB in about two weeks and the default Node ceiling shortly after. Startup already costs 6-11 s to first useful response and grows linearly.
+
+This section previously read "a 15-second system cannot keep full-history parse/stringify in the request or collector path." That premise was wrong and is worth recording as wrong, because it is what turned this into a fire drill. The parse costs ~1.2 s once per process; the ~10 s blocks were quadratic grouping in `summarizePerformance`. Sharding is still the right answer, but for memory rather than for blocking.
 
 Started 2026-08-14:
 
 - Added `lib/forecast-storage.ts` and `scripts/verify-forecast-storage.ts`.
-- `npm run verify:forecast-storage` replays the legacy snapshot plus journal, builds a coexistence shard plan, and verifies row identity plus current summary counters before writing anything.
-- A verified `--write` run created ignored local shard artifacts under `data/forecast-history-shards/`: 49,219 effective rows, 3,082 open rows, 46,137 terminal rows, and 7 daily terminal shards. Summary counters matched exactly: 29,197 issued, 971 pending, 28,226 resolved, 2,358 cycles, 2,254 resolved cycles, 480 resolved windows, and 507 calibration windows.
-- The first materialized `open.json` is still 14 MB, so the next runtime step must reduce/seal old unresolved rows before switching the collector to the hot-set file.
+- `npm run verify:forecast-storage` replays the legacy snapshot plus journal, builds a coexistence shard plan, and verifies row identity plus the full summary before writing anything.
+- The gate compares the whole summary field by field, not eight counters: exact for anything countable, and a 1e-12 relative tolerance for float aggregates, because IEEE addition is not associative and a different row order legitimately moves the last digits. Byte-identical output is not an achievable bar.
+- Passing the gate required giving six reported orderings a total order by `id`. Ties are the ordinary case here, so `timeline`, both streaks, the per-cycle representative row, `recent`, and the grouped sorts previously depended on where rows sat in the durable file and could shift across a compaction or journal replay with no data change. Only two were found by reading the code; the gate found the other four. Last run over 49,600 live rows: `ok: true`, no errors.
+- The 14 MB / 3,082-row `open.json` recorded here earlier was a symptom of the stall, not an independent blocker: while the event loop was starved, `resolveDueForecasts` could not keep up and unresolved rows piled into the hot set. With the loop fixed the hot set is 135 rows. The materialized artifacts under `data/forecast-history-shards/` are stale from that earlier `--write` run.
 - Off-machine archive phase 1 is active: dedicated one-year Scaleway application credentials have object read/write and bucket read permissions but no object-delete or bucket-write permission. The app archives daily from the persistent worker; rolling local deletion remains deliberately disabled until repeated manifests and an independent restore test pass.
 
 Plan:
 
-1. Implement rollups from [docs/forecast-storage-design.md](/Users/raiphairow/code/money/docs/forecast-storage-design.md), gated on reproducing today's summary field by field over the full history.
-2. Shard immutable settled history by day and keep only a small unresolved/hot set in the active file.
-3. Move expensive aggregation behind a worker boundary or cached rollup reader so dashboard and collector requests cannot block on full-history parsing.
-4. Keep retention policy unchanged during the migration; this is a storage-layout change, not evidence deletion.
+1. Build `summarize(sealedRollups, openRows)` beside the current function, both running and compared under the existing gate on live data, with nothing switching over. This is the whole correctness risk of the design, isolated from any layout change.
+2. Then switch the reader: `readForecasts()` returns the open set only, and sealed shards become lazily loaded for the evaluator and `/api/performance`. This is the step where retained heap and startup time actually drop, and it is measured that way rather than by cycle latency.
+3. Keep retention policy unchanged during the migration; this is a storage-layout change, not evidence deletion.
 
-Done means: 15-second collection remains fresh through restart, forecast scoring matches pre-migration output, compaction no longer serializes the whole history, and the dashboard can report degraded rollup state explicitly.
+Rollups must come before sharding, not after. Every cycle `updateTracking` reads the whole array and the cached summary scans all of it every 60 seconds, so switching the reader while the summary still needs sealed rows would either keep the archive resident anyway or re-read the history every minute. The residency win is gated on the summary no longer needing sealed rows.
+
+The worker boundary previously listed here is deferred indefinitely. It relocates work without reducing residency, which is not what binds. See [docs/forecast-storage-design.md](/Users/raiphairow/code/money/docs/forecast-storage-design.md) §5.
+
+Done means: retained heap and startup time measurably drop, forecast scoring matches pre-migration output under the gate, 15-second collection remains fresh through restart, and the dashboard can report degraded rollup state explicitly.
 
 ### 2. Harden Walk-Forward Review Before Any Model Promotion
 
