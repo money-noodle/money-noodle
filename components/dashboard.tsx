@@ -12,6 +12,7 @@ import { MarketChart } from '@/components/market-chart';
 import { PerformanceDialog } from '@/components/performance-dialog';
 import { PaperBudgetDialog } from '@/components/paper-budget-panel';
 import { PolicyDialog } from '@/components/policy-dialog';
+import { LongShotDialog } from '@/components/long-shot-dialog';
 import { ResearchDialog } from '@/components/research-dialog';
 import { TradingControlDialog } from '@/components/trading-control-dialog';
 import { ThemeToggle } from '@/components/theme-toggle';
@@ -490,7 +491,7 @@ export function Dashboard({ initialData, authenticated }: { initialData: Dashboa
     <div className="relative mx-auto max-w-[1500px] px-4 py-8 sm:px-6 sm:py-12">
       <section className="mb-8 flex flex-col justify-between gap-6 lg:flex-row lg:items-end">
         <div className="max-w-2xl">
-          <div className="mb-3 flex flex-wrap items-center gap-2"><Badge variant="outline" className="gap-1.5 border-primary/20 bg-primary/5 text-primary"><Sparkles/> {data?.modelVersion ?? 'Blend 0.2'}</Badge>{data?.policyManifest && <PolicyDialog manifest={data.policyManifest} providers={authenticated ? data.tradingProviders : undefined} variant="badge"/>}{data && <DataFreshnessDialog data={data} variant="badge"/>}<span className="text-[10px] text-muted-foreground">15-minute crypto markets</span></div>
+          <div className="mb-3 flex flex-wrap items-center gap-2"><Badge variant="outline" className="gap-1.5 border-primary/20 bg-primary/5 text-primary"><Sparkles/> {data?.modelVersion ?? 'Blend 0.2'}</Badge>{data?.policyManifest && <PolicyDialog manifest={data.policyManifest} providers={authenticated ? data.tradingProviders : undefined} variant="badge"/>}{data && <DataFreshnessDialog data={data} variant="badge"/>}{authenticated && <LongShotDialog variant="badge"/>}<span className="text-[10px] text-muted-foreground">15-minute crypto markets</span></div>
           <h1 className="text-3xl font-semibold tracking-[-.04em] text-primary sm:text-4xl">See the signal.<br/><span className="text-brand-green">Inspect the evidence.</span></h1>
           <p className="mt-4 max-w-xl text-sm leading-relaxed text-secondary-foreground">A transparent model layered over prediction-market prices, trend regimes, seasonal history, and breaking crypto news.</p>
         </div>
