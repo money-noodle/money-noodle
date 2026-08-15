@@ -92,8 +92,8 @@ Started 2026-08-14:
 
 Plan:
 
-1. Build `summarize(sealedRollups, openRows)` beside the current function, both running and compared under the existing gate on live data, with nothing switching over. This is the whole correctness risk of the design, isolated from any layout change.
-2. Then switch the reader: `readForecasts()` returns the open set only, and sealed shards become lazily loaded for the evaluator and `/api/performance`. This is the step where retained heap and startup time actually drop, and it is measured that way rather than by cycle latency.
+1. ~~Build `summarize(sealedRollups, openRows)` beside the current function, both running and compared under the existing gate on live data, with nothing switching over.~~ **Done.** `summarizeFromRollups` in `lib/forecast-rollup.ts` reproduces the full summary from per-shard sufficient statistics with zero differences over the 49,675-row live history, in 134 ms against 624 ms, from 6.1 MB of rollups standing in for 188.7 MB of rows. Both paths run on every gate run and nothing has switched over. The merge depends on no property of the layout: an early measurement said shards never overlap in resolution time, that turned out to be false within the hour, and the merge now sorts rather than assuming. See [docs/forecast-storage-design.md](/Users/raiphairow/code/money/docs/forecast-storage-design.md) §4.1.
+2. **Next.** Switch the reader: `readForecasts()` returns the open set only, and sealed shards become lazily loaded for the evaluator and `/api/performance`. This is the step where retained heap and startup time actually drop, and it is measured that way rather than by cycle latency.
 3. Keep retention policy unchanged during the migration; this is a storage-layout change, not evidence deletion.
 
 Rollups must come before sharding, not after. Every cycle `updateTracking` reads the whole array and the cached summary scans all of it every 60 seconds, so switching the reader while the summary still needs sealed rows would either keep the archive resident anyway or re-read the history every minute. The residency win is gated on the summary no longer needing sealed rows.
