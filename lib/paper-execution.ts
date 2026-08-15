@@ -1117,7 +1117,11 @@ async function executeLiveStandaloneExit(order: PaperOrder, decision: NonNullabl
 async function observeAndExecuteStandaloneExits(dashboard: DashboardData, status: TradingControlData, ledger: Ledger): Promise<boolean> {
   if (!isFreshCalculationTimestamp(dashboard.generatedAt)) return false;
   let changed = false;
-  for (const order of ledger.orders.filter((item) => item.status === 'open')) {
+  // Scoped to the edge policy's own positions. Its exit rules read a model probability and an optimistic
+  // hold value; the long-shot policy produces neither, so applying them to its positions grades a bet
+  // against a forecast that was never made. On 2026-08-15 this closed three long-shot positions at 48-76c
+  // that the strategy was holding for its 90c mark, corrupting the round trip it exists to measure.
+  for (const order of ledger.orders.filter((item) => item.status === 'open' && orderStrategyId(item) === EDGE_BINARY_BUY)) {
     const prediction = dashboard.predictions.find((item) => item.symbol === order.symbol
       && (order.venue === 'kalshi' ? item.kalshi?.closesAt === order.closesAt : item.market.closesAt === order.closesAt));
     if (!prediction) continue;
@@ -1158,7 +1162,8 @@ function bestSwitch(dashboard: DashboardData, status: TradingControlData, ledger
     if (ledger.orders.some((order) => order.executionMode === 'live' && order.status === 'sold' && order.closesAt === replacement.closesAt)) continue;
     const newExpectedProfit = replacement.quantity * 100 * orderProbability(replacement) - replacement.stakeCents;
     if (newExpectedProfit <= 0) continue;
-    for (const incumbent of open.filter((order) => order.venue === 'kalshi' && order.status === 'open')) {
+    for (const incumbent of open.filter((order) => order.venue === 'kalshi' && order.status === 'open'
+      && orderStrategyId(order) === EDGE_BINARY_BUY)) {
       if (options.oppositeSameAssetOnly && !(replacement.symbol === incumbent.symbol && replacement.side !== incumbent.side)) continue;
       const current = dashboard.predictions.find((item) => item.symbol === incumbent.symbol && item.kalshi?.closesAt === incumbent.closesAt);
       const quote = current ? venueQuote(current, 'kalshi', incumbent.side) : null;

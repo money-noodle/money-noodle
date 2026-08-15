@@ -137,3 +137,28 @@ describe('account-wide limits deliberately do not scope by strategy', () => {
     expect(countFilledLiveVenueOrders(filled, Date.parse('2026-08-14T00:00:00Z'))).toBe(2);
   });
 });
+
+describe('the edge policy acts only on positions it owns', () => {
+  const source = readFileSync(new URL('./paper-execution.ts', import.meta.url), 'utf8');
+  const between = (from: string, to: string) => source.slice(source.indexOf(from), source.indexOf(to));
+
+  it('exits only its own positions', () => {
+    // Its exit rules read a model probability and an optimistic hold value. The long-shot policy produces
+    // neither, so applying them there grades a bet against a forecast that was never made. On 2026-08-15
+    // this closed three long-shot positions at 48-76c that were being held for a 90c mark.
+    const exits = between('async function observeAndExecuteStandaloneExits', 'function bestSwitch');
+    expect(exits).toContain('orderStrategyId(item) === EDGE_BINARY_BUY');
+  });
+
+  it('never liquidates another strategy\'s incumbent to fund its own entry', () => {
+    const switching = between('function bestSwitch', 'async function executeSwitch');
+    expect(switching).toContain('orderStrategyId(order) === EDGE_BINARY_BUY');
+  });
+
+  it('still counts every strategy against the shared exposure caps', () => {
+    // Deliberately unscoped: risk is exposure to the underlying, so two strategies must not each hold a
+    // full allowance of the same correlated window. Acting on a position and counting it are different.
+    const exposures = between('function updatePortfolioDecisions', 'async function resolveOutcome');
+    expect(exposures).not.toContain('EDGE_BINARY_BUY');
+  });
+});
