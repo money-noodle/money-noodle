@@ -13,7 +13,8 @@ import { simulateManagedPaperMaker, type PaperMakerSimulationResult } from './pa
 import { isFreshCalculationTimestamp } from './freshness';
 import { observationBucket } from './observation-window';
 import { selectedSideDepth } from './order-book-depth';
-import { orderMarketId, orderProviderId } from './execution-report';
+import { orderMarketId, orderProviderId, orderStrategyId } from './execution-report';
+import { EDGE_BINARY_BUY } from './strategy-registry';
 import { assetAdmitted } from './asset-exclusion';
 import { cycleRegimeFor } from './cycle-path-store';
 import { DEFAULT_MARKET_ID } from './market-registry';
@@ -34,7 +35,7 @@ import { advanceSignalPersistence, evaluateSignalPersistence, evaluateSignalPers
 import { REQUIRED_SWITCH_SNAPSHOTS, REQUIRED_SWITCH_SPAN_MS, advanceSwitchPersistence, switchCooldownRemainingMs, switchEvidenceReady, switchEvidenceSpanMs, type SwitchPersistenceState } from './switch-hysteresis';
 import { evaluateSwitchProbabilityGate, switchPolicySettings, valueSwitch } from './switch-policy';
 import { autoResumeTradingAfterReconciliation, getTradingControl, pauseTrading, reconcileTradingBudget, recordTradingReconciliationFailure, releaseTradingBudget, reserveTradingBudget, settleTradingBudget, stopTradingForLiveRisk, suspendTrading } from './trading-control';
-import type { DashboardData, ExecutionMode, ExecutionSignalReadiness, ExecutionSummary, MarketFunding, MarketId, PaperOrder, PortfolioDecisionView, PositionSide, Prediction, ProviderBudgetConfiguration, PublicPaperBudget, PublicPaperExecutionRecord, TradingControlData, TradingProviderId } from './types';
+import type { DashboardData, ExecutionMode, ExecutionSignalReadiness, ExecutionSummary, MarketFunding, MarketId, PaperOrder, PortfolioDecisionView, PositionSide, Prediction, ProviderBudgetConfiguration, PublicPaperBudget, PublicPaperExecutionRecord, StrategyId, TradingControlData, TradingProviderId } from './types';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const LEDGER_FILE = path.join(DATA_DIR, 'paper-orders.json');
@@ -452,6 +453,9 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
     id: orderId(prediction, mode, side, ledger), logicalOrderId: orderId(prediction, mode, side, ledger), attemptNumber: 1,
     clientOrderId: orderId(prediction, mode, side, ledger), executionMode: mode,
     marketId: DEFAULT_MARKET_ID,
+    // `buildOrder` is the edge policy's construction path; the long-shot policy builds its own orders and
+    // stamps its own id. Explicit on both sides so neither can fall through to a default.
+    strategyId: EDGE_BINARY_BUY,
     // Stamped at creation so a later reconfiguration cannot reattribute this order's P&L.
     budgetEpochId: status.control.epochId,
     providerId: selected.venue,
@@ -1624,8 +1628,11 @@ export function groupedRecentOrders(orders: PaperOrder[]): PaperOrder[] {
   }).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 }
 
-function summarize(orders: PaperOrder[], mode: ExecutionMode, running: boolean, equityCents: number, figures: LedgerFigures, budget?: PaperBudget): ExecutionSummary {
-  const mine = orders.filter((order) => order.executionMode === mode);
+function summarize(orders: PaperOrder[], mode: ExecutionMode, running: boolean, equityCents: number, figures: LedgerFigures, budget?: PaperBudget, strategyId: StrategyId = EDGE_BINARY_BUY): ExecutionSummary {
+  // Scoped by strategy as well as mode. The two strategies share one ledger because reconciliation is an
+  // account-wide concern and a split file would leave real resting orders unmatched, so every money figure
+  // read out of it has to re-narrow.
+  const mine = orders.filter((order) => order.executionMode === mode && orderStrategyId(order) === strategyId);
   const settled = mine.filter((order) => order.status === 'won' || order.status === 'lost' || order.status === 'invalid' || order.status === 'sold');
   const openOrders = mine.filter((order) => order.status === 'open' || order.status === 'pending_reservation' || order.status === 'uncertain').length;
   return {
@@ -1668,7 +1675,9 @@ function publicPaperExecution(order: PaperOrder): PublicPaperExecutionRecord {
  * records, client/venue identifiers, contracts, account state, decision snapshots, and mutations.
  */
 function publicPaperBudgetFromLedger(ledger: Ledger): PublicPaperBudget {
-  const orders = ledger.orders.filter((order) => order.executionMode === 'paper');
+  // The published track record is the edge policy's. A second strategy's results must not be blended into
+  // it: the public figure would then describe neither strategy.
+  const orders = ledger.orders.filter((order) => order.executionMode === 'paper' && orderStrategyId(order) === EDGE_BINARY_BUY);
   const openOrders = orders.filter((order) => order.status === 'open' || order.status === 'pending_reservation');
   const settledOrders = orders.filter((order) => order.status === 'won' || order.status === 'lost' || order.status === 'invalid' || order.status === 'sold');
   const reservedCents = openOrders.reduce((total, order) => total + order.stakeCents, 0);

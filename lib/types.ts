@@ -33,6 +33,24 @@ export type TradingProviderImplementation = 'planned' | 'read-paper' | 'live';
  */
 export type MarketId = 'crypto-15m' | 'crypto-spot';
 
+/**
+ * A strategy is a complete way of deciding what to buy and when to sell, running on a market. Two exist:
+ * the model-driven edge policy, and the long-shot round trip, which consumes no probability at all.
+ *
+ * Keyed separately from market and provider because it varies along its own axis (SPEC §12.10). Budget,
+ * bankroll, P&L, loss stops, and operator intent are per strategy; exposure caps, the kill switch,
+ * reconciliation, drain, and the venue order ceiling are not, because those are account properties.
+ */
+export type StrategyId = 'edge-binary-buy' | 'long-shot-round-trip';
+
+export interface StrategyDescriptor {
+  id: StrategyId;
+  name: string;
+  /** Whether entries come from the forecast model or purely from venue price and clock. */
+  signalSource: 'model-probability' | 'venue-price';
+  description: string;
+}
+
 export interface MarketDescriptor {
   id: MarketId;
   name: string;
@@ -1299,6 +1317,12 @@ export interface PaperOrder {
   executionMode: ExecutionMode;
   /** Absent on records written before markets were explicit; those belong to `crypto-15m`. */
   marketId?: MarketId;
+  /**
+   * Absent on records written before strategies were explicit; those belong to `edge-binary-buy`, which
+   * was the only thing trading. Read it through `orderStrategyId` rather than directly: an unattributed
+   * long-shot order would land inside the edge policy's lifetime loss breaker.
+   */
+  strategyId?: StrategyId;
   /** Budget epoch this order was placed under, so a later reconfiguration cannot reattribute its P&L. */
   budgetEpochId?: string;
   /**

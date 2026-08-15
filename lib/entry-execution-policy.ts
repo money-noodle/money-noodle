@@ -1,4 +1,5 @@
-import type { PaperOrder, PositionSide } from './types';
+import { DEFAULT_STRATEGY_ID, normalizeStrategyId } from './strategy-registry';
+import type { PaperOrder, PositionSide, StrategyId } from './types';
 
 export const ENTRY_EXECUTION_POLICY_VERSION = 'maker-taker-adaptive-shadow-v1';
 export type EntryExecutionMode = 'maker' | 'adaptive' | 'taker';
@@ -47,9 +48,15 @@ const priceBand = (price: number): string => price < 0.10 ? '<10c' : price < 0.2
 const spreadBand = (spread: number): string => spread < 0.01 ? '<1c' : spread <= 0.02 ? '1-2c' : '2c+';
 
 /** Uses only prior accepted maker attempts in a comparable price/spread cohort. */
-export function makerCohortEvidence(orders: PaperOrder[], price: number, spread: number): MakerCohortEvidence {
+/**
+ * Scoped to one strategy. The bands would otherwise pool the long-shot policy's attempts with the edge
+ * policy's cheapest ones: both sit in the same low price band, but a resting limit at a fixed mark and a
+ * repriced managed maker are not the same execution, so a shared fill rate would describe neither.
+ */
+export function makerCohortEvidence(orders: PaperOrder[], price: number, spread: number, strategyId: StrategyId = DEFAULT_STRATEGY_ID): MakerCohortEvidence {
   const label = `${priceBand(price)} · ${spreadBand(spread)}`;
   const comparable = orders.filter((order) => order.executionMode === 'live' && order.venue === 'kalshi'
+    && normalizeStrategyId(order.strategyId) === strategyId
     && !order.id.includes(':exit:') && order.entryExecutionDecision?.executedStyle !== 'taker'
     && order.liquidityRole !== 'taker' && Boolean(order.venueOrderId)
     && priceBand(order.askPrice) === priceBand(price) && spreadBand(order.spread) === spreadBand(spread));
