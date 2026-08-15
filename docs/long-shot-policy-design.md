@@ -179,6 +179,18 @@ same correlated window would silently multiply intended exposure.
 5. **No prior-cycle filter at launch.** Both readings were measured and failed, and at the 10¢ mark the
    candidate flow cannot support a selective filter before there is data to choose one.
 
+**Execution is a price-capped taker IOC at the mark.** Production is maker-only for the edge policy, and
+this is a deliberate exception rather than an oversight. The trigger here is *defined* as "the executable
+ask reached the low mark," so taking that ask is intrinsic to the strategy rather than a choice of
+execution style, and every break-even figure in §3.3 already assumes paying it. A post-only bid at the mark
+would cross the ask and be rejected; a bid one tick below would rest and frequently not fill, which defeats
+the thesis the same way a fifteen-second exit poll would — the side is cheap precisely because price is
+moving away from it.
+
+The primitive is `placeKalshiTakerBuy`, which refuses to submit when the current ask exceeds the approved
+cap, so this can never pay more than the mark. Kalshi charges the same fee either way, so the cost of
+taking is the spread alone, which the entry mark already bounds.
+
 ## 8. Exit
 
 **A two-second poll of the owned side's bid, submitting a reduce-only IOC at the mark when it is reached.**
