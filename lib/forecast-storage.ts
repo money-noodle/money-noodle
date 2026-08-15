@@ -2,25 +2,11 @@ import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { groupBy } from './group';
-import { buildSummaryRollup, summarizeFromRollups } from './forecast-rollup';
+import { buildSummaryRollup, summarizeFromRollups, type ForecastSummaryRollup } from './forecast-rollup';
 import { summarizePerformance } from './performance';
 import type { PerformanceSummary, TrackedForecast } from './types';
 
-export const FORECAST_STORAGE_VERSION = 'forecast-storage-v1';
-
-export interface ForecastShardRollup {
-  shardId: string;
-  rowCount: number;
-  resolved: number;
-  invalid: number;
-  pending: number;
-  qualified: number;
-  unqualified: number;
-  distinctCycles: string[];
-  distinctResolvedCycles: string[];
-  distinctResolvedWindows: string[];
-  cycleOutcomes: Array<{ cycleId: string; correct: number; total: number }>;
-}
+export const FORECAST_STORAGE_VERSION = 'forecast-storage-v2';
 
 export interface ForecastShardIndexEntry {
   shardId: string;
@@ -28,6 +14,7 @@ export interface ForecastShardIndexEntry {
   rollupFile: string;
   rowCount: number;
   sha256: string;
+  rollupSha256: string;
   firstIssuedAt?: string;
   lastIssuedAt?: string;
 }
@@ -44,7 +31,7 @@ export interface ForecastStorageIndex {
 export interface ForecastStoragePlan {
   index: ForecastStorageIndex;
   open: TrackedForecast[];
-  shards: Array<{ entry: ForecastShardIndexEntry; rows: TrackedForecast[]; rollup: ForecastShardRollup }>;
+  shards: Array<{ entry: ForecastShardIndexEntry; rows: TrackedForecast[]; rollup: ForecastSummaryRollup }>;
 }
 
 export interface ForecastStorageVerification {
@@ -59,19 +46,6 @@ export interface ForecastStorageVerification {
 const terminal = (forecast: TrackedForecast) => forecast.status === 'resolved' || forecast.status === 'invalid';
 const json = (value: unknown) => `${JSON.stringify(value)}\n`;
 const sha256 = (content: string) => createHash('sha256').update(content).digest('hex');
-const qualified = (forecast: TrackedForecast) => forecast.qualified !== false;
-
-function cycleKey(forecast: TrackedForecast): string {
-  if (forecast.cycleId) return forecast.cycleId;
-  const slug = forecast.marketUrl.split('/').filter(Boolean).at(-1) ?? forecast.symbol;
-  return `${slug}:${forecast.closesAt}`;
-}
-
-function settlementWindowKey(forecast: TrackedForecast): string {
-  const timestamp = Date.parse(forecast.closesAt);
-  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : forecast.closesAt;
-}
-
 function shardId(forecast: TrackedForecast): string {
   const timestamp = Date.parse(forecast.issuedAt);
   if (!Number.isFinite(timestamp)) return 'undated';
@@ -83,32 +57,6 @@ function timeBounds(rows: TrackedForecast[]): { firstIssuedAt?: string; lastIssu
   return { firstIssuedAt: issued[0], lastIssuedAt: issued.at(-1) };
 }
 
-function rollup(shard: string, rows: TrackedForecast[]): ForecastShardRollup {
-  const policy = rows.filter(qualified);
-  const resolved = policy.filter((forecast) => forecast.status === 'resolved');
-  const resolvedCycles = new Map<string, { correct: number; total: number }>();
-  for (const forecast of resolved) {
-    const key = cycleKey(forecast);
-    const current = resolvedCycles.get(key) ?? { correct: 0, total: 0 };
-    resolvedCycles.set(key, { correct: current.correct + (forecast.correct ? 1 : 0), total: current.total + 1 });
-  }
-  return {
-    shardId: shard,
-    rowCount: rows.length,
-    resolved: resolved.length,
-    invalid: policy.filter((forecast) => forecast.status === 'invalid').length,
-    pending: policy.filter((forecast) => forecast.status === 'pending').length,
-    qualified: policy.length,
-    unqualified: rows.length - policy.length,
-    distinctCycles: [...new Set(policy.map(cycleKey))].sort(),
-    distinctResolvedCycles: [...resolvedCycles.keys()].sort(),
-    distinctResolvedWindows: [...new Set(resolved.map(settlementWindowKey))].sort(),
-    cycleOutcomes: [...resolvedCycles.entries()]
-      .map(([cycleId, counts]) => ({ cycleId, ...counts }))
-      .sort((a, b) => a.cycleId.localeCompare(b.cycleId)),
-  };
-}
-
 export function buildForecastStoragePlan(forecasts: TrackedForecast[], generatedAt = new Date().toISOString()): ForecastStoragePlan {
   const open = forecasts.filter((forecast) => !terminal(forecast));
   // One bucket per day over the whole history is the coarse shape that makes copy-on-append quadratic;
@@ -118,15 +66,17 @@ export function buildForecastStoragePlan(forecasts: TrackedForecast[], generated
   const shards = [...terminalByShard.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([id, rows]) => {
     const orderedRows = [...rows].sort((a, b) => a.issuedAt.localeCompare(b.issuedAt) || a.id.localeCompare(b.id));
     const content = json(orderedRows);
+    const summaryRollup = buildSummaryRollup(id, orderedRows);
     const entry: ForecastShardIndexEntry = {
       shardId: id,
       file: `${id}.json`,
       rollupFile: `${id}.rollup.json`,
       rowCount: orderedRows.length,
       sha256: sha256(content),
+      rollupSha256: sha256(json(summaryRollup)),
       ...timeBounds(orderedRows),
     };
-    return { entry, rows: orderedRows, rollup: rollup(id, orderedRows) };
+    return { entry, rows: orderedRows, rollup: summaryRollup };
   });
 
   return {
@@ -144,13 +94,12 @@ export function buildForecastStoragePlan(forecasts: TrackedForecast[], generated
 }
 
 /**
- * Relative tolerance for float aggregates when comparing two summaries of the same rows.
+ * Combined absolute/relative tolerance for float aggregates over the same rows.
  *
- * Byte-identical output is not achievable and the gate must not demand it. IEEE addition is not
- * associative, so summing ~30k terms in a different row order moves the last digits; a rollup that sums
- * per-shard subtotals will do the same. Measured across the sharded layout the largest relative
- * deviation is 6.3e-15, about 28x double epsilon. This bound is ~160x that observed noise and still far
- * tighter than anything that could change a reading, let alone a decision.
+ * Byte-identical output is not achievable: IEEE addition is not associative, and rollups sum shard
+ * subtotals in a different order. A purely relative test becomes meaningless near zero — an absolute
+ * difference of 1.45e-16 measured 2.2e-12 relative once mean return approached zero — so the bound is
+ * `tolerance * max(1, |left|, |right|)`. At ordinary scale this is relative; near zero it is absolute.
  *
  * It applies only to non-integer numbers. Counts, cardinalities, labels, and array lengths are compared
  * exactly, because those are the values that gate calibration readiness and must never drift.
@@ -174,9 +123,9 @@ export function compareSummaries(
         return;
       }
       if (Number.isNaN(left) && Number.isNaN(right)) return;
-      const scale = Math.max(Math.abs(left), Math.abs(right));
-      const relative = scale === 0 ? Math.abs(left - right) : Math.abs(left - right) / scale;
-      if (!(relative <= tolerance)) differences.push(`${path}: ${left} != ${right} (relative ${relative.toExponential(2)} exceeds ${tolerance.toExponential(2)})`);
+      const difference = Math.abs(left - right);
+      const bound = tolerance * Math.max(1, Math.abs(left), Math.abs(right));
+      if (!(difference <= bound)) differences.push(`${path}: ${left} != ${right} (difference ${difference.toExponential(2)} exceeds ${bound.toExponential(2)})`);
       return;
     }
     if (Array.isArray(left) || Array.isArray(right)) {
@@ -217,6 +166,15 @@ export function verifyForecastStoragePlan(original: TrackedForecast[], plan: For
   if (plan.index.totalRows !== original.length) errors.push(`Index totalRows ${plan.index.totalRows} did not match original rows ${original.length}.`);
   if (plan.index.openRows !== plan.open.length) errors.push(`Index openRows ${plan.index.openRows} did not match open rows ${plan.open.length}.`);
   if (plan.index.terminalRows !== plan.shards.reduce((sum, shard) => sum + shard.rows.length, 0)) errors.push('Index terminalRows did not match shard row counts.');
+  if (plan.index.shards.length !== plan.shards.length) errors.push(`Index listed ${plan.index.shards.length} shards but the plan contained ${plan.shards.length}.`);
+  for (const shard of plan.shards) {
+    const indexed = plan.index.shards.find((entry) => entry.shardId === shard.entry.shardId);
+    if (!indexed) { errors.push(`Shard ${shard.entry.shardId} was missing from the index.`); continue; }
+    if (indexed.rowCount !== shard.rows.length) errors.push(`Shard ${shard.entry.shardId} row count ${shard.rows.length} did not match index ${indexed.rowCount}.`);
+    if (indexed.sha256 !== sha256(json(shard.rows))) errors.push(`Shard ${shard.entry.shardId} row checksum did not match its content.`);
+    if (shard.rollup.shardId !== shard.entry.shardId) errors.push(`Shard ${shard.entry.shardId} rollup identified itself as ${shard.rollup.shardId}.`);
+    if (indexed.rollupSha256 !== sha256(json(shard.rollup))) errors.push(`Shard ${shard.entry.shardId} rollup checksum did not match its content.`);
+  }
 
   const originalIds = new Set(original.map((forecast) => forecast.id));
   const plannedIds = new Set<string>();
@@ -241,7 +199,7 @@ export function verifyForecastStoragePlan(original: TrackedForecast[], plan: For
   // risk of the whole design sits. It is proven here against the same rows rather than by inspection:
   // sufficient statistics per shard, merged, must reproduce the summary the rows produce directly.
   const rollups = [
-    ...plan.shards.map((shard) => buildSummaryRollup(shard.entry.shardId, shard.rows)),
+    ...plan.shards.map((shard) => shard.rollup),
     buildSummaryRollup('open', plan.open),
   ];
   errors.push(...compareSummaries(originalFull, summarizeFromRollups(rollups)).map((difference) => `rollup ${difference}`));

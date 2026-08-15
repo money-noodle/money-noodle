@@ -165,10 +165,13 @@ originally anticipated.
   stores its own top 8; the merge is a top-k merge and needs no ordering assumption at all.
 
 `missedBuyCounterfactual` runs over all forecasts including unqualified ones, so it needs its own
-counters rather than riding on the qualified path. Its per-window values are stored **unclustered**, as
-`(window key, sum, count)`, and merge by key — as do `segments`' per-window returns. Averaging inside a
-shard would turn a window split across two shards into two observations, inflating the window count and
-moving the very standard error the clustering exists to keep honest.
+state rather than riding on the qualified path. Each shard stores its nearest-five-minute candidate per
+asset/window, including candidates that ultimately contribute no trade; the merge re-selects the global
+nearest snapshot before counting anything. Its resulting per-window values are stored **unclustered**,
+as `(window key, sum, count)`, and merge by key — as do `segments`' per-window returns. This prevents
+both duplicate asset/windows and duplicate clustered windows when storage boundaries split either one.
+Durable compact provenance references are matched through the contract identity embedded in
+`registryId`, so the gate exercises this path without rehydrating the full contract registry.
 
 ### 4.1 What the measurements changed, and what they got wrong
 
@@ -211,10 +214,10 @@ sort of ~30k rows: the merge went from 12 ms to 134 ms against 624 ms for the di
 rollups from 3.0 MB to 6.1 MB against 188.7 MB of rows.
 
 The two shard-locality results below are still true of today's data, and are still not relied on. The
-`segments` and counterfactual merges were both written to assume them and both were wrong: a test with a
-cycle split across two shards caught the window double-counting. What the measurements were genuinely
-good for was sizing — the streak length, the row counts, the column cost — not for licensing
-assumptions.
+`segments` and counterfactual merges were both initially written to assume them and both were wrong:
+fixtures now split cycles, settlement windows, and one counterfactual asset/window across shards. What
+the measurements were genuinely good for was sizing — the streak length, the row counts, the column
+cost — not for licensing assumptions.
 
 One rollup field was missing and would have drifted silently: `calibrationWindows` counts distinct
 settlement windows over **all** resolved rows including unqualified ones (552), while the stored
@@ -241,8 +244,8 @@ on the full 49,583-row history, comparing `summarizePerformance(original)` again
 The float aggregates differ because IEEE addition is not associative and the layout sums ~30k terms in
 a different order. No amount of care removes this; a rollup that sums per-shard subtotals will differ
 in the last digits too. The gate should therefore assert **exact** equality for everything countable and
-a **relative tolerance** (1e-12 is ~140× the observed noise and still far tighter than anything that
-could change a decision) for float aggregates.
+a **combined absolute/relative tolerance** (`1e-12 × max(1, |left|, |right|)`) for float aggregates.
+The absolute floor matters near zero, where last-bit noise otherwise looks large in relative terms.
 
 `timeline` was the real failure, and it is the one this section predicted. **Implemented**, and the
 cause was narrower than "rolling windows are hard": `Array.prototype.sort` is stable, so rows comparing
@@ -252,19 +255,22 @@ A total order was. Adding an `id` tie-break to every ordering that feeds a repor
 summary layout-independent, and drops the whole-summary deviation to 6.3e-15 with zero structural
 differences.
 
-Six orderings needed it, and only two were found by reading the code. The gate found the rest:
-`timeline`, `currentStreak`, `currentCycleStreak`, the per-cycle representative row, `recent` (ties
-decide which rows make the top 8 at all), and the grouped `byAsset`/`segments` sorts, which fell back to
-Map insertion order when groups tied.
+The first gate run found six tie-sensitive orderings: `timeline`, `currentStreak`,
+`currentCycleStreak`, the per-cycle representative row, `recent` (ties decide which rows make the top 8
+at all), and the grouped `byAsset`/`segments` sorts. Completing rollup coverage found two more in the
+missed-buy counterfactual: nearest-snapshot selection and equal-edge best-per-window selection. Both now
+fall back to row/candidate identity rather than incidental insertion order.
 
 This is a **behaviour change on ties**, not only a gate fix. Those statistics previously depended on the
 order rows happened to occupy in the durable file, so they could shift across a compaction or a journal
 replay with no data change at all. They are now deterministic.
 
 **Implemented as** `compareSummaries` in `lib/forecast-storage.ts`, wired into
-`verifyForecastStoragePlan`: exact for anything countable, `SUMMARY_FLOAT_TOLERANCE` (1e-12) for float
-aggregates, output capped so a systematic divergence reports its shape rather than thousands of lines.
-Last run over 49,586 live rows: `ok: true`, no errors. This completes the first half of step 1 in §7.
+`verifyForecastStoragePlan`: exact for anything countable, a combined absolute/relative
+`SUMMARY_FLOAT_TOLERANCE` (1e-12) for float aggregates, and output capped so a systematic divergence
+reports its shape rather than thousands of lines.
+Last verified write over 49,703 live rows: `ok: true`, no errors; 79 open rows, 8 terminal
+shards, and 6.6 MB of sufficient-statistic rollups with indexed checksums.
 
 ## 5. Non-blocking I/O boundary — deferred, and probably not needed
 
@@ -333,30 +339,24 @@ Each step is independently verifiable and independently revertable.
   with byte-identical output; the shared helper is `lib/group.ts`. This was the whole of the emergency.
 - **Plan builder and verification gate.** `buildForecastStoragePlan` / `verifyForecastStoragePlan` and
   `npm run verify:forecast-storage` reproduce the summary from a sharded plan.
-- **Full field-by-field gate, and the total ordering it required** (§4). The gate now compares the whole
-  summary, not eight counters, and six orderings were made deterministic so it can pass. Last run over
-  49,586 live rows: `ok: true`, no errors. Step 1's first half is complete.
+- **Full field-by-field gate, and the total ordering it required** (§4). The gate compares the whole
+  summary, not eight counters; every ordering and tie-sensitive selection now has a deterministic
+  identity fallback. Last verified write over 49,703 live rows: `ok: true`, no errors.
+- **Rollup algebra behind the gate.** `summarizeFromRollups` reproduces the direct summary from sealed
+  shard statistics plus open rows. Ordered columns sort globally, cycles and clustered windows merge by
+  key, and missed-buy asset/windows re-select their globally nearest snapshot before aggregation. Both
+  paths still run; nothing reads from the new layout yet.
 
 **Next, in order.**
 
-> An earlier draft of this re-scope put sharding first and rollups second. That ordering does not work,
-> for a reason worth recording. Every cycle, `dashboard.ts` → `trackCalculations` → `updateTracking`
-> calls `readForecasts()` for the *whole* array, and `cachedPerformanceSummary` scans all of it every 60
-> seconds. Switching the reader to shards while the summary still needs every row would either keep the
-> archive resident anyway — no win — or re-read 198 MB a minute, which is worse than today. **The
-> residency win is gated on the summary no longer needing sealed rows**, so the rollup algebra comes
-> first even though it is the riskier half.
+> Rollups had to come first: switching the reader while the summary still needed every sealed row would
+> either retain the archive anyway or re-read it every minute. That correctness risk is now isolated and
+> passing behind the gate, so the layout can change without inventing summary behavior at the same time.
 
-1. **Rollup algebra, behind the existing gate.** Extend `verifyForecastStoragePlan` to full field-by-
-   field equality — including `cycleBalancedAccuracy`, the streaks, and `timeline`, which it does not
-   cover yet (§4) — then build `summarize(sealedRollups, openRows)` beside the current function. Both
-   run and are compared on live data; nothing switches over. This is the whole correctness risk of the
-   design, isolated from any layout change, and it is verifiable before it is load-bearing.
-2. **Switch the reader.** Once the summary no longer needs sealed rows, `readForecasts()` can return the
-   open set only and sealed shards become lazily loaded for the evaluator and `/api/performance`. This
-   is the step where retained heap and startup time actually drop, and it is measured that way rather
-   than by cycle latency, which is already fixed.
-3. **Payload split** (already agreed separately): the freshness badge judges only market data, so no
+1. **Switch the reader.** `readForecasts()` returns the open set only, while sealed shards are lazily
+   loaded for the evaluator and `/api/performance`. This is the step where retained heap and startup
+   time actually drop, and it is measured that way rather than by cycle latency, which is already fixed.
+2. **Payload split** (already agreed separately): the freshness badge judges only market data, so no
    future slow subsystem can blank the trading view.
 
 **Not scheduled.**
@@ -372,8 +372,9 @@ Each step is independently verifiable and independently revertable.
 - **Riskiest code in the system.** This is the durability layer for data the spec calls irreplaceable.
   The verification gate in §4 and the coexistence period in §6 are the controls; neither should be
   shortened for speed.
-- **Cycle straddling midnight** is the main correctness trap in the rollups — a cycle key must merge
-  across shards, never be counted twice.
+- **Storage boundaries cannot become statistical boundaries.** Fixtures split cycles, clustered
+  settlement windows, and one missed-buy asset/window across shards; each merges globally by identity
+  or key rather than being counted once per file.
 - **Retention is unchanged here on purpose.** Sharding makes unbounded retention affordable rather than
   deciding what to discard. Whether qualified rows should be retained forever is a separate question
   and should not be settled as a side effect of a performance change.

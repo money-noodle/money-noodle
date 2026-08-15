@@ -1,3 +1,4 @@
+import { contractProvenanceMatches } from './contract-provenance';
 import { pushInto } from './group';
 import { BUY_POLICY_VERSION, MIN_CALIBRATION_SAMPLE, MIN_ENTRY_PRICE, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, MIN_SELECTED_SIDE_PROBABILITY, venueFeeRate } from './prediction-policy';
 import type { BenchmarkScore, CalibrationBin, EdgeBucket, LeadTimeSlice, MissedBuyCounterfactual, PerformanceSlice, PerformanceSummary, PerformanceTimelinePoint, SegmentGroup, SegmentStat, TrackedForecast } from './types';
@@ -167,17 +168,18 @@ function missedBuyCounterfactual(forecasts: TrackedForecast[]): MissedBuyCounter
   const description = `Exact-Kalshi fee-aware counterfactuals for sides that passed quality, price, and 5pp edge but were rejected only because independent selected-side probability was below ${floorPercent}.`;
   const byAssetWindow = new Map<string, TrackedForecast[]>();
   for (const forecast of forecasts.filter((item) => item.status === 'resolved' && item.policyVersion === BUY_POLICY_VERSION)) {
-    const outcome = forecast.venueOutcomes?.kalshi?.outcome;
-    if (!outcome || !forecast.venueContracts?.kalshi || forecast.venueOutcomes?.kalshi?.contractId !== forecast.venueContracts.kalshi.contractId) continue;
+    const resolution = forecast.venueOutcomes?.kalshi;
+    const reference = forecast.venueContracts?.kalshi;
+    if (!resolution?.outcome || !reference || !contractProvenanceMatches(reference, 'kalshi', resolution.contractId)) continue;
     const key = `${forecast.symbol}:${settlementWindowKey(forecast)}`;
     pushInto(byAssetWindow, key, forecast);
   }
-  const candidates: Array<{ closesAt: string; edge: number; returnValue: number }> = [];
+  const candidates: Array<{ key: string; closesAt: string; edge: number; returnValue: number }> = [];
   for (const snapshots of byAssetWindow.values()) {
     const nearest = [...snapshots].sort((a, b) => {
       const left = Math.abs((a.secondsRemaining ?? (Date.parse(a.closesAt) - Date.parse(a.issuedAt)) / 1000) - 300);
       const right = Math.abs((b.secondsRemaining ?? (Date.parse(b.closesAt) - Date.parse(b.issuedAt)) / 1000) - 300);
-      return left - right || Date.parse(a.issuedAt) - Date.parse(b.issuedAt);
+      return left - right || Date.parse(a.issuedAt) - Date.parse(b.issuedAt) || byIdTieBreak(a, b);
     })[0];
     const seconds = nearest.secondsRemaining ?? (Date.parse(nearest.closesAt) - Date.parse(nearest.issuedAt)) / 1000;
     // Fixed five-minute snapshots avoid update-count inflation and retain the ordinary execution horizon.
@@ -188,7 +190,11 @@ function missedBuyCounterfactual(forecasts: TrackedForecast[]): MissedBuyCounter
       const fee = venueFeeRate('kalshi', quote.price);
       const edge = probability - quote.price - fee;
       if (quote.price < MIN_ENTRY_PRICE || quote.price > 0.97 || edge < MIN_NET_EDGE || probability >= MIN_SELECTED_SIDE_PROBABILITY) continue;
-      candidates.push({ closesAt: settlementWindowKey(nearest), edge, returnValue: (outcome === quote.side ? 1 : 0) - quote.price - fee });
+      candidates.push({
+        key: `${nearest.id}:${quote.side}:${quote.price}`,
+        closesAt: settlementWindowKey(nearest), edge,
+        returnValue: (outcome === quote.side ? 1 : 0) - quote.price - fee,
+      });
     }
   }
   const windowValues = new Map<string, number[]>();
@@ -198,10 +204,12 @@ function missedBuyCounterfactual(forecasts: TrackedForecast[]): MissedBuyCounter
   const standardError = mean !== null && clustered.length > 1
     ? Math.sqrt(clustered.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (clustered.length - 1) / clustered.length)
     : null;
-  const best = new Map<string, { edge: number; returnValue: number }>();
+  const best = new Map<string, { key: string; edge: number; returnValue: number }>();
   for (const candidate of candidates) {
     const prior = best.get(candidate.closesAt);
-    if (!prior || candidate.edge > prior.edge) best.set(candidate.closesAt, candidate);
+    if (!prior || candidate.edge > prior.edge || (candidate.edge === prior.edge && candidate.key < prior.key)) {
+      best.set(candidate.closesAt, candidate);
+    }
   }
   const bestValues = [...best.values()].map((item) => item.returnValue);
   return {

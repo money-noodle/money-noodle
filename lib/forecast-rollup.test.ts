@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { compareSummaries } from './forecast-storage';
 import { buildSummaryRollup, leadingStreak, summarizeFromRollups } from './forecast-rollup';
 import { summarizePerformance } from './performance';
+import { BUY_POLICY_VERSION } from './prediction-policy';
 import type { TrackedForecast } from './types';
 
 function forecast(overrides: Partial<TrackedForecast> = {}): TrackedForecast {
@@ -46,6 +47,46 @@ function day(date: string, count: number, correctAt: (index: number) => boolean)
 
 const rollupsFor = (shards: Array<[string, TrackedForecast[]]>) =>
   shards.map(([id, rows]) => buildSummaryRollup(id, rows));
+
+/**
+ * A row that actually reaches `missedBuyCounterfactual`, which is harder than it looks: it needs a
+ * matching Kalshi contract id on both the contract and the outcome, a snapshot within 300s ± 90s, and a
+ * quote whose only disqualification is the selected-side floor.
+ *
+ * The fixture deliberately uses the durable compacted provenance shape (`registryId` plus capture
+ * time, no `contractId`). Runtime reads rehydrate it, but storage verification and sealed rollups work
+ * directly from the compacted rows and must enforce the same identity without loading the registry.
+ */
+function counterfactualRow(overrides: {
+  id: string; symbol?: string; closesAt: string; price: number; probabilityUp?: number; outcome?: 'UP' | 'DOWN';
+}): TrackedForecast {
+  const contractId = `KX${overrides.symbol ?? 'BTC'}15M-${overrides.closesAt}`;
+  const closesAt = overrides.closesAt;
+  return forecast({
+    id: overrides.id,
+    symbol: overrides.symbol ?? 'BTC',
+    status: 'resolved',
+    policyVersion: BUY_POLICY_VERSION,
+    // 0.53 clears the 5pp net edge against a 0.40 quote while staying under the 0.55 floor, which is
+    // precisely the "rejected only by the floor" case the counterfactual measures.
+    probabilityUp: overrides.probabilityUp ?? 0.53,
+    confidence: 0.7,
+    outcome: overrides.outcome ?? 'UP',
+    correct: true,
+    entrySide: 'UP',
+    brierScore: 0.2,
+    logLoss: 0.4,
+    predictedEdge: 0.06,
+    realizedReturn: 0.2,
+    secondsRemaining: 300,
+    issuedAt: '2026-08-14T00:00:00Z',
+    closesAt,
+    resolvedAt: `${closesAt.slice(0, 19)}Z`,
+    actionableVenuePrices: [{ venue: 'kalshi', side: 'UP', price: overrides.price }],
+    venueContracts: { kalshi: { registryId: `kalshi:${contractId}:fp`, capturedAt: '2026-08-14T00:00:00Z' } } as unknown as TrackedForecast['venueContracts'],
+    venueOutcomes: { kalshi: { venue: 'kalshi', contractId, outcome: overrides.outcome ?? 'UP', resolutionSource: 'test', resolvedAt: `${closesAt.slice(0, 19)}Z` } },
+  } as Partial<TrackedForecast>);
+}
 
 describe('the leading streak', () => {
   it('is zero on an empty sequence', () => {
@@ -149,6 +190,104 @@ describe('when shards overlap in resolution time', () => {
     const forward = summarizeFromRollups(rollupsFor(overlapping));
     const backward = summarizeFromRollups(rollupsFor([...overlapping].reverse()));
     expect(compareSummaries(forward, backward)).toEqual([]);
+  });
+});
+
+describe('the missed-buy counterfactual', () => {
+  it('produces candidates at all, so the rest of these assertions are not vacuous', () => {
+    const rows = [counterfactualRow({ id: 'cf-1', closesAt: '2026-08-14T00:15:00Z', price: 0.40 })];
+    const direct = summarizePerformance(rows).missedBuyCounterfactual;
+    expect(direct.candidates).toBe(1);
+    expect(direct.windows).toBe(1);
+    expect(direct.bestPerWindowCandidates).toBe(1);
+  });
+
+  it('reproduces the counterfactual from rollups', () => {
+    const rows = [
+      counterfactualRow({ id: 'cf-1', symbol: 'BTC', closesAt: '2026-08-14T00:15:00Z', price: 0.40 }),
+      counterfactualRow({ id: 'cf-2', symbol: 'ETH', closesAt: '2026-08-14T00:15:00Z', price: 0.35, outcome: 'DOWN' }),
+      counterfactualRow({ id: 'cf-3', symbol: 'SOL', closesAt: '2026-08-14T00:30:00Z', price: 0.30 }),
+    ];
+    expect(compareSummaries(
+      summarizePerformance(rows),
+      summarizeFromRollups(rollupsFor([['2026-08-14', rows]])),
+    )).toEqual([]);
+  });
+
+  it('selects one nearest snapshot when the same asset/window is split across shards', () => {
+    const farther = { ...counterfactualRow({ id: 'cf-farther', symbol: 'BTC', closesAt: '2026-08-14T00:15:00Z', price: 0.30 }), secondsRemaining: 330 };
+    const nearest = counterfactualRow({ id: 'cf-nearest', symbol: 'BTC', closesAt: '2026-08-14T00:15:00Z', price: 0.40 });
+    const rows = [farther, nearest];
+    const merged = summarizeFromRollups(rollupsFor([['2026-08-13', [farther]], ['2026-08-14', [nearest]]]));
+
+    expect(compareSummaries(summarizePerformance(rows), merged)).toEqual([]);
+    expect(merged.missedBuyCounterfactual.candidates).toBe(1);
+  });
+
+  it('does not fall back to a farther qualifying snapshot when the global nearest is ineligible', () => {
+    const farther = { ...counterfactualRow({ id: 'cf-farther', symbol: 'BTC', closesAt: '2026-08-14T00:15:00Z', price: 0.30 }), secondsRemaining: 330 };
+    const nearest = counterfactualRow({
+      id: 'cf-nearest-ineligible', symbol: 'BTC', closesAt: '2026-08-14T00:15:00Z', price: 0.40, probabilityUp: 0.62,
+    });
+    const rows = [farther, nearest];
+    const merged = summarizeFromRollups(rollupsFor([['2026-08-13', [farther]], ['2026-08-14', [nearest]]]));
+
+    expect(summarizePerformance(rows).missedBuyCounterfactual.candidates).toBe(0);
+    expect(compareSummaries(summarizePerformance(rows), merged)).toEqual([]);
+  });
+
+  it('breaks equal-distance snapshot ties by id independently of row and shard order', () => {
+    const first = counterfactualRow({ id: 'a', symbol: 'BTC', closesAt: '2026-08-14T00:15:00Z', price: 0.40 });
+    const second = counterfactualRow({ id: 'b', symbol: 'BTC', closesAt: '2026-08-14T00:15:00Z', price: 0.30 });
+    const direct = summarizePerformance([second, first]);
+    const merged = summarizeFromRollups(rollupsFor([['newer', [second]], ['older', [first]]]));
+
+    expect(direct.missedBuyCounterfactual.candidates).toBe(1);
+    expect(compareSummaries(direct, merged)).toEqual([]);
+  });
+
+  it('keeps one best candidate for a window split across two shards, not one per shard', () => {
+    // Both rows sit in the same settlement window but different shards. The stronger edge is the
+    // cheaper quote, and best-per-window must pick it once rather than contributing from each shard.
+    const cheap = counterfactualRow({ id: 'cf-cheap', symbol: 'BTC', closesAt: '2026-08-14T00:15:00Z', price: 0.30 });
+    const dear = counterfactualRow({ id: 'cf-dear', symbol: 'ETH', closesAt: '2026-08-14T00:15:00Z', price: 0.45 });
+    const rows = [cheap, dear];
+    const merged = summarizeFromRollups(rollupsFor([['2026-08-13', [cheap]], ['2026-08-14', [dear]]]));
+
+    expect(compareSummaries(summarizePerformance(rows), merged)).toEqual([]);
+    expect(merged.missedBuyCounterfactual.candidates).toBe(2);
+    // One window, therefore one best-per-window candidate, despite spanning two shards.
+    expect(merged.missedBuyCounterfactual.windows).toBe(1);
+    expect(merged.missedBuyCounterfactual.bestPerWindowCandidates).toBe(1);
+  });
+
+  it('breaks equal-edge best-per-window ties by candidate identity', () => {
+    const loss = counterfactualRow({ id: 'a-loss', symbol: 'BTC', closesAt: '2026-08-14T00:15:00Z', price: 0.40, outcome: 'DOWN' });
+    const win = counterfactualRow({ id: 'b-win', symbol: 'ETH', closesAt: '2026-08-14T00:15:00Z', price: 0.40, outcome: 'UP' });
+    const direct = summarizePerformance([win, loss]);
+    const merged = summarizeFromRollups(rollupsFor([['newer', [win]], ['older', [loss]]]));
+
+    expect(compareSummaries(direct, merged)).toEqual([]);
+    expect(merged.missedBuyCounterfactual.bestPerWindowWins).toBe(0);
+  });
+
+  it('excludes a snapshot outside the five-minute window in both paths alike', () => {
+    const rows = [{ ...counterfactualRow({ id: 'cf-late', closesAt: '2026-08-14T00:15:00Z', price: 0.40 }), secondsRemaining: 60 }];
+    expect(summarizePerformance(rows).missedBuyCounterfactual.candidates).toBe(0);
+    expect(compareSummaries(
+      summarizePerformance(rows),
+      summarizeFromRollups(rollupsFor([['2026-08-14', rows]])),
+    )).toEqual([]);
+  });
+
+  it('excludes a side already above the selected-side floor in both paths alike', () => {
+    // 0.62 clears the floor, so the policy did not reject it and it is not a missed buy.
+    const rows = [counterfactualRow({ id: 'cf-high', closesAt: '2026-08-14T00:15:00Z', price: 0.40, probabilityUp: 0.62 })];
+    expect(summarizePerformance(rows).missedBuyCounterfactual.candidates).toBe(0);
+    expect(compareSummaries(
+      summarizePerformance(rows),
+      summarizeFromRollups(rollupsFor([['2026-08-14', rows]])),
+    )).toEqual([]);
   });
 });
 

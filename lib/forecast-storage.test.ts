@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -30,10 +31,8 @@ describe('forecast storage layout planning', () => {
   it('keeps unresolved rows hot and shards terminal rows by issuance day', () => {
     const rows = [
       forecast({ id: 'pending' }),
-      // Distinct settlement and resolution times per shard, because that is what the data looks like:
-      // a row issued before midnight settles in that day's last window. Two rows in different shards
-      // resolving at the identical instant would leave the global order decided by the id tie-break
-      // rather than by shard order, which the rollup gate now correctly rejects as ambiguous.
+      // Deliberately separate issuance days. Resolution columns are merged by `(time, id)` and do not
+      // rely on shard order, so overlaps and ties remain deterministic.
       forecast({ id: 'resolved-a', status: 'resolved', correct: true, outcome: 'UP', issuedAt: '2026-08-13T23:59:00Z', closesAt: '2026-08-14T00:00:00Z', resolvedAt: '2026-08-14T00:00:30Z' }),
       forecast({ id: 'resolved-b', status: 'resolved', correct: false, outcome: 'DOWN', issuedAt: '2026-08-14T00:01:00Z', resolvedAt: '2026-08-14T10:15:30Z' }),
       forecast({ id: 'invalid', status: 'invalid', issuedAt: '2026-08-14T00:02:00Z' }),
@@ -43,11 +42,9 @@ describe('forecast storage layout planning', () => {
     expect(plan.index).toMatchObject({ totalRows: 4, openRows: 1, terminalRows: 3 });
     expect(plan.shards.map((shard) => shard.entry.shardId)).toEqual(['2026-08-13', '2026-08-14']);
     expect(plan.shards.find((shard) => shard.entry.shardId === '2026-08-14')?.rollup).toMatchObject({
-      rowCount: 2,
-      resolved: 1,
-      invalid: 1,
-      pending: 0,
+      version: 'forecast-rollup-v1', shardId: '2026-08-14', resolved: 1, invalid: 1, pending: 0,
     });
+    expect(plan.index.shards[1].rollupSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(verifyForecastStoragePlan(rows, plan)).toMatchObject({ ok: true, errors: [] });
   });
 
@@ -88,6 +85,12 @@ describe('forecast storage layout planning', () => {
       expect(compareSummaries(base(), scaleMeanReturn(base(), 1 + SUMMARY_FLOAT_TOLERANCE / 10))).toEqual([]);
     });
 
+    it('accepts last-bit summation noise near zero without magnifying it into a relative failure', () => {
+      const before = base();
+      const after = { ...before, meanRealizedReturn: 1.45e-16 };
+      expect(compareSummaries({ ...before, meanRealizedReturn: 0 }, after)).toEqual([]);
+    });
+
     it('rejects a float aggregate that moved further than summation order explains', () => {
       expect(compareSummaries(base(), scaleMeanReturn(base(), 1.01)).join(' ')).toContain('meanRealizedReturn');
     });
@@ -120,7 +123,14 @@ describe('forecast storage layout planning', () => {
     });
   });
 
-  it('writes open rows, shards, rollups, and index atomically readable as JSON', async () => {
+  it('rejects a stored rollup that no longer matches its indexed checksum', () => {
+    const rows = [forecast({ id: 'resolved', status: 'resolved', correct: true, outcome: 'UP' })];
+    const plan = buildForecastStoragePlan(rows, '2026-08-14T12:00:00Z');
+    plan.shards[0].rollup.correct += 1;
+    expect(verifyForecastStoragePlan(rows, plan).errors.join(' ')).toContain('rollup checksum');
+  });
+
+  it('writes open rows, shards, sufficient-statistic rollups, and index atomically readable as JSON', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'money-noodle-forecast-storage-'));
     try {
       const rows = [
@@ -131,12 +141,18 @@ describe('forecast storage layout planning', () => {
       await writeForecastStoragePlan(root, plan);
       const index = JSON.parse(await readFile(path.join(root, 'index.json'), 'utf8'));
       const open = JSON.parse(await readFile(path.join(root, 'open.json'), 'utf8'));
-      const shard = JSON.parse(await readFile(path.join(root, '2026-08-14.json'), 'utf8'));
-      const rollup = JSON.parse(await readFile(path.join(root, '2026-08-14.rollup.json'), 'utf8'));
+      const shardRaw = await readFile(path.join(root, '2026-08-14.json'), 'utf8');
+      const rollupRaw = await readFile(path.join(root, '2026-08-14.rollup.json'), 'utf8');
+      const shard = JSON.parse(shardRaw);
+      const rollup = JSON.parse(rollupRaw);
+      expect(index).toMatchObject({ version: 'forecast-storage-v2' });
       expect(index.shards).toHaveLength(1);
+      expect(index.shards[0].sha256).toBe(createHash('sha256').update(shardRaw).digest('hex'));
+      expect(index.shards[0].rollupSha256).toBe(createHash('sha256').update(rollupRaw).digest('hex'));
       expect(open.map((item: TrackedForecast) => item.id)).toEqual(['pending']);
       expect(shard.map((item: TrackedForecast) => item.id)).toEqual(['resolved']);
-      expect(rollup).toMatchObject({ shardId: '2026-08-14', rowCount: 1, resolved: 1 });
+      expect(rollup).toMatchObject({ version: 'forecast-rollup-v1', shardId: '2026-08-14', resolved: 1 });
+      expect(rollup.timeline).toHaveLength(1);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

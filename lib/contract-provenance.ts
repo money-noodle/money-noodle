@@ -158,3 +158,18 @@ export function contractProvenanceRef(record: ContractProvenanceRecord): Contrac
   const { rulesText: _rulesText, ...reference } = record;
   return reference;
 }
+
+/**
+ * Matches an outcome to either an in-memory full provenance reference or its durable slim form.
+ * Snapshot compaction retains only `registryId` and `capturedAt`; the immutable registry id embeds the
+ * exact venue and contract id before the final fingerprint, so consumers need not rehydrate 40k rows
+ * merely to enforce contract identity.
+ */
+export function contractProvenanceMatches(
+  reference: Pick<ContractProvenanceRef, 'registryId'> & Partial<Pick<ContractProvenanceRef, 'contractId'>>,
+  venue: TradingVenue,
+  contractId: string,
+): boolean {
+  if (reference.contractId !== undefined) return reference.contractId === contractId;
+  return reference.registryId.startsWith(`${venue}:${contractId}:`);
+}

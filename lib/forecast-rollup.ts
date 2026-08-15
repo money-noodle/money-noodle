@@ -1,3 +1,4 @@
+import { contractProvenanceMatches } from './contract-provenance';
 import { pushInto } from './group';
 import {
   BENCHMARK_SOURCES,
@@ -39,6 +40,22 @@ export interface LabelledCount {
   label: string;
   resolved: number;
   correct: number;
+}
+
+export interface CounterfactualCandidate {
+  key: string;
+  windowKey: string;
+  edge: number;
+  returnValue: number;
+}
+
+/** Nearest-five-minute snapshot selected within one shard for an asset/window. */
+export interface CounterfactualAssetWindow {
+  key: string;
+  distanceFromFiveMinutes: number;
+  issuedAt: string;
+  forecastId: string;
+  candidates: CounterfactualCandidate[];
 }
 
 /**
@@ -120,11 +137,11 @@ export interface ForecastSummaryRollup {
   segments: Array<{ dimension: string; label: string; trades: number; predictedEdgeSum: number; wins: number; windows: WindowTotal[] }>;
 
   counterfactual: {
-    candidates: number;
-    profitableCandidates: number;
-    windows: WindowTotal[];
-    /** Best candidate per window, merged by window so a split window keeps only its strongest. */
-    bestPerWindow: Array<{ key: string; edge: number; returnValue: number }>;
+    /**
+     * One shard-local nearest snapshot per asset/window. The merge re-selects globally before counting
+     * candidates, so an asset/window split across shards cannot contribute twice.
+     */
+    assetWindows: CounterfactualAssetWindow[];
   };
 
   timeline: TimelineCell[];
@@ -157,50 +174,47 @@ function labelledCounts(rows: TrackedForecast[], key: (forecast: TrackedForecast
 }
 
 /**
- * The nearest-five-minute snapshot selection and the per-window clustering that
- * `missedBuyCounterfactual` performs, applied to one shard. Both are window-local, and windows never
- * span shards, so the shard's answer is final and the merge is concatenation.
+ * Selects the nearest-five-minute snapshot per asset/window inside one shard. The merge repeats that
+ * selection across shard candidates before calculating any statistic, because neither window nor
+ * asset/window locality is a safe storage invariant.
  */
 function counterfactualRollup(forecasts: TrackedForecast[]): ForecastSummaryRollup['counterfactual'] {
   const byAssetWindow = new Map<string, TrackedForecast[]>();
   for (const forecast of forecasts.filter((item) => item.status === 'resolved' && item.policyVersion === BUY_POLICY_VERSION)) {
-    const outcome = forecast.venueOutcomes?.kalshi?.outcome;
-    if (!outcome || !forecast.venueContracts?.kalshi || forecast.venueOutcomes?.kalshi?.contractId !== forecast.venueContracts.kalshi.contractId) continue;
+    const resolution = forecast.venueOutcomes?.kalshi;
+    const reference = forecast.venueContracts?.kalshi;
+    if (!resolution?.outcome || !reference || !contractProvenanceMatches(reference, 'kalshi', resolution.contractId)) continue;
     pushInto(byAssetWindow, `${forecast.symbol}:${settlementWindowKey(forecast)}`, forecast);
   }
-  const candidates: Array<{ closesAt: string; edge: number; returnValue: number }> = [];
-  for (const snapshots of byAssetWindow.values()) {
+  const assetWindows: CounterfactualAssetWindow[] = [];
+  for (const [key, snapshots] of byAssetWindow) {
     const nearest = [...snapshots].sort((a, b) => {
       const left = Math.abs(leadSeconds(a) - 300);
       const right = Math.abs(leadSeconds(b) - 300);
-      return left - right || Date.parse(a.issuedAt) - Date.parse(b.issuedAt);
+      return left - right || Date.parse(a.issuedAt) - Date.parse(b.issuedAt) || byIdTieBreak(a, b);
     })[0];
+    const candidates: CounterfactualCandidate[] = [];
     const seconds = leadSeconds(nearest);
-    if (Math.abs(seconds - 300) > 90 || nearest.confidence < MIN_ESTIMATE_QUALITY) continue;
-    const outcome = nearest.venueOutcomes!.kalshi!.outcome!;
-    for (const quote of nearest.actionableVenuePrices?.filter((item) => item.venue === 'kalshi') ?? []) {
-      const probability = quote.side === 'UP' ? nearest.probabilityUp : 1 - nearest.probabilityUp;
-      const fee = venueFeeRate('kalshi', quote.price);
-      const edge = probability - quote.price - fee;
-      if (quote.price < MIN_ENTRY_PRICE || quote.price > 0.97 || edge < MIN_NET_EDGE || probability >= MIN_SELECTED_SIDE_PROBABILITY) continue;
-      candidates.push({ closesAt: settlementWindowKey(nearest), edge, returnValue: (outcome === quote.side ? 1 : 0) - quote.price - fee });
+    if (Math.abs(seconds - 300) <= 90 && nearest.confidence >= MIN_ESTIMATE_QUALITY) {
+      const outcome = nearest.venueOutcomes!.kalshi!.outcome!;
+      for (const quote of nearest.actionableVenuePrices?.filter((item) => item.venue === 'kalshi') ?? []) {
+        const probability = quote.side === 'UP' ? nearest.probabilityUp : 1 - nearest.probabilityUp;
+        const fee = venueFeeRate('kalshi', quote.price);
+        const edge = probability - quote.price - fee;
+        if (quote.price < MIN_ENTRY_PRICE || quote.price > 0.97 || edge < MIN_NET_EDGE || probability >= MIN_SELECTED_SIDE_PROBABILITY) continue;
+        candidates.push({
+          key: `${nearest.id}:${quote.side}:${quote.price}`,
+          windowKey: settlementWindowKey(nearest), edge,
+          returnValue: (outcome === quote.side ? 1 : 0) - quote.price - fee,
+        });
+      }
     }
+    assetWindows.push({
+      key, distanceFromFiveMinutes: Math.abs(seconds - 300), issuedAt: nearest.issuedAt,
+      forecastId: nearest.id, candidates,
+    });
   }
-  const windowValues = new Map<string, number[]>();
-  for (const candidate of candidates) pushInto(windowValues, candidate.closesAt, candidate.returnValue);
-  const best = new Map<string, { key: string; edge: number; returnValue: number }>();
-  for (const candidate of candidates) {
-    const prior = best.get(candidate.closesAt);
-    if (!prior || candidate.edge > prior.edge) best.set(candidate.closesAt, { key: candidate.closesAt, edge: candidate.edge, returnValue: candidate.returnValue });
-  }
-  return {
-    candidates: candidates.length,
-    profitableCandidates: candidates.filter((item) => item.returnValue > 0).length,
-    windows: [...windowValues.entries()].map(([key, values]) => ({
-      key, sum: values.reduce((sum, value) => sum + value, 0), count: values.length,
-    })),
-    bestPerWindow: [...best.values()],
-  };
+  return { assetWindows };
 }
 
 function segmentRollups(resolved: TrackedForecast[]): ForecastSummaryRollup['segments'] {
@@ -452,18 +466,34 @@ export function summarizeFromRollups(rollups: ForecastSummaryRollup[]): Performa
     new Date(b.closesAt).getTime() - new Date(a.closesAt).getTime() || a.representativeId.localeCompare(b.representativeId));
 
   const realizedEdgeTrades = sum((rollup) => rollup.realizedEdgeTrades);
-  const counterfactualWindows = mergeWindows(rollups.map((rollup) => rollup.counterfactual.windows));
-  // Best-per-window merges by window: a window split across shards keeps its single strongest candidate
-  // rather than contributing one from each shard.
-  const bestByWindow = new Map<string, { key: string; edge: number; returnValue: number }>();
-  for (const rollup of rollups) {
-    for (const candidate of rollup.counterfactual.bestPerWindow) {
-      const prior = bestByWindow.get(candidate.key);
-      if (!prior || candidate.edge > prior.edge) bestByWindow.set(candidate.key, candidate);
+
+  // Re-select the nearest snapshot globally for every asset/window. Counting shard-local selections
+  // directly would duplicate an asset/window split by the storage layout and could even select a farther
+  // observation whose quote happened to qualify.
+  const counterfactualAssetWindows = new Map<string, CounterfactualAssetWindow>();
+  for (const item of rollups.flatMap((rollup) => rollup.counterfactual.assetWindows)) {
+    const prior = counterfactualAssetWindows.get(item.key);
+    const comparison = prior ? item.distanceFromFiveMinutes - prior.distanceFromFiveMinutes
+      || Date.parse(item.issuedAt) - Date.parse(prior.issuedAt)
+      || item.forecastId.localeCompare(prior.forecastId) : -1;
+    if (!prior || comparison < 0) counterfactualAssetWindows.set(item.key, item);
+  }
+  const counterfactualCandidates = [...counterfactualAssetWindows.values()].flatMap((item) => item.candidates);
+  const counterfactualWindowValues = new Map<string, number[]>();
+  for (const candidate of counterfactualCandidates) pushInto(counterfactualWindowValues, candidate.windowKey, candidate.returnValue);
+  const counterfactualWindowTotals: WindowTotal[] = [...counterfactualWindowValues.entries()].map(([key, values]) => ({
+    key, sum: values.reduce((total, value) => total + value, 0), count: values.length,
+  }));
+  const counterfactualWindowReturns = mergeWindows([counterfactualWindowTotals]);
+  const bestByWindow = new Map<string, CounterfactualCandidate>();
+  for (const candidate of counterfactualCandidates) {
+    const prior = bestByWindow.get(candidate.windowKey);
+    if (!prior || candidate.edge > prior.edge || (candidate.edge === prior.edge && candidate.key < prior.key)) {
+      bestByWindow.set(candidate.windowKey, candidate);
     }
   }
   const counterfactualBest = [...bestByWindow.values()].map((item) => item.returnValue);
-  const counterfactual = meanAndStandardError(counterfactualWindows);
+  const counterfactual = meanAndStandardError(counterfactualWindowReturns);
 
   const segments = new Map<string, Map<string, { trades: number; predictedEdgeSum: number; wins: number; windows: WindowTotal[] }>>();
   for (const rollup of rollups) {
@@ -542,9 +572,9 @@ export function summarizeFromRollups(rollups: ForecastSummaryRollup[]): Performa
     missedBuyCounterfactual: {
       label: `${Number((MIN_SELECTED_SIDE_PROBABILITY * 100).toFixed(2))}% selected-side floor rejects`,
       description: `Exact-Kalshi fee-aware counterfactuals for sides that passed quality, price, and 5pp edge but were rejected only because independent selected-side probability was below ${Number((MIN_SELECTED_SIDE_PROBABILITY * 100).toFixed(2))}%.`,
-      candidates: sum((rollup) => rollup.counterfactual.candidates),
-      windows: counterfactualWindows.length,
-      profitableCandidates: sum((rollup) => rollup.counterfactual.profitableCandidates),
+      candidates: counterfactualCandidates.length,
+      windows: counterfactualWindowReturns.length,
+      profitableCandidates: counterfactualCandidates.filter((item) => item.returnValue > 0).length,
       meanCandidateReturn: counterfactual.mean,
       standardError: counterfactual.standardError,
       bestPerWindowCandidates: counterfactualBest.length,

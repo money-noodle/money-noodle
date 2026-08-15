@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compareContractTargets, contractProvenanceRef, createContractProvenance, parseContractSettlementMetadata } from './contract-provenance';
+import { compareContractTargets, contractProvenanceMatches, contractProvenanceRef, createContractProvenance, parseContractSettlementMetadata } from './contract-provenance';
 
 const input = {
   venue: 'kalshi' as const,
@@ -65,5 +65,13 @@ describe('contract provenance fingerprints', () => {
     expect(record.rulesText).toContain('settlement value');
     expect(reference).not.toHaveProperty('rulesText');
     expect(reference.rulesFingerprint).toBe(record.rulesFingerprint);
+  });
+
+  it('matches outcomes against both full and compacted registry references', () => {
+    const reference = contractProvenanceRef(createContractProvenance(input));
+    expect(contractProvenanceMatches(reference, 'kalshi', input.contractId)).toBe(true);
+    expect(contractProvenanceMatches({ registryId: reference.registryId }, 'kalshi', input.contractId)).toBe(true);
+    expect(contractProvenanceMatches({ registryId: reference.registryId }, 'kalshi', 'OTHER')).toBe(false);
+    expect(contractProvenanceMatches({ registryId: reference.registryId }, 'polymarket', input.contractId)).toBe(false);
   });
 });

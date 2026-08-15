@@ -66,6 +66,7 @@ async function main() {
     openRows: plan.index.openRows,
     terminalRows: plan.index.terminalRows,
     shards: plan.index.shards.length,
+    rollupBytes: plan.shards.reduce((sum, shard) => sum + Buffer.byteLength(`${JSON.stringify(shard.rollup)}\n`), 0),
     firstShard: plan.index.shards[0],
     lastShard: plan.index.shards.at(-1),
     summary: verification.summary,
