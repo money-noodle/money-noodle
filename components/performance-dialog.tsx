@@ -286,8 +286,24 @@ function SliceTable({ title, rows }: { title: string; rows: PerformanceSlice[] }
  * benchmarks, segments, cycle regimes, walk-forward evaluations, and the full signal history — scores
  * the forecast rather than real money and is identical for both.
  */
+/**
+ * A missing shard rollup does not fail loudly: the lifetime summary is still produced, just from fewer
+ * shards. Under-reporting a lifetime figure silently is worse than showing a degraded dashboard, so the
+ * only real protection is saying so where the figures are read.
+ */
+function DegradedStorageNotice({ storage }: { storage: { missingRollups: number; shards: number; reason: string } }) {
+  return <div className="mb-3 rounded-lg border border-amber-300/30 bg-amber-300/[.04] p-3">
+    <p className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-300">
+      <AlertTriangle className="size-3"/>Lifetime figures are incomplete
+    </p>
+    <p className="mt-1 text-[10px] leading-relaxed text-amber-300/90">
+      {storage.reason} Every figure below is missing those rows. Re-run <span className="font-mono">npm run verify:forecast-storage</span> to rebuild them.
+    </p>
+  </div>;
+}
+
 export function PerformanceDialog({ publicView = false }: { publicView?: boolean }) {
-  const [data, setData] = useState<{ summary: PerformanceSummary; forecasts: ForecastHistoryRow[]; paperRecord?: TradeTrackRecord; liveRecord?: TradeTrackRecord; cyclePaths?: CyclePathReport; contractComparability?: ContractComparabilityReport; makerFillReport?: MakerFillReport; persistenceCandidate?: PersistenceCandidateReport; calendarEvaluation?: CalendarEvaluationReport; modelEvaluations?: WalkForwardEvaluationHistory; promotionEligibility?: PromotionEligibility; promotionLedger?: ModelPromotionEntry[]; paperProviderRecords?: ProviderTradeRecord[]; liveProviderRecords?: ProviderTradeRecord[]; durable?: boolean } | null>(null);
+  const [data, setData] = useState<{ summary: PerformanceSummary; forecasts: ForecastHistoryRow[]; paperRecord?: TradeTrackRecord; liveRecord?: TradeTrackRecord; cyclePaths?: CyclePathReport; contractComparability?: ContractComparabilityReport; makerFillReport?: MakerFillReport; persistenceCandidate?: PersistenceCandidateReport; calendarEvaluation?: CalendarEvaluationReport; modelEvaluations?: WalkForwardEvaluationHistory; promotionEligibility?: PromotionEligibility; promotionLedger?: ModelPromotionEntry[]; paperProviderRecords?: ProviderTradeRecord[]; liveProviderRecords?: ProviderTradeRecord[]; durable?: boolean; forecastStorage?: { layout: string; openRows: number; sealedRows: number; shards: number; missingRollups: number; degraded: boolean; reason: string } } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -307,7 +323,7 @@ export function PerformanceDialog({ publicView = false }: { publicView?: boolean
     <DialogContent className="max-w-4xl p-0">
       <DialogHeader className="border-b p-5 pr-12"><DialogTitle>Positive-edge performance</DialogTitle><DialogDescription>{publicView ? 'Immutable qualifying calculations and the simulated paper track, grouped without excluding losses or pending outcomes.' : 'Immutable qualifying calculations, grouped without excluding losses or pending outcomes.'}</DialogDescription></DialogHeader>
       <div className="p-5">
-        {loading && !data ? <div className="grid h-64 place-items-center"><Loader2 className="animate-spin text-muted-foreground"/></div> : error ? <p className="rounded-lg border border-red-400/20 bg-red-400/5 p-3 text-xs text-red-300">{error}</p> : data && <>{publicView && data.durable === false && <StaleProjectionNotice/>}<SampleWarning summary={data.summary}/><CalibrationStatus summary={data.summary}/><MissedBuyPanel summary={data.summary}/><Tabs defaultValue="breakdown">
+        {loading && !data ? <div className="grid h-64 place-items-center"><Loader2 className="animate-spin text-muted-foreground"/></div> : error ? <p className="rounded-lg border border-red-400/20 bg-red-400/5 p-3 text-xs text-red-300">{error}</p> : data && <>{publicView && data.durable === false && <StaleProjectionNotice/>}{!publicView && data.forecastStorage?.degraded && <DegradedStorageNotice storage={data.forecastStorage}/>}<SampleWarning summary={data.summary}/><CalibrationStatus summary={data.summary}/><MissedBuyPanel summary={data.summary}/><Tabs defaultValue="breakdown">
           <TabsList className="h-auto w-full flex-wrap justify-start gap-0.5"><TabsTrigger value="trades">Trades</TabsTrigger>{!publicView && <><TabsTrigger value="policy-candidate">Policy candidate</TabsTrigger><TabsTrigger value="calendar">Calendar</TabsTrigger><TabsTrigger value="targets">Target integrity</TabsTrigger><TabsTrigger value="walk-forward">Walk-forward</TabsTrigger><TabsTrigger value="maker">Maker execution</TabsTrigger></>}<TabsTrigger value="breakdown">Signal quality</TabsTrigger><TabsTrigger value="benchmarks">Benchmarks</TabsTrigger><TabsTrigger value="segments">Segments</TabsTrigger><TabsTrigger value="regimes">Cycle regimes</TabsTrigger><TabsTrigger value="history">Signal history ({data.forecasts.length})</TabsTrigger></TabsList>
           <TabsContent value="trades">
             <p className="mb-3 text-[10px] leading-relaxed text-muted-foreground">{publicView ? 'Executed simulated trades only, taken from the paper order ledger. These include modelled fill prices and venue fees, so they answer what the shadow bankroll did — not how good the forecast looked.' : 'Executed trades only, taken from the order ledger, with paper and live kept completely separate. These include real fill prices and venue fees, so they answer what the money did — not how good the forecast looked.'}</p>

@@ -674,6 +674,48 @@ export async function getPerformanceSummary(): Promise<PerformanceSummary> {
  * it is read when something genuinely needs history and released afterwards. Nothing on the fifteen-second
  * path calls it.
  */
+export interface ForecastStorageHealth {
+  layout: 'sharded' | 'legacy';
+  openRows: number;
+  sealedRows: number;
+  shards: number;
+  /** Shards whose rollup could not be read. Every one of them is missing from every lifetime figure. */
+  missingRollups: number;
+  degraded: boolean;
+  reason: string;
+}
+
+/**
+ * Whether the lifetime summary is being computed from complete statistics.
+ *
+ * A missing rollup does not fail loudly — the summary is still produced, just from fewer shards — so the
+ * only protection against silently under-reporting a lifetime figure is saying so. Reported rather than
+ * thrown because a degraded read is better than no dashboard, but it must never look healthy.
+ */
+export async function getForecastStorageHealth(): Promise<ForecastStorageHealth> {
+  if (!(await usingShardedLayout())) {
+    return {
+      layout: 'legacy', openRows: (await readForecasts()).length, sealedRows: 0, shards: 0,
+      missingRollups: 0, degraded: false,
+      reason: 'Reading the legacy whole-history snapshot; sharded storage is not active.',
+    };
+  }
+  const index = await readForecastStorageIndex();
+  const source = await summarizeFromStorage(await readForecasts());
+  const degraded = source.missingRollups > 0;
+  return {
+    layout: 'sharded',
+    openRows: source.openRows,
+    sealedRows: index?.terminalRows ?? 0,
+    shards: index?.shards.length ?? 0,
+    missingRollups: source.missingRollups,
+    degraded,
+    reason: degraded
+      ? `${source.missingRollups} shard rollup(s) could not be read; lifetime figures are missing those rows.`
+      : `${source.shardRollups} shard rollup(s) cover ${index?.terminalRows ?? 0} sealed rows beside ${source.openRows} open rows.`,
+  };
+}
+
 export async function getForecastHistory(): Promise<TrackedForecast[]> {
   return [...await readFullForecastHistory()].sort((a, b) => new Date(b.issuedAt).getTime() - new Date(a.issuedAt).getTime());
 }

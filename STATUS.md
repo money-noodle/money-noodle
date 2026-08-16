@@ -104,7 +104,12 @@ Rollups must come before sharding, not after. Every cycle `updateTracking` reads
 
 The worker boundary previously listed here is deferred indefinitely. It relocates work without reducing residency, which is not what binds. See [docs/forecast-storage-design.md](/Users/raiphairow/code/money/docs/forecast-storage-design.md) §5.
 
-Done means: retained heap and startup time measurably drop, forecast scoring matches pre-migration output under the gate, 15-second collection remains fresh through restart, and the dashboard can report degraded rollup state explicitly.
+Done means: retained heap and startup time measurably drop, forecast scoring matches pre-migration output under the gate, 15-second collection remains fresh through restart, and the dashboard can report degraded rollup state explicitly. **All four met as of 2026-08-16.** `/api/performance` carries `forecastStorage`, and the signed Performance dialog shows an explicit incomplete-figures notice when a shard rollup cannot be read — a missing rollup still produces a summary, just from fewer shards, so silently under-reporting a lifetime figure is the failure this guards against.
+
+Two follow-ups remain, neither of which is residency:
+
+- **Payload split** (design §7 item 2, agreed separately): the freshness badge should judge only market data, so no future slow subsystem can blank the trading view.
+- **Retire the legacy snapshot.** `data/forecast-history.json` is 207 MB, frozen since the seal, and on no read path — it is the coexistence copy. Deleting it is what makes the switch irreversible, so it should wait until the sharded layout has run through several seals and an evaluator pass.
 
 ### 2. Build the Long-Shot Round-Trip Policy
 

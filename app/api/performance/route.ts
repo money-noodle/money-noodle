@@ -12,7 +12,7 @@ import { buildMakerShadow } from '@/lib/maker-shadow';
 import { evaluatePromotionEligibility } from '@/lib/model-promotion';
 import { readPromotionLedger } from '@/lib/model-promotion-store';
 import { getTradingControl } from '@/lib/trading-control';
-import { getForecastHistory, getPerformanceSummary } from '@/lib/forecast-tracker';
+import { getForecastHistory, getForecastStorageHealth, getPerformanceSummary } from '@/lib/forecast-tracker';
 import { getExecutionOrders } from '@/lib/paper-execution';
 import { getWalkForwardEvaluationHistory } from '@/lib/model-evaluation-store';
 import { getPersistenceCandidateReport } from '@/lib/persistence-candidate-store';
@@ -35,6 +35,8 @@ export async function GET(request: Request) {
       getContractProvenanceRegistry(), getTradingControl(), getPersistenceCandidateReport(BUY_POLICY_VERSION),
       getCalendarEvaluationReport(BUY_POLICY_VERSION),
     ]);
+    // Whether the lifetime figures above were computed from complete shard statistics.
+    const forecastStorage = await getForecastStorageHealth();
     const modelEvaluations = await getWalkForwardEvaluationHistory(summary.calibrationWindows);
     const promotionLedger = await readPromotionLedger();
     // Signal quality comes from the calculation log; executed money comes from the order ledger, kept
@@ -68,6 +70,7 @@ export async function GET(request: Request) {
       promotionEligibility: evaluatePromotionEligibility(modelEvaluations.runs.at(-1)),
       promotionLedger,
       cyclePaths,
+      forecastStorage,
       contractComparability: buildContractComparabilityReport(forecasts, cyclePathRecords, provenance.records),
       makerFillReport: buildMakerFillReport(orders, forecasts),
       persistenceCandidate,
