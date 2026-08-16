@@ -19,7 +19,9 @@
     "verify:forecast-storage": "jiti scripts/verify-forecast-storage.ts",
     "fund:long-shot": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/fund-long-shot.ts",
     "archive:local": "jiti scripts/archive-local-data.ts",
-    "generate:brand": "node scripts/generate-brand-assets.mjs"
+    "generate:brand": "node scripts/generate-brand-assets.mjs",
+    "analyze:edge-gates": "node --max-old-space-size=6144 scripts/analyze-edge-gates.mjs",
+    "analyze:execution-value": "node --max-old-space-size=6144 scripts/analyze-execution-value.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1111.0",
