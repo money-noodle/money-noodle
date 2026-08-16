@@ -16,10 +16,10 @@ import { selectedSideDepth } from './order-book-depth';
 import { selectedManagedMakerQuote } from './managed-maker';
 import { orderMarketId, orderProviderId, orderStrategyId } from './execution-report';
 import { EDGE_BINARY_BUY } from './strategy-registry';
-import { recordContractPaths } from './contract-path-store';
+import { recordContractPaths, recordDenseContractQuote } from './contract-path-store';
 import { getHoldSentinels, updateHoldSentinelStore } from './hold-sentinel-store';
 import { collectLongShotEvidence, longShotAllocationCents } from './long-shot-execution';
-import { evaluateLongShotEntry, longShotSettings } from './long-shot-policy';
+import { evaluateLongShotEntry, longShotSettings, type LongShotSettings } from './long-shot-policy';
 import { LONG_SHOT_ROUND_TRIP } from './strategy-registry';
 import {
   buildLongShotOrder, longShotDailyNetLossCents, longShotFunding, openLongShotPositions,
@@ -46,6 +46,16 @@ const TRAILING_QUOTE_MAX_AGE_MS = TRAILING_ENTRY_POLL_MS - 50;
 
 /** Live trailing state per asset/window/side. Cleared when the entry resolves, abandons, or expires. */
 const trailing = new Map<string, TrailingEntryState>();
+
+/**
+ * Contracts that reached the entry mark, watched densely until their window closes.
+ *
+ * Not the same population as the entry gate. The measurement that needs dense sampling is the *peak* —
+ * whether a bid ever touched the exit mark — and that happens late in a cycle, usually near settlement,
+ * long after the entry window shuts. Watching only while a contract is buyable would leave the biased
+ * half of the path exactly as coarse as before.
+ */
+const denseWatch = new Map<string, { symbol: string; closesAt: string }>();
 import { assetAdmitted } from './asset-exclusion';
 import { cycleRegimeFor } from './cycle-path-store';
 import { DEFAULT_MARKET_ID } from './market-registry';
@@ -1775,6 +1785,31 @@ async function longShotEntryQuote(ticker: string, maxAgeMs = LONG_SHOT_ENTRY_POL
  *
  * Skipped entirely when no window is inside the entry gate, so the quiet majority of a cycle costs nothing.
  */
+/**
+ * Polls every watched candidate at the entry cadence and records it densely.
+ *
+ * Detached from the trading path: this is evidence collection, and a slow venue read must not delay a
+ * decision. Reads go through the shared cache, so a contract that is also being trailed or held is fetched
+ * once rather than three times.
+ */
+async function pollDenseWatch(settings: LongShotSettings): Promise<void> {
+  const now = Date.now();
+  await Promise.all([...denseWatch.entries()].map(async ([ticker, meta]) => {
+    if (now > Date.parse(meta.closesAt)) { denseWatch.delete(ticker); return; }
+    const quote = await longShotEntryQuote(ticker, LONG_SHOT_ENTRY_POLL_MS);
+    if (!quote) return;
+    await recordDenseContractQuote({
+      contractId: ticker, symbol: meta.symbol, closesAt: meta.closesAt,
+      askUpCents: quote.askUp * 100, askDownCents: quote.askDown * 100,
+    }, now);
+  }));
+  // Bounded so a runaway watch list cannot quietly consume the read budget.
+  if (denseWatch.size > settings.maximumOpenPerSettlementWindow * 4) {
+    const oldest = [...denseWatch.entries()].sort(([, a], [, b]) => Date.parse(a.closesAt) - Date.parse(b.closesAt))[0];
+    if (oldest) denseWatch.delete(oldest[0]);
+  }
+}
+
 async function longShotEntryTick(): Promise<void> {
   if (longShotEntryRunning) return;
   longShotEntryRunning = true;
@@ -1783,6 +1818,12 @@ async function longShotEntryTick(): Promise<void> {
     if (!settings.enabled) return;
     const dashboard = latestDashboard;
     if (!dashboard || getExecutionDrainStatus().phase === 'draining') return;
+
+    // Ahead of the entry-eligibility check on purpose. A watched candidate is followed to settlement, long
+    // after it stops being buyable — and that later stretch is exactly where the peak happens and where
+    // the coarse path was blind. Returning early when nothing is currently buyable would stop the watch
+    // during the only period it exists for.
+    void pollDenseWatch(settings).catch((error) => console.error('Dense contract watch failed:', error));
 
     // Only windows that could still qualify are worth a quote at all.
     const eligible = (dashboard.predictions ?? []).filter((prediction) => {
@@ -1806,6 +1847,17 @@ async function longShotEntryTick(): Promise<void> {
       if (quote) refreshed.set(ticker, quote);
     }));
     if (!refreshed.size) return;
+
+    // A contract that reached the mark is followed to settlement from here, whether or not it is bought.
+    for (const prediction of eligible) {
+      const quote = prediction.kalshi!;
+      const refreshedQuote = refreshed.get(quote.ticker);
+      if (!refreshedQuote) continue;
+      const cheapest = Math.min(refreshedQuote.askUp, refreshedQuote.askDown) * 100;
+      if (cheapest > 0 && cheapest <= settings.entryMarkCents) {
+        denseWatch.set(quote.ticker, { symbol: prediction.symbol, closesAt: quote.closesAt });
+      }
+    }
 
     // Trailing decides which of the qualifying sides may be bought this look. A side still getting
     // cheaper is held back: a continuing fall is a trend, and this strategy needs a reversal.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CONTRACT_PATH_BUCKET_MS, decodeContractPath, emptyContractPath, encodeContractPath,
+  CONTRACT_PATH_BUCKET_MS, CONTRACT_PATH_DENSE_BUCKET_MS, decodeContractPath, emptyContractPath, encodeContractPath,
   firstEntryOffsetSeconds, observeContractPath, peakBidAfterOffset, sideAskCents, sideBidCents,
   summarizeContractPath, type ContractPathRecord,
 } from './contract-path';
@@ -119,5 +119,33 @@ describe('compact journal encoding', () => {
     expect(decodeContractPath(null)).toBeNull();
     expect(decodeContractPath(['id', 'BTC', 'not-a-date', []])).toBeNull();
     expect(decodeContractPath(['id', 'BTC', closesAt, [[0, 10, 91], 'junk', [1]]])?.points).toHaveLength(1);
+  });
+});
+
+describe('dense sampling for a watched candidate', () => {
+  it('keeps a finer bucket, so a spike between coarse samples is visible', () => {
+    // The measurement this exists for: a fifteen-second path cannot say whether a bid touched the exit
+    // mark. Winners were observed reaching 90c in 68.4% of cases where the true figure must be 100%.
+    let coarse = base();
+    let dense = base();
+    for (const [seconds, up, down] of [[600, 45, 56], [601, 8, 93], [602, 45, 56]] as Array<[number, number, number]>) {
+      coarse = observeContractPath(coarse, at(seconds, up, down));
+      dense = observeContractPath(dense, at(seconds, up, down), CONTRACT_PATH_DENSE_BUCKET_MS);
+    }
+    // All three land in one 15-second bucket, so the coarse path keeps only the last and the spike is gone.
+    expect(coarse.points).toHaveLength(1);
+    expect(summarizeContractPath(coarse).down.maxBidCents).toBe(55);
+    // The dense path keeps each second, and the 92c bid survives.
+    expect(dense.points).toHaveLength(3);
+    expect(summarizeContractPath(dense).down.maxBidCents).toBe(92);
+  });
+
+  it('lets one window mix coarse and dense samples', () => {
+    // A window is sampled coarsely until it becomes a candidate, then densely to settlement. Paying for
+    // dense sampling on every window would be a hundredfold more data for paths nothing reads.
+    let record = observeContractPath(base(), at(0, 45, 56));
+    record = observeContractPath(record, at(301, 9, 92), CONTRACT_PATH_DENSE_BUCKET_MS);
+    record = observeContractPath(record, at(302, 8, 93), CONTRACT_PATH_DENSE_BUCKET_MS);
+    expect(record.points.map((point) => point.offsetSeconds)).toEqual([0, 301, 302]);
   });
 });

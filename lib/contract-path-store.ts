@@ -4,8 +4,9 @@ import { createReadStream } from 'node:fs';
 import readline from 'node:readline';
 import path from 'node:path';
 import {
-  CONTRACT_PATH_VERSION, decodeContractPath, emptyContractPath, encodeContractPath, observeContractPath,
-  summarizeContractPath, type ContractPathRecord, type ContractPathRollup,
+  CONTRACT_PATH_DENSE_BUCKET_MS, CONTRACT_PATH_VERSION, decodeContractPath, emptyContractPath,
+  encodeContractPath, observeContractPath, summarizeContractPath,
+  type ContractPathRecord, type ContractPathRollup,
 } from './contract-path';
 import type { Prediction } from './types';
 
@@ -147,6 +148,43 @@ async function updateContractPaths(predictions: Prediction[], observedAt: number
 
   await appendClosed(closed);
   await writeActive({ version: 1, pathVersion: CONTRACT_PATH_VERSION, active });
+}
+
+async function updateDenseQuote(
+  input: { contractId: string; symbol: string; closesAt: string; askUpCents: number; askDownCents: number },
+  observedAt: number,
+): Promise<void> {
+  const store = await readActive();
+  const key = `${input.contractId}:${input.closesAt}`;
+  const existing = store.active.find((record) => `${record.contractId}:${record.closesAt}` === key)
+    ?? emptyContractPath(input);
+  const updated = observeContractPath(existing, {
+    atMs: observedAt, askUpCents: input.askUpCents, askDownCents: input.askDownCents,
+  }, CONTRACT_PATH_DENSE_BUCKET_MS);
+  await writeActive({
+    version: 1, pathVersion: CONTRACT_PATH_VERSION,
+    active: [...store.active.filter((record) => `${record.contractId}:${record.closesAt}` !== key), updated],
+  });
+}
+
+/**
+ * Records one contract at the dense bucket, for a candidate being watched to settlement.
+ *
+ * The sweep asks whether a bid ever reached the exit mark, and a fifteen-second path cannot answer it: a
+ * spike lasting eight seconds falls between samples. Measured against a case where the answer is known —
+ * every contract settling in the money must pass through 90¢ — the coarse path sees 68.4% of touches.
+ * That missing third is the whole distance between the strategy reading dead and reading marginal.
+ *
+ * Applied only to contracts that became candidates, which is the population the sweep analyses. Doing it
+ * for every window would be a hundredfold more data for paths nothing reads.
+ */
+export function recordDenseContractQuote(
+  input: { contractId: string; symbol: string; closesAt: string; askUpCents: number; askDownCents: number },
+  observedAt = Date.now(),
+): Promise<void> {
+  const operation = pathQueue.then(() => updateDenseQuote(input, observedAt));
+  pathQueue = operation.then(() => undefined, () => undefined);
+  return operation;
 }
 
 /**
