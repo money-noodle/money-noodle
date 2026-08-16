@@ -22,14 +22,16 @@ interface Track {
   dailyLossCapCents: number; report: TrackReport;
 }
 interface LongShotResponse {
-  policyVersion: string; enabled: boolean; liveEnabled: boolean;
+  policyVersion: string; enabled: boolean; liveEnabled?: boolean;
+  /** Set when served from the replicated projection, which carries the paper lane only. */
+  durable?: boolean; generatedAt?: string; paper?: Track;
   settings: {
     entryMarkCents: number; exitMarkCents: number; minimumSecondsRemaining: number;
     drawdownDivisor: number; minimumTicketCents: number; maximumOpenPerSettlementWindow: number;
     maximumEntriesPerAssetWindow: number; dailyLossTickets: number; excludedAssets: string[];
   };
   allocation: { startingCents: number; funded: boolean };
-  tracks: Track[];
+  tracks?: Track[];
   hold: {
     samples: number; resolvedSamples: number; unexecutedSamples: number;
     hold: { windows: number; samples: number; rate: number | null; clusteredMeanReturn: number | null };
@@ -150,9 +152,9 @@ export function LongShotDialog({ variant = 'button' }: { variant?: 'button' | 'b
           <Badge variant="outline" className={cn('gap-1', data.enabled ? 'border-primary/25 text-primary' : 'text-muted-foreground')}>
             {data.enabled ? <ShieldCheck className="size-3"/> : <ShieldAlert className="size-3"/>}paper {data.enabled ? 'armed' : 'off'}
           </Badge>
-          <Badge variant="outline" className={cn('gap-1', data.liveEnabled ? 'border-amber-300/40 text-amber-300' : 'text-muted-foreground')}>
+          {data.liveEnabled !== undefined && <Badge variant="outline" className={cn('gap-1', data.liveEnabled ? 'border-amber-300/40 text-amber-300' : 'text-muted-foreground')}>
             {data.liveEnabled ? <ShieldAlert className="size-3"/> : <ShieldCheck className="size-3"/>}live {data.liveEnabled ? 'ARMED' : 'off'}
-          </Badge>
+          </Badge>}
           <Badge variant="outline" className="font-mono text-[9px] text-muted-foreground">{data.policyVersion}</Badge>
         </div>
 
@@ -166,7 +168,13 @@ export function LongShotDialog({ variant = 'button' }: { variant?: 'button' | 'b
           {data.settings.maximumEntriesPerAssetWindow} entries per asset window.
         </p>
 
-        {data.tracks.map((track) => <TrackPanel key={track.mode} track={track} breakEven={breakEven}/>)}
+        {/* The hosted projection carries the paper lane only; the worker carries both. */}
+        {(data.tracks ?? (data.paper ? [data.paper] : [])).map((track) => <TrackPanel key={track.mode} track={track} breakEven={breakEven}/>)}
+        {data.durable && !data.tracks && <p className="text-[9px] leading-relaxed text-muted-foreground">
+          Replicated paper projection, published by the persistent worker
+          {data.generatedAt ? ` at ${new Date(data.generatedAt).toLocaleString()}` : ''}. The live lane is
+          never published: a hosted deployment has no execution authority and no way to reconcile a venue position.
+        </p>}
 
         {/* Approach (ii): the same triggers held to settlement, committed at trigger time. */}
         <div className="rounded-xl border p-4">

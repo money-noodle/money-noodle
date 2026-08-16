@@ -242,3 +242,63 @@ export async function syncPublicPaperBudgetToPostgres(budget: PublicPaperBudget)
     `;
   });
 }
+
+interface LongShotRow { payload: unknown; source_updated_at: Date | string }
+
+/**
+ * Paper-only projection of the long-shot policy, for the hosted dashboard.
+ *
+ * Rebuilt field by field rather than spread, for the same reason as the performance projection: a stored
+ * snapshot is whatever an older worker published, and spreading it would keep serving a field after it was
+ * deliberately withdrawn from the public surface. In particular the live track is never carried, so a
+ * stale document cannot reintroduce it.
+ */
+export async function readPublicLongShotFromPostgres(): Promise<Record<string, unknown> | null> {
+  const connection = sql();
+  if (!connection) return null;
+  try {
+    const [row] = await connection<LongShotRow[]>`
+      select payload, source_updated_at
+      from money_noodle_public_long_shot
+      where singleton = true
+      limit 1
+    `;
+    if (!row?.payload || typeof row.payload !== 'object') return null;
+    const payload = row.payload as Record<string, unknown>;
+    // A projection missing the paper track is a failed or partial replication, not an empty policy.
+    if (!payload.paper) return null;
+    return {
+      durable: true,
+      generatedAt: timestamp(row.source_updated_at),
+      policyVersion: payload.policyVersion ?? null,
+      enabled: payload.enabled ?? false,
+      settings: payload.settings ?? null,
+      allocation: payload.allocation ?? null,
+      paper: payload.paper,
+      hold: payload.hold ?? null,
+      contractPaths: payload.contractPaths ?? null,
+    };
+  } catch (error) {
+    console.error('Postgres public long-shot read failed:', error);
+    return null;
+  }
+}
+
+/**
+ * Replicates the paper lane. Best-effort: a database outage must never block a ledger write, the
+ * execution lifecycle, reconciliation, or the restart barrier.
+ */
+export async function syncPublicLongShotToPostgres(payload: Record<string, unknown>): Promise<void> {
+  if (!postgresPaperProjectionSyncEnabled()) return;
+  const connection = sql();
+  if (!connection) return;
+  const now = new Date().toISOString();
+  const document = payload as unknown as JSONValue;
+  await connection`
+    insert into money_noodle_public_long_shot (singleton, payload, source_updated_at)
+    values (true, ${connection.json(document)}, ${now})
+    on conflict (singleton) do update set
+      payload = excluded.payload,
+      source_updated_at = excluded.source_updated_at
+  `;
+}
