@@ -35,13 +35,30 @@ function SampleWarning({ summary }: { summary: PerformanceSummary }) {
  * who publishes it, rather than implying the paper track record does not exist.
  */
 export function StaleProjectionNotice() {
-  return <div className="mb-4 flex items-start gap-3 rounded-lg border border-amber-300/25 bg-amber-300/5 p-3">
-    <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-200"/>
+  return <div className="mb-4 flex items-start gap-3 rounded-lg border p-3">
+    <Clock3 className="mt-0.5 size-4 shrink-0 text-muted-foreground"/>
     <div>
-      <p className="text-xs font-medium text-amber-100">Waiting for the worker&rsquo;s first published snapshot</p>
-      <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">The paper track record is scored on the persistent Money Noodle worker and replicated here for reading. This dashboard has not received a snapshot yet, so the figures below are empty rather than zero.</p>
+      <p className="text-xs font-medium">No published record yet</p>
+      <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">This page shows the paper track record as published by the Money Noodle desk. Nothing has been published so far, so the figures below are empty rather than zero.</p>
     </div>
   </div>;
+}
+
+/**
+ * States when the record was published.
+ *
+ * Deliberately framed as a fact rather than a warning. The figures are a point-in-time record of a desk
+ * that runs elsewhere, which is what this page is for — not a cache that has fallen behind. The timestamp
+ * is also the honest disclosure: a reader can see for themselves how recent it is, which a vague staleness
+ * badge does not tell them.
+ */
+export function PublishedStamp({ generatedAt }: { generatedAt?: string }) {
+  const published = generatedAt ? new Date(generatedAt) : undefined;
+  if (!published || Number.isNaN(published.getTime())) return null;
+  return <p className="mb-4 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+    <Clock3 className="size-3"/>
+    Current as of <span className="font-mono text-foreground">{published.toLocaleString()}</span>, when the desk last published.
+  </p>;
 }
 
 function CalibrationStatus({ summary }: { summary: PerformanceSummary }) {
@@ -303,7 +320,7 @@ function DegradedStorageNotice({ storage }: { storage: { missingRollups: number;
 }
 
 export function PerformanceDialog({ publicView = false }: { publicView?: boolean }) {
-  const [data, setData] = useState<{ summary: PerformanceSummary; forecasts: ForecastHistoryRow[]; paperRecord?: TradeTrackRecord; liveRecord?: TradeTrackRecord; cyclePaths?: CyclePathReport; contractComparability?: ContractComparabilityReport; makerFillReport?: MakerFillReport; persistenceCandidate?: PersistenceCandidateReport; calendarEvaluation?: CalendarEvaluationReport; modelEvaluations?: WalkForwardEvaluationHistory; promotionEligibility?: PromotionEligibility; promotionLedger?: ModelPromotionEntry[]; paperProviderRecords?: ProviderTradeRecord[]; liveProviderRecords?: ProviderTradeRecord[]; durable?: boolean; forecastStorage?: { layout: string; openRows: number; sealedRows: number; shards: number; missingRollups: number; degraded: boolean; reason: string } } | null>(null);
+  const [data, setData] = useState<{ summary: PerformanceSummary; forecasts: ForecastHistoryRow[]; paperRecord?: TradeTrackRecord; liveRecord?: TradeTrackRecord; cyclePaths?: CyclePathReport; contractComparability?: ContractComparabilityReport; makerFillReport?: MakerFillReport; persistenceCandidate?: PersistenceCandidateReport; calendarEvaluation?: CalendarEvaluationReport; modelEvaluations?: WalkForwardEvaluationHistory; promotionEligibility?: PromotionEligibility; promotionLedger?: ModelPromotionEntry[]; paperProviderRecords?: ProviderTradeRecord[]; liveProviderRecords?: ProviderTradeRecord[]; durable?: boolean; generatedAt?: string; forecastStorage?: { layout: string; openRows: number; sealedRows: number; shards: number; missingRollups: number; degraded: boolean; reason: string } } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -323,7 +340,7 @@ export function PerformanceDialog({ publicView = false }: { publicView?: boolean
     <DialogContent className="max-w-4xl p-0">
       <DialogHeader className="border-b p-5 pr-12"><DialogTitle>Positive-edge performance</DialogTitle><DialogDescription>{publicView ? 'Immutable qualifying calculations and the simulated paper track, grouped without excluding losses or pending outcomes.' : 'Immutable qualifying calculations, grouped without excluding losses or pending outcomes.'}</DialogDescription></DialogHeader>
       <div className="p-5">
-        {loading && !data ? <div className="grid h-64 place-items-center"><Loader2 className="animate-spin text-muted-foreground"/></div> : error ? <p className="rounded-lg border border-red-400/20 bg-red-400/5 p-3 text-xs text-red-300">{error}</p> : data && <>{publicView && data.durable === false && <StaleProjectionNotice/>}{!publicView && data.forecastStorage?.degraded && <DegradedStorageNotice storage={data.forecastStorage}/>}<SampleWarning summary={data.summary}/><CalibrationStatus summary={data.summary}/><MissedBuyPanel summary={data.summary}/><Tabs defaultValue="breakdown">
+        {loading && !data ? <div className="grid h-64 place-items-center"><Loader2 className="animate-spin text-muted-foreground"/></div> : error ? <p className="rounded-lg border border-red-400/20 bg-red-400/5 p-3 text-xs text-red-300">{error}</p> : data && <>{publicView && (data.durable === false ? <StaleProjectionNotice/> : <PublishedStamp generatedAt={data.generatedAt}/>)}{!publicView && data.forecastStorage?.degraded && <DegradedStorageNotice storage={data.forecastStorage}/>}<SampleWarning summary={data.summary}/><CalibrationStatus summary={data.summary}/><MissedBuyPanel summary={data.summary}/><Tabs defaultValue="breakdown">
           <TabsList className="h-auto w-full flex-wrap justify-start gap-0.5"><TabsTrigger value="trades">Trades</TabsTrigger>{!publicView && <><TabsTrigger value="policy-candidate">Policy candidate</TabsTrigger><TabsTrigger value="calendar">Calendar</TabsTrigger><TabsTrigger value="targets">Target integrity</TabsTrigger><TabsTrigger value="walk-forward">Walk-forward</TabsTrigger><TabsTrigger value="maker">Maker execution</TabsTrigger></>}<TabsTrigger value="breakdown">Signal quality</TabsTrigger><TabsTrigger value="benchmarks">Benchmarks</TabsTrigger><TabsTrigger value="segments">Segments</TabsTrigger><TabsTrigger value="regimes">Cycle regimes</TabsTrigger><TabsTrigger value="history">Signal history ({data.forecasts.length})</TabsTrigger></TabsList>
           <TabsContent value="trades">
             <p className="mb-3 text-[10px] leading-relaxed text-muted-foreground">{publicView ? 'Executed simulated trades only, taken from the paper order ledger. These include modelled fill prices and venue fees, so they answer what the shadow bankroll did — not how good the forecast looked.' : 'Executed trades only, taken from the order ledger, with paper and live kept completely separate. These include real fill prices and venue fees, so they answer what the money did — not how good the forecast looked.'}</p>

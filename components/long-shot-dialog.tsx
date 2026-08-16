@@ -171,9 +171,9 @@ export function LongShotDialog({ variant = 'button' }: { variant?: 'button' | 'b
         {/* The hosted projection carries the paper lane only; the worker carries both. */}
         {(data.tracks ?? (data.paper ? [data.paper] : [])).map((track) => <TrackPanel key={track.mode} track={track} breakEven={breakEven}/>)}
         {data.durable && !data.tracks && <p className="text-[9px] leading-relaxed text-muted-foreground">
-          Replicated paper projection, published by the persistent worker
-          {data.generatedAt ? ` at ${new Date(data.generatedAt).toLocaleString()}` : ''}. The live lane is
-          never published: a hosted deployment has no execution authority and no way to reconcile a venue position.
+          Paper lane, current as of{' '}
+          <span className="font-mono text-foreground">{data.generatedAt ? new Date(data.generatedAt).toLocaleString() : 'the last publish'}</span>.
+          The live lane runs on the desk and is not published here.
         </p>}
 
         {/* Approach (ii): the same triggers held to settlement, committed at trigger time. */}

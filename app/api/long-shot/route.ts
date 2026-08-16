@@ -29,7 +29,7 @@ export async function GET(request: Request) {
       // and "the policy has done nothing" look identical in a payload and mean very different things.
       if (!projected) {
         return NextResponse.json({
-          error: 'No replicated long-shot projection is available yet. The persistent worker publishes it.',
+          error: 'The desk has not published a long-shot record yet.',
         }, { status: 503 });
       }
       return NextResponse.json(projected, { headers: { 'Cache-Control': 'private, no-store' } });
