@@ -5,6 +5,9 @@ import { contractProvenanceRef } from './contract-provenance';
 import { getContractProvenanceRegistry, recordContractProvenance } from './contract-provenance-store';
 import { bestEntry, directionalLikelihood, qualifiesAsBuyEdge, venueEntryOptions, BUY_POLICY_VERSION } from './prediction-policy';
 import { summarizePerformance } from './performance';
+import {
+  readAllShardRows, readForecastStorageIndex, readOpenSet, sealForecastStorage, summarizeFromStorage,
+} from './forecast-store';
 import { DATA_FRESHNESS } from './freshness';
 import { calculationObservationId, signalObservationId, TRACKING_POLICY_VERSION } from './observation-window';
 import type { ContractProvenanceRecord, PerformanceSummary, Prediction, TrackedForecast, TradingVenue, VenueOutcomeRecord } from './types';
@@ -154,8 +157,7 @@ async function knownProvenanceIds(): Promise<Set<string>> {
   }
 }
 
-async function loadForecasts(): Promise<TrackedForecast[]> {
-  const snapshot = await readForecastSnapshot();
+async function readJournalEvents(): Promise<ForecastJournalEvent[]> {
   let raw = '';
   try {
     raw = await readFile(JOURNAL_FILE, 'utf8');
@@ -178,7 +180,43 @@ async function loadForecasts(): Promise<TrackedForecast[]> {
     validLines.push(line);
     events.push(event);
   }
-  const replayed = replayForecastJournal(snapshot, events);
+  return events;
+}
+
+async function loadForecasts(): Promise<TrackedForecast[]> {
+  const snapshot = await readForecastSnapshot();
+  const replayed = replayForecastJournal(snapshot, await readJournalEvents());
+  let records: Map<string, ContractProvenanceRecord>;
+  try {
+    records = new Map((await getContractProvenanceRegistry()).records.map((record) => [record.registryId, record]));
+  } catch {
+    return replayed;
+  }
+  return replayed.map((forecast) => rehydrateProvenance(forecast, records));
+}
+
+/**
+ * Whether the sharded layout is authoritative. Absent or version-mismatched means the legacy snapshot
+ * still is, which is what keeps this switch revertable: remove `index.json` and every path below falls
+ * back to reading whole history exactly as before.
+ */
+let shardedLayout: Promise<boolean> | undefined;
+function usingShardedLayout(): Promise<boolean> {
+  shardedLayout ??= readForecastStorageIndex().then((index) => Boolean(index)).catch(() => false);
+  return shardedLayout;
+}
+
+/**
+ * The hot set: rows the cycle can still change, plus anything the journal has added since the last seal.
+ *
+ * This is the residency fix. The cached array was every row ever written — about 396 MB of parsed history
+ * held to serve a working set near a hundred rows, growing 40 MB a day. A terminal row is immutable and
+ * nothing on the fifteen-second path reads one, so only the open set stays resident.
+ */
+async function loadOpenForecasts(): Promise<TrackedForecast[]> {
+  const open = await readOpenSet();
+  const journal = await readJournalEvents();
+  const replayed = replayForecastJournal(open, journal);
   let records: Map<string, ContractProvenanceRecord>;
   try {
     records = new Map((await getContractProvenanceRegistry()).records.map((record) => [record.registryId, record]));
@@ -189,13 +227,26 @@ async function loadForecasts(): Promise<TrackedForecast[]> {
 }
 
 async function readForecasts(): Promise<TrackedForecast[]> {
-  forecastCache ??= loadForecasts();
+  forecastCache ??= usingShardedLayout().then((sharded) => (sharded ? loadOpenForecasts() : loadForecasts()));
   try {
     return await forecastCache;
   } catch (error) {
     forecastCache = undefined;
     throw error;
   }
+}
+
+/**
+ * Every row, sealed and open. Transient and deliberately uncached: holding it is the cost the layout
+ * exists to remove, so it is loaded for the evaluator and the on-demand reports and then released.
+ */
+export async function readFullForecastHistory(): Promise<TrackedForecast[]> {
+  if (!(await usingShardedLayout())) return readForecasts();
+  const [sealed, open] = await Promise.all([readAllShardRows(), readForecasts()]);
+  const openIds = new Set(open.map((forecast) => forecast.id));
+  // The open set wins on collision: a row can be sealed and then patched by the journal before the next
+  // seal, and the journal is the newer statement.
+  return [...sealed.filter((forecast) => !openIds.has(forecast.id)), ...open];
 }
 
 function resolutionPatch(forecast: TrackedForecast): Partial<TrackedForecast> {
@@ -222,16 +273,36 @@ async function persistForecastChanges(
   await mkdir(DATA_DIR, { recursive: true });
   await appendFile(JOURNAL_FILE, `${events.map((event) => JSON.stringify(event)).join('\n')}\n`);
   const journalSize = await stat(JOURNAL_FILE).then((value) => value.size).catch(() => 0);
-  if (journalSize >= JOURNAL_COMPACTION_BYTES) {
-    // Snapshot first, then clear the journal. A crash between these steps only replays idempotent events.
-    await writeForecastSnapshot(retained);
-    await atomicWrite(JOURNAL_FILE, '');
+  if (journalSize < JOURNAL_COMPACTION_BYTES) return;
+  if (await usingShardedLayout()) {
+    // Compaction under the sharded layout is a seal: terminal rows move into their day's shard, the open
+    // set is rewritten, and the journal is cleared. This is the one place on the write path that touches
+    // whole history, and it releases it immediately.
+    //
+    // `retained` is passed rather than re-read because the cache still holds the pre-commit state here,
+    // and re-reading would seal a set missing the rows this very call just appended.
+    const sealed = await readAllShardRows();
+    const openIds = new Set(retained.map((forecast) => forecast.id));
+    await sealForecastStorage(pruned([...sealed.filter((forecast) => !openIds.has(forecast.id)), ...retained]));
+    return;
   }
+  // Snapshot first, then clear the journal. A crash between these steps only replays idempotent events.
+  await writeForecastSnapshot(retained);
+  await atomicWrite(JOURNAL_FILE, '');
 }
 
-function cachedPerformanceSummary(forecasts: TrackedForecast[]): PerformanceSummary {
+/**
+ * Lifetime summary without holding lifetime rows.
+ *
+ * Under the sharded layout this is a sum over per-shard sufficient statistics plus the open rows, proven
+ * field-by-field against the direct scan by `verifyForecastStoragePlan`. Under the legacy layout it is
+ * still the direct scan, so the two agree during coexistence.
+ */
+async function cachedPerformanceSummary(forecasts: TrackedForecast[]): Promise<PerformanceSummary> {
   if (performanceCache && Date.now() - performanceCache.generatedAt < PERFORMANCE_CACHE_MS) return performanceCache.summary;
-  const summary = summarizePerformance(forecasts);
+  const summary = await usingShardedLayout()
+    ? (await summarizeFromStorage(forecasts)).summary
+    : summarizePerformance(forecasts);
   performanceCache = { generatedAt: Date.now(), summary };
   return summary;
 }
@@ -444,8 +515,8 @@ async function updateTracking(predictions: Prediction[], modelVersion: string): 
     }
   }
 
-  if (!changed) return cachedPerformanceSummary(forecasts);
-  return cachedPerformanceSummary(await commitForecastChanges(forecasts, newForecastIds, new Set()));
+  if (!changed) return await cachedPerformanceSummary(forecasts);
+  return await cachedPerformanceSummary(await commitForecastChanges(forecasts, newForecastIds, new Set()));
 }
 
 function pruned(forecasts: TrackedForecast[]): TrackedForecast[] {
@@ -596,6 +667,13 @@ export async function getPerformanceSummary(): Promise<PerformanceSummary> {
   return cachedPerformanceSummary(await readForecasts());
 }
 
+/**
+ * Whole history, newest first, for the evaluator and the on-demand reports.
+ *
+ * Loaded lazily and not cached: this is the shape whose residency the sharded layout exists to remove, so
+ * it is read when something genuinely needs history and released afterwards. Nothing on the fifteen-second
+ * path calls it.
+ */
 export async function getForecastHistory(): Promise<TrackedForecast[]> {
-  return [...await readForecasts()].sort((a, b) => new Date(b.issuedAt).getTime() - new Date(a.issuedAt).getTime());
+  return [...await readFullForecastHistory()].sort((a, b) => new Date(b.issuedAt).getTime() - new Date(a.issuedAt).getTime());
 }

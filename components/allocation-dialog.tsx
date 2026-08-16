@@ -150,7 +150,7 @@ export function AllocationDialog({ variant = 'badge' }: { variant?: 'button' | '
   const blocked = useMemo(() => (data?.blockers.length ?? 0) > 0, [data]);
 
   return <Dialog onOpenChange={(open) => { if (open) void load(); }}>
-    <DialogTrigger className={variant === 'badge' ? inlineTrigger : undefined} asChild={variant === 'button'}>
+    <DialogTrigger asChild>
       {variant === 'badge'
         ? <button type="button" title="Budget allocation across provider, market, and strategy" className={cn(inlineTrigger, 'text-[9px]')}>
             <Layers3 className="size-2.5 shrink-0"/>Allocation<ChevronDown className="size-2.5 shrink-0"/>

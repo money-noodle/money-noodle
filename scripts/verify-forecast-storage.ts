@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   buildForecastStoragePlan,
@@ -71,6 +71,7 @@ async function main() {
     lastShard: plan.index.shards.at(-1),
     summary: verification.summary,
     wrote: false,
+    journalCleared: false,
     shardDir: SHARD_DIR,
   };
   if (!verification.ok) {
@@ -80,7 +81,15 @@ async function main() {
   }
   if (write) {
     await writeForecastStoragePlan(SHARD_DIR, plan);
+    // Clearing the journal is part of sealing, not an afterthought. The plan was built from the snapshot
+    // plus this journal, so every one of those events is now inside a shard or the open set. Leaving them
+    // would make the next read replay sealed rows back into the open set and double-count every lifetime
+    // figure. Truncated last, so a crash between the two replays idempotent events over a sealed layout.
+    const temporary = `${JOURNAL_FILE}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+    await writeFile(temporary, '');
+    await rename(temporary, JOURNAL_FILE);
     result.wrote = true;
+    result.journalCleared = true;
   }
   console.log(JSON.stringify(result, null, 2));
 }

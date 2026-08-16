@@ -124,7 +124,7 @@ export function LongShotDialog({ variant = 'button' }: { variant?: 'button' | 'b
   const breakEven = data ? data.settings.entryMarkCents / data.settings.exitMarkCents : 0;
 
   return <Dialog onOpenChange={(open) => { if (open) void load(); }}>
-    <DialogTrigger className={variant === 'badge' ? inlineTrigger : undefined} asChild={variant === 'button'}>
+    <DialogTrigger asChild>
       {variant === 'badge'
         ? <button type="button" title="Long-shot round-trip policy — open evidence and arming" className={cn(inlineTrigger, 'text-[9px]')}>
             <Dices className="size-2.5 shrink-0"/>Long shot<ChevronDown className="size-2.5 shrink-0"/>
