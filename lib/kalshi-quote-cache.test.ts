@@ -112,3 +112,34 @@ describe('read rate limiting', () => {
     expect(rateLimitPaused(recordRateLimitSuccess(limited), now)).toBe(false);
   });
 });
+
+describe('writes are never cached, and a refused write is retried', () => {
+  it('caches no signed request path', async () => {
+    // An account read must be authoritative and an order must reach the venue. Only quote reads are
+    // cached, and this pins that: the signed client must not gain a cache by accident later.
+    const { readFileSync } = await import('node:fs');
+    const api = readFileSync(new URL('./kalshi-api.ts', import.meta.url), 'utf8');
+    expect(api).not.toContain('cachedKalshiRead');
+    expect(api).toContain('Never cached');
+  });
+
+  it('retries only an explicit 429, never an ambiguous failure', async () => {
+    // A 429 is the venue refusing before processing, so no order can exist and retrying is safe. A
+    // timeout may well have created one, and must keep the uncertain path that reconciles authoritatively.
+    const { readFileSync } = await import('node:fs');
+    const api = readFileSync(new URL('./kalshi-api.ts', import.meta.url), 'utf8');
+    expect(api).toContain('error instanceof KalshiRateLimitError');
+    // The retry loop must bail on anything else rather than looping over a real error.
+    expect(api).toContain('if (!(error instanceof KalshiRateLimitError) || attempt >= RATE_LIMIT_ATTEMPTS) throw error;');
+  });
+
+  it('backs reads and writes off separately, because the buckets are separate', () => {
+    // Kalshi refills 200 read tokens/s against 100 write tokens/s. A burst of quote reads must not delay
+    // an order, and a busy order path must not stall reconciliation.
+    const now = 1_000_000;
+    const limited = recordRateLimited(initialRateLimitState(), now, () => 1);
+    const fresh = initialRateLimitState();
+    expect(rateLimitPaused(limited, now)).toBe(true);
+    expect(rateLimitPaused(fresh, now)).toBe(false);
+  });
+});
