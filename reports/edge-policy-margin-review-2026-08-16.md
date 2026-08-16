@@ -238,3 +238,60 @@ random.
 Reproduce with `npm run analyze:trading-clock`. If the hypothesis is worth revisiting it needs a longer
 history — nine days gives roughly nine daily observations per hour, and a real effect smaller than about
 15 percentage points could not be detected here either way.
+
+## 9. Alternative exit rules: 26 tested, none better
+
+`strict-value-v1` sells when executable cash exceeds the model's own optimistic hold value. Twenty-six
+alternatives were replayed over recorded position paths — every filled position stores a
+`positionObservations` path of executable bid, net liquidation, owned-side probability and seconds
+remaining, which is enough to ask what a different rule would have done without re-running the desk.
+Reproduce with `npm run analyze:exit-alternatives`.
+
+**Nothing beat it.** The best candidate is a +5% take-profit at +979c, t = 1.18, out of 26 candidates —
+under a null of no effect the best of 26 is expected to reach roughly t = 2.3, so this is comfortably
+inside noise.
+
+| family | rules | mean vs today | positive |
+| --- | --- | --- | --- |
+| take-profit | 8 | +2.0% | 4/8 |
+| trailing stop | 5 | −0.2% | 2/5 |
+| profit-reversal | 3 | −1.8% | 0/3 |
+| time-based flatten | 6 | −8.1% | 0/6 |
+| stop-loss | 4 | **−13.1%** | 0/4 |
+
+### 9.1 The trap this nearly walked into
+
+Scored only against positions currently held to settlement, a +5% take-profit looks worth **+3,699c**.
+Scored properly it is worth **+979c**. The difference is pre-emption: the same trigger fires on 59 of the
+64 positions `strict-value-v1` sells, and sells them for less. A candidate has to beat the live rule, not
+beat doing nothing, and a held-only population silently excludes every sale the candidate would spoil.
+
+The held-only view also produced a clean monotonic gradient — the earlier you sell, the better, all the
+way down to +2% — which read as a strong mechanical finding and was an artefact of that same exclusion.
+
+The underlying fact is real and worth keeping: **43% of the positions that settled as a total loss were
+at some point up 5% or more.** Those 35 positions carried 4,423c of stake and returned nothing. The
+naive fix does not survive contact with the sales it would spoil, but the money is genuinely sitting
+there, and a rule that could reach it *without* front-running strict-value would be worth having. That
+rule would have to condition on something other than profit level, since profit level is exactly what
+strict-value is already reacting to.
+
+### 9.2 Two clear negatives worth keeping
+
+**Stop-loss is actively harmful** — all four thresholds negative, family mean −13.1%, down to t = −2.29
+at −60%. Cutting a losing binary early is the wrong instinct: a position that is down has not lost, and
+these recover often enough that realising the loss costs more than carrying it. This is the one family
+where the evidence points somewhere with any force, and it points at *not* doing it.
+
+**Time-based flattening is harmful** — all six variants negative, family mean −8.1%. Closing out near
+expiry to avoid carrying binary risk into settlement gives up more than it protects.
+
+**Profit-reversal is negative at every arm level tested** (+50%, +75%, +100%), which independently
+corroborates the existing decision to withhold `profit-reversal-75-v1` from execution.
+
+### 9.3 What would make this measurable
+
+Position paths only begin 2026-08-14, so this rests on 173 positions over three days — 109 held and 64
+sold. That is thin for 26 candidates. Nothing here justifies a change to the exit; the useful output is
+the two negatives in §9.2 and the pre-emption correction in §9.1, both of which constrain future
+proposals rather than motivating one.
