@@ -1,5 +1,9 @@
 import 'server-only';
 import { kalshiBaseUrl } from './kalshi-api';
+import {
+  KalshiRateLimitError, initialRateLimitState, isRateLimited, rateLimitPaused, recordRateLimitSuccess,
+  recordRateLimited, type RateLimitState,
+} from './kalshi-rate-limit';
 import { fetchKalshiOrderBookNow } from './kalshi-depth';
 import { selectedManagedMakerQuote, type KalshiPriceRange, type ManagedMakerQuote } from './managed-maker';
 import type { PositionSide } from './types';
@@ -35,13 +39,46 @@ export interface KalshiTradePrint {
   takerSide: 'yes' | 'no';
 }
 
+let readRateLimit = initialRateLimitState();
+
+/** Current read backoff, for reporting. A paused reader is a fact worth surfacing, not a silent skip. */
+export function kalshiReadRateLimitState(): RateLimitState {
+  return readRateLimit;
+}
+
+/**
+ * A 429 is raised as its own error type rather than folded into the generic non-OK path.
+ *
+ * Kalshi sends no `Retry-After` and no `X-RateLimit-*` headers, so without this a rate-limit breach is
+ * indistinguishable from a flaky venue: every poller here catches and skips, and price updates would just
+ * stop with nothing explaining why. Requests are refused outright while paused, so backing off actually
+ * reduces load instead of merely delaying the same burst.
+ */
 async function publicKalshiJson<T>(path: string, timeoutMs = 2_500): Promise<T> {
+  if (rateLimitPaused(readRateLimit)) throw new KalshiRateLimitError(path.split('?')[0]);
   const response = await fetch(`${kalshiBaseUrl().replace(/\/$/, '')}${path}`, {
     headers: { Accept: 'application/json', 'User-Agent': 'MoneyNoodle/0.2 local-research' },
     signal: AbortSignal.timeout(timeoutMs), cache: 'no-store',
   });
+  if (isRateLimited(response.status)) {
+    readRateLimit = recordRateLimited(readRateLimit);
+    console.error(`Kalshi read rate limit hit on ${path.split('?')[0]}; pausing reads for ${readRateLimit.pausedUntilMs - Date.now()}ms.`);
+    throw new KalshiRateLimitError(path.split('?')[0]);
+  }
   if (!response.ok) throw new Error(`Kalshi public ${path.split('?')[0]} returned ${response.status}.`);
+  readRateLimit = recordRateLimitSuccess(readRateLimit);
   return response.json() as Promise<T>;
+}
+
+/** Both sides' asks for one contract. One request, where a managed-maker quote costs two. */
+export async function fetchKalshiQuote(ticker: string): Promise<{ yesBid: number; yesAsk: number } | undefined> {
+  const response = await publicKalshiJson<KalshiMarketResponse>(`/markets/${encodeURIComponent(ticker)}`);
+  const market = response.market;
+  const yesBid = Number(market?.yes_bid_dollars);
+  const yesAsk = Number(market?.yes_ask_dollars);
+  // Fail closed on a malformed or crossed book rather than returning a price nothing should act on.
+  if (!market || !Number.isFinite(yesBid) || !Number.isFinite(yesAsk) || yesBid <= 0 || yesAsk <= yesBid) return undefined;
+  return { yesBid, yesAsk };
 }
 
 export function parseKalshiTradePrints(value: unknown): KalshiTradePrint[] {

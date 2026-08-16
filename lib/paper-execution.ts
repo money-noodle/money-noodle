@@ -7,7 +7,7 @@ import { reconcileExecutionLedger } from './execution-reconciliation';
 import { ENTRY_EXECUTION_POLICY_VERSION, entrySideProbability, evaluateEntryExecutionPolicy, makerCohortEvidence, parseEntryExecutionMode, type EntryExecutionDecision } from './entry-execution-policy';
 import { POST_EXIT_REENTRY_COOLDOWN_MS, evaluateExitPolicy } from './exit-policy';
 import { estimateMakerFill } from './maker-fill-model';
-import { fetchKalshiManagedMakerQuote, fetchKalshiTradePrintsSince } from './kalshi-market-data';
+import { fetchKalshiManagedMakerQuote, fetchKalshiQuote, fetchKalshiTradePrintsSince } from './kalshi-market-data';
 import { observeKalshiOrderBook } from './kalshi-depth';
 import { simulateManagedPaperMaker, type PaperMakerSimulationResult } from './paper-maker-simulation';
 import { isFreshCalculationTimestamp } from './freshness';
@@ -26,6 +26,10 @@ import {
 import {
   TARGET_EXIT_POLL_MS, evaluateTargetExit, observePeakBid, targetExitPosition, targetExitSettlement,
 } from './target-exit-policy';
+import { cachedKalshiRead } from './kalshi-quote-cache';
+
+/** Entry cadence. Also the quote max-age, so the pass never acts on a price older than its own tick. */
+const LONG_SHOT_ENTRY_POLL_MS = 1_000;
 import { assetAdmitted } from './asset-exclusion';
 import { cycleRegimeFor } from './cycle-path-store';
 import { DEFAULT_MARKET_ID } from './market-registry';
@@ -1719,6 +1723,93 @@ async function runLongShotExits(bidFor: OwnedSideBid, ledger: Ledger): Promise<b
 
 let longShotPollTimer: NodeJS.Timeout | undefined;
 let longShotPollRunning = false;
+let longShotEntryTimer: NodeJS.Timeout | undefined;
+let longShotEntryRunning = false;
+let latestDashboard: DashboardData | undefined;
+
+/**
+ * Fresh both-sides quote for one contract, through the shared cache.
+ *
+ * One request rather than the two a managed-maker quote costs: the entry trigger reads only the asks and
+ * has no use for a twenty-level book. `maxAgeMs` is the entry cadence, so a value fetched for the exit
+ * poller or the cycle in the same second is reused instead of refetched.
+ */
+async function longShotEntryQuote(ticker: string): Promise<{ askUp: number; askDown: number } | undefined> {
+  const quote = await cachedKalshiRead(`quote:${ticker}`, () => fetchKalshiQuote(ticker),
+    { maxAgeMs: LONG_SHOT_ENTRY_POLL_MS });
+  // ask(DOWN) = 1 - bid(UP) on Kalshi's shared book.
+  return quote ? { askUp: quote.yesAsk, askDown: 1 - quote.yesBid } : undefined;
+}
+
+/**
+ * One-second entry pass.
+ *
+ * The fifteen-second collector cycle reads quotes that are themselves on a fifteen-second cadence, so a
+ * side that dips to the mark between two samples is invisible to it. Measured on 586 recorded episodes,
+ * 87% persist beyond one sample and half beyond ninety seconds, so this is not expected to change the
+ * entry count much on its own — the entry-window gate excludes 98% of cheap sides regardless. It earns its
+ * place by removing duplicate fetching and by making a wider entry window affordable.
+ *
+ * Skipped entirely when no window is inside the entry gate, so the quiet majority of a cycle costs nothing.
+ */
+async function longShotEntryTick(): Promise<void> {
+  if (longShotEntryRunning) return;
+  longShotEntryRunning = true;
+  try {
+    const settings = longShotSettings();
+    if (!settings.enabled) return;
+    const dashboard = latestDashboard;
+    if (!dashboard || getExecutionDrainStatus().phase === 'draining') return;
+
+    // Only windows that could still qualify are worth a quote at all.
+    const eligible = (dashboard.predictions ?? []).filter((prediction) => {
+      const quote = prediction.kalshi;
+      if (!quote?.live || !quote.ticker) return false;
+      const remaining = (Date.parse(quote.closesAt) - Date.now()) / 1000;
+      return remaining >= settings.minimumSecondsRemaining;
+    });
+    if (!eligible.length) return;
+
+    // Quotes are refreshed outside the write queue; only the ledger mutation is queued, matching the exit
+    // poller and the 2026-08-14 decision that upstream waits must not sit inside the queue they serve.
+    const refreshed = new Map<string, { askUp: number; askDown: number }>();
+    await Promise.all(eligible.map(async (prediction) => {
+      const quote = await longShotEntryQuote(prediction.kalshi!.ticker);
+      if (quote) refreshed.set(prediction.kalshi!.ticker, quote);
+    }));
+    if (!refreshed.size) return;
+
+    const priced: DashboardData = {
+      ...dashboard,
+      predictions: eligible.map((prediction) => {
+        const quote = refreshed.get(prediction.kalshi!.ticker);
+        return quote ? { ...prediction, kalshi: { ...prediction.kalshi!, ...quote } } : prediction;
+      }),
+      // The entry rule requires a fresh calculation; these quotes were fetched a moment ago.
+      generatedAt: new Date().toISOString(),
+    };
+
+    const status = await getTradingControl();
+    const operation = engineQueue.then(async () => {
+      const ledger = await readLedger();
+      let changed = await runLongShot(priced, status, ledger, 'paper');
+      changed = await runLongShot(priced, status, ledger, 'live') || changed;
+      if (changed) await writeLedger(ledger);
+    });
+    engineQueue = operation.then(() => undefined, () => undefined);
+    await operation;
+  } catch (error) {
+    console.error('Long-shot entry poll failed:', error);
+  } finally {
+    longShotEntryRunning = false;
+  }
+}
+
+function startLongShotEntryPoller(): void {
+  if (longShotEntryTimer || !longShotSettings().enabled) return;
+  longShotEntryTimer = setInterval(() => { void longShotEntryTick(); }, LONG_SHOT_ENTRY_POLL_MS);
+  longShotEntryTimer.unref?.();
+}
 
 /**
  * Two-second exit poll for open long-shot positions.
@@ -1750,8 +1841,11 @@ async function longShotExitTick(): Promise<void> {
     const bids = new Map<string, number>();
     await Promise.all([...wanted].map(async ([key, order]) => {
       try {
-        const quote = await fetchKalshiManagedMakerQuote(order.contractId, order.side);
-        bids.set(key, quote.bid * 100);
+        // Through the same cache as the entry pass: both want this contract, and at two seconds versus
+        // one they would otherwise fetch it twice a second between them.
+        const quote = await cachedKalshiRead(`maker:${order.contractId}:${order.side}`,
+          () => fetchKalshiManagedMakerQuote(order.contractId, order.side), { maxAgeMs: TARGET_EXIT_POLL_MS });
+        if (quote) bids.set(key, quote.bid * 100);
       } catch {
         // A transient quote failure is not a reason to sell or to stop; the next tick retries.
       }
@@ -1782,7 +1876,10 @@ function startLongShotExitPoller(): void {
 }
 
 export function processPaperTradingCycle(dashboard: DashboardData): Promise<void> {
+  // The entry pass needs contract identities and the clock, not prices: it refreshes those itself.
+  latestDashboard = dashboard;
   startLongShotExitPoller();
+  startLongShotEntryPoller();
   const operation = engineQueue.then(() => processCycle(dashboard));
   engineQueue = operation.then(() => undefined, () => undefined);
   return operation.then(async () => {
