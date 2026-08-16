@@ -191,3 +191,50 @@ Sample sizes are also thin where it matters most. The current policy (v17) has 9
 filled entries over three days; 46% of the lifetime live ledger was traded under retired policies whose
 windows the current gate would not even qualify. Lifetime P&L is therefore not a measurement of the
 policy now running, in either direction.
+
+## 8. Time of day: tested, and there is nothing there
+
+The hypothesis was that Kalshi's retail flow follows the US working day — people betting before work and
+after dinner — and that the book is priced worse when that flow dominates. It is a reasonable mechanism
+and it does not appear in the data. Blocks were fixed from the hypothesis before any return was looked
+at; the clock is US Eastern, because that is where the flow would be.
+
+| block (ET) | windows | win% | return |
+| --- | --- | --- | --- |
+| overnight 00–06 | 448 | 51.8% | +10.5% [+1.4, +19.5] |
+| pre-work 06–09 | 217 | 63.3% | +9.8% [−3.0, +22.6] |
+| work morning 09–12 | 260 | 58.6% | +16.8% [+5.6, +28.1] |
+| work afternoon 12–17 | 356 | 59.7% | +19.9% [+9.7, +30.1] |
+| after work 17–21 | 312 | 57.7% | +19.1% [+8.7, +29.4] |
+| late evening 21–24 | 217 | 58.5% | +11.7% [−1.0, +24.4] |
+
+The widest gap between any two blocks is 10.1% ± 8.3, or 1.2 standard errors — and it is the widest of
+six, so even two standard errors would be the wrong bar. Weekday (+16.2%) against weekend (+11.1%) and
+working hours (+17.2%) against everything else (+15.8%) are likewise indistinguishable.
+
+**The test that settles it.** Counting how many hours clear two standard errors *against zero* is the
+wrong test, and it looks encouraging: five of twenty-four do, headed by 06:00 at +41.9% and 13:00 at
++35.1%. But the population's overall mean is already +14.8%, so on a large enough sample most hours
+would clear zero regardless of any clock effect — that count measures the desk's overall edge and the
+number of looks taken, not clustering. Cochran's Q compares each cell against the *grand mean* instead:
+
+| cells | Q | df | expected under no effect | z |
+| --- | --- | --- | --- | --- |
+| 6 blocks | 3.4 | 5 | ≈5 | −0.34 |
+| 24 hours | 32.3 | 23 | ≈23 | +1.32 |
+| live ledger blocks | 7.6 | 5 | ≈5 | +0.92 |
+| paper ledger blocks | 6.4 | 5 | ≈5 | +0.61 |
+
+Every one of them is at or below what independent cells with these error bars produce anyway. There is
+no hour of the day, and no part of the working week, where this desk trades measurably better.
+
+That includes the realized ledger, whose block returns *look* dramatic — live runs from −51.6% in the
+work morning to +69.9% pre-work — and are entirely noise at 60–130 orders per block. Two traps in
+reading that table: live and paper agreeing in sign is not corroboration, because they trade the same
+signals on the same windows at the same times; and order timing is confounded with policy era, since the
+desk was paused, resumed and repolicied throughout, so which hours carry which policy version is not
+random.
+
+Reproduce with `npm run analyze:trading-clock`. If the hypothesis is worth revisiting it needs a longer
+history — nine days gives roughly nine daily observations per hour, and a real effect smaller than about
+15 percentage points could not be detected here either way.
