@@ -75,6 +75,43 @@ describe('quote cache', () => {
     expect(await cachedKalshiRead('k', failing, { maxAgeMs: 1_000, nowMs: start + 60_000, allowStale: true })).toBe('old');
   });
 
+  it('supports sub-second freshness, which the trailing entry needs', async () => {
+    let calls = 0;
+    const load = async () => { calls += 1; return calls; };
+    const start = 1_000_000;
+    expect(await cachedKalshiRead('k', load, { maxAgeMs: 250, nowMs: start })).toBe(1);
+    // Inside 250ms: served without a request.
+    expect(await cachedKalshiRead('k', load, { maxAgeMs: 250, nowMs: start + 200 })).toBe(1);
+    // Past it: refetched.
+    expect(await cachedKalshiRead('k', load, { maxAgeMs: 250, nowMs: start + 300 })).toBe(2);
+    expect(calls).toBe(2);
+  });
+
+  it('lets a fast and a slow caller share one entry without either being starved', async () => {
+    // The trailing entry wants a quarter second; the one-second pass and the exit poller want more. The
+    // fast caller drives the refresh and the slower ones ride it, which is why max-age is per call.
+    let calls = 0;
+    const load = async () => { calls += 1; return calls; };
+    const start = 1_000_000;
+    await cachedKalshiRead('k', load, { maxAgeMs: 250, nowMs: start });
+    expect(await cachedKalshiRead('k', load, { maxAgeMs: 1_000, nowMs: start + 400 })).toBe(1);
+    expect(await cachedKalshiRead('k', load, { maxAgeMs: 250, nowMs: start + 400 })).toBe(2);
+    expect(calls).toBe(2);
+  });
+
+  it('bounds a slow venue to one request in flight even when every tick misses', async () => {
+    // Asking for less than a round trip means the cache never hits. Single flight makes that degrade to
+    // the venue's response time rather than a pile of concurrent requests.
+    let calls = 0;
+    const load = async () => {
+      calls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return 'slow';
+    };
+    await Promise.all(Array.from({ length: 8 }, () => cachedKalshiRead('slow', load, { maxAgeMs: 5 })));
+    expect(calls).toBe(1);
+  });
+
   it('reports the age of what it holds', async () => {
     const start = 1_000_000;
     await cachedKalshiRead('k', async () => 'v', { maxAgeMs: 1_000, nowMs: start });

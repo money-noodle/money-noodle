@@ -29,7 +29,16 @@ export function resetKalshiQuoteCache(): void {
 }
 
 export interface CachedReadOptions {
-  /** Oldest acceptable value. A cached value at or under this age is returned without a request. */
+  /**
+   * Oldest acceptable value in milliseconds. A cached value at or under this age is returned without a
+   * request. Sub-second values are supported and expected — the trailing entry asks for a couple of
+   * hundred milliseconds while slower readers ask for seconds, which is the point of making this per-call.
+   *
+   * The practical floor is venue latency, not this number. Entries are stamped when the request *starts*,
+   * so a value is already one round trip old when stored; ask for less than that and every tick misses and
+   * refetches. Single flight still bounds it to one request in progress per key, so the effect is a
+   * cadence that degrades to the venue's response time rather than a pile of concurrent requests.
+   */
   maxAgeMs: number;
   /**
    * Serve a value older than `maxAgeMs` rather than failing, when a refresh cannot be made. Off by
