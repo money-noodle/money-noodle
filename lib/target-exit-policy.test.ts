@@ -37,12 +37,12 @@ describe('reduce-only quantity bound', () => {
 });
 
 describe('polled target exit', () => {
-  it('polls fast enough that only a sub-two-second spike is missed', () => {
+  it('polls fast enough that only a sub-second spike is missed', () => {
     // Kalshi refuses reduce_only with good_till_canceled, so a resting order cannot do this. The
-    // objection to polling was to a 15-second cadence: at two seconds a 90-second excursion is sampled
-    // roughly 45 times.
-    expect(TARGET_EXIT_POLL_MS).toBe(2_000);
-    expect(90_000 / TARGET_EXIT_POLL_MS).toBeGreaterThan(40);
+    // objection to polling was to a 15-second cadence: at one second a 90-second excursion is sampled
+    // about 90 times.
+    expect(TARGET_EXIT_POLL_MS).toBe(1_000);
+    expect(90_000 / TARGET_EXIT_POLL_MS).toBeGreaterThan(80);
   });
 
   it('sells the moment the owned-side bid reaches the mark', () => {

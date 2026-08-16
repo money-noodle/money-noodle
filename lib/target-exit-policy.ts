@@ -13,8 +13,14 @@ import type { PaperOrder, PaperOrderStatus } from './types';
  */
 export const TARGET_EXIT_POLICY_VERSION = 'polled-reduce-only-ioc-target-v1';
 
-/** Cadence the caller must poll at. Two seconds is what paper maker management already sustains. */
-export const TARGET_EXIT_POLL_MS = 2_000;
+/**
+ * Cadence the caller must poll at, and the max-age of the quote it acts on.
+ *
+ * One second. A 90-second excursion is sampled about 90 times, so only a sub-second spike escapes. Worth
+ * the request budget because the exit mark is the whole return: missing the one tick a position touches
+ * 90c costs the entire trade, where missing an entry costs one candidate out of many.
+ */
+export const TARGET_EXIT_POLL_MS = 1_000;
 
 /** Smallest quantity Kalshi v2 accepts, so a smaller remainder cannot be sold. */
 export const MINIMUM_EXIT_COUNT = 0.01;

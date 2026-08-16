@@ -13,6 +13,7 @@ import { simulateManagedPaperMaker, type PaperMakerSimulationResult } from './pa
 import { isFreshCalculationTimestamp } from './freshness';
 import { observationBucket } from './observation-window';
 import { selectedSideDepth } from './order-book-depth';
+import { selectedManagedMakerQuote } from './managed-maker';
 import { orderMarketId, orderProviderId, orderStrategyId } from './execution-report';
 import { EDGE_BINARY_BUY } from './strategy-registry';
 import { recordContractPaths } from './contract-path-store';
@@ -1812,10 +1813,10 @@ function startLongShotEntryPoller(): void {
 }
 
 /**
- * Two-second exit poll for open long-shot positions.
+ * One-second exit poll for open long-shot positions.
  *
  * The fifteen-second collector cycle is too slow for this strategy: the whole premise is transient
- * excursions, and a round trip inside ninety seconds would be sampled six times rather than forty-five.
+ * excursions, and a round trip inside ninety seconds would be sampled six times rather than ninety.
  * A resting order would have removed the need to watch at all, but Kalshi refuses `reduce_only` with
  * `good_till_canceled` (SPEC decision 2026-08-15), so the watching has to be ours.
  *
@@ -1841,11 +1842,13 @@ async function longShotExitTick(): Promise<void> {
     const bids = new Map<string, number>();
     await Promise.all([...wanted].map(async ([key, order]) => {
       try {
-        // Through the same cache as the entry pass: both want this contract, and at two seconds versus
-        // one they would otherwise fetch it twice a second between them.
-        const quote = await cachedKalshiRead(`maker:${order.contractId}:${order.side}`,
-          () => fetchKalshiManagedMakerQuote(order.contractId, order.side), { maxAgeMs: TARGET_EXIT_POLL_MS });
-        if (quote) bids.set(key, quote.bid * 100);
+        // One request, sharing the entry pass's cache key. The exit compares a bid against the mark, and
+        // the owned-side bid is derived from the two YES prices — a managed-maker quote also fetches a
+        // twenty-level book, which this has no use for and which would double the cost of every tick.
+        const quote = await cachedKalshiRead(`quote:${order.contractId}`,
+          () => fetchKalshiQuote(order.contractId), { maxAgeMs: TARGET_EXIT_POLL_MS });
+        // Through the shared helper rather than re-derived here, so both sides stay on one tested rule.
+        if (quote) bids.set(key, selectedManagedMakerQuote({ ...quote, side: order.side }).bid * 100);
       } catch {
         // A transient quote failure is not a reason to sell or to stop; the next tick retries.
       }

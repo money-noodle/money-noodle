@@ -208,7 +208,7 @@ taking is the spread alone, which the entry mark already bounds.
 
 ## 8. Exit
 
-**A two-second poll of the owned side's bid, submitting a reduce-only IOC at the mark when it is reached.**
+**A one-second poll of the owned side's bid, submitting a reduce-only IOC at the mark when it is reached.**
 
 This was designed as a resting reduce-only GTC limit placed at entry fill, which would have filled on a
 spike unattended. **Kalshi refuses that combination.** Verified against the production API on 2026-08-15
@@ -222,10 +222,14 @@ Reduce-only is the invariant that matters most here — a sell that is not cappe
 that can open reverse exposure — so it is the resting order that gives way, not the safety property.
 
 The replacement polls, which the original design rejected on the grounds that a round trip inside 90
-seconds is invisible to a 15-second poll. That objection was to the *cadence*, not to polling: at two
-seconds, a 90-second excursion is sampled roughly 45 times, and only a spike lasting under two seconds is
-missed. Paper maker management already runs on exactly this cadence, so it is a proven load rather than a
-new one, and at most three open positions means at most three quote reads per tick.
+seconds is invisible to a 15-second poll. That objection was to the *cadence*, not to polling: at one
+second a 90-second excursion is sampled about 90 times, and only a sub-second spike is missed. Each tick
+costs one request per held contract — the owned-side bid comes from the two YES prices, so no order book is
+read — shared through the quote cache with the one-second entry pass.
+
+The exit is polled faster than it strictly needs because the asymmetry favours it: missing the single tick
+where a position touches the mark costs that entire trade, while missing an entry costs one candidate out
+of many.
 
 Two consequences are worth stating rather than discovering later:
 
