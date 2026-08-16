@@ -2,6 +2,7 @@ import 'server-only';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { DEFAULT_ALLOCATION, allocationsValid } from './provider-budget-policy';
+import { strategyAllocationsValid } from './strategy-budget-policy';
 import { TRADING_PROVIDER_IDS } from './trading-provider-config-store';
 import type { MarketAllocation, ProviderBudget, ProviderBudgetConfiguration, TradingProviderId } from './types';
 
@@ -43,8 +44,19 @@ export function normalizeProviderBudgets(input: Partial<ProviderBudgetConfigurat
     providers: TRADING_PROVIDER_IDS.map((id) => {
       const item = stored.get(id);
       if (!item) return budget(id, now);
+      // Strategy funding is carried through, not rebuilt away. Reconstructing each allocation from
+      // `marketId` and `percent` alone silently discarded it on every read: the funded amounts were written
+      // to disk and never seen again, so the long-shot policy ran on its fallback default rather than its
+      // configured allocation, and `fundedAt` — which scopes a strategy's equity to its funding epoch —
+      // was lost with it. An invalid block is dropped rather than trusted.
       const allocations = Array.isArray(item.allocations) && allocationsValid(item.allocations)
-        ? item.allocations.map((entry) => ({ marketId: entry.marketId, percent: entry.percent }))
+        ? item.allocations.map((entry) => ({
+          marketId: entry.marketId,
+          percent: entry.percent,
+          ...(entry.strategies && strategyAllocationsValid(entry.strategies)
+            ? { strategies: entry.strategies.map((strategy) => ({ ...strategy })) }
+            : {}),
+        }))
         : DEFAULT_ALLOCATION.map((entry) => ({ ...entry }));
       const cents = (value: unknown) => Number.isSafeInteger(value) && (value as number) >= 0 ? value as number : 0;
       return {
@@ -100,6 +112,13 @@ export async function updateProviderBudget(
     if (changes.allocations && !allocationsValid(changes.allocations)) {
       throw new Error('Market allocations must be non-negative, unique per market, and sum to at most 100%.');
     }
+    // Strategy shares are bounded inside their market exactly as markets are bounded inside the provider.
+    // Unvalidated, two strategies could each be funded a full allowance of the same cash.
+    for (const allocation of changes.allocations ?? []) {
+      if (allocation.strategies && !strategyAllocationsValid(allocation.strategies)) {
+        throw new Error(`${allocation.marketId} strategy allocations must be non-negative, unique per strategy, carry a non-negative starting amount, and sum to at most 100%.`);
+      }
+    }
     for (const key of ['liveLimitCents', 'paperLimitCents'] as const) {
       const value = changes[key];
       if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
@@ -116,7 +135,12 @@ export async function updateProviderBudget(
           ...item,
           liveLimitCents: changes.liveLimitCents ?? item.liveLimitCents,
           paperLimitCents: changes.paperLimitCents ?? item.paperLimitCents,
-          allocations: changes.allocations?.map((entry) => ({ ...entry })) ?? item.allocations,
+          // Strategies are copied too: a shallow copy would leave the caller holding a live reference
+          // into persisted budget state.
+          allocations: changes.allocations?.map((entry) => ({
+            ...entry,
+            ...(entry.strategies ? { strategies: entry.strategies.map((strategy) => ({ ...strategy })) } : {}),
+          })) ?? item.allocations,
           updatedAt: now,
         }
         : item),

@@ -7,7 +7,9 @@
 
 Money Noodle is operational as a local research dashboard, continuous paper shadow trader, public paper-track-record publisher, and explicitly armed live Kalshi trader. Core UP/YES and DOWN/NO entry, managed maker execution, paper maker mirroring, signed Kalshi reconciliation, quiescent pause/drain, loss gates, budget epochs, provider permissions, contract provenance, target integrity, standalone reduce-only exits, protected switching, model evaluation, and immutable promotion accounting are implemented.
 
-The system is mechanically capable. The unresolved question is economic: current evidence does not justify stake expansion, taker execution, looser entry gates, queue-aware live gates, or adding a second live venue. The next work should prioritize storage residency and decision-grade evidence over new trading features.
+The system is mechanically capable. The unresolved question is economic: current evidence does not justify stake expansion, taker execution, looser entry gates, queue-aware live gates, or adding a second live venue. None of those change here.
+
+A second production policy is being added on the same market — the long-shot round trip, §2 below. It is a new trading feature, which this guidance deprioritizes, and it proceeds as an explicit operator decision under a bounded learning budget carved from the existing allocation rather than added to it. It relaxes none of the constraints above and changes no rule of the edge policy.
 
 | Area | Status |
 | --- | --- |
@@ -102,7 +104,85 @@ The worker boundary previously listed here is deferred indefinitely. It relocate
 
 Done means: retained heap and startup time measurably drop, forecast scoring matches pre-migration output under the gate, 15-second collection remains fresh through restart, and the dashboard can report degraded rollup state explicitly.
 
-### 2. Harden Walk-Forward Review Before Any Model Promotion
+### 2. Build the Long-Shot Round-Trip Policy
+
+Started 2026-08-14. A second production policy on `crypto-15m`, running beside the edge policy: buy a side
+whose executable Kalshi ask reaches 10¢ within the first three minutes, sell through a resting reduce-only
+GTC limit at 90¢. Design, arithmetic, and the screening behind every parameter are in
+[docs/long-shot-policy-design.md](/Users/raiphairow/code/money/docs/long-shot-policy-design.md);
+SPEC §12.10 and the 2026-08-14 decision-log entries carry the decisions.
+
+This is a new trading feature, which the guidance above deprioritizes relative to storage and evidence. It
+is being built anyway as an explicit operator decision, under a bounded learning budget: 30% of the
+`crypto-15m` cap, a 20¢ opening ticket, and a derived halt at 300¢ of policy equity. Roughly $7–12 buys the
+~60 resolved attempts needed to separate "real" from "hopeless," which is the only question that sample size
+can answer.
+
+What the screening does and does not support is recorded honestly. Buy-and-hold on this trigger has no edge:
+20.2% ± 3.7pp over 119 candidates against a 22.2% break-even, so the cheap side wins about exactly what it
+costs. The round-trip exit is **unmeasured** — path sampling is provably blind there, observing winners
+reach 90¢ in 68.4% of cases where the true figure must be 100% — and that is the reason to collect rather
+than a reason to believe.
+
+Delivery order:
+
+1. ~~Pure rule layer and ticket/cap arithmetic.~~ **Done.** `lib/long-shot-policy.ts`. Entry rule, ticket
+   sizing, caps, and round-trip economics asserted against the production fee and sizing code rather than a
+   copy, so a fee-model change breaks the test.
+2. ~~`strategyId` on orders and summaries.~~ **Done.** `lib/strategy-registry.ts`, absent meaning the edge
+   policy exactly as absent `marketId` means `crypto-15m`. One ledger, not two, because reconciliation is
+   account-wide and a split file would leave real resting orders unmatched. `lib/strategy-isolation.test.ts`
+   pins the money boundary in both directions.
+3. ~~Per-policy budget sub-allocation and the derived halt.~~ **Done.** `lib/strategy-budget-policy.ts`. The
+   percentage funds a strategy once; its equity then rolls forward on its own P&L. Applying the percentage
+   continuously would size one strategy's ticket from the other's results and dilute its own losses so the
+   halt could never fire on the strategy that earned it.
+4. ~~Resting reduce-only GTC limit exits.~~ **Superseded.** Kalshi refuses `reduce_only` with
+   `good_till_canceled`; verified against the production API. `lib/target-exit-policy.ts` polls the
+   owned-side bid every two seconds and submits a reduce-only IOC at the mark instead.
+5. ~~Buy-and-hold sentinels, written at trigger time.~~ **Done.** `lib/hold-sentinel.ts`.
+6. ~~Contract price-path recorder.~~ **Done.** `lib/contract-path.ts`. Compact per-window triples rather
+   than the rewritten array `cycle-path-store` uses, at under 700 KB/day.
+7. ~~Reporting split by entry generation and regime.~~ **Done.** `lib/long-shot-report.ts`.
+
+8. ~~Durable stores and collection wiring.~~ **Done, collection only.** `lib/contract-path-store.ts`,
+   `lib/hold-sentinel-store.ts`, and `lib/long-shot-execution.ts` run detached from `processCycle`
+   alongside the calendar and persistence lanes. Contract paths and hold sentinels accumulate from the
+   next cycle onward.
+
+9. ~~Execution.~~ **Done.** `runLongShot` and `runLongShotExits` in `paper-execution.ts`, inside the
+   serialized engine queue and deliberately separate from `runPaper`/`runLive` — threading a second policy
+   through the edge policy's selection, persistence, maker-retry, portfolio-ranking and regime-gate path
+   would change behaviour the mirror invariant depends on. Exits run before entries so a position that
+   reaches its mark frees its slot for a same-cycle re-entry.
+10. ~~Two-second exit poll.~~ **Done.** Quotes are fetched outside the write queue and only the ledger
+    mutation is queued, per the 2026-08-14 decision that upstream waits must not sit inside the queue they
+    serve. A tick never queues behind itself, so a slow venue produces fewer polls rather than a backlog.
+
+Enabled and running as of 2026-08-15. Entry is a price-capped taker IOC at the mark — an explicit exception
+to maker-only production execution, because the trigger is defined as the ask reaching the mark. Every
+account-wide protection still applies unchanged: kill switch, live arming, the reconciliation barrier, the
+drain, and the shared hourly filled-order ceiling.
+
+Funded at 30% of the Kalshi `crypto-15m` cap: 600¢, a 20¢ ticket, halting below 300¢. `npm run fund:long-shot`
+reports and re-applies it, refusing unless automation is paused with nothing reserved or open.
+
+Current state: the paper lane is live and the live lane is blocked by ordinary controls (`state: paused`,
+`mode: paper`) rather than by any breaker — the edge policy's loss gate is clear at 0¢ current-epoch
+drawdown and +225.85¢ lifetime. Contract paths are accumulating across all seven assets. No trigger has
+fired yet, which matches the ~4/day the screening measured.
+
+First live observation worth recording: cheap sides are common but cheap sides **early** are rare. ETH at
+6.1¢ and SOL at 5.0¢ were both correctly refused at eight minutes into their cycle. The entry window, not
+the price mark, is the binding constraint on candidate flow.
+
+Remaining: the report surface, and the durable stores' retention policy once the journal starts growing.
+
+Done means: the policy trades paper and live under the mirror invariant, the edge policy's behaviour is
+byte-for-byte unchanged, exposure caps and the shared kill switch/reconciliation/drain still bind across
+both, and 60 resolved attempts are reportable against the 12.5% break-even clustered by settlement window.
+
+### 3. Harden Walk-Forward Review Before Any Model Promotion
 
 The evaluator and promotion ledger exist, but promotion criteria still need to become decision-grade.
 
@@ -116,7 +196,7 @@ Remaining work:
 
 Current stance: baseline retained. No automatic evaluator result may change production, and no manual promotion should be recorded unless every evidence gate clears.
 
-### 3. Decide the Profit-Reversal Exit Policy From Prospective Evidence
+### 4. Decide the Profit-Reversal Exit Policy From Prospective Evidence
 
 Strict value exits and the 75% profit-reversal lock are measured separately. Strict value remains executable. `profit-reversal-75-v1` is already withheld from execution by default on its own negative evidence; arming and high-water observations continue so the counterfactual remains prospective. The local environment explicitly keeps it disabled.
 
@@ -129,7 +209,7 @@ Remaining work:
 
 The small historical live cohort supports conservative withholding, not permanent refutation or a replacement rule.
 
-### 4. Accumulate and Evaluate Maker Queue/Depth Evidence
+### 5. Accumulate and Evaluate Maker Queue/Depth Evidence
 
 Instrumentation and the queue-aware paper simulator are implemented; the next step is held-out evidence, not live execution changes. Before this deployment, same-signal paper/live maker agreement was only 29.7% across 37 paired attempts (19 live-only fills and 7 paper-only fills), which is the baseline the new independent and matched-live lanes must improve on prospectively. The first post-deployment review has only 2 matched intents.
 
@@ -143,7 +223,7 @@ Remaining work:
 
 Forbidden for now: depth-aware sizing, more retries, taker promotion, stale maker-to-taker fallback, or queue-aware live gates.
 
-### 5. Verify First Organic Live Switch and Continue Exit Verification
+### 6. Verify First Organic Live Switch and Continue Exit Verification
 
 The switch engine, reconciliation matcher, partial-exit handling, replacement withholding, and switch-versus-hold accounting are implemented and tested. A real organic switch has still not been economically verified end to end.
 
@@ -157,7 +237,7 @@ When it occurs naturally, verify:
 
 Never force a live switch just to exercise the path.
 
-### 6. Provider Variant and Policy Visibility Follow-Through
+### 7. Provider Variant and Policy Visibility Follow-Through
 
 The provider registry foundation is in place. The next useful work is observability and clean attribution before new execution adapters.
 
@@ -169,7 +249,7 @@ Remaining work:
 - Defer candidate-set funding/ranking changes until there is a second live-capable provider, because it cannot change behavior before then.
 - Add any new provider read/paper-first behind official API verification, operator eligibility, and explicit capabilities. No scraping path may imply live capability.
 
-### 7. Secondary Work After Safety and Evidence
+### 8. Secondary Work After Safety and Evidence
 
 These are useful, but lower priority than storage, evaluation, exits, and maker evidence:
 

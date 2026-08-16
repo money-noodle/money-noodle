@@ -34,7 +34,9 @@ describe('live loss circuit breaker', () => {
     const result = evaluateLiveRisk(control(), [], environment);
     expect(result.allowed).toBe(false);
     expect(result.currentEpochDrawdownCents).toBe(10);
-    expect(result.reasons[0]).toContain('Current live budget drawdown');
+    // Named account-wide rather than "current live budget": the drawdown is blended across strategies,
+    // and the old wording read as though the strategy being blocked had caused it.
+    expect(result.reasons[0]).toContain('Account live drawdown');
   });
 
   it('preserves lifetime evidence independently of budget reconfiguration', () => {

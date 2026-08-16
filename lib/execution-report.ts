@@ -1,7 +1,8 @@
 import { ACTION_COUNTERFACTUAL_VERSION, buildActionCounterfactuals, clusterByWindow } from './action-counterfactual';
 import { normalizeMarketId } from './market-registry';
+import { normalizeStrategyId } from './strategy-registry';
 import { BUY_POLICY_VERSION } from './prediction-policy';
-import type { ExecutionMode, MakerExecutionSegment, MakerFillReport, MarketId, PaperOrder, ProviderTradeRecord, SegmentGroup, SegmentStat, TrackedForecast, TradeTrackRecord, TradingProviderId } from './types';
+import type { ExecutionMode, MakerExecutionSegment, MakerFillReport, MarketId, PaperOrder, ProviderTradeRecord, SegmentGroup, SegmentStat, StrategyId, TrackedForecast, TradeTrackRecord, TradingProviderId } from './types';
 
 const settledStatuses = new Set(['won', 'lost', 'invalid', 'sold']);
 
@@ -317,6 +318,22 @@ export function orderProviderId(order: PaperOrder): TradingProviderId {
 /** Market an order belongs to, defaulting to the only market that existed when it was written. */
 export function orderMarketId(order: PaperOrder): MarketId {
   return normalizeMarketId(order.marketId);
+}
+
+/**
+ * Strategy an order belongs to, defaulting to the only strategy that existed when it was written.
+ *
+ * Every P&L, bankroll, and loss-gate aggregation must scope by this. Account-wide concerns must not:
+ * reconciliation, the venue order ceiling, the drain, and the kill switch all act on the shared Kalshi
+ * account, so filtering those by strategy would leave a real resting order unaccounted for.
+ */
+export function orderStrategyId(order: PaperOrder): StrategyId {
+  return normalizeStrategyId(order.strategyId);
+}
+
+/** Orders belonging to one strategy. The default keeps historical rows with the edge policy. */
+export function strategyOrders(orders: PaperOrder[], strategyId: StrategyId): PaperOrder[] {
+  return orders.filter((order) => orderStrategyId(order) === strategyId);
 }
 
 /**

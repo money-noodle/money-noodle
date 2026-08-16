@@ -125,7 +125,7 @@ async function readiness(stored: StoredTradingControl): Promise<TradingControlDa
     const reason = `Live risk evidence is unavailable: ${error instanceof Error ? error.message : 'unknown ledger error'}`;
     liveRisk = {
       ...limits, allowed: false, currentEpochDrawdownCents: 0,
-      lifetimeRealizedPnlCents: 0, lifetimeLossCents: 0, reasons: [reason],
+      lifetimeRealizedPnlCents: 0, lifetimeLossCents: 0, currentEpochAttribution: [], reasons: [reason],
     };
   }
   if (stored.control.mode === 'live' && !liveRisk.allowed) blockers.push(...liveRisk.reasons);

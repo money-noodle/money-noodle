@@ -13,7 +13,19 @@ import { simulateManagedPaperMaker, type PaperMakerSimulationResult } from './pa
 import { isFreshCalculationTimestamp } from './freshness';
 import { observationBucket } from './observation-window';
 import { selectedSideDepth } from './order-book-depth';
-import { orderMarketId, orderProviderId } from './execution-report';
+import { orderMarketId, orderProviderId, orderStrategyId } from './execution-report';
+import { EDGE_BINARY_BUY } from './strategy-registry';
+import { recordContractPaths } from './contract-path-store';
+import { getHoldSentinels, updateHoldSentinelStore } from './hold-sentinel-store';
+import { collectLongShotEvidence, longShotAllocationCents } from './long-shot-execution';
+import { evaluateLongShotEntry, longShotSettings } from './long-shot-policy';
+import { LONG_SHOT_ROUND_TRIP } from './strategy-registry';
+import {
+  buildLongShotOrder, longShotDailyNetLossCents, longShotFunding, openLongShotPositions,
+} from './long-shot-engine';
+import {
+  TARGET_EXIT_POLL_MS, evaluateTargetExit, observePeakBid, targetExitPosition, targetExitSettlement,
+} from './target-exit-policy';
 import { assetAdmitted } from './asset-exclusion';
 import { cycleRegimeFor } from './cycle-path-store';
 import { DEFAULT_MARKET_ID } from './market-registry';
@@ -23,6 +35,7 @@ import { isStatelessDeployment } from './runtime-environment';
 import { postgresPaperProjectionSyncEnabled, readPublicPaperBudgetFromPostgres, syncPublicPaperBudgetToPostgres } from './postgres-paper-projection';
 import { fetchKalshiReconciliationSnapshot } from './kalshi-reconciliation';
 import { entryAttemptsForLogicalOrder, makerAttemptId, makerRetryDecision, maximumLiveMakerAttempts, maximumPaperMakerAttempts } from './maker-retry-policy';
+import { evaluateLiveRisk } from './live-risk-policy';
 import { liveBlockers, liveTradingEnabled, maxLiveOrdersPerHour, maxLiveStakeCents, placeKalshiBuy, placeKalshiSell, placeKalshiTakerBuy } from './live-orders';
 import { countFilledLiveVenueOrders } from './order-rate-limit';
 import { selectPortfolio, DEFAULT_PORTFOLIO_CONSTRAINTS, parseMaximumOpenPositions, type PortfolioConstraints } from './portfolio-policy';
@@ -34,7 +47,7 @@ import { advanceSignalPersistence, evaluateSignalPersistence, evaluateSignalPers
 import { REQUIRED_SWITCH_SNAPSHOTS, REQUIRED_SWITCH_SPAN_MS, advanceSwitchPersistence, switchCooldownRemainingMs, switchEvidenceReady, switchEvidenceSpanMs, type SwitchPersistenceState } from './switch-hysteresis';
 import { evaluateSwitchProbabilityGate, switchPolicySettings, valueSwitch } from './switch-policy';
 import { autoResumeTradingAfterReconciliation, getTradingControl, pauseTrading, reconcileTradingBudget, recordTradingReconciliationFailure, releaseTradingBudget, reserveTradingBudget, settleTradingBudget, stopTradingForLiveRisk, suspendTrading } from './trading-control';
-import type { DashboardData, ExecutionMode, ExecutionSignalReadiness, ExecutionSummary, MarketFunding, MarketId, PaperOrder, PortfolioDecisionView, PositionSide, Prediction, ProviderBudgetConfiguration, PublicPaperBudget, PublicPaperExecutionRecord, TradingControlData, TradingProviderId } from './types';
+import type { DashboardData, ExecutionMode, ExecutionSignalReadiness, ExecutionSummary, MarketFunding, MarketId, PaperOrder, PortfolioDecisionView, PositionSide, Prediction, ProviderBudgetConfiguration, PublicPaperBudget, PublicPaperExecutionRecord, StrategyId, TradingControlData, TradingProviderId } from './types';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const LEDGER_FILE = path.join(DATA_DIR, 'paper-orders.json');
@@ -53,7 +66,6 @@ let automaticReconciliationRequested = false;
 interface PaperBudget { startingCents: number; availableCents: number; realizedPnlCents: number; resets?: number; startedAt?: string }
 export const MAX_PAPER_BANKROLL_CENTS = 1_000_000;
 interface Ledger { version: 6; paperBudget: PaperBudget; orders: PaperOrder[]; signalPersistence: Record<string, SignalPersistenceState>; portfolioDecisions: Record<string, PortfolioDecisionView>; switchPersistence: Record<string, SwitchPersistenceState>; lastLiveSkip?: { reason: string; at: string } }
-interface PaperFill { quantity: number; limitPriceCents: number; purchaseCents: number; feeCents: number; stakeCents: number; potentialPayoutCents: number }
 
 async function readLedger(): Promise<Ledger> {
   try {
@@ -134,37 +146,9 @@ function portfolioConstraints(): PortfolioConstraints {
 }
 
 /** A fill at or above the $1 payout is a guaranteed loss, so it is refused regardless of policy. */
-export const MAX_FILLABLE_ASK = 0.99;
-
-/** Conservative taker-fee reserve; actual maker fees come from Kalshi fill records and unused cash is released. */
-export function venueFeeCents(venue: 'polymarket' | 'kalshi', limitPriceCents: number, quantity: number): number {
-  const price = limitPriceCents / 100;
-  if (venue === 'kalshi') return Math.max(1, Math.ceil(7 * quantity * price * (1 - price)));
-  return Math.max(1, Math.ceil(quantity * limitPriceCents * 0.01));
-}
-
-/**
- * Largest purchase that fits inside an all-in spend cap.
- *
- * The configured per-trade amount is what leaves the account in total, so the value sent to the venue
- * must be lower to leave room for fees. The limit price is rounded up to a whole cent so the order is
- * marketable against the quoted ask, and quantity is reduced until price x count plus fees fits.
- */
-export function estimatePaperFill(stakeLimitCents: number, askPrice: number, venue: 'polymarket' | 'kalshi'): PaperFill | null {
-  if (!Number.isInteger(stakeLimitCents) || stakeLimitCents <= 0 || !Number.isFinite(askPrice) || askPrice <= 0 || askPrice > MAX_FILLABLE_ASK) return null;
-  const limitPriceCents = askPrice * 100;
-  // Kalshi v2 supports 0.01-contract increments. Polymarket remains whole-contract only here.
-  const quantityStep = venue === 'kalshi' ? 0.01 : 1;
-  const maximumUnits = Math.floor((stakeLimitCents / limitPriceCents + 1e-9) / quantityStep);
-  for (let units = maximumUnits; units > 0; units -= 1) {
-    const quantity = Number((units * quantityStep).toFixed(2));
-    const purchaseCents = Math.ceil(quantity * limitPriceCents - 1e-9);
-    const feeCents = venueFeeCents(venue, limitPriceCents, quantity);
-    const stakeCents = purchaseCents + feeCents;
-    if (stakeCents <= stakeLimitCents) return { quantity, limitPriceCents, purchaseCents, feeCents, stakeCents, potentialPayoutCents: Math.round(quantity * 100) };
-  }
-  return null;
-}
+import { MAX_FILLABLE_ASK, estimatePaperFill, venueFeeCents } from './venue-fill';
+import type { PaperFill } from './venue-fill';
+export { MAX_FILLABLE_ASK, estimatePaperFill, venueFeeCents } from './venue-fill';
 
 const baseOrderId = (prediction: Prediction, mode: ExecutionMode, side: PositionSide) => `${mode}:${prediction.symbol}:${side}:${prediction.market.closesAt}`;
 const sideWindowOrders = (ledger: Ledger, prediction: Prediction, mode: ExecutionMode, side: PositionSide) => ledger.orders
@@ -452,6 +436,9 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
     id: orderId(prediction, mode, side, ledger), logicalOrderId: orderId(prediction, mode, side, ledger), attemptNumber: 1,
     clientOrderId: orderId(prediction, mode, side, ledger), executionMode: mode,
     marketId: DEFAULT_MARKET_ID,
+    // `buildOrder` is the edge policy's construction path; the long-shot policy builds its own orders and
+    // stamps its own id. Explicit on both sides so neither can fall through to a default.
+    strategyId: EDGE_BINARY_BUY,
     // Stamped at creation so a later reconfiguration cannot reattribute this order's P&L.
     budgetEpochId: status.control.epochId,
     providerId: selected.venue,
@@ -595,7 +582,12 @@ async function settleDueOrders(ledger: Ledger): Promise<boolean> {
       if (!outcome) continue;
       const payoutCents = outcome === 'INVALID' ? order.stakeCents : outcome === order.side ? order.potentialPayoutCents : 0;
       if (order.executionMode === 'live') await settleTradingBudget(order.stakeCents, payoutCents, order.venue, order.id);
-      else {
+      // Live cash is one real Kalshi balance and settles through the shared control whatever strategy
+      // spent it. The paper bankroll is not: it is the edge policy's own counter, and crediting another
+      // strategy's payout into it would inflate the edge policy's paper equity and its published track
+      // record. Other strategies derive their paper equity from their own orders, so there is nothing to
+      // credit here.
+      else if (orderStrategyId(order) === EDGE_BINARY_BUY) {
         ledger.paperBudget.availableCents += payoutCents;
         ledger.paperBudget.realizedPnlCents += payoutCents - order.stakeCents;
       }
@@ -1125,7 +1117,11 @@ async function executeLiveStandaloneExit(order: PaperOrder, decision: NonNullabl
 async function observeAndExecuteStandaloneExits(dashboard: DashboardData, status: TradingControlData, ledger: Ledger): Promise<boolean> {
   if (!isFreshCalculationTimestamp(dashboard.generatedAt)) return false;
   let changed = false;
-  for (const order of ledger.orders.filter((item) => item.status === 'open')) {
+  // Scoped to the edge policy's own positions. Its exit rules read a model probability and an optimistic
+  // hold value; the long-shot policy produces neither, so applying them to its positions grades a bet
+  // against a forecast that was never made. On 2026-08-15 this closed three long-shot positions at 48-76c
+  // that the strategy was holding for its 90c mark, corrupting the round trip it exists to measure.
+  for (const order of ledger.orders.filter((item) => item.status === 'open' && orderStrategyId(item) === EDGE_BINARY_BUY)) {
     const prediction = dashboard.predictions.find((item) => item.symbol === order.symbol
       && (order.venue === 'kalshi' ? item.kalshi?.closesAt === order.closesAt : item.market.closesAt === order.closesAt));
     if (!prediction) continue;
@@ -1166,7 +1162,8 @@ function bestSwitch(dashboard: DashboardData, status: TradingControlData, ledger
     if (ledger.orders.some((order) => order.executionMode === 'live' && order.status === 'sold' && order.closesAt === replacement.closesAt)) continue;
     const newExpectedProfit = replacement.quantity * 100 * orderProbability(replacement) - replacement.stakeCents;
     if (newExpectedProfit <= 0) continue;
-    for (const incumbent of open.filter((order) => order.venue === 'kalshi' && order.status === 'open')) {
+    for (const incumbent of open.filter((order) => order.venue === 'kalshi' && order.status === 'open'
+      && orderStrategyId(order) === EDGE_BINARY_BUY)) {
       if (options.oppositeSameAssetOnly && !(replacement.symbol === incumbent.symbol && replacement.side !== incumbent.side)) continue;
       const current = dashboard.predictions.find((item) => item.symbol === incumbent.symbol && item.kalshi?.closesAt === incumbent.closesAt);
       const quote = current ? venueQuote(current, 'kalshi', incumbent.side) : null;
@@ -1441,7 +1438,19 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
   void persistenceCandidateCycle(dashboard, ledger, regimeGate.allowsEntries)
     .then((cycle) => updatePersistenceCandidateStore(cycle))
     .catch((error) => console.error('Two-snapshot persistence candidate collection failed:', error));
+  void recordContractPaths(dashboard.predictions ?? [])
+    .catch((error) => console.error('Contract path collection failed:', error));
   const status = await getTradingControl();
+  // Long-shot collection only: this records triggers and outcomes and places no order. It runs detached
+  // and unconditionally, because the evidence is what decides whether to enable the policy, so gating
+  // collection on it being enabled would be circular. See lib/long-shot-execution.ts.
+  void getHoldSentinels()
+    .then((existingSentinels) => collectLongShotEvidence({
+      dashboard, orders: ledger.orders, existingSentinels,
+      startingCents: longShotAllocationCents(status.control.startingBudgetCents),
+    }))
+    .then((cycle) => updateHoldSentinelStore(cycle))
+    .catch((error) => console.error('Long-shot evidence collection failed:', error));
   changed = await observeAndExecuteStandaloneExits(dashboard, status, ledger) || changed;
   changed = updatePortfolioDecisions(dashboard, status, ledger) || changed;
   const previousSkip = ledger.lastLiveSkip?.reason;
@@ -1458,10 +1467,322 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
   const liveManagement = runLive(dashboard, status, ledger, regimeGate, budgets);
   const [paperChanged, liveChanged] = await Promise.all([paperManagement, liveManagement]);
   changed = paperChanged || liveChanged || changed;
+  // Exits before entries, so a position that reached its mark this tick frees its slot for a re-entry in
+  // the same cycle rather than waiting fifteen seconds. Both run inside the serialized engine queue.
+  changed = await runLongShotExits(dashboardBid(dashboard), ledger) || changed;
+  changed = await runLongShot(dashboard, status, ledger, 'paper') || changed;
+  changed = await runLongShot(dashboard, status, ledger, 'live') || changed;
   if (changed || ledger.lastLiveSkip?.reason !== previousSkip) await writeLedger(ledger);
 }
 
+/**
+ * Long-shot entries for one track.
+ *
+ * Deliberately separate from `runPaper`/`runLive` rather than threaded through them: the edge policy's
+ * selection, persistence, maker retry, portfolio ranking, and regime gate are all specific to it, and
+ * forcing a second policy through that path would change behaviour the mirror invariant depends on.
+ *
+ * Every account-wide protection still applies, because those are properties of the venue and the account
+ * rather than of a policy: the kill switch and live arming through `liveBlockers`, the reconciliation
+ * barrier, the drain, and the shared hourly filled-order ceiling.
+ */
+async function runLongShot(
+  dashboard: DashboardData, status: TradingControlData, ledger: Ledger, mode: ExecutionMode,
+): Promise<boolean> {
+  const settings = longShotSettings();
+  if (!settings.enabled) return false;
+  if (!isFreshCalculationTimestamp(dashboard.generatedAt)) return false;
+  if (getExecutionDrainStatus().phase === 'draining') return false;
+
+  const allocation = (await getProviderBudgets({ revision: status.control.revision })).providers
+    .find((provider) => provider.providerId === 'kalshi')?.allocations
+    .find((item) => item.marketId === DEFAULT_MARKET_ID)?.strategies
+    ?.find((strategy) => strategy.strategyId === LONG_SHOT_ROUND_TRIP);
+  const startingCents = longShotAllocationCents(status.control.startingBudgetCents, allocation?.startingCents);
+  // Equity counts only what this strategy earned since it was last funded. Re-funding sets a new starting
+  // amount, so carrying a prior period's losses across would report equity the operator never committed.
+  const funding = longShotFunding(ledger.orders, mode, startingCents, settings, Date.parse(allocation?.fundedAt ?? '') || 0);
+  if (funding.sizing.halted) return false;
+
+  if (mode === 'live') {
+    // Per-strategy arming, checked before the account-wide controls. Those say whether the desk is armed;
+    // this says whether this strategy is, and conflating them is what put three unintended live orders on
+    // the venue on 2026-08-15.
+    if (!settings.liveEnabled) return false;
+    if (liveBlockers().length || status.control.mode !== 'live' || status.control.state !== 'active') return false;
+    if (getKalshiReconciliationStatus().phase !== 'ready') return false;
+    if (evaluateLiveRisk(status.control, ledger.orders, process.env, LONG_SHOT_ROUND_TRIP).allowed === false) return false;
+    if (countFilledLiveVenueOrders(ledger.orders, Date.now() - 3_600_000) >= maxLiveOrdersPerHour()) return false;
+  }
+
+  const dailyNetLossCents = longShotDailyNetLossCents(ledger.orders, mode);
+  const open = openLongShotPositions(ledger.orders, mode);
+  let changed = false;
+
+  for (const prediction of dashboard.predictions) {
+    const quote = prediction.kalshi;
+    if (!quote?.live || !quote.ticker) continue;
+    for (const side of ['UP', 'DOWN'] as const) {
+      const ask = side === 'UP' ? quote.askUp : quote.askDown;
+      const oppositeAsk = side === 'UP' ? quote.askDown : quote.askUp;
+      if (!(ask > 0) || !(oppositeAsk > 0)) continue;
+
+      const generation = ledger.orders.filter((order) => orderStrategyId(order) === LONG_SHOT_ROUND_TRIP
+        && order.executionMode === mode && order.symbol === prediction.symbol
+        && order.closesAt === quote.closesAt && !order.id.includes(':exit:')).length + 1;
+
+      const decision = evaluateLongShotEntry({
+        symbol: prediction.symbol, side, askPrice: ask,
+        secondsRemaining: (Date.parse(quote.closesAt) - Date.now()) / 1000,
+        openSameAssetWindow: open.filter((order) => order.symbol === prediction.symbol && order.closesAt === quote.closesAt).length,
+        openSameSettlementWindow: open.filter((order) => order.closesAt === quote.closesAt).length,
+        entriesThisAssetWindow: generation - 1,
+        dailyNetLossCents,
+      }, funding.sizing, settings);
+      if (!decision.qualifies) continue;
+
+      const fill = estimatePaperFill(funding.sizing.ticketCents, ask, 'kalshi');
+      // The strategy's own headroom binds before any shared cash does; the shared budget is charged only
+      // for live, where the cash is real.
+      if (!fill || fill.stakeCents > funding.headroomCents) continue;
+
+      const order = buildLongShotOrder({
+        mode, symbol: prediction.symbol, side, contractId: quote.ticker, closesAt: quote.closesAt,
+        calculationAt: dashboard.generatedAt, entryAsk: ask, oppositeAsk,
+        entryGeneration: generation, exitMarkCents: settings.exitMarkCents, settings,
+        budgetEpochId: status.control.epochId, fill,
+      });
+      order.entryCycleRegime = (await cycleRegimeFor(order.symbol, order.closesAt))?.regime;
+
+      if (mode === 'paper') {
+        // Taking a displayed ask is the entry, so a fill at that ask is the honest simulation. There is no
+        // maker queue to model here, which is precisely why this policy does not reuse the maker mirror.
+        Object.assign(order, {
+          status: 'open', filledCount: fill.quantity, liquidityRole: 'taker',
+          actualStakeCents: fill.stakeCents, actualPurchaseCents: fill.purchaseCents,
+          actualFeeCents: fill.feeCents, authoritativeFillPrice: ask,
+        } satisfies Partial<PaperOrder>);
+        ledger.orders.push(order);
+        changed = true;
+        continue;
+      }
+
+      // Durable intent and reservation before submission, so a lost response leaves a record to reconcile
+      // rather than an untracked venue order.
+      ledger.orders.push(order);
+      await writeLedger(ledger);
+      await reserveTradingBudget(order.stakeCents, 'kalshi', order.id);
+      changed = true;
+      try {
+        const live = await placeKalshiTakerBuy({
+          ticker: order.contractId, positionSide: side,
+          maximumPriceCents: settings.entryMarkCents, count: fill.quantity,
+          clientOrderId: order.clientOrderId!,
+          onAccepted: async (venueOrderId) => { order.venueOrderId = venueOrderId; await writeLedger(ledger); },
+        });
+        if (live.filledCount > 0) {
+          Object.assign(order, {
+            status: 'open', filledCount: live.filledCount, quantity: live.filledCount,
+            liquidityRole: live.liquidityRole, authoritativeFillPrice: live.averagePriceCents / 100,
+            actualPurchaseCents: live.filledCount * live.averagePriceCents,
+            actualFeeCents: live.feeCents,
+            actualStakeCents: live.filledCount * live.averagePriceCents + live.feeCents,
+            potentialPayoutCents: Math.round(live.filledCount * 100),
+          } satisfies Partial<PaperOrder>);
+        } else {
+          order.status = 'unfilled';
+          order.noFillReason = 'ioc_no_fill';
+          await releaseTradingBudget(order.stakeCents, 'kalshi', order.id);
+        }
+      } catch (error) {
+        // A definitively refused cap is a clean no-op. Anything else is ambiguous: retain the reservation,
+        // mark uncertain, and let authoritative reconciliation decide what actually happened.
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes('Taker not submitted')) {
+          order.status = 'unfilled';
+          order.noFillReason = 'ioc_no_fill';
+          await releaseTradingBudget(order.stakeCents, 'kalshi', order.id);
+        } else {
+          order.status = 'uncertain';
+          order.reason = `Long-shot entry outcome is uncertain: ${message}`;
+          automaticReconciliationRequested = true;
+          await suspendTrading(`Long-shot entry outcome uncertain for ${order.id}.`);
+        }
+      }
+      await writeLedger(ledger);
+      return changed;
+    }
+  }
+  return changed;
+}
+
+/**
+ * One pass of the long-shot exit poll. Sells at the mark, never below it.
+ *
+ * Kalshi refuses `reduce_only` with `good_till_canceled`, so this cannot be a resting order (SPEC decision
+ * 2026-08-15). The submitted limit is the mark rather than the observed bid, so a quote that retreats
+ * between observation and submission produces no fill instead of a worse one.
+ */
+type OwnedSideBid = (order: PaperOrder) => number | undefined;
+
+/** Owned-side bid from the 15-second dashboard snapshot: bid(side) = 100 - ask(other side). */
+const dashboardBid = (dashboard: DashboardData): OwnedSideBid => (order) => {
+  const quote = dashboard.predictions.find((item) => item.kalshi?.ticker === order.contractId)?.kalshi;
+  if (!quote?.live) return undefined;
+  return (1 - (order.side === 'UP' ? quote.askDown : quote.askUp)) * 100;
+};
+
+async function runLongShotExits(bidFor: OwnedSideBid, ledger: Ledger): Promise<boolean> {
+  const settings = longShotSettings();
+  if (!settings.enabled) return false;
+  const draining = getExecutionDrainStatus().phase === 'draining';
+  let changed = false;
+
+  for (const mode of ['paper', 'live'] as const) {
+    for (const order of openLongShotPositions(ledger.orders, mode)) {
+      const bidCents = bidFor(order);
+      if (bidCents === undefined || !Number.isFinite(bidCents)) continue;
+      const peak = observePeakBid(order.peakOwnedSideBidCents, bidCents);
+      if (peak !== order.peakOwnedSideBidCents) { order.peakOwnedSideBidCents = peak; changed = true; }
+
+      const decision = evaluateTargetExit(targetExitPosition(order), {
+        exitMarkCents: order.exitTargetCents ?? settings.exitMarkCents,
+        ownedSideBidCents: bidCents, nowMs: Date.now(), draining,
+      });
+      if (decision.action !== 'sell') continue;
+
+      if (mode === 'paper') {
+        const feeCents = venueFeeCents('kalshi', decision.limitPriceCents, decision.count);
+        const settlement = targetExitSettlement({
+          filledCount: decision.count, averagePriceCents: decision.limitPriceCents, feeCents,
+          entryQuantity: order.quantity, entryStakeCents: order.actualStakeCents ?? order.stakeCents,
+        });
+        Object.assign(order, {
+          status: 'sold', exitPrice: decision.limitPriceCents / 100, exitFeeCents: feeCents,
+          saleProceedsCents: settlement.proceedsCents, payoutCents: settlement.proceedsCents,
+          actualPnlCents: settlement.realizedPnlCents,
+          pnlCents: Math.floor(settlement.proceedsCents) - order.stakeCents,
+          settledAt: new Date().toISOString(),
+          reason: `Long-shot exit filled at the ${decision.limitPriceCents}¢ mark.`,
+        } satisfies Partial<PaperOrder>);
+        changed = true;
+        continue;
+      }
+
+      order.exitPending = true;
+      order.exitClientOrderId = `exit-${order.id}`;
+      order.exitRequestedAt = new Date().toISOString();
+      await writeLedger(ledger);
+      try {
+        const exit = await placeKalshiSell({
+          ticker: order.contractId, positionSide: order.side,
+          minimumPriceCents: decision.limitPriceCents, count: decision.count,
+          clientOrderId: order.exitClientOrderId,
+          onAccepted: async (venueOrderId) => { order.exitVenueOrderId = venueOrderId; await writeLedger(ledger); },
+        });
+        order.exitPending = false;
+        if (exit.filledCount <= 0) continue;
+        const settlement = targetExitSettlement({
+          filledCount: exit.filledCount, averagePriceCents: exit.averagePriceCents, feeCents: exit.feeCents,
+          entryQuantity: order.quantity, entryStakeCents: order.actualStakeCents ?? order.stakeCents,
+        });
+        // A partial fill is an ordinary outcome: the remainder keeps its own basis and stays open.
+        if (settlement.remainingQuantity > 0) {
+          order.quantity = settlement.remainingQuantity;
+          order.filledCount = settlement.remainingQuantity;
+          order.potentialPayoutCents = Math.round(settlement.remainingQuantity * 100);
+          order.actualStakeCents = (order.actualStakeCents ?? order.stakeCents) - settlement.costBasisCents;
+        } else {
+          Object.assign(order, {
+            status: 'sold', exitPrice: exit.averagePriceCents / 100, exitFeeCents: exit.feeCents,
+            saleProceedsCents: settlement.proceedsCents, payoutCents: settlement.proceedsCents,
+            actualPnlCents: settlement.realizedPnlCents,
+            pnlCents: Math.floor(settlement.proceedsCents) - order.stakeCents,
+            settledAt: new Date().toISOString(),
+          } satisfies Partial<PaperOrder>);
+        }
+        await settleTradingBudget(order.stakeCents, Math.max(0, Math.floor(settlement.proceedsCents)), 'kalshi', `${order.id}:long-shot-exit`);
+        changed = true;
+      } catch (error) {
+        order.exitPending = false;
+        order.status = 'uncertain';
+        order.reason = `Long-shot exit outcome is uncertain: ${error instanceof Error ? error.message : String(error)}`;
+        automaticReconciliationRequested = true;
+        await suspendTrading(`Long-shot exit outcome uncertain for ${order.id}.`);
+        changed = true;
+      }
+      await writeLedger(ledger);
+    }
+  }
+  return changed;
+}
+
+let longShotPollTimer: NodeJS.Timeout | undefined;
+let longShotPollRunning = false;
+
+/**
+ * Two-second exit poll for open long-shot positions.
+ *
+ * The fifteen-second collector cycle is too slow for this strategy: the whole premise is transient
+ * excursions, and a round trip inside ninety seconds would be sampled six times rather than forty-five.
+ * A resting order would have removed the need to watch at all, but Kalshi refuses `reduce_only` with
+ * `good_till_canceled` (SPEC decision 2026-08-15), so the watching has to be ours.
+ *
+ * Two properties keep this from destabilising the engine:
+ *
+ * - **Quotes are fetched outside the write queue.** Only the ledger mutation is queued, following the
+ *   2026-08-14 decision that upstream waits must not sit inside the queue they serve — a slow venue read
+ *   would otherwise delay every fifteen-second calculation behind it.
+ * - **A tick never queues behind itself.** If a pass is still running the next one is dropped rather than
+ *   accumulating, so a slow venue produces fewer polls instead of an unbounded backlog.
+ */
+async function longShotExitTick(): Promise<void> {
+  if (longShotPollRunning) return;
+  longShotPollRunning = true;
+  try {
+    if (getExecutionDrainStatus().phase === 'draining') return;
+    const ledger = await readLedger();
+    const open = [...openLongShotPositions(ledger.orders, 'paper'), ...openLongShotPositions(ledger.orders, 'live')];
+    if (!open.length) return;
+
+    // One read per distinct contract and side, not per position: paper and live hold the same contract.
+    const wanted = new Map(open.map((order) => [`${order.contractId}:${order.side}`, order]));
+    const bids = new Map<string, number>();
+    await Promise.all([...wanted].map(async ([key, order]) => {
+      try {
+        const quote = await fetchKalshiManagedMakerQuote(order.contractId, order.side);
+        bids.set(key, quote.bid * 100);
+      } catch {
+        // A transient quote failure is not a reason to sell or to stop; the next tick retries.
+      }
+    }));
+    if (!bids.size) return;
+
+    const operation = engineQueue.then(async () => {
+      const current = await readLedger();
+      if (await runLongShotExits((order) => bids.get(`${order.contractId}:${order.side}`), current)) {
+        await writeLedger(current);
+      }
+    });
+    engineQueue = operation.then(() => undefined, () => undefined);
+    await operation;
+  } catch (error) {
+    console.error('Long-shot exit poll failed:', error);
+  } finally {
+    longShotPollRunning = false;
+  }
+}
+
+/** Started lazily from the collector cycle, so it exists exactly where the collector does. */
+function startLongShotExitPoller(): void {
+  if (longShotPollTimer || !longShotSettings().enabled) return;
+  longShotPollTimer = setInterval(() => { void longShotExitTick(); }, TARGET_EXIT_POLL_MS);
+  // Never hold the process open on its own account.
+  longShotPollTimer.unref?.();
+}
+
 export function processPaperTradingCycle(dashboard: DashboardData): Promise<void> {
+  startLongShotExitPoller();
   const operation = engineQueue.then(() => processCycle(dashboard));
   engineQueue = operation.then(() => undefined, () => undefined);
   return operation.then(async () => {
@@ -1624,8 +1945,11 @@ export function groupedRecentOrders(orders: PaperOrder[]): PaperOrder[] {
   }).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 }
 
-function summarize(orders: PaperOrder[], mode: ExecutionMode, running: boolean, equityCents: number, figures: LedgerFigures, budget?: PaperBudget): ExecutionSummary {
-  const mine = orders.filter((order) => order.executionMode === mode);
+function summarize(orders: PaperOrder[], mode: ExecutionMode, running: boolean, equityCents: number, figures: LedgerFigures, budget?: PaperBudget, strategyId: StrategyId = EDGE_BINARY_BUY): ExecutionSummary {
+  // Scoped by strategy as well as mode. The two strategies share one ledger because reconciliation is an
+  // account-wide concern and a split file would leave real resting orders unmatched, so every money figure
+  // read out of it has to re-narrow.
+  const mine = orders.filter((order) => order.executionMode === mode && orderStrategyId(order) === strategyId);
   const settled = mine.filter((order) => order.status === 'won' || order.status === 'lost' || order.status === 'invalid' || order.status === 'sold');
   const openOrders = mine.filter((order) => order.status === 'open' || order.status === 'pending_reservation' || order.status === 'uncertain').length;
   return {
@@ -1668,7 +1992,9 @@ function publicPaperExecution(order: PaperOrder): PublicPaperExecutionRecord {
  * records, client/venue identifiers, contracts, account state, decision snapshots, and mutations.
  */
 function publicPaperBudgetFromLedger(ledger: Ledger): PublicPaperBudget {
-  const orders = ledger.orders.filter((order) => order.executionMode === 'paper');
+  // The published track record is the edge policy's. A second strategy's results must not be blended into
+  // it: the public figure would then describe neither strategy.
+  const orders = ledger.orders.filter((order) => order.executionMode === 'paper' && orderStrategyId(order) === EDGE_BINARY_BUY);
   const openOrders = orders.filter((order) => order.status === 'open' || order.status === 'pending_reservation');
   const settledOrders = orders.filter((order) => order.status === 'won' || order.status === 'lost' || order.status === 'invalid' || order.status === 'sold');
   const reservedCents = openOrders.reduce((total, order) => total + order.stakeCents, 0);

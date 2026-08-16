@@ -33,6 +33,24 @@ export type TradingProviderImplementation = 'planned' | 'read-paper' | 'live';
  */
 export type MarketId = 'crypto-15m' | 'crypto-spot';
 
+/**
+ * A strategy is a complete way of deciding what to buy and when to sell, running on a market. Two exist:
+ * the model-driven edge policy, and the long-shot round trip, which consumes no probability at all.
+ *
+ * Keyed separately from market and provider because it varies along its own axis (SPEC §12.10). Budget,
+ * bankroll, P&L, loss stops, and operator intent are per strategy; exposure caps, the kill switch,
+ * reconciliation, drain, and the venue order ceiling are not, because those are account properties.
+ */
+export type StrategyId = 'edge-binary-buy' | 'long-shot-round-trip';
+
+export interface StrategyDescriptor {
+  id: StrategyId;
+  name: string;
+  /** Whether entries come from the forecast model or purely from venue price and clock. */
+  signalSource: 'model-probability' | 'venue-price';
+  description: string;
+}
+
 export interface MarketDescriptor {
   id: MarketId;
   name: string;
@@ -954,6 +972,27 @@ export interface BudgetControl {
 export interface MarketAllocation {
   marketId: MarketId;
   percent: number;
+  /**
+   * Strategies funded within this market. Absent means the whole market allocation belongs to
+   * `edge-binary-buy`, which is what every configuration written before 2026-08-15 meant.
+   */
+  strategies?: StrategyAllocation[];
+}
+
+/**
+ * A strategy's share of one (provider, market) allocation. `percent` funds it once, at configuration
+ * time; `startingCents` is the resulting cash and is what the strategy's own equity rolls forward from.
+ *
+ * The percentage is deliberately not re-applied continuously. Doing so would size one strategy's ticket
+ * from the other's results — a run of edge-policy wins would raise the long-shot ticket, and its own
+ * losses would only reach it diluted by its share, so the drawdown halt could never fire on the strategy
+ * that earned it.
+ */
+export interface StrategyAllocation {
+  strategyId: StrategyId;
+  percent: number;
+  startingCents: number;
+  fundedAt: string;
 }
 
 /**
@@ -997,6 +1036,26 @@ export interface MarketFunding {
   reason: string;
 }
 
+/** What one strategy within a (provider, market) pair may commit right now, and whether it has halted. */
+export interface StrategyFunding {
+  strategyId: StrategyId;
+  marketId: MarketId;
+  mode: ExecutionMode;
+  percent: number;
+  /** Cash this strategy was funded with, which its equity rolls forward from. */
+  startingCents: number;
+  /** This strategy's own settled P&L, read from the shared ledger. */
+  realizedPnlCents: number;
+  /** starting + own realized P&L: the figure the ticket is sized from. */
+  equityCents: number;
+  /** This strategy's own open commitments. */
+  reservedCents: number;
+  spendableCents: number;
+  ticketCents: number;
+  halted: boolean;
+  reason: string;
+}
+
 export interface LiveRiskStatus {
   allowed: boolean;
   currentEpochDrawdownCents: number;
@@ -1005,6 +1064,18 @@ export interface LiveRiskStatus {
   maximumCurrentEpochDrawdownCents: number;
   maximumCurrentEpochDrawdownPercent: number;
   maximumLifetimeLossCents: number;
+  /**
+   * Current-epoch realized P&L per strategy, for the drawdown stop only.
+   *
+   * The drawdown is deliberately **not** scoped by strategy: there is one pot of cash, so if one strategy
+   * loses, the account really is down and a capital-preservation stop should fire. What that costs is
+   * attribution — the stop can pause a strategy that did nothing wrong — so the split is reported instead,
+   * and the reason names it as account-wide rather than implying the strategy being blocked caused it.
+   *
+   * The lifetime stop is different and *is* scoped, because it measures a strategy's own track record
+   * rather than the capital remaining.
+   */
+  currentEpochAttribution: Array<{ strategyId: StrategyId; realizedPnlCents: number }>;
   reasons: string[];
 }
 
@@ -1299,6 +1370,12 @@ export interface PaperOrder {
   executionMode: ExecutionMode;
   /** Absent on records written before markets were explicit; those belong to `crypto-15m`. */
   marketId?: MarketId;
+  /**
+   * Absent on records written before strategies were explicit; those belong to `edge-binary-buy`, which
+   * was the only thing trading. Read it through `orderStrategyId` rather than directly: an unattributed
+   * long-shot order would land inside the edge policy's lifetime loss breaker.
+   */
+  strategyId?: StrategyId;
   /** Budget epoch this order was placed under, so a later reconfiguration cannot reattribute its P&L. */
   budgetEpochId?: string;
   /**
@@ -1437,6 +1514,32 @@ export interface PaperOrder {
   exitRequestedAt?: string;
   exitPending?: boolean;
   exitVenueOrderId?: string;
+  /**
+   * Long-shot policy exit target in force for this position, recorded so a later mark change cannot be
+   * mistaken for the one this order actually traded under.
+   */
+  exitTargetCents?: number;
+  /**
+   * Policy version this order was placed under, derived from the settings that define a cohort. Read by
+   * the report so a parameter change starts a fresh cohort instead of blending two rule sets.
+   */
+  strategyPolicyVersion?: string;
+  /**
+   * Entry generation within this asset and settlement window; 1 is the first, above 1 is a re-entry.
+   *
+   * A re-entry can only follow a profitable exit, so it carries direct evidence that this window whipsaws
+   * — a fresher version of what the rejected prior-cycle filter was reaching for. Tagged so that
+   * hypothesis stays testable rather than buried in a blended average.
+   */
+  entryGeneration?: number;
+  /**
+   * Highest owned-side bid observed while this position was open, sampled every two seconds.
+   *
+   * Recorded on every tick rather than only on a fill: it is what lets every candidate exit mark be
+   * evaluated from one dataset afterwards. Without it the only recoverable fact is whether the single
+   * mark in force was reached, and re-choosing the mark would need another month of collection.
+   */
+  peakOwnedSideBidCents?: number;
   exitPrice?: number;
   exitFeeCents?: number;
   saleProceedsCents?: number;
