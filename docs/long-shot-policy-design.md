@@ -414,6 +414,38 @@ the marks are revisited, the evidence is forward-collected rather than re-derive
 First review at **60 resolved round-trip attempts**, reporting touch rate against the 12.5% break-even,
 clustered by settlement window, split by entry generation and by regime label.
 
+## 14a. First parameter sweep, 2026-08-16 — no configuration clears break-even
+
+Run `npm run analyze:long-shot-marks`. Over 757 recorded windows, with the still-falling cohort excluded:
+
+| entry | exit | n | touch | break-even | ratio |
+|---|---|---|---|---|---|
+| 10¢ | 90¢ | 13 | 7.7% | 10.7% | **0.72** |
+| 20¢ | 90¢ | 96 | 14.6% | 21.1% | 0.69 |
+| 15¢ | 90¢ | 48 | 10.4% | 16.3% | 0.64 |
+| 25¢ | 50¢ | 150 | 27.3% | 47.4% | 0.58 |
+| 20¢ | 30¢ | 96 | 32.3% | 67.1% | 0.48 |
+
+**The flatness is the finding, not the best cell.** Every one of the sixteen combinations lands between
+0.48 and 0.72: lowering the exit raises the touch rate almost exactly in proportion to raising the
+break-even, and widening the entry mark does the same. That is what an efficiently priced book looks like.
+It also means further tuning is the wrong response — a sixteen-cell grid containing an exploitable edge
+would show it somewhere.
+
+Two things keep this from being a verdict:
+
+- **Every touch rate here is a floor.** Fifteen-second sampling cannot see a spike between samples, and
+  winners were observed reaching 90¢ in 68.4% of cases where the true figure must be 100%. Closing the best
+  ratio needs 1.39× more touches; the measured coverage shortfall is 1.36×. Uncomfortably close, though
+  "around break-even after fees" is not a business either.
+- **The best cells have the smallest samples.** The 10¢ rows are n=13; the n=150 row sits at 0.58, and the
+  ratio tends to worsen as the sample grows.
+
+The one-second entry polling added the same day is what removes the sampling bias. Re-run this sweep
+against paths recorded afterwards before concluding anything. The stall filter is real — still-falling
+candidates reached 90¢ 0.9% of the time against 2.6% for stalled ones — but it moves 2.2% to 2.6% against a
+12.5% bar, so it belongs in evidence collection rather than being treated as a rescue.
+
 ## 15. Open parameters
 
 Everything below the allocation is derived from it, so the **budget slice is the only free judgment call.**

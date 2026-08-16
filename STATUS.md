@@ -179,9 +179,27 @@ Current state: the paper lane is live and the live lane is blocked by ordinary c
 drawdown and +225.85¢ lifetime. Contract paths are accumulating across all seven assets. No trigger has
 fired yet, which matches the ~4/day the screening measured.
 
-First live observation worth recording: cheap sides are common but cheap sides **early** are rare. ETH at
-6.1¢ and SOL at 5.0¢ were both correctly refused at eight minutes into their cycle. The entry window, not
-the price mark, is the binding constraint on candidate flow.
+Live findings so far, in the order they were measured:
+
+- **Cheap sides are common; cheap sides *early* are rare.** Only 2% of sides that reach 10¢ do so inside
+  the first five minutes — a contract becomes cheap *because* the underlying already moved, so cheapness
+  and clock-remaining are close to mutually exclusive. The entry window, not the price mark, is what
+  limits candidate flow.
+- **Fifteen-second entry sampling was not the constraint.** Of 586 recorded cheap-side episodes, only 13%
+  lasted a single sample and half persisted beyond ninety seconds. One-second polling was added anyway,
+  for the shared quote cache and to make a wider window affordable, not to catch flickers.
+- **A still-falling price is a trend, not a dip.** Candidates still falling at the next sample reached 90¢
+  0.9% of the time against 2.6% for those that stalled. Real, and worth filtering — but it moves the rate
+  from 2.2% to 2.6% against a 12.5% bar.
+- **No configuration of marks clears break-even.** All sixteen cells of an entry/exit sweep land between
+  0.48 and 0.72, and the flatness rather than the best cell is the finding. See
+  [docs/long-shot-policy-design.md](/Users/raiphairow/code/money/docs/long-shot-policy-design.md) §14a and
+  `npm run analyze:long-shot-marks`.
+
+Current stance: **stop tuning, keep collecting.** Every touch rate measured so far is a floor taken at
+fifteen-second sampling, and closing the best ratio needs 1.39× more touches against a measured coverage
+shortfall of 1.36×. The one-second polling now running removes that bias; re-run the sweep against paths
+recorded under it before concluding anything. The paper lane costs nothing while that accumulates.
 
 Remaining: the report surface, and the durable stores' retention policy once the journal starts growing.
 
