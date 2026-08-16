@@ -1525,6 +1525,15 @@ export interface PaperOrder {
    */
   strategyPolicyVersion?: string;
   /**
+   * Ask at the first look that qualified, before trailing waited for the fall to stall.
+   *
+   * Kept beside the achieved fill so what trailing earned is measurable rather than assumed at the 2.1¢
+   * median measured retrospectively at fifteen-second spacing.
+   */
+  firstTouchAskCents?: number;
+  /** Looks taken while trailing before buying. One means it stalled immediately. */
+  trailingLooks?: number;
+  /**
    * Entry generation within this asset and settlement window; 1 is the first, above 1 is a re-entry.
    *
    * A re-entry can only follow a profitable exit, so it carries direct evidence that this window whipsaws

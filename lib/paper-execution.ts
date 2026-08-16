@@ -28,9 +28,24 @@ import {
   TARGET_EXIT_POLL_MS, evaluateTargetExit, observePeakBid, targetExitPosition, targetExitSettlement,
 } from './target-exit-policy';
 import { cachedKalshiRead } from './kalshi-quote-cache';
+import {
+  TRAILING_ENTRY_POLL_MS, beginTrailingEntry, evaluateTrailingEntry, observeTrailingEntry,
+  trailingGainCents, type TrailingEntryState,
+} from './trailing-entry';
 
-/** Entry cadence. Also the quote max-age, so the pass never acts on a price older than its own tick. */
+/**
+ * Entry cadence while nothing is being trailed, and the quote max-age at that cadence.
+ *
+ * Once a side qualifies, `TRAILING_ENTRY_POLL_MS` takes over for that contract: the pass looks four times
+ * a second while a price is still falling, and buys when it stalls. The quote max-age is set just below
+ * the poll interval so the timer governs the cadence rather than the cache occasionally serving the
+ * previous tick's value.
+ */
 const LONG_SHOT_ENTRY_POLL_MS = 1_000;
+const TRAILING_QUOTE_MAX_AGE_MS = TRAILING_ENTRY_POLL_MS - 50;
+
+/** Live trailing state per asset/window/side. Cleared when the entry resolves, abandons, or expires. */
+const trailing = new Map<string, TrailingEntryState>();
 import { assetAdmitted } from './asset-exclusion';
 import { cycleRegimeFor } from './cycle-path-store';
 import { DEFAULT_MARKET_ID } from './market-registry';
@@ -1551,12 +1566,20 @@ async function runLongShot(
       // for live, where the cash is real.
       if (!fill || fill.stakeCents > funding.headroomCents) continue;
 
+      const trail = trailing.get(`${quote.ticker}:${side}`);
       const order = buildLongShotOrder({
         mode, symbol: prediction.symbol, side, contractId: quote.ticker, closesAt: quote.closesAt,
         calculationAt: dashboard.generatedAt, entryAsk: ask, oppositeAsk,
         entryGeneration: generation, exitMarkCents: settings.exitMarkCents, settings,
         budgetEpochId: status.control.epochId, fill,
+        firstTouchAskCents: trail?.firstTouchAskCents, trailingLooks: trail?.looks,
       });
+      if (trail) {
+        order.reason = `Trailed ${trail.looks} look(s) from ${trail.firstTouchAskCents.toFixed(1)}¢; bought at ${(ask * 100).toFixed(1)}¢ for ${trailingGainCents(trail, ask * 100).toFixed(2)}¢.`;
+        // Cleared on the buy so a re-entry in the same window trails afresh rather than inheriting a
+        // best price from a position that has already been taken.
+        trailing.delete(`${quote.ticker}:${side}`);
+      }
       order.entryCycleRegime = (await cycleRegimeFor(order.symbol, order.closesAt))?.regime;
 
       if (mode === 'paper') {
@@ -1735,9 +1758,8 @@ let latestDashboard: DashboardData | undefined;
  * has no use for a twenty-level book. `maxAgeMs` is the entry cadence, so a value fetched for the exit
  * poller or the cycle in the same second is reused instead of refetched.
  */
-async function longShotEntryQuote(ticker: string): Promise<{ askUp: number; askDown: number } | undefined> {
-  const quote = await cachedKalshiRead(`quote:${ticker}`, () => fetchKalshiQuote(ticker),
-    { maxAgeMs: LONG_SHOT_ENTRY_POLL_MS });
+async function longShotEntryQuote(ticker: string, maxAgeMs = LONG_SHOT_ENTRY_POLL_MS): Promise<{ askUp: number; askDown: number } | undefined> {
+  const quote = await cachedKalshiRead(`quote:${ticker}`, () => fetchKalshiQuote(ticker), { maxAgeMs });
   // ask(DOWN) = 1 - bid(UP) on Kalshi's shared book.
   return quote ? { askUp: quote.yesAsk, askDown: 1 - quote.yesBid } : undefined;
 }
@@ -1773,19 +1795,53 @@ async function longShotEntryTick(): Promise<void> {
 
     // Quotes are refreshed outside the write queue; only the ledger mutation is queued, matching the exit
     // poller and the 2026-08-14 decision that upstream waits must not sit inside the queue they serve.
+    // A contract already being trailed is read at the trailing cadence; the rest at the ordinary one.
+    const anyTrailing = trailing.size > 0;
     const refreshed = new Map<string, { askUp: number; askDown: number }>();
     await Promise.all(eligible.map(async (prediction) => {
-      const quote = await longShotEntryQuote(prediction.kalshi!.ticker);
-      if (quote) refreshed.set(prediction.kalshi!.ticker, quote);
+      const ticker = prediction.kalshi!.ticker;
+      const watched = [...trailing.keys()].some((key) => key.startsWith(`${ticker}:`));
+      const quote = await longShotEntryQuote(ticker, watched ? TRAILING_QUOTE_MAX_AGE_MS : LONG_SHOT_ENTRY_POLL_MS);
+      if (quote) refreshed.set(ticker, quote);
     }));
     if (!refreshed.size) return;
 
+    // Trailing decides which of the qualifying sides may be bought this look. A side still getting
+    // cheaper is held back: a continuing fall is a trend, and this strategy needs a reversal.
+    const settingsNow = settings;
+    const buyable = new Set<string>();
+    for (const prediction of eligible) {
+      const ticker = prediction.kalshi!.ticker;
+      const quote = refreshed.get(ticker);
+      if (!quote) continue;
+      for (const side of ['UP', 'DOWN'] as const) {
+        const askCents = (side === 'UP' ? quote.askUp : quote.askDown) * 100;
+        const key = `${ticker}:${side}`;
+        const closed = Date.parse(prediction.kalshi!.closesAt);
+        const remaining = (closed - Date.now()) / 1000;
+        // Outside the window the candidate is gone; drop any trail rather than carrying it into a
+        // window it can no longer be bought in.
+        if (remaining < settingsNow.minimumSecondsRemaining) { trailing.delete(key); continue; }
+        if (!(askCents > 0) || askCents > settingsNow.entryMarkCents) { trailing.delete(key); continue; }
+
+        const existing = trailing.get(key);
+        if (!existing) { trailing.set(key, beginTrailingEntry(askCents, Date.now())); continue; }
+        const decision = evaluateTrailingEntry(existing, askCents, { entryMarkCents: settingsNow.entryMarkCents });
+        if (decision.action === 'buy') buyable.add(key);
+        else if (decision.action === 'abandon') trailing.delete(key);
+        else trailing.set(key, observeTrailingEntry(existing, askCents, Date.now()));
+      }
+    }
+    if (!buyable.size) return;
+
     const priced: DashboardData = {
       ...dashboard,
-      predictions: eligible.map((prediction) => {
-        const quote = refreshed.get(prediction.kalshi!.ticker);
-        return quote ? { ...prediction, kalshi: { ...prediction.kalshi!, ...quote } } : prediction;
-      }),
+      predictions: eligible
+        .filter((prediction) => (['UP', 'DOWN'] as const).some((side) => buyable.has(`${prediction.kalshi!.ticker}:${side}`)))
+        .map((prediction) => {
+          const quote = refreshed.get(prediction.kalshi!.ticker);
+          return quote ? { ...prediction, kalshi: { ...prediction.kalshi!, ...quote } } : prediction;
+        }),
       // The entry rule requires a fresh calculation; these quotes were fetched a moment ago.
       generatedAt: new Date().toISOString(),
     };
@@ -1803,12 +1859,26 @@ async function longShotEntryTick(): Promise<void> {
     console.error('Long-shot entry poll failed:', error);
   } finally {
     longShotEntryRunning = false;
+    // A trail that started or ended this tick changes the cadence the next one should run at.
+    startLongShotEntryPoller();
   }
 }
 
+/**
+ * Runs at one second while nothing is being trailed and at the trailing cadence once something is.
+ *
+ * Rescheduled rather than always fast: watching four times a second costs four times the requests, and
+ * only a contract that has actually reached the mark is worth that. A trail is usually seconds long,
+ * so the fast cadence is rare and brief.
+ */
+let longShotEntryIntervalMs = LONG_SHOT_ENTRY_POLL_MS;
 function startLongShotEntryPoller(): void {
-  if (longShotEntryTimer || !longShotSettings().enabled) return;
-  longShotEntryTimer = setInterval(() => { void longShotEntryTick(); }, LONG_SHOT_ENTRY_POLL_MS);
+  if (!longShotSettings().enabled) return;
+  const wanted = trailing.size > 0 ? TRAILING_ENTRY_POLL_MS : LONG_SHOT_ENTRY_POLL_MS;
+  if (longShotEntryTimer && longShotEntryIntervalMs === wanted) return;
+  if (longShotEntryTimer) clearInterval(longShotEntryTimer);
+  longShotEntryIntervalMs = wanted;
+  longShotEntryTimer = setInterval(() => { void longShotEntryTick(); }, wanted);
   longShotEntryTimer.unref?.();
 }
 

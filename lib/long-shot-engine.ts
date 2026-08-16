@@ -103,6 +103,9 @@ export interface LongShotOrderInput {
   entryGeneration: number;
   exitMarkCents: number;
   settings: LongShotSettings;
+  /** Trailing evidence, when the entry waited for the fall to stall. */
+  firstTouchAskCents?: number;
+  trailingLooks?: number;
   budgetEpochId?: string;
   fill: { quantity: number; limitPriceCents: number; feeCents: number; stakeCents: number; potentialPayoutCents: number };
 }
@@ -144,6 +147,8 @@ export function buildLongShotOrder(input: LongShotOrderInput): PaperOrder {
     entryGeneration: input.entryGeneration,
     exitTargetCents: input.exitMarkCents,
     strategyPolicyVersion: longShotPolicyVersion(input.settings),
+    firstTouchAskCents: input.firstTouchAskCents,
+    trailingLooks: input.trailingLooks,
     peakOwnedSideBidCents: Math.round((1 - input.oppositeAsk) * 100),
   };
 }
