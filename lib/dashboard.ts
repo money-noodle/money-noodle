@@ -1,5 +1,5 @@
 import { basisProbability, clampProbability, impliedVolatility, logit, realizedVolatility, resolveVolatility, sigmoid } from './basis-model';
-import { createCalibrationReplaySnapshot } from './calibration-replay';
+import { PRODUCTION_BASIS_LOG_ODDS_WEIGHT, PRODUCTION_PROBABILITY_CAP, createCalibrationReplaySnapshot } from './calibration-replay';
 import { compareContractTargets } from './contract-provenance';
 import { cached, recordOracleHistory, recordPriceHistory, recordVenueHistory, type OracleSnapshot, type PriceSnapshot, type VenueSnapshot } from './cache';
 import { collectorStatus } from './collector-state';
@@ -27,7 +27,14 @@ export const MODEL_VERSION = 'Blend 0.4';
 // The tradeable forecast is venue-independent: edge is measured against the venue price, so mixing
 // that price into the forecast would shrink the disagreement the desk exists to trade. The venue is
 // blended only into a separate reference figure used for comparison and calibration benchmarking.
-const BASIS_LOG_ODDS_WEIGHT = 0.55;
+// One definition, shared with the replay path and the published policy manifest. It was previously
+// declared here as a second literal 0.55 beside the exported one; they agreed by coincidence, and the
+// manifest quoted a third literal of its own, so a change to any of them would have left the desk
+// describing a weight it was not using.
+const BASIS_LOG_ODDS_WEIGHT = PRODUCTION_BASIS_LOG_ODDS_WEIGHT;
+/** Tradeable probability is clamped this far from certainty at both ends. */
+export const MIN_TRADEABLE_PROBABILITY = PRODUCTION_PROBABILITY_CAP;
+export const MAX_TRADEABLE_PROBABILITY = 1 - PRODUCTION_PROBABILITY_CAP;
 const VENUE_LOG_ODDS_WEIGHT = 0.30;
 const VENUE_ONLY_LOG_ODDS_WEIGHT = 0.80;
 const TILT_SCALE = 0.8;
@@ -255,10 +262,10 @@ export function buildPrediction(coin: CoinSnapshot, market: MarketQuote | undefi
   // The tradeable estimate excludes the venue term entirely.
   const independentLogOdds = weighted.filter((item) => item.factor.id !== 'market').reduce((sum, item) => sum + item.logOdds, 0);
   const totalLogOdds = weighted.reduce((sum, item) => sum + item.logOdds, 0);
-  const probability = clampProbability(sigmoid(independentLogOdds), 0.03, 0.97);
-  const blendedProbabilityUp = clampProbability(sigmoid(totalLogOdds), 0.03, 0.97);
+  const probability = clampProbability(sigmoid(independentLogOdds), MIN_TRADEABLE_PROBABILITY, MAX_TRADEABLE_PROBABILITY);
+  const blendedProbabilityUp = clampProbability(sigmoid(totalLogOdds), MIN_TRADEABLE_PROBABILITY, MAX_TRADEABLE_PROBABILITY);
   // Each contribution is the exact marginal effect of removing that term from the blended reference.
-  for (const item of weighted) item.factor.contribution = (blendedProbabilityUp - clampProbability(sigmoid(totalLogOdds - item.logOdds), 0.03, 0.97)) * 100;
+  for (const item of weighted) item.factor.contribution = (blendedProbabilityUp - clampProbability(sigmoid(totalLogOdds - item.logOdds), MIN_TRADEABLE_PROBABILITY, MAX_TRADEABLE_PROBABILITY)) * 100;
   const factors = weighted.map((item) => item.factor);
 
   const edge = probability - quote.probabilityUp;

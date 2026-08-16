@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { activePolicyManifest } from './policy-manifest';
-import { BUY_POLICY_VERSION } from './prediction-policy';
+import { PRODUCTION_BASIS_LOG_ODDS_WEIGHT } from './calibration-replay';
+import { MAX_TRADEABLE_PROBABILITY, MIN_TRADEABLE_PROBABILITY } from './dashboard';
+import {
+  BUY_POLICY_VERSION, MAX_ENTRY_PRICE, MIN_ENTRY_PRICE, MIN_ESTIMATE_QUALITY, MIN_SELECTED_SIDE_PROBABILITY,
+} from './prediction-policy';
 import { tradingProviderRegistry } from './trading-provider-registry';
 import type { ModelPromotionEntry, TradingProviderConfiguration, WalkForwardParameters } from './types';
 
@@ -114,5 +118,65 @@ describe('published model provenance', () => {
     expect(model.unrecorded).toBe(false);
     expect(model.currentPromotion?.id).toBe('c');
     expect(model.history.map((entry) => entry.id)).toEqual(['c', 'b', 'a']);
+  });
+});
+
+describe('the manifest describes the policy the desk is actually running', () => {
+  const manifest = () => activePolicyManifest([], 'Blend 0.4');
+  const detail = (kind: string, label: string) => manifest().components
+    .filter((component) => component.kind === kind)
+    .flatMap((component) => component.details)
+    .find((row) => row.label === label)?.value;
+
+  it('quotes the basis weight the forecast actually uses', () => {
+    // This was three independent literals: one in dashboard.ts, one in calibration-replay.ts, and one
+    // typed into this manifest. They agreed by coincidence, so changing the model would have left the
+    // published policy describing a weight nothing used.
+    expect(detail('forecast', 'Basis log-odds weight')).toBe(`${PRODUCTION_BASIS_LOG_ODDS_WEIGHT}`);
+  });
+
+  it('quotes the probability bounds the forecast is actually clamped to', () => {
+    expect(detail('forecast', 'Probability bounds'))
+      .toBe(`${Number((MIN_TRADEABLE_PROBABILITY * 100).toFixed(2))}%–${Number((MAX_TRADEABLE_PROBABILITY * 100).toFixed(2))}%`);
+  });
+
+  it('quotes the entry gates from the constants execution reads', () => {
+    expect(detail('buy', 'Selected-side probability')).toBe(`≥${Number((MIN_SELECTED_SIDE_PROBABILITY * 100).toFixed(2))}%`);
+    expect(detail('buy', 'Estimate quality')).toBe(`≥${Number((MIN_ESTIMATE_QUALITY * 100).toFixed(2))}%`);
+    expect(detail('buy', 'Actionable ask')).toBe(`${Number((MIN_ENTRY_PRICE * 100).toFixed(2))}¢–${Number((MAX_ENTRY_PRICE * 100).toFixed(2))}¢`);
+  });
+
+  it('follows a net-edge ceiling override rather than the version string', () => {
+    // The version string says "net5to35". MONEY_NOODLE_MAX_NET_EDGE can move the real ceiling without
+    // moving that string, so the detail row has to come from the function execution calls.
+    const original = process.env.MONEY_NOODLE_MAX_NET_EDGE;
+    process.env.MONEY_NOODLE_MAX_NET_EDGE = '0.2';
+    try {
+      expect(detail('buy', 'Net edge after fees')).toContain('<20pp');
+    } finally {
+      if (original === undefined) delete process.env.MONEY_NOODLE_MAX_NET_EDGE;
+      else process.env.MONEY_NOODLE_MAX_NET_EDGE = original;
+    }
+  });
+
+  it('describes the path-classification gate, which is restrictive and on by default', () => {
+    // Two regime gates run. Only the adaptive one was published until 2026-08-16, so the surface
+    // understated what the desk declines to trade by roughly 15% of windows.
+    const gate = manifest().components.find((component) => component.kind === 'regime-classification');
+    expect(gate).toBeDefined();
+    expect(gate?.details.find((row) => row.label === 'Status')?.value).toContain('Enabled');
+  });
+
+  it('reports the classification gate as disabled when the operator turns it off', () => {
+    const original = process.env.MONEY_NOODLE_REQUIRE_CLASSIFIED_REGIME;
+    process.env.MONEY_NOODLE_REQUIRE_CLASSIFIED_REGIME = 'false';
+    try {
+      const gate = manifest().components.find((component) => component.kind === 'regime-classification');
+      expect(gate?.status).toBe('observation');
+      expect(gate?.details.find((row) => row.label === 'Status')?.value).toContain('Disabled');
+    } finally {
+      if (original === undefined) delete process.env.MONEY_NOODLE_REQUIRE_CLASSIFIED_REGIME;
+      else process.env.MONEY_NOODLE_REQUIRE_CLASSIFIED_REGIME = original;
+    }
   });
 });

@@ -134,7 +134,7 @@ export interface TradingProviderDescriptor {
   variants: TradingProviderVariant[];
 }
 
-export type PolicyComponentKind = 'forecast' | 'buy' | 'eligibility' | 'execution' | 'exit' | 'switch' | 'regime' | 'provider';
+export type PolicyComponentKind = 'forecast' | 'buy' | 'eligibility' | 'execution' | 'exit' | 'switch' | 'regime' | 'regime-classification' | 'provider';
 export interface PolicyManifestComponent {
   kind: PolicyComponentKind;
   label: string;

@@ -1,4 +1,7 @@
 import { excludedAssets } from './asset-exclusion';
+import { PRODUCTION_BASIS_LOG_ODDS_WEIGHT } from './calibration-replay';
+import { MAX_TRADEABLE_PROBABILITY, MIN_TRADEABLE_PROBABILITY } from './dashboard';
+import { classifiedRegimeRequired } from './paper-execution';
 import { ENTRY_EXECUTION_POLICY_VERSION, parseEntryExecutionMode } from './entry-execution-policy';
 import { POST_EXIT_REENTRY_COOLDOWN_MS, PROFIT_REVERSAL_ARM_PERCENT, STRICT_EXIT_MIN_GAIN_CENTS, profitReversalExitEnabled, standaloneExitPolicyVersion } from './exit-policy';
 import { maximumLiveMakerAttempts } from './maker-retry-policy';
@@ -150,6 +153,7 @@ export function activePolicyManifest(providers: TradingProviderDescriptor[], mod
   const downEnabled = downEntryEnabled();
   const excluded = excludedAssets();
   const maximumEdge = maximumNetEdge();
+  const classifiedRequired = classifiedRegimeRequired();
   return {
     version: 'policy-manifest-v1',
     generatedAt: new Date().toISOString(),
@@ -158,8 +162,8 @@ export function activePolicyManifest(providers: TradingProviderDescriptor[], mod
     components: [
       component('forecast', 'Forecast model', modelVersion, 'production', 'Venue-independent contract-basis probability.', [
         { label: 'Tradeable probability', value: 'No trading-provider price input' },
-        { label: 'Basis log-odds weight', value: '0.55' },
-        { label: 'Probability bounds', value: '3%–97%' },
+        { label: 'Basis log-odds weight', value: `${PRODUCTION_BASIS_LOG_ODDS_WEIGHT}` },
+        { label: 'Probability bounds', value: `${percent(MIN_TRADEABLE_PROBABILITY)}–${percent(MAX_TRADEABLE_PROBABILITY)}` },
       ]),
       component('buy', 'Binary buy policy', BUY_POLICY_VERSION, 'production', 'Positive expected value on the actionable ask, bounded above by a model-failure ceiling.', [
         { label: 'Selected-side probability', value: `≥${percent(MIN_SELECTED_SIDE_PROBABILITY)}` },
@@ -191,6 +195,16 @@ export function activePolicyManifest(providers: TradingProviderDescriptor[], mod
         { label: 'Cooldown after a switch', value: `${switchSettings.cooldownSeconds} seconds` },
         { label: 'Persistence', value: `${REQUIRED_SWITCH_SNAPSHOTS} snapshots spanning ${seconds(REQUIRED_SWITCH_SPAN_MS)}` },
       ]),
+      // Two distinct regime gates run, and only the adaptive one was described here until 2026-08-16.
+      // The classifier gate is restrictive, on by default, and refuses roughly 15% of windows, so
+      // omitting it left this surface understating what the desk declines to trade.
+      component('regime-classification', 'Path-classification gate', 'classified-regime-required-v1',
+        classifiedRequired ? 'production' : 'observation',
+        'Hard entry gate on the 15-second cycle path. A window the classifier cannot characterise is refused rather than traded on an unclassified path. Restrictive only — it can remove entries, never add exposure.', [
+          { label: 'Status', value: classifiedRequired ? 'Enabled; unclassified windows are refused' : 'Disabled; unclassified windows may be traded' },
+          { label: 'Refuses', value: 'Windows whose regime is `insufficient` or unrecorded' },
+          { label: 'Operator switch', value: 'MONEY_NOODLE_REQUIRE_CLASSIFIED_REGIME' },
+        ]),
       component('regime', 'Adaptive regime gate', REGIME_GATE_POLICY_VERSION, regime.enabled ? 'production' : 'observation', 'Soft entry gate over current-policy exact-contract sentinel windows. Evidence is scoped to the active buy policy, so a policy change restarts warm-up and the gate permits entries until it is warm again.', [
         { label: 'Status', value: regime.enabled ? 'Enabled' : 'Disabled; entries are not gated' },
         { label: 'Warm-up', value: `${regime.minimumPolicyWindows} policy windows` },
