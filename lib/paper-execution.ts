@@ -30,7 +30,7 @@ import {
 import { cachedKalshiRead } from './kalshi-quote-cache';
 import {
   TRAILING_ENTRY_POLL_MS, beginTrailingEntry, evaluateTrailingEntry, observeTrailingEntry,
-  trailingGainCents, type TrailingEntryState,
+  trailingGainCents, trailingIsFast, type TrailingEntryState,
 } from './trailing-entry';
 
 /**
@@ -1795,12 +1795,13 @@ async function longShotEntryTick(): Promise<void> {
 
     // Quotes are refreshed outside the write queue; only the ledger mutation is queued, matching the exit
     // poller and the 2026-08-14 decision that upstream waits must not sit inside the queue they serve.
-    // A contract already being trailed is read at the trailing cadence; the rest at the ordinary one.
-    const anyTrailing = trailing.size > 0;
+    // A contract being trailed within its fast-look budget is read at the trailing cadence; everything
+    // else at the ordinary one, which the cache absorbs without extra requests.
     const refreshed = new Map<string, { askUp: number; askDown: number }>();
     await Promise.all(eligible.map(async (prediction) => {
       const ticker = prediction.kalshi!.ticker;
-      const watched = [...trailing.keys()].some((key) => key.startsWith(`${ticker}:`));
+      const watched = [...trailing.entries()]
+        .some(([key, state]) => key.startsWith(`${ticker}:`) && trailingIsFast(state));
       const quote = await longShotEntryQuote(ticker, watched ? TRAILING_QUOTE_MAX_AGE_MS : LONG_SHOT_ENTRY_POLL_MS);
       if (quote) refreshed.set(ticker, quote);
     }));
@@ -1874,7 +1875,9 @@ async function longShotEntryTick(): Promise<void> {
 let longShotEntryIntervalMs = LONG_SHOT_ENTRY_POLL_MS;
 function startLongShotEntryPoller(): void {
   if (!longShotSettings().enabled) return;
-  const wanted = trailing.size > 0 ? TRAILING_ENTRY_POLL_MS : LONG_SHOT_ENTRY_POLL_MS;
+  // Only a trail still inside its fast-look budget justifies the faster timer.
+  const wanted = [...trailing.values()].some((state) => trailingIsFast(state))
+    ? TRAILING_ENTRY_POLL_MS : LONG_SHOT_ENTRY_POLL_MS;
   if (longShotEntryTimer && longShotEntryIntervalMs === wanted) return;
   if (longShotEntryTimer) clearInterval(longShotEntryTimer);
   longShotEntryIntervalMs = wanted;

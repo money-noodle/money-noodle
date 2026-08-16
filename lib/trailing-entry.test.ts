@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  TRAILING_ENTRY_POLL_MS, TRAILING_SIGNIFICANCE_CENTS, beginTrailingEntry, evaluateTrailingEntry,
-  observeTrailingEntry, trailingGainCents,
+  TRAILING_ENTRY_POLL_MS, TRAILING_FAST_LOOK_BUDGET, TRAILING_SIGNIFICANCE_CENTS, beginTrailingEntry,
+  evaluateTrailingEntry, observeTrailingEntry, trailingGainCents, trailingIsFast,
 } from './trailing-entry';
 
 const start = 1_000_000;
@@ -64,9 +64,10 @@ describe('trailing entry', () => {
     }
   });
 
-  it('has no deadline, by design', () => {
+  it('never buys on a deadline, however long the fall runs', () => {
     // Ten minutes of continuous falling still does not buy. The entry window closes the candidate; a timer
-    // would buy exactly the trending contracts the stall rule exists to avoid.
+    // that purchased would take exactly the trending contracts the stall rule exists to avoid. The fast
+    // watch is bounded separately, which costs requests rather than changing the decision.
     let state = beginTrailingEntry(10, start);
     let ask = 10;
     for (let tick = 1; tick <= 2_400; tick += 1) {
@@ -89,5 +90,26 @@ describe('trailing entry', () => {
 
   it('polls fast enough to see a deci-cent move, at a cadence the venue can answer', () => {
     expect(TRAILING_ENTRY_POLL_MS).toBe(250);
+  });
+
+  it('spends a bounded fast-look budget, then keeps trailing at the slow cadence', () => {
+    // Cost and the trading rule are separate concerns. Watching four times a second for one contract is
+    // four requests a second, and several can qualify at once, so the fast watch is bounded — but the
+    // decision is not: after the budget it still waits, and still buys when the fall stalls.
+    let state = beginTrailingEntry(10, start);
+    expect(trailingIsFast(state)).toBe(true);
+    for (let tick = 1; tick <= TRAILING_FAST_LOOK_BUDGET; tick += 1) {
+      state = look(state, 10 - tick * 0.15, tick * TRAILING_ENTRY_POLL_MS);
+    }
+    expect(trailingIsFast(state)).toBe(false);
+    // Still trailing, and still refusing a falling price.
+    expect(evaluateTrailingEntry(state, state.bestAskCents - 0.5, options)).toMatchObject({ action: 'wait' });
+    // And still buying on a stall, just noticed a second later rather than a quarter of one.
+    expect(evaluateTrailingEntry(state, state.bestAskCents, options)).toMatchObject({ action: 'buy' });
+  });
+
+  it('bounds the fast watch to ten seconds', () => {
+    // Ample for a stall to appear: 54% of first touches improved within two fifteen-second samples.
+    expect(TRAILING_FAST_LOOK_BUDGET * TRAILING_ENTRY_POLL_MS).toBe(10_000);
   });
 });

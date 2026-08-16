@@ -9,10 +9,13 @@
  * with the touch rate unchanged. Over 457 recorded first touches, 54% improved within two samples by a
  * median of 2.1¢ — roughly a fifth off break-even at a 10¢ entry.
  *
- * There is deliberately **no deadline**. A price that keeps falling is trending, and this strategy needs a
- * reversal: candidates still falling at the next sample reached 90¢ 0.9% of the time against 2.6% for those
- * that stalled. Never buying one is the intended outcome, not a missed opportunity. Only 2% of first
- * touches rose back above the mark before offering anything better, so waiting is cheap.
+ * There is deliberately **no deadline on the decision**. A price that keeps falling is trending, and this
+ * strategy needs a reversal: candidates still falling at the next sample reached 90¢ 0.9% of the time
+ * against 2.6% for those that stalled. Never buying one is the intended outcome, not a missed opportunity.
+ * Only 2% of first touches rose back above the mark before offering anything better, so waiting is cheap.
+ *
+ * Watching, however, is bounded — see `TRAILING_FAST_LOOK_BUDGET`. Cost and the trading rule are separate
+ * concerns, and a deadline that forced a purchase would resolve the first by breaking the second.
  *
  * Pure and I/O free.
  */
@@ -25,6 +28,21 @@ export const TRAILING_ENTRY_POLL_MS = 250;
  * it — so one tick down there is 0.1¢ and a sub-cent threshold is a real distinction rather than noise.
  */
 export const TRAILING_SIGNIFICANCE_CENTS = 0.1;
+
+/**
+ * Looks taken at the fast cadence before dropping back to the slow one.
+ *
+ * A bound on cost, not on the decision. Watching four times a second costs four requests a second for one
+ * contract, and several can qualify at once — 41% of settlement windows carry more than one candidate — so
+ * an unbounded fast watch can reach the venue's read ceiling on its own.
+ *
+ * After the budget the trail continues at the ordinary cadence: it still buys when the fall stalls, just
+ * noticed a second later. Deliberately not a deadline that buys, which would purchase exactly the
+ * still-falling contracts the stall rule exists to avoid, nor one that abandons, which would drop a
+ * candidate that may yet stall. Forty looks is ten seconds — ample for a stall to appear, given 54% of
+ * first touches improved within two fifteen-second samples.
+ */
+export const TRAILING_FAST_LOOK_BUDGET = 40;
 
 export interface TrailingEntryState {
   /** Ask at the first look that qualified. Retained so the trailing gain is measurable, not assumed. */
@@ -89,6 +107,11 @@ export function observeTrailingEntry(state: TrailingEntryState, askCents: number
     lastSeenAtMs: nowMs,
     looks: state.looks + 1,
   };
+}
+
+/** Whether this trail still warrants the fast cadence, or has spent its budget and dropped to the slow one. */
+export function trailingIsFast(state: TrailingEntryState, budget = TRAILING_FAST_LOOK_BUDGET): boolean {
+  return state.looks <= budget;
 }
 
 /** What trailing actually earned on this entry, in cents. Recorded so the rule can be judged on evidence. */
