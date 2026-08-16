@@ -48,6 +48,33 @@ moves return from +14.8% to +9.2% while discarding 79% of volume — strictly wo
 winner's-curse hypothesis — that firing at peak estimated edge fires at peak model error — does not
 reproduce.
 
+## 2a. Does the gate help? Yes — and half of it is inert
+
+Gating is worth roughly double, held to settlement and window-clustered:
+
+| cohort | rows | windows | win% | return |
+| --- | --- | --- | --- | --- |
+| no gate at all — every chosen side | 41,183 | 3,658 | 42.2% | +6.8% [+2.9, +10.7] |
+| **full gate (v17)** | 8,837 | 1,810 | 57.4% | **+14.8% [+10.4, +19.2]** |
+
+Leaving each component out in turn shows where that comes from:
+
+| gate without… | rows | return | worth |
+| --- | --- | --- | --- |
+| `netEdge` 0.05–0.35 | 18,776 | +10.3% | **−4.5pp** |
+| `sideProbability >= 0.55` | 30,828 | +9.7% | **−5.1pp** |
+| `confidence >= 0.5` | 8,837 | +14.8% | nothing |
+| `price 0.05–0.97` | 8,837 | +14.8% | nothing |
+
+`netEdge` and `sideProbability` are both load-bearing and complementary — each alone yields about
++10%, together +14.8%. **`confidence` and `price` are inert**: removing either changes not one row of
+the admitted set, because every row already satisfies them (only 54 of 41,183 rows price outside
+0.05–0.97, and none of those survive the other gates). They are not hurting; they are simply not
+protecting anything, and should not be mistaken for risk controls that are doing work.
+
+The *tracking* `qualified` flag is a different thing again and constrains trading not at all: the full
+gate is a strict subset of it, so no gate-qualifying row is ever untracked.
+
 ## 3. Calibration by price, which bounds how far the gate may be loosened
 
 Across all 41,183 resolved rows with a chosen side, the model is overconfident on cheap contracts and
@@ -79,12 +106,16 @@ artefact of the simulated fill model rather than a market fact — paper require
 taker prints to consume displayed queue-ahead volume, and only 12.7% of paper entries go unfilled
 against 51.5% live. The two fill populations are not comparable. Worth a look, not worth acting on.
 
-## 5. The exit is the whole result, and it is invisible
+## 5. The exit is the whole result
 
-A position closed before settlement is recorded `sold` and **never receives an `outcome`** — resolution
-only runs on positions still held. So no report the desk produces can score the exit, despite it
-touching 27% of live fills under the current policy and 47% of paper fills. This review could only
-score it by recovering settlement outcomes from forecast history and joining by contract window.
+> **Correction.** An earlier revision of this section claimed the exit was invisible and unmeasurable,
+> on the grounds that a `sold` order never receives an `outcome`. That is true of the `outcome` field and
+> false of the conclusion. `updateSoldCounterfactuals` already records `counterfactualHoldOutcome` and
+> `counterfactualHoldPnlCents` on every exit — 249 of 249 edge-policy exits have them — and
+> `buildActionCounterfactuals` already scores an authoritative EXIT-vs-HOLD arm, split by exit policy
+> and clustered by settlement window. The offline reconstruction below was unnecessary; it agrees with
+> the production figures to within the switch incumbents it excluded. What was actually missing is
+> narrower, and is §5.1.
 
 Scored against simply holding the same position to settlement:
 
@@ -103,17 +134,50 @@ is insurance, and its expected value is positive here. The intuitive improvement
 quarter of the time, make it fire less" — would remove the payoff. Anyone tuning this needs the
 asymmetry in front of them.
 
+### 5.1 What the aggregate hid: the two exit policies disagree
+
+Pooling the exits was the mistake this table corrects. Production already splits them, and split, they
+point opposite ways:
+
+| arm | live | paper |
+| --- | --- | --- |
+| EXIT vs HOLD · `strict-value-v1` | +763c, +9.4% ±13.9 | +3,627c, **+28.9% ±10.9, credible** |
+| EXIT vs HOLD · `profit-reversal-75-v1` | −130c, **−192.9% ±81.5, credible** | −83c, −10.1% ±29.3 |
+
+`strict-value-v1` is carrying the result. `profit-reversal-75-v1` is the only arm on either track that
+clears two standard errors *against* the action taken — it is credibly destroying value on live, on 9
+decisions across 8 windows. Nine decisions is thin, and the paper arm for the same policy is negative
+but not credible, so this is a flag rather than a verdict.
+
+It also sits in tension with the `exit-at-armed-peak` arm, which says live positions that armed the
+profit lock and were never sold gave up 993c against selling at their peak. One arm says the reversal
+exit fires badly; the other says not firing it also costs. Both are thin and neither is actionable yet.
+
+### 5.2 What was actually missing: how often, as distinct from how much
+
+Every arm reported magnitude and no frequency. That is the one number needed to keep the asymmetry from
+being tuned away: `strict-value-v1` is right on a minority of its firings and profitable regardless, and
+a reader seeing only "+28.9%" has no way to know that making it fire less would destroy the arm.
+
+Added in this change: `decisionsBeatingAlternative` and `hitRate` on every arm, computed per decision
+rather than per window — the mean answers "what did this earn", the hit rate answers "of the times it
+fired, how often was it right", and those are different questions. Surfaced in the performance dialog
+beside the per-stake mean with the asymmetry stated in the caption.
+
 ## 6. What this authorizes
 
 Nothing automatic. In order of value:
 
-1. **Record settlement outcome on exited positions.** Currently unmeasurable in production; this review
-   had to reconstruct it offline. Until the desk can score its own exits, the component carrying the
-   entire result is the one component nobody can see. Backfillable for all 249 historical exits.
-2. **Score the exit as a first-class report**, on the held-to-settlement counterfactual above, with the
-   right-rate and the contribution reported separately so the asymmetry stays visible.
-3. **Do not tune entry thresholds on this evidence.** They are flat. Changes there are noise-chasing.
-4. **Do not act on per-asset results.** They do not survive window clustering.
+1. **Watch `profit-reversal-75-v1`.** It is the only credibly negative arm on either track (§5.1). Nine
+   live decisions is too thin to retire a policy on, and the `exit-at-armed-peak` arm argues the other
+   way, so this is a thing to accumulate evidence on rather than switch off today. If it stays credibly
+   negative past ~25 windows it should go to the evaluation lane.
+2. **Do not tune entry thresholds on this evidence.** They are flat (§2). Changes there are
+   noise-chasing.
+3. **Do not act on per-asset results.** They do not survive window clustering (§1).
+4. **Do not remove the two inert gate components** — `confidence >= 0.5` and `price 0.05-0.97` exclude
+   essentially nothing (§2a), so removing them changes no behaviour and loses a backstop that costs
+   nothing. Worth knowing they are not protecting anything, not worth a change.
 
 ## 7. What this review cannot say
 

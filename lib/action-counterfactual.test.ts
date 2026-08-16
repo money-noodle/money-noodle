@@ -95,3 +95,52 @@ describe('action counterfactual arms', () => {
     expect(buildActionCounterfactuals([paper], 'paper')).toHaveLength(1);
   });
 });
+
+describe('how often the action wins, as distinct from how much', () => {
+  it('reports a hit rate beside the mean', () => {
+    const orders = [
+      exit('strict-value-v1', 8, 2),
+      exit('strict-value-v1', 1, 4, { closesAt: '2026-01-01T00:30:00Z' }),
+    ];
+    const armed = findArm(orders, 'strict-value-v1');
+    expect(armed?.decisionsBeatingAlternative).toBe(1);
+    expect(armed?.hitRate).toBe(0.5);
+  });
+
+  it('keeps a profitable exit legible when it is usually wrong', () => {
+    // The shape this figure exists for, and the measured shape of the live desk: nine exits surrender 1c
+    // of remaining upside each, one avoids losing the whole 10c stake. The policy is right 10% of the
+    // time and makes money, so the hit rate must not be mistakable for a verdict on its own.
+    const orders = [
+      ...Array.from({ length: 9 }, (_, index) => exit('strict-value-v1', 4, 5, { closesAt: `2026-01-0${index + 1}T00:15:00Z` })),
+      exit('strict-value-v1', 2, -10, { closesAt: '2026-01-20T00:15:00Z' }),
+    ];
+    const armed = findArm(orders, 'strict-value-v1');
+    expect(armed?.hitRate).toBeCloseTo(0.1);
+    // Wrong nine times out of ten and up 3c overall.
+    expect(armed?.incrementalCents).toBe(3);
+    expect(armed?.meanIncrementalCents).toBeGreaterThan(0);
+  });
+
+  it('counts a decision that exactly matched its alternative as not beating it', () => {
+    // A tie is not a win. Counting it as one would inflate every arm whose alternative is frequently
+    // identical, which is the common case for an exit taken at a price the settlement then matched.
+    const armed = findArm([exit('strict-value-v1', 5, 5)], 'strict-value-v1');
+    expect(armed?.decisionsBeatingAlternative).toBe(0);
+    expect(armed?.hitRate).toBe(0);
+  });
+
+  it('counts decisions rather than windows, so a busy window cannot dominate the rate', () => {
+    // The mean is clustered because trades in one window share a market move. The hit rate deliberately
+    // is not: it answers "of the times this fired, how often was it right", which is a per-decision
+    // question. Both are reported so neither has to stand in for the other.
+    const orders = [
+      exit('strict-value-v1', 9, 1), exit('strict-value-v1', 9, 1), exit('strict-value-v1', 9, 1),
+      exit('strict-value-v1', 0, 6, { closesAt: '2026-01-02T00:15:00Z' }),
+    ];
+    const armed = findArm(orders, 'strict-value-v1');
+    expect(armed?.windows).toBe(2);
+    expect(armed?.decisions).toBe(4);
+    expect(armed?.hitRate).toBe(0.75);
+  });
+});

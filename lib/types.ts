@@ -637,6 +637,16 @@ export interface ActionCounterfactualArm {
   description: string;
   decisions: number;
   windows: number;
+  /** Decisions where the action beat its alternative. Frequency, not magnitude — the two diverge. */
+  decisionsBeatingAlternative: number;
+  /**
+   * Share of decisions where the action beat its alternative.
+   *
+   * Read together with `meanIncrementalReturn`, never instead of it. An exit policy is insurance and is
+   * expected to be right well under half the time while still being worth running; a low hit rate beside
+   * a positive mean is the intended shape, not a defect to tune away.
+   */
+  hitRate: number | null;
   takenPnlCents: number;
   alternativePnlCents: number;
   incrementalCents: number;

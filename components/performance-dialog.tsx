@@ -145,17 +145,20 @@ function ActionCounterfactualPanel({ record }: { record: TradeTrackRecord }) {
       <p className="text-[8px] uppercase tracking-wider text-muted-foreground">Action versus rejected alternative</p>
       <span className="font-mono text-[8px] text-muted-foreground">{record.actionCounterfactualVersion}</span>
     </div>
-    <div className="mt-2 grid grid-cols-[1fr_52px_74px_84px] gap-2 border-b pb-1 text-[8px] uppercase text-muted-foreground">
-      <span>Action · policy</span><span className="text-right">n/w</span><span className="text-right">Total</span><span className="text-right">Per stake</span>
+    <div className="mt-2 grid grid-cols-[1fr_52px_46px_74px_84px] gap-2 border-b pb-1 text-[8px] uppercase text-muted-foreground">
+      <span>Action · policy</span><span className="text-right">n/w</span><span className="text-right">Hit</span><span className="text-right">Total</span><span className="text-right">Per stake</span>
     </div>
     {record.actionCounterfactuals.map((armed) => (
-      <div key={`${armed.action}:${armed.policy}`} className="grid grid-cols-[1fr_52px_74px_84px] gap-2 py-1 text-[10px]" title={armed.description}>
+      <div key={`${armed.action}:${armed.policy}`} className="grid grid-cols-[1fr_52px_46px_74px_84px] gap-2 py-1 text-[10px]" title={armed.description}>
         <span className="truncate">
           <span className="font-medium">{armed.action}</span>
           <span className="text-muted-foreground"> vs {armed.alternative} · {armed.policy}</span>
           {armed.basis === 'approximate' && <span className="ml-1 text-amber-200/70">≈</span>}
         </span>
         <span className="text-right font-mono text-muted-foreground">{armed.decisions}/{armed.windows}w</span>
+        <span className="text-right font-mono text-muted-foreground" title={`Beat the alternative on ${armed.decisionsBeatingAlternative} of ${armed.decisions}`}>
+          {armed.hitRate === null ? '—' : `${(armed.hitRate * 100).toFixed(0)}%`}
+        </span>
         <span className={cn('text-right font-mono', armed.incrementalCents > 0 ? 'text-primary/70' : armed.incrementalCents < 0 ? 'text-red-400/70' : 'text-muted-foreground')}>{`${armed.incrementalCents >= 0 ? '+' : ''}${armed.incrementalCents.toFixed(1)}¢`}</span>
         <span className={cn('text-right font-mono', !armed.credible ? 'text-muted-foreground' : (armed.meanIncrementalReturn ?? 0) > 0 ? 'text-primary' : 'text-red-400')}>
           {armed.meanIncrementalReturn === null ? '—' : `${armed.meanIncrementalReturn >= 0 ? '+' : ''}${(armed.meanIncrementalReturn * 100).toFixed(0)}%`}
@@ -163,7 +166,7 @@ function ActionCounterfactualPanel({ record }: { record: TradeTrackRecord }) {
         </span>
       </div>
     ))}
-    <p className="mt-1 text-[9px] text-muted-foreground">Positive means the action beat the alternative it rejected. Per-stake means are clustered by settlement window; greyed-out rows do not clear two standard errors. Rows marked ≈ price the rejected exit from an observed bid rather than a settled outcome. Reporting only — no arm may change execution.</p>
+    <p className="mt-1 text-[9px] text-muted-foreground">Positive means the action beat the alternative it rejected. <span className="text-foreground/70">Hit is how often, not how much — an exit is insurance and is expected to be right well under half the time while still paying, so a low hit rate beside a positive per-stake mean is the intended shape.</span> Per-stake means are clustered by settlement window; greyed-out rows do not clear two standard errors. Rows marked ≈ price the rejected exit from an observed bid rather than a settled outcome. Reporting only — no arm may change execution.</p>
   </div>;
 }
 

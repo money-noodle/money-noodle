@@ -58,10 +58,18 @@ function arm(
     (decision) => decision.order.closesAt,
     (decision) => incremental(decision) / actualStake(decision.order),
   );
+  // How often the action won, as distinct from how much. An exit is insurance: it surrenders a little
+  // remaining upside most times it fires and avoids a total loss of stake occasionally, so a positive
+  // mean routinely sits on a hit rate well under half. Without this figure the obvious "improvement" —
+  // it is only right a quarter of the time, make it fire less — reads as reasonable and would remove the
+  // payoff. Reported beside the mean so the asymmetry cannot be missed.
+  const beat = decisions.filter((decision) => incremental(decision) > 0).length;
   return {
     action, alternative, policy, basis, description,
     decisions: decisions.length,
     windows: cents.windows,
+    decisionsBeatingAlternative: beat,
+    hitRate: decisions.length ? beat / decisions.length : null,
     takenPnlCents: decisions.reduce((sum, decision) => sum + decision.takenCents, 0),
     alternativePnlCents: decisions.reduce((sum, decision) => sum + decision.alternativeCents, 0),
     incrementalCents: decisions.reduce((sum, decision) => sum + incremental(decision), 0),
