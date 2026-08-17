@@ -19,7 +19,7 @@ const dollars = (cents: number) => usd.format(cents / 100);
  * instead of reporting 0W 0L beside a non-zero settled count.
  */
 type TrackFigures = Pick<ExecutionSummary, 'mode' | 'running' | 'depleted' | 'realizedPnlCents' | 'equityCents' | 'openOrders' | 'settledOrders'>
-  & Partial<Pick<ExecutionSummary, 'wins' | 'losses' | 'blockedReason'>>;
+  & Partial<Pick<ExecutionSummary, 'wins' | 'losses' | 'blockedReason' | 'lifetimePnlCents' | 'pnlScope' | 'epochStartedAt'>>;
 
 /**
  * One self-contained panel per execution track. Paper and live are deliberately given separate
@@ -30,6 +30,10 @@ function TrackPanel({ track, title, subtitle, equityLabel }: { track: TrackFigur
   const isLive = track?.mode === 'live';
   const running = Boolean(track?.running);
   const pnl = track?.realizedPnlCents ?? 0;
+  // Only worth a second figure when the two actually differ in meaning. A track whose bankroll has never
+  // been re-funded reports the same number twice, which reads as a discrepancy rather than a detail.
+  const epochScoped = track?.pnlScope === 'budget-epoch';
+  const lifetimePnl = track?.lifetimePnlCents;
   return <div className={cn('flex-1 rounded-lg border p-3',
     running && isLive ? 'border-red-400/45 bg-red-400/[.06]' : running ? 'border-primary/30 bg-primary/[.04]' : 'border-border bg-background/40')}>
     <div className="flex items-center justify-between gap-2">
@@ -52,7 +56,9 @@ function TrackPanel({ track, title, subtitle, equityLabel }: { track: TrackFigur
 
     <div className="mt-3 flex items-end justify-between gap-3">
       <div>
-        <p className="text-[8px] uppercase tracking-wider text-muted-foreground">Realized P&amp;L</p>
+        {/* The headline is the figure that reconciles with the equity beside it. Lifetime spans earlier
+            fundings and ties to nothing, so it sits in the footer rather than competing here. */}
+        <p className="text-[8px] uppercase tracking-wider text-muted-foreground">{epochScoped ? 'Budget P&L' : 'Realized P&L'}</p>
         <p className={cn('font-mono text-xl leading-tight', pnl > 0 ? 'text-primary' : pnl < 0 ? 'text-red-400' : 'text-foreground')}>{dollars(pnl)}</p>
       </div>
       <div className="text-right">
@@ -67,6 +73,10 @@ function TrackPanel({ track, title, subtitle, equityLabel }: { track: TrackFigur
       {track?.wins !== undefined && <><span>·</span>
         <span className={cn(track.wins > (track.losses ?? 0) && 'text-primary')}>{track.wins}W</span>
         <span className={cn((track.losses ?? 0) > 0 && 'text-red-400')}>{track.losses ?? 0}L</span></>}
+      {epochScoped && lifetimePnl !== undefined && <><span>·</span>
+        <span title={track?.epochStartedAt ? `Across every funding. The headline covers only the budget funded ${new Date(track.epochStartedAt).toLocaleString()}.` : undefined}>
+          lifetime <span className={cn(lifetimePnl > 0 ? 'text-primary' : lifetimePnl < 0 ? 'text-red-400' : '')}>{dollars(lifetimePnl)}</span>
+        </span></>}
     </div>
 
     {track?.depleted && <p className="mt-2 flex items-start gap-1.5 text-[9px] leading-relaxed text-amber-200/90"><AlertTriangle className="mt-px size-3 shrink-0"/>Bankroll depleted — reset in Budget to resume.</p>}

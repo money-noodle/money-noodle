@@ -20,6 +20,9 @@ async function withExecution(data: Promise<TradingControlData>): Promise<Trading
       reservedBudgetCents: control.control.reservedBudgetCents,
       proposedStakeCents: control.proposedStakeCents,
       perTradeCents: control.control.perTradeCents,
+      // The live counter is scoped to the funding epoch, so its P&L must be too or it will not tie.
+      epochId: control.control.epochId,
+      epochStartedAt: control.control.epochStartedAt,
     }),
   };
 }

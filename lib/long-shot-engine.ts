@@ -106,7 +106,10 @@ export interface LongShotOrderInput {
   /** Trailing evidence, when the entry waited for the fall to stall. */
   firstTouchAskCents?: number;
   trailingLooks?: number;
+  /** Live only: the funding epoch that bought this order. */
   budgetEpochId?: string;
+  /** Paper only: the bankroll funding that bought it. The two tracks never share an identity. */
+  paperBankrollId?: string;
   fill: { quantity: number; limitPriceCents: number; feeCents: number; stakeCents: number; potentialPayoutCents: number };
 }
 
@@ -125,7 +128,9 @@ export function buildLongShotOrder(input: LongShotOrderInput): PaperOrder {
     strategyId: LONG_SHOT_ROUND_TRIP,
     marketId: 'crypto-15m',
     providerId: 'kalshi',
-    budgetEpochId: input.budgetEpochId,
+    ...(input.mode === 'live'
+      ? { budgetEpochId: input.budgetEpochId }
+      : { paperBankrollId: input.paperBankrollId }),
     symbol: input.symbol, venue: 'kalshi', contractId: input.contractId, side: input.side,
     status: 'pending_reservation',
     createdAt: new Date().toISOString(),

@@ -11,9 +11,12 @@ import type { PaperOrder } from './types';
  * On 2026-08-17 the bankroll was credited 694c of taker fees wrongly charged on maker fills. The order
  * records still carry that fee — they are evidence and are never rewritten — so any figure summed from
  * them reads low by exactly the amount returned unless the correction is added back.
+ *
+ * `executionMode` is not decoration in these fixtures: the figure is scoped to the bankroll funding
+ * that bought the order, and that attribution is mode-aware. An order without it is read as live.
  */
 const order = (pnl: number, exact?: number): PaperOrder => ({
-  pnlCents: pnl, ...(exact === undefined ? {} : { actualPnlCents: exact }),
+  executionMode: 'paper', pnlCents: pnl, ...(exact === undefined ? {} : { actualPnlCents: exact }),
 } as PaperOrder);
 
 const correction = (realizedPnlCents: number) => ({
@@ -80,6 +83,26 @@ describe('paper P&L reported against a corrected bankroll', () => {
   });
 
   it('treats a missing P&L as zero rather than dropping the order', () => {
-    expect(correctedPaperPnlCents([{} as PaperOrder, order(-50)], undefined)).toBe(-50);
+    const withoutPnl = { executionMode: 'paper' } as PaperOrder;
+    expect(correctedPaperPnlCents([withoutPnl, order(-50)], undefined)).toBe(-50);
+  });
+
+  it('counts only the funding currently backing the bankroll', () => {
+    // A reset zeroes the counter, so an earlier funding's orders must stop reaching this figure or
+    // the panel reports the whole pre-reset P&L as an unreconciled residual.
+    const previous = { executionMode: 'paper', pnlCents: 900 } as PaperOrder;
+    const current = { executionMode: 'paper', pnlCents: -25, paperBankrollId: 'paper-2-x' } as PaperOrder;
+    const budget = { startingCents: 5_000, availableCents: 4_975, realizedPnlCents: -25, fundingId: 'paper-2-x', fundingSequence: 2, startedAt: '2026-08-18T00:00:00.000Z' };
+    expect(correctedPaperPnlCents([previous, current], budget)).toBe(-25);
+  });
+
+  it('drops a correction made under an earlier bankroll, whose counter the reset already zeroed', () => {
+    const current = { executionMode: 'paper', pnlCents: -25, paperBankrollId: 'paper-2-x' } as PaperOrder;
+    const budget = {
+      startingCents: 5_000, availableCents: 4_975, realizedPnlCents: -25,
+      fundingId: 'paper-2-x', fundingSequence: 2, startedAt: '2026-08-18T00:00:00.000Z',
+      makerFeeCorrections: [correction(694)],
+    };
+    expect(correctedPaperPnlCents([current], budget)).toBe(-25);
   });
 });

@@ -13,7 +13,7 @@ import { evaluatePromotionEligibility } from '@/lib/model-promotion';
 import { readPromotionLedger } from '@/lib/model-promotion-store';
 import { getTradingControl } from '@/lib/trading-control';
 import { getForecastHistory, getForecastStorageHealth, getPerformanceSummary } from '@/lib/forecast-tracker';
-import { getExecutionOrders } from '@/lib/paper-execution';
+import { getExecutionOrders, getPaperBankrollFunding } from '@/lib/paper-execution';
 import { getWalkForwardEvaluationHistory } from '@/lib/model-evaluation-store';
 import { getPersistenceCandidateReport } from '@/lib/persistence-candidate-store';
 import { BUY_POLICY_VERSION } from '@/lib/prediction-policy';
@@ -35,6 +35,7 @@ export async function GET(request: Request) {
       getContractProvenanceRegistry(), getTradingControl(), getPersistenceCandidateReport(BUY_POLICY_VERSION),
       getCalendarEvaluationReport(BUY_POLICY_VERSION),
     ]);
+    const paperFunding = await getPaperBankrollFunding();
     // Whether the lifetime figures above were computed from complete shard statistics.
     const forecastStorage = await getForecastStorageHealth();
     const modelEvaluations = await getWalkForwardEvaluationHistory(summary.calibrationWindows);
@@ -59,6 +60,11 @@ export async function GET(request: Request) {
       // without erasing what earlier epochs actually did.
       liveEpochs: epochResults(orders, 'live', control.control.epochId),
       liveLifetimePnlCents: lifetimeRealizedPnlCents(orders, 'live'),
+      // Paper's equivalent. Its generations are opened by a bankroll reset rather than by reconfiguring
+      // the control, so the identity is its own and never live's. See docs/paper-bankroll-fundings-design.md.
+      paperEpochs: epochResults(orders, 'paper', paperFunding.fundingId),
+      paperLifetimePnlCents: lifetimeRealizedPnlCents(orders, 'paper'),
+      paperFunding,
       // Evaluation only. Raising the cap stays a manual, audited act; this states whether the stated
       // criteria are met and what a qualifying expansion would be.
       stakeExpansion: evaluateStakeExpansion(control.control, orders),

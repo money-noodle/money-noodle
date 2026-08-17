@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DATA_FRESHNESS } from '@/lib/freshness';
 import { MIN_ESTIMATE_QUALITY, MIN_NET_EDGE } from '@/lib/prediction-policy';
+import type { EpochResult } from '@/lib/budget-epoch';
 import type { PromotionEligibility } from '@/lib/model-promotion';
 import type { CalendarEvaluationReport, ContractComparabilityReport, CyclePathReport, ForecastHistoryRow, MakerFillReport, ModelPromotionEntry, PerformanceSlice, PerformanceSummary, PersistenceCandidateReport, ProviderTradeRecord, SegmentGroup, TradeTrackRecord, WalkForwardEvaluationHistory } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -322,8 +323,46 @@ function DegradedStorageNotice({ storage }: { storage: { missingRollups: number;
   </div>;
 }
 
+
+/**
+ * Funding history for both tracks, in one table because they answer the same question.
+ *
+ * A generation is opened by a different act per track — reconfiguring the trading control for live, a
+ * bankroll reset for paper — and closing one restarts its P&L without erasing what it did. The realized
+ * column is the whole-cent budget view, which is the one that reconciles with a generation's starting
+ * balance; the exact reporting view lives in the track records above and legitimately differs.
+ */
+function FundingHistory({ live, paper }: { live: EpochResult[]; paper: EpochResult[] }) {
+  const rows = [...live.map((epoch) => ({ epoch, mode: 'live' as const })), ...paper.map((epoch) => ({ epoch, mode: 'paper' as const }))];
+  if (!rows.length) return null;
+  return <div className="mt-4 rounded-lg border">
+    <div className="border-b px-3 py-2">
+      <h3 className="text-xs font-semibold">Funding history</h3>
+      <p className="mt-0.5 text-[9px] text-muted-foreground">Every funding of each budget. Live is funded by reconfiguring the control, paper by resetting the bankroll. Realized is the whole-cent budget view, so it reconciles with that funding&apos;s starting balance.</p>
+    </div>
+    <div className="overflow-x-auto"><table className="w-full min-w-[38rem] text-[10px]">
+      <thead className="text-muted-foreground"><tr className="border-b">
+        <th className="px-3 py-1.5 text-left font-medium">Track</th>
+        <th className="px-3 py-1.5 text-left font-medium">Funding</th>
+        <th className="px-3 py-1.5 text-right font-medium">Trades</th>
+        <th className="px-3 py-1.5 text-right font-medium">Settled</th>
+        <th className="px-3 py-1.5 text-right font-medium">Staked</th>
+        <th className="px-3 py-1.5 text-right font-medium">Realized</th>
+      </tr></thead>
+      <tbody>{rows.map(({ epoch, mode }) => <tr key={`${mode}:${epoch.epochId}`} className="border-b last:border-0">
+        <td className="px-3 py-1.5"><Badge variant="outline" className={cn('h-4 px-1.5 text-[8px] uppercase', mode === 'live' ? 'border-red-400/30 text-red-300' : 'border-primary/25 text-primary')}>{mode}</Badge></td>
+        <td className="px-3 py-1.5"><span className="font-mono">{epoch.firstAt ? new Date(epoch.firstAt).toLocaleDateString() : '—'}</span>{epoch.current && <span className="ml-1.5 text-[8px] uppercase text-primary">current</span>}<p className="truncate font-mono text-[8px] text-muted-foreground" title={epoch.epochId}>{epoch.epochId}</p></td>
+        <td className="px-3 py-1.5 text-right font-mono">{epoch.trades}</td>
+        <td className="px-3 py-1.5 text-right font-mono">{epoch.settled}</td>
+        <td className="px-3 py-1.5 text-right font-mono">{usd.format(epoch.stakedCents / 100)}</td>
+        <td className={cn('px-3 py-1.5 text-right font-mono', epoch.budgetPnlCents > 0 ? 'text-primary' : epoch.budgetPnlCents < 0 ? 'text-red-400' : '')}>{usd.format(epoch.budgetPnlCents / 100)}</td>
+      </tr>)}</tbody>
+    </table></div>
+  </div>;
+}
+
 export function PerformanceDialog({ publicView = false }: { publicView?: boolean }) {
-  const [data, setData] = useState<{ summary: PerformanceSummary; forecasts: ForecastHistoryRow[]; paperRecord?: TradeTrackRecord; liveRecord?: TradeTrackRecord; cyclePaths?: CyclePathReport; contractComparability?: ContractComparabilityReport; makerFillReport?: MakerFillReport; persistenceCandidate?: PersistenceCandidateReport; calendarEvaluation?: CalendarEvaluationReport; modelEvaluations?: WalkForwardEvaluationHistory; promotionEligibility?: PromotionEligibility; promotionLedger?: ModelPromotionEntry[]; paperProviderRecords?: ProviderTradeRecord[]; liveProviderRecords?: ProviderTradeRecord[]; durable?: boolean; generatedAt?: string; forecastStorage?: { layout: string; openRows: number; sealedRows: number; shards: number; missingRollups: number; degraded: boolean; reason: string } } | null>(null);
+  const [data, setData] = useState<{ summary: PerformanceSummary; forecasts: ForecastHistoryRow[]; paperRecord?: TradeTrackRecord; liveRecord?: TradeTrackRecord; cyclePaths?: CyclePathReport; contractComparability?: ContractComparabilityReport; makerFillReport?: MakerFillReport; persistenceCandidate?: PersistenceCandidateReport; calendarEvaluation?: CalendarEvaluationReport; modelEvaluations?: WalkForwardEvaluationHistory; promotionEligibility?: PromotionEligibility; promotionLedger?: ModelPromotionEntry[]; paperProviderRecords?: ProviderTradeRecord[]; liveProviderRecords?: ProviderTradeRecord[]; liveEpochs?: EpochResult[]; paperEpochs?: EpochResult[]; durable?: boolean; generatedAt?: string; forecastStorage?: { layout: string; openRows: number; sealedRows: number; shards: number; missingRollups: number; degraded: boolean; reason: string } } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -349,6 +388,7 @@ export function PerformanceDialog({ publicView = false }: { publicView?: boolean
             <p className="mb-3 text-[10px] leading-relaxed text-muted-foreground">{publicView ? 'Executed simulated trades only, taken from the paper order ledger. These include modelled fill prices and venue fees, so they answer what the shadow bankroll did — not how good the forecast looked.' : 'Executed trades only, taken from the order ledger, with paper and live kept completely separate. These include real fill prices and venue fees, so they answer what the money did — not how good the forecast looked.'}</p>
             <div className="space-y-3">
               {data.liveRecord && <div><TradeRecordCard record={data.liveRecord}/><ProviderRecordRows records={data.liveProviderRecords ?? []} label="Live"/></div>}
+              <FundingHistory live={data.liveEpochs ?? []} paper={data.paperEpochs ?? []}/>
               {data.paperRecord && <div><TradeRecordCard record={data.paperRecord}/><ProviderRecordRows records={data.paperProviderRecords ?? []} label="Paper"/></div>}
             </div>
           </TabsContent>

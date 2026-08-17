@@ -1386,8 +1386,20 @@ export interface PaperOrder {
    * long-shot order would land inside the edge policy's lifetime loss breaker.
    */
   strategyId?: StrategyId;
-  /** Budget epoch this order was placed under, so a later reconfiguration cannot reattribute its P&L. */
+  /**
+   * Live budget epoch this order was placed under, so a later reconfiguration cannot reattribute its P&L.
+   *
+   * Live orders only. Paper orders written before 2026-08-17 also carry it, copied from the live control
+   * by a `buildOrder` that did not distinguish the tracks; that stamp is ignored for paper, which reads
+   * `paperBankrollId` instead. Those records are evidence and are never rewritten.
+   */
   budgetEpochId?: string;
+  /**
+   * Paper bankroll funding this order was placed under, minted by a reset. Absent means the original
+   * bankroll. Paper orders only — the two budgets are opened by different acts and must not share an
+   * identity. See docs/paper-bankroll-fundings-design.md.
+   */
+  paperBankrollId?: string;
   /**
    * Path-regime label at the moment of entry, recorded so cohort analysis does not require rejoining a
    * 210MB forecast snapshot. Observation-only for live; paper additionally refuses unclassified windows.
@@ -1797,7 +1809,22 @@ export interface ExecutionSummary {
   settledOrders: number;
   wins: number;
   losses: number;
+  /**
+   * The P&L that reconciles with the budget figures beside it: `startingCents + realizedPnlCents`
+   * equals equity. Its scope differs per track and is stated in `pnlScope`, because the two budgets
+   * mean different things — live's was re-funded and counts from that epoch, paper's never has been.
+   *
+   * Whole-cent throughout. These sit next to budget figures, and the budget counters accumulate
+   * `payoutCents - stakeCents` in whole cents, so summing the exact `actualPnlCents` here would make
+   * the panel disagree with itself. The exact view belongs in performance reporting.
+   */
   realizedPnlCents: number;
+  /** Every settled order on this track, whichever budget epoch funded it. Never reconciles with equity. */
+  lifetimePnlCents: number;
+  /** What `realizedPnlCents` covers, so the two figures can never be read as the same quantity. */
+  pnlScope: 'budget-epoch' | 'lifetime';
+  /** When the funding epoch behind `realizedPnlCents` opened; absent when the scope is lifetime. */
+  epochStartedAt?: string;
   equityCents: number;
   recentOrders: PaperOrder[];
 }

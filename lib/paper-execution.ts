@@ -57,6 +57,7 @@ const trailing = new Map<string, TrailingEntryState>();
  */
 const denseWatch = new Map<string, { symbol: string; closesAt: string }>();
 import { assetAdmitted } from './asset-exclusion';
+import { LEGACY_PAPER_BANKROLL_ID, nextPaperBankrollFunding, orderEpochId } from './budget-epoch';
 import { cycleRegimeFor } from './cycle-path-store';
 import { DEFAULT_MARKET_ID } from './market-registry';
 import { marketFunding } from './provider-budget-policy';
@@ -112,8 +113,12 @@ let automaticReconciliationRequested = false;
 interface BankrollCorrection { at: string; reason: string; orderIds: string[]; availableCents: number; realizedPnlCents: number }
 interface PaperBudget {
   startingCents: number; availableCents: number; realizedPnlCents: number; resets?: number; startedAt?: string;
+  /** Identity of the current bankroll funding; absent means the original, never-reset bankroll. */
+  fundingId?: string;
+  fundingSequence?: number;
   makerFeeCorrections?: BankrollCorrection[];
   strategyLeakCorrections?: BankrollCorrection[];
+  reconciliationCorrections?: BankrollCorrection[];
 }
 export const MAX_PAPER_BANKROLL_CENTS = 1_000_000;
 interface Ledger { version: 6; paperBudget: PaperBudget; orders: PaperOrder[]; signalPersistence: Record<string, SignalPersistenceState>; portfolioDecisions: Record<string, PortfolioDecisionView>; switchPersistence: Record<string, SwitchPersistenceState>; lastLiveSkip?: { reason: string; at: string } }
@@ -546,7 +551,12 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
     // stamps its own id. Explicit on both sides so neither can fall through to a default.
     strategyId: EDGE_BINARY_BUY,
     // Stamped at creation so a later reconfiguration cannot reattribute this order's P&L.
-    budgetEpochId: status.control.epochId,
+    // Each track records the funding that actually bought the order. Stamping live's epoch onto a paper
+    // order attributes a simulated result to a real funding that never paid for it, and survives forever
+    // because records are never rewritten. See docs/paper-bankroll-fundings-design.md.
+    ...(mode === 'live'
+      ? { budgetEpochId: status.control.epochId }
+      : { paperBankrollId: ledger.paperBudget.fundingId }),
     providerId: selected.venue,
     providerVariantId: status.tradingProviders?.find((provider) => provider.id === selected.venue)?.selectedVariantId,
     symbol: prediction.symbol, venue: selected.venue,
@@ -1659,7 +1669,7 @@ async function runLongShot(
         mode, symbol: prediction.symbol, side, contractId: quote.ticker, closesAt: quote.closesAt,
         calculationAt: dashboard.generatedAt, entryAsk: ask, oppositeAsk,
         entryGeneration: generation, exitMarkCents: settings.exitMarkCents, settings,
-        budgetEpochId: status.control.epochId, fill,
+        budgetEpochId: status.control.epochId, paperBankrollId: ledger.paperBudget.fundingId, fill,
         firstTouchAskCents: trail?.firstTouchAskCents, trailingLooks: trail?.looks,
       });
       if (trail) {
@@ -2194,6 +2204,17 @@ export function reconcileLiveExecution(options: { trigger?: 'startup' | 'manual'
  * Order history is deliberately preserved; only the spending account is reset, and the reset is
  * counted so a restored bankroll is never mistaken for an unbroken run.
  */
+/** The bankroll funding currently backing the paper desk, for reports that group history by it. */
+export async function getPaperBankrollFunding(): Promise<{ fundingId: string; fundingSequence: number; startedAt?: string; resets: number }> {
+  const budget = (await readLedger()).paperBudget;
+  return {
+    fundingId: budget.fundingId ?? LEGACY_PAPER_BANKROLL_ID,
+    fundingSequence: budget.fundingSequence ?? 1,
+    startedAt: budget.startedAt,
+    resets: budget.resets ?? 0,
+  };
+}
+
 export function resetPaperBudget(bankrollCents: number): Promise<ExecutionSummary> {
   const operation = engineQueue.then(async () => {
     if (!Number.isSafeInteger(bankrollCents) || bankrollCents <= 0) throw new Error('Paper bankroll must be a positive dollar amount.');
@@ -2202,9 +2223,15 @@ export function resetPaperBudget(bankrollCents: number): Promise<ExecutionSummar
     if (ledger.orders.some((order) => order.executionMode === 'paper' && (order.status === 'open' || order.status === 'pending_reservation'))) {
       throw new Error('Wait for open paper positions to settle before resetting the bankroll.');
     }
+    // A reset opens a new bankroll funding, exactly as reconfiguring the control opens a live epoch.
+    // Without an identity the reset would zero the counter while every prior order still summed into the
+    // figure beside it, and the panel would report the whole pre-reset P&L as an unreconciled residual.
+    // Corrections are deliberately dropped: they adjusted a counter this reset has just zeroed.
+    const funding = nextPaperBankrollFunding(ledger.paperBudget);
     ledger.paperBudget = {
       startingCents: bankrollCents, availableCents: bankrollCents, realizedPnlCents: 0,
-      resets: (ledger.paperBudget.resets ?? 0) + 1, startedAt: new Date().toISOString(),
+      resets: (ledger.paperBudget.resets ?? 0) + 1, startedAt: funding.startedAt,
+      fundingId: funding.fundingId, fundingSequence: funding.fundingSequence,
     };
     await writeLedger(ledger);
     // A freshly reset bankroll has nothing reserved, so the next stake is sized off the full amount.
@@ -2259,6 +2286,12 @@ export function groupedRecentOrders(orders: PaperOrder[]): PaperOrder[] {
  *
  * Only `makerFeeCorrections` applies here; see `BankrollCorrection` for why its sibling must not.
  */
+/** Orders bought by the bankroll funding currently backing the desk. */
+function currentFundingOrders(settled: PaperOrder[], budget?: PaperBudget): PaperOrder[] {
+  const funding = budget?.fundingId ?? LEGACY_PAPER_BANKROLL_ID;
+  return settled.filter((order) => orderEpochId(order) === funding);
+}
+
 export function correctedPaperPnlCents(settled: PaperOrder[], budget?: PaperBudget): number {
   // Whole-cent `pnlCents`, deliberately, not the exact `actualPnlCents`. This figure is displayed beside
   // starting, available and equity, and the bankroll counter accumulates `payoutCents - stakeCents` in
@@ -2266,16 +2299,38 @@ export function correctedPaperPnlCents(settled: PaperOrder[], budget?: PaperBudg
   // it is priced from the fractional net liquidation, so summing it here mixes the two views and makes
   // the budget panel disagree with itself by ~100c across 205 sold exits. §1 of the agent rules forbids
   // exactly that mix; the exact view belongs in performance reporting, not in a budget.
-  const raw = settled.reduce((sum, order) => sum + (order.pnlCents ?? 0), 0);
-  return raw + (budget?.makerFeeCorrections ?? []).reduce((sum, entry) => sum + entry.realizedPnlCents, 0);
+  //
+  // Scoped to the bankroll funding now backing the desk, so a reset restarts this figure with the
+  // counter it must equal. Corrections are scoped the same way: a reset zeroes the counter they adjusted,
+  // so one made under an earlier bankroll is no longer reflected in it and must not be added back.
+  const funding = currentFundingOrders(settled, budget);
+  const since = budget?.startedAt;
+  const raw = funding.reduce((sum, order) => sum + (order.pnlCents ?? 0), 0);
+  return raw + (budget?.makerFeeCorrections ?? [])
+    .filter((entry) => !since || entry.at >= since)
+    .reduce((sum, entry) => sum + entry.realizedPnlCents, 0);
 }
 
-function summarize(orders: PaperOrder[], mode: ExecutionMode, running: boolean, equityCents: number, figures: LedgerFigures, budget?: PaperBudget, strategyId: StrategyId = EDGE_BINARY_BUY): ExecutionSummary {
+/**
+ * Which funding epoch a track's reconciling P&L covers.
+ *
+ * Live's working budget was re-funded, so its counter counts from that moment and only orders stamped
+ * with the current `budgetEpochId` belong in the figure that ties to equity. Paper's bankroll has never
+ * been reset, so its epoch is its whole life and scoping it would silently drop the 856 orders that
+ * predate epoch stamping. Passing the epoch explicitly keeps that difference visible rather than
+ * hard-coding a rule that is only right for one track.
+ */
+interface PnlScope { epochId?: string; startedAt?: string }
+
+export function summarize(orders: PaperOrder[], mode: ExecutionMode, running: boolean, equityCents: number, figures: LedgerFigures, budget?: PaperBudget, strategyId: StrategyId = EDGE_BINARY_BUY, scope: PnlScope = {}): ExecutionSummary {
   // Scoped by strategy as well as mode. The two strategies share one ledger because reconciliation is an
   // account-wide concern and a split file would leave real resting orders unmatched, so every money figure
   // read out of it has to re-narrow.
   const mine = orders.filter((order) => order.executionMode === mode && orderStrategyId(order) === strategyId);
-  const settled = mine.filter((order) => order.status === 'won' || order.status === 'lost' || order.status === 'invalid' || order.status === 'sold');
+  const isSettled = (order: PaperOrder) => order.status === 'won' || order.status === 'lost' || order.status === 'invalid' || order.status === 'sold';
+  const settled = mine.filter(isSettled);
+  /** Every strategy on this track. Only the money figures that mirror an account-wide counter use it. */
+  const accountWide = orders.filter((order) => order.executionMode === mode && isSettled(order));
   const openOrders = mine.filter((order) => order.status === 'open' || order.status === 'pending_reservation' || order.status === 'uncertain').length;
   return {
     mode, running,
@@ -2289,10 +2344,27 @@ function summarize(orders: PaperOrder[], mode: ExecutionMode, running: boolean, 
     settledOrders: settled.length,
     wins: mine.filter((order) => order.status === 'won').length,
     losses: mine.filter((order) => order.status === 'lost').length,
-    // Corrections belong to the paper bankroll, so the live summary sums its orders unadjusted.
+    /**
+     * Both figures are whole-cent `pnlCents`, because they sit beside budget counters that move in
+     * whole cents; the exact `actualPnlCents` belongs in performance reporting.
+     *
+     * Live is scored **account-wide**, deliberately not re-narrowed by strategy. §4 forbids strategies
+     * sharing money, and they do not — but live cash is one real Kalshi balance and `settleDueOrders`
+     * settles it through the shared control whatever strategy spent it, so the counter beside this
+     * figure is account-wide by construction. Narrowing to the edge policy reads 183c against the
+     * counter's 152c, the difference being the long-shot strategy's draw on the same balance, and the
+     * panel would contradict itself. Paper is the opposite case: its bankroll is the edge policy's own,
+     * which is why the leak correction existed at all, so it stays narrowed and corrected.
+     */
     realizedPnlCents: mode === 'paper' && strategyId === EDGE_BINARY_BUY
       ? correctedPaperPnlCents(settled, budget)
-      : settled.reduce((sum, order) => sum + (order.actualPnlCents ?? order.pnlCents ?? 0), 0),
+      : accountWide.filter((order) => !scope.epochId || order.budgetEpochId === scope.epochId)
+        .reduce((sum, order) => sum + (order.pnlCents ?? 0), 0),
+    lifetimePnlCents: mode === 'paper' && strategyId === EDGE_BINARY_BUY
+      ? correctedPaperPnlCents(settled, budget)
+      : accountWide.reduce((sum, order) => sum + (order.pnlCents ?? 0), 0),
+    pnlScope: scope.epochId ? 'budget-epoch' : 'lifetime',
+    ...(scope.startedAt ? { epochStartedAt: scope.startedAt } : {}),
     equityCents,
     recentOrders: groupedRecentOrders(mine).slice(0, 30),
   };
@@ -2363,7 +2435,7 @@ export async function getPublicPaperBudget(): Promise<PublicPaperBudget> {
   return publicPaperBudgetFromLedger(await readLedger());
 }
 
-export async function getExecutionSummaries(control: { state: string; mode: string; startingBudgetCents: number; workingEquityCents: number; availableBudgetCents: number; reservedBudgetCents: number; proposedStakeCents: number; perTradeCents: number }): Promise<{ paper: ExecutionSummary; live: ExecutionSummary; executionSignals: ExecutionSignalReadiness[]; liveAvailable: boolean; liveBlockers: string[]; maximumLiveMakerAttempts: number; portfolioConstraints: Pick<PortfolioConstraints, 'maximumPositions' | 'maximumSameWindow' | 'maximumSameGroupPerWindow'>; regimeGate: RegimeGateStatus }> {
+export async function getExecutionSummaries(control: { state: string; mode: string; startingBudgetCents: number; workingEquityCents: number; availableBudgetCents: number; reservedBudgetCents: number; proposedStakeCents: number; perTradeCents: number; epochId?: string; epochStartedAt?: string }): Promise<{ paper: ExecutionSummary; live: ExecutionSummary; executionSignals: ExecutionSignalReadiness[]; liveAvailable: boolean; liveBlockers: string[]; maximumLiveMakerAttempts: number; portfolioConstraints: Pick<PortfolioConstraints, 'maximumPositions' | 'maximumSameWindow' | 'maximumSameGroupPerWindow'>; regimeGate: RegimeGateStatus }> {
   const [ledger, regimeGate] = await Promise.all([readLedger(), getRegimeGateStatus()]);
   const now = Date.now();
   const openPaper = ledger.orders.filter((order) => order.executionMode === 'paper' && (order.status === 'open' || order.status === 'pending_reservation')).reduce((sum, order) => sum + order.stakeCents, 0);
@@ -2380,7 +2452,8 @@ export async function getExecutionSummaries(control: { state: string; mode: stri
         startingCents: control.startingBudgetCents,
         availableCents: control.availableBudgetCents, reservedCents: control.reservedBudgetCents,
         proposedStakeCents: Math.min(control.proposedStakeCents, maxLiveStakeCents()),
-      }),
+        // Live's counter was re-funded, so only this epoch's orders tie to the equity shown beside them.
+      }, undefined, EDGE_BINARY_BUY, { epochId: control.epochId, startedAt: control.epochStartedAt }),
       blockedReason: ledger.lastLiveSkip?.reason,
     },
     executionSignals: Object.values(ledger.signalPersistence)
