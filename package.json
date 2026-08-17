@@ -24,7 +24,8 @@
     "analyze:execution-value": "node --max-old-space-size=6144 scripts/analyze-execution-value.mjs",
     "analyze:trading-clock": "node --max-old-space-size=6144 scripts/analyze-trading-clock.mjs",
     "analyze:exit-alternatives": "node --max-old-space-size=6144 scripts/analyze-exit-alternatives.mjs",
-    "analyze:exit-counterfactuals": "node scripts/analyze-exit-counterfactuals.mjs"
+    "analyze:exit-counterfactuals": "node scripts/analyze-exit-counterfactuals.mjs",
+    "analyze:entry-realization": "node --max-old-space-size=6144 scripts/analyze-entry-realization.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1111.0",

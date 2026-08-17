@@ -33,6 +33,32 @@ Snapshot from local durable files on 2026-08-14:
 - Latest reviewed walk-forward run: `walk-forward:550:fnv1a-866cfdc4`, generated 2026-08-15T00:00:23.891Z, 550 checkpoint windows, decision `baseline_retained`. Candidate mean window return was 4.37% versus baseline 4.81%; it beat baseline in only 2 of 5 folds and had a larger maximum drawdown, so it is not citable for promotion.
 - Forecast storage is a memory-residency risk, not a cadence risk. `data/forecast-history.json` is 188.7 MB and `data/forecast-history.journal.jsonl` is 12.2 MB. The parse itself costs ~1.2 s once per process behind a promise cache; the ~10 s blocks previously attributed to it were quadratic grouping in `summarizePerformance`, now fixed and 643 ms. What binds is that the process holds ~396 MB of retained heap to serve a hot set of 135 rows, and grows ~40 MB a day.
 
+### Edge policy v17, reviewed 2026-08-17
+
+Three days of `buy-binary-edge-net5to35-quality50-owned55-price5to97-v17` are now reportable, and the
+policy is losing money on both tracks while the gate it enforces is not the reason. Full review in
+[reports/edge-policy-review-2026-08-17.md](reports/edge-policy-review-2026-08-17.md); reproduce with
+`npm run analyze:entry-realization`. Figures are one read at 2026-08-17T07:17:38Z, settled entries only.
+
+- The gate is intact. In the v17 era the rows it admits win 58.8% and return +14.9% [+8.9, +21.0] over
+  892 settlement windows, against +15.4% in the era before it. The market did not deteriorate.
+- The book is negative: live −565c on 13,185c (−4.3%) over 110 settled entries, paper −1,458c on 15,550c
+  (−9.4%) over 117. Retired-policy entries on the same ledger returned +570c on 8,457c.
+- **Fill selection is a leak and the previous 3.4pp figure was pooled across policy eras.** Split out,
+  v17 filled entries win 19.2pp ±14.3 less than unfilled on live (t = −2.63) and 20.3pp ±12.4 less on
+  paper (t = −3.21), while capturing a −3.96c maker discount. The earlier eras are too small or too
+  low-base-rate to serve as a control, so "this is new" is *not* established.
+- **Entries fired on an edge spike lose.** Decisions where `netEdge` sat 2pp or more above the
+  `medianNetEdge` that `signalEligibility` already stamps win 34.0% against 58.7%, deduplicated to 228
+  unique `(symbol, window, side)` decisions and clustered by window. It holds within every edge band and
+  on 6 of 6 assets. It is retroactive screening on a threshold chosen after the fact and promotes nothing.
+- The walk-forward evaluator cannot referee any of this: `WalkForwardParameters` has no maximum-edge or
+  selected-side-floor dimension, so its baseline is not the production gate, and `selectedTrade` scores
+  buy-at-the-ask-and-hold — the exact counterfactual this review shows is biased. Hardening §3 below is
+  now a prerequisite to promotion rather than parallel work.
+
+No policy version changed. The open items this creates are listed in the review's §6.
+
 Interpretation: the newer exact ledger snapshot is slightly negative lifetime and the current live budget epoch is down materially. Stake expansion must use both views, plus drawdown, maker-fill quality, model evaluation, and reconciliation health. Do not treat a near-flat lifetime P&L alone as readiness. The fresh evidence-by-feature review is recorded in [reports/monitoring-review-2026-08-14.md](reports/monitoring-review-2026-08-14.md); it authorizes no new live feature.
 
 ## Implemented
