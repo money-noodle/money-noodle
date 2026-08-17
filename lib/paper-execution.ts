@@ -96,7 +96,25 @@ const DEFAULT_MAX_PAPER_STAKE_CENTS = 200;
 let engineQueue: Promise<void> = Promise.resolve();
 let automaticReconciliationRequested = false;
 
-interface PaperBudget { startingCents: number; availableCents: number; realizedPnlCents: number; resets?: number; startedAt?: string }
+/**
+ * An out-of-band adjustment to the paper bankroll, appended by a correction script and never rewritten.
+ *
+ * Two arrays exist and they relate to the order-derived P&L view differently, which is the whole reason
+ * they are kept apart rather than pooled:
+ *
+ * - `makerFeeCorrections` returned taker fees charged on paper *maker* fills. That fee is still baked
+ *   into the `stakeCents` and `pnlCents` of the edge-policy orders it was taken from, so any figure
+ *   summed from those orders must add it back or it will disagree with the bankroll.
+ * - `strategyLeakCorrections` removed another strategy's payouts that were wrongly credited here. Those
+ *   orders are excluded from the edge-policy sum by the strategy filter already, so applying it to an
+ *   order-derived figure would subtract it a second time.
+ */
+interface BankrollCorrection { at: string; reason: string; orderIds: string[]; availableCents: number; realizedPnlCents: number }
+interface PaperBudget {
+  startingCents: number; availableCents: number; realizedPnlCents: number; resets?: number; startedAt?: string;
+  makerFeeCorrections?: BankrollCorrection[];
+  strategyLeakCorrections?: BankrollCorrection[];
+}
 export const MAX_PAPER_BANKROLL_CENTS = 1_000_000;
 interface Ledger { version: 6; paperBudget: PaperBudget; orders: PaperOrder[]; signalPersistence: Record<string, SignalPersistenceState>; portfolioDecisions: Record<string, PortfolioDecisionView>; switchPersistence: Record<string, SwitchPersistenceState>; lastLiveSkip?: { reason: string; at: string } }
 
@@ -2230,6 +2248,28 @@ export function groupedRecentOrders(orders: PaperOrder[]): PaperOrder[] {
   }).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 }
 
+/**
+ * Realized paper P&L summed from order records, plus the bankroll corrections those records still carry.
+ *
+ * The 137 maker fills corrected on 2026-08-17 were charged a taker fee the venue does not levy on a
+ * resting order. The fee was returned to the bankroll, but the order records keep it — they are evidence
+ * of what the desk actually did and are never rewritten — so a figure summed from them reads lower than
+ * the bankroll by exactly the amount returned. Adding the recorded corrections back is what keeps the two
+ * from contradicting each other on the same screen. See docs/paper-maker-fee-design.md.
+ *
+ * Only `makerFeeCorrections` applies here; see `BankrollCorrection` for why its sibling must not.
+ */
+export function correctedPaperPnlCents(settled: PaperOrder[], budget?: PaperBudget): number {
+  // Whole-cent `pnlCents`, deliberately, not the exact `actualPnlCents`. This figure is displayed beside
+  // starting, available and equity, and the bankroll counter accumulates `payoutCents - stakeCents` in
+  // whole cents at each settlement and exit. `actualPnlCents` is the exact reporting view: on a sold exit
+  // it is priced from the fractional net liquidation, so summing it here mixes the two views and makes
+  // the budget panel disagree with itself by ~100c across 205 sold exits. §1 of the agent rules forbids
+  // exactly that mix; the exact view belongs in performance reporting, not in a budget.
+  const raw = settled.reduce((sum, order) => sum + (order.pnlCents ?? 0), 0);
+  return raw + (budget?.makerFeeCorrections ?? []).reduce((sum, entry) => sum + entry.realizedPnlCents, 0);
+}
+
 function summarize(orders: PaperOrder[], mode: ExecutionMode, running: boolean, equityCents: number, figures: LedgerFigures, budget?: PaperBudget, strategyId: StrategyId = EDGE_BINARY_BUY): ExecutionSummary {
   // Scoped by strategy as well as mode. The two strategies share one ledger because reconciliation is an
   // account-wide concern and a split file would leave real resting orders unmatched, so every money figure
@@ -2249,7 +2289,10 @@ function summarize(orders: PaperOrder[], mode: ExecutionMode, running: boolean, 
     settledOrders: settled.length,
     wins: mine.filter((order) => order.status === 'won').length,
     losses: mine.filter((order) => order.status === 'lost').length,
-    realizedPnlCents: settled.reduce((sum, order) => sum + (order.actualPnlCents ?? order.pnlCents ?? 0), 0),
+    // Corrections belong to the paper bankroll, so the live summary sums its orders unadjusted.
+    realizedPnlCents: mode === 'paper' && strategyId === EDGE_BINARY_BUY
+      ? correctedPaperPnlCents(settled, budget)
+      : settled.reduce((sum, order) => sum + (order.actualPnlCents ?? order.pnlCents ?? 0), 0),
     equityCents,
     recentOrders: groupedRecentOrders(mine).slice(0, 30),
   };
@@ -2295,7 +2338,7 @@ function publicPaperBudgetFromLedger(ledger: Ledger): PublicPaperBudget {
     depleted: availableCents <= 0 && openOrders.length === 0,
     openOrders: openOrders.length,
     settledOrders: settledOrders.length,
-    realizedPnlCents: settledOrders.reduce((total, order) => total + (order.actualPnlCents ?? order.pnlCents ?? 0), 0),
+    realizedPnlCents: correctedPaperPnlCents(settledOrders, ledger.paperBudget),
     bankrollResets: ledger.paperBudget.resets ?? 0,
     recentExecutions: groupedRecentOrders(orders).slice(0, 30).map(publicPaperExecution),
   };
