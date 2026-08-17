@@ -73,7 +73,10 @@ import { bestEntry, bestVenueEntry, BUY_POLICY_VERSION, edgeStrength, MIN_ESTIMA
 import { getKalshiReconciliationStatus, serializedReconciliation, setKalshiReconciliationStatus, type KalshiReconciliationStatus } from './reconciliation-state';
 import { getRegimeGateStatus, updateRegimeGate, type RegimeGateStatus, type RegimeSentinelCandidate } from './regime-gate-store';
 import { TWO_SNAPSHOT_PERSISTENCE_CANDIDATE_VERSION, updatePersistenceCandidateStore, type PersistenceCandidateCycle } from './persistence-candidate-store';
-import { advanceSignalPersistence, evaluateSignalPersistence, evaluateSignalPersistenceWithRequirements, type SignalEligibility, type SignalPersistenceState } from './signal-persistence';
+import { advanceSignalPersistence, evaluateSignalPersistence, evaluateSignalPersistenceIgnoringSpike, evaluateSignalPersistenceWithRequirements, type SignalEligibility, type SignalPersistenceState } from './signal-persistence';
+import { maximumEdgeSpike, spikeAdmits } from './edge-spike-policy';
+import { EDGE_SPIKE_SENTINEL_VERSION, edgeSpikeSentinelId, type EdgeSpikeSentinel } from './edge-spike-sentinel';
+import { updateEdgeSpikeSentinels } from './edge-spike-sentinel-store';
 import { REQUIRED_SWITCH_SNAPSHOTS, REQUIRED_SWITCH_SPAN_MS, advanceSwitchPersistence, switchCooldownRemainingMs, switchEvidenceReady, switchEvidenceSpanMs, type SwitchPersistenceState } from './switch-hysteresis';
 import { evaluateSwitchProbabilityGate, switchPolicySettings, valueSwitch } from './switch-policy';
 import { autoResumeTradingAfterReconciliation, getTradingControl, pauseTrading, reconcileTradingBudget, recordTradingReconciliationFailure, releaseTradingBudget, reserveTradingBudget, settleTradingBudget, stopTradingForLiveRisk, suspendTrading } from './trading-control';
@@ -252,8 +255,10 @@ async function persistenceCandidateCycle(dashboard: DashboardData, ledger: Ledge
     if (!quote || !entry || !(quote.bid > 0) || quote.bid > quote.ask || quote.ask - quote.bid > MAX_SPREAD) continue;
 
     const state = ledger.signalPersistence[persistenceKey(prediction, side)];
+    // Carries production's freshness ceiling deliberately: this candidate exists to measure snapshot
+    // count and span, so it must differ from production in that one variable and nothing else.
     const candidate = evaluateSignalPersistenceWithRequirements(state, nowMs, MIN_NET_EDGE, MIN_ESTIMATE_QUALITY, {
-      requiredSnapshots: 2, requiredSpanMs: 15_000,
+      requiredSnapshots: 2, requiredSpanMs: 15_000, maximumEdgeSpike: maximumEdgeSpike(),
     });
     const production = executionEligibility(prediction, side, ledger, nowMs);
     const id = `${TWO_SNAPSHOT_PERSISTENCE_CANDIDATE_VERSION}:${BUY_POLICY_VERSION}:${prediction.symbol}:${side}:${prediction.kalshi.closesAt}`;
@@ -283,6 +288,59 @@ async function persistenceCandidateCycle(dashboard: DashboardData, ledger: Ledge
     });
   }
   return { productionPolicyVersion: BUY_POLICY_VERSION, observedAt, intents, productionEligibleIds };
+}
+
+/**
+ * Prospective evidence for the v18 edge-spike freshness gate.
+ *
+ * Records every decision that passed every other entry and persistence gate and reached the spike check,
+ * labelled by whether the gate admitted it. Both arms therefore come from one evaluation on one
+ * population, which is what makes them comparable — the admitted arm is deliberately not taken from the
+ * order ledger, because that would score a real-fills cohort against a counterfactual one and reproduce
+ * the maker selection the gate exists to avoid.
+ *
+ * Committed at decision time and independent of budget, caps, automation state and execution mode, so a
+ * decision the desk could not fund still lands in the sample. The two regime gates are deliberately not
+ * applied: they are time-varying operational filters, one of which is about to restart its warm-up on
+ * this very version bump, and the comparison only needs the two arms drawn from the same population.
+ *
+ * See docs/edge-spike-sentinel-design.md §4.
+ */
+function edgeSpikeSentinelCycle(dashboard: DashboardData, ledger: Ledger, nowMs = Date.now()): EdgeSpikeSentinel[] {
+  if (!isFreshCalculationTimestamp(dashboard.generatedAt, nowMs)) return [];
+  const observed: EdgeSpikeSentinel[] = [];
+  for (const prediction of dashboard.predictions) {
+    const side = selectedSide(prediction);
+    if (!side || !prediction.market.live || !prediction.kalshi?.live || !assetAdmitted(prediction.symbol)) continue;
+    if (!qualifiesAsBuyEdge(prediction) || !qualifiesVenueBuyEdge(prediction, 'kalshi', side)) continue;
+    const state = ledger.signalPersistence[persistenceKey(prediction, side)];
+    const eligibility = evaluateSignalPersistenceIgnoringSpike(state, nowMs, MIN_NET_EDGE, MIN_ESTIMATE_QUALITY);
+    // Anything refused before the spike check belongs in neither arm.
+    if (!eligibility.eligible || eligibility.edgeSpike === null || eligibility.medianNetEdge === null) continue;
+    const quote = venueQuote(prediction, 'kalshi', side);
+    const entry = bestVenueEntry(prediction, 'kalshi', side);
+    if (!quote || !entry || !(quote.ask > 0) || !(quote.bid > 0) || quote.bid > quote.ask) continue;
+    observed.push({
+      id: edgeSpikeSentinelId({ policyVersion: BUY_POLICY_VERSION, symbol: prediction.symbol, side, closesAt: prediction.kalshi.closesAt }),
+      sentinelVersion: EDGE_SPIKE_SENTINEL_VERSION,
+      policyVersion: BUY_POLICY_VERSION,
+      symbol: prediction.symbol,
+      contractId: prediction.kalshi.ticker,
+      side,
+      closesAt: prediction.kalshi.closesAt,
+      createdAt: dashboard.generatedAt,
+      admitted: spikeAdmits(eligibility.edgeSpike),
+      edgeSpike: eligibility.edgeSpike,
+      netEdge: entry.netEdge,
+      medianNetEdge: eligibility.medianNetEdge,
+      selectedSideProbability: sideProbability(prediction, side),
+      confidence: prediction.confidence,
+      askPrice: quote.ask,
+      estimatedFeeRate: entry.feeRate,
+      qualifyingSnapshots: eligibility.qualifyingSnapshots,
+    });
+  }
+  return observed;
 }
 
 /**
@@ -1470,6 +1528,8 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
     .catch((error) => console.error('Two-snapshot persistence candidate collection failed:', error));
   void recordContractPaths(dashboard.predictions ?? [])
     .catch((error) => console.error('Contract path collection failed:', error));
+  void updateEdgeSpikeSentinels(edgeSpikeSentinelCycle(dashboard, ledger))
+    .catch((error) => console.error('Edge spike sentinel collection failed:', error));
   const status = await getTradingControl();
   // Long-shot collection only: this records triggers and outcomes and places no order. It runs detached
   // and unconditionally, because the evidence is what decides whether to enable the policy, so gating

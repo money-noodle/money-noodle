@@ -57,7 +57,41 @@ policy is losing money on both tracks while the gate it enforces is not the reas
   buy-at-the-ask-and-hold — the exact counterfactual this review shows is biased. Hardening §3 below is
   now a prerequisite to promotion rather than parallel work.
 
-No policy version changed. The open items this creates are listed in the review's §6.
+### Buy policy v18: the edge-spike freshness gate, shipped 2026-08-17
+
+`buy-binary-edge-net5to35-quality50-owned55-price5to97-fresh2pp-v18` refuses an entry whose net edge sits
+2pp or more above the median of its qualifying snapshots. Design in
+[docs/edge-spike-sentinel-design.md](docs/edge-spike-sentinel-design.md); manifest history carries the
+decision.
+
+**This was made on an asymmetry, not on evidence clearing a bar, and the record says so.** The threshold
+was chosen after inspecting the bins, on three days, with paper's own clustered interval spanning zero —
+retroactive screening, which promotes nothing. What authorizes it is that declining this volume costs
+roughly nothing while the book is negative, and not declining it costs real money if the effect is real.
+
+- The rule is `lib/edge-spike-policy.ts`: pure, restrictive-only, tunable through
+  `MONEY_NOODLE_MAX_EDGE_SPIKE`, with the tolerance on the refusing side so noise can only refuse.
+- The gate sits in `evaluateSignalPersistenceWithRequirements` as a declared member of
+  `SignalPersistenceRequirements`. That layer takes no execution mode, so the mirror invariant holds by
+  construction, and the two-snapshot candidate lane states the ceiling explicitly rather than inheriting
+  it, keeping its own comparison to one variable.
+- `edge-spike-sentinel-v1` (`lib/edge-spike-sentinel.ts`, `data/edge-spike-sentinels.json`) records every
+  decision that reaches the gate, admitted or refused, **at decision time**. Both arms come from one
+  evaluation on one population; the admitted arm is deliberately not taken from the order ledger, because
+  scoring real fills against a counterfactual would reproduce the maker selection the gate addresses.
+  Review bar 60 resolved windows in the declined arm — a review bar, not a promotion criterion.
+- **Known cost, accepted:** the version bump discards 156 accumulated v17 adaptive-regime windows and the
+  gate permits entries for 12 settlement windows while it re-warms. Scoping regime evidence to the policy
+  version is correct, and special-casing a "compatible" bump would start exactly the drift it prevents.
+
+Rollback criterion, stated now rather than after the fact: if the declined arm comes back at or above the
+admitted arm over enough independent windows, the gate goes. The reason for it was never that the evidence
+was strong.
+
+Remaining: a report surface for the sentinel, and one independent re-derivation of the §3 figures from the
+order ledger rather than the analysis script — the specific way the v14 DOWN suspension failed.
+
+The other open items are listed in the review's §6, and none of them changed here.
 
 Interpretation: the newer exact ledger snapshot is slightly negative lifetime and the current live budget epoch is down materially. Stake expansion must use both views, plus drawdown, maker-fill quality, model evaluation, and reconciliation health. Do not treat a near-flat lifetime P&L alone as readiness. The fresh evidence-by-feature review is recorded in [reports/monitoring-review-2026-08-14.md](reports/monitoring-review-2026-08-14.md); it authorizes no new live feature.
 

@@ -1,3 +1,4 @@
+import { edgeSpike, maximumEdgeSpike, spikeAdmits } from './edge-spike-policy';
 import { observationBucket } from './observation-window';
 import type { PositionSide } from './types';
 
@@ -29,17 +30,35 @@ export interface SignalEligibility {
   remainingMs: number;
   qualifyingSnapshots: number;
   medianNetEdge: number | null;
+  /**
+   * Firing edge minus its persistence median. Reported whether or not it decides eligibility, so the
+   * sentinel can record the continuous value on decisions the gate admits as well as ones it refuses.
+   */
+  edgeSpike: number | null;
 }
 
 export interface SignalPersistenceRequirements {
   requiredSnapshots: number;
   requiredSpanMs: number;
+  /**
+   * Declared rather than read from a constant here, so a candidate lane that calls this evaluator
+   * directly states what it is holding fixed instead of silently inheriting a production gate.
+   */
+  maximumEdgeSpike: number;
 }
 
-export const PRODUCTION_SIGNAL_PERSISTENCE: SignalPersistenceRequirements = {
-  requiredSnapshots: REQUIRED_QUALIFYING_SNAPSHOTS,
-  requiredSpanMs: REQUIRED_OBSERVATION_SPAN_MS,
-};
+/**
+ * A function rather than a constant: the spike ceiling is operator-configurable, and a module-level
+ * constant would freeze whatever the environment held at import time, leaving the policy manifest able to
+ * describe a gate the desk is not running.
+ */
+export function productionSignalPersistence(): SignalPersistenceRequirements {
+  return {
+    requiredSnapshots: REQUIRED_QUALIFYING_SNAPSHOTS,
+    requiredSpanMs: REQUIRED_OBSERVATION_SPAN_MS,
+    maximumEdgeSpike: maximumEdgeSpike(),
+  };
+}
 
 /**
  * Advances one signal's durable execution evidence. A failed current snapshot resets the streak;
@@ -79,14 +98,18 @@ export function evaluateSignalPersistenceWithRequirements(
   minimumQuality: number,
   requirements: SignalPersistenceRequirements,
 ): SignalEligibility {
-  if (!state) return { eligible: false, reason: 'No persistence observations yet.', cycleAgeMs: 0, remainingMs: 0, qualifyingSnapshots: 0, medianNetEdge: null };
+  if (!state) return { eligible: false, reason: 'No persistence observations yet.', cycleAgeMs: 0, remainingMs: 0, qualifyingSnapshots: 0, medianNetEdge: null, edgeSpike: null };
   const closesAtMs = Date.parse(state.closesAt);
   const cycleAgeMs = nowMs - (closesAtMs - CYCLE_DURATION_MS);
   const remainingMs = closesAtMs - nowMs;
   const observations = state.observations.filter((item) => Number.isFinite(Date.parse(item.at)));
   const edges = observations.map((item) => item.netEdge);
   const medianNetEdge = median(edges);
-  const base = { cycleAgeMs, remainingMs, qualifyingSnapshots: observations.length, medianNetEdge };
+  // Reported on every outcome, not only the one it decides, so the sentinel can record the continuous
+  // value for admitted and refused decisions alike from a single evaluation.
+  const currentNetEdge = observations.at(-1)?.netEdge;
+  const spike = currentNetEdge === undefined ? null : edgeSpike(currentNetEdge, medianNetEdge);
+  const base = { cycleAgeMs, remainingMs, qualifyingSnapshots: observations.length, medianNetEdge, edgeSpike: spike };
   if (!Number.isFinite(closesAtMs)) return { ...base, eligible: false, reason: 'Contract close time is invalid.' };
   if (cycleAgeMs < EXECUTION_WARMUP_MS) return { ...base, eligible: false, reason: `Cycle warming up: ${Math.max(0, Math.floor(cycleAgeMs / 1000))}/${EXECUTION_WARMUP_MS / 1000}s.` };
   if (remainingMs <= EXECUTION_LATE_CUTOFF_MS) return { ...base, eligible: false, reason: `Inside the final ${EXECUTION_LATE_CUTOFF_MS / 1000}s entry cutoff.` };
@@ -98,10 +121,28 @@ export function evaluateSignalPersistenceWithRequirements(
   if (nowMs - Date.parse(latest.at) > MAX_EXECUTION_SNAPSHOT_AGE_MS) return { ...base, eligible: false, reason: 'Latest persistence snapshot is stale.' };
   if (latest.quality < minimumQuality) return { ...base, eligible: false, reason: `Current estimate quality ${(latest.quality * 100).toFixed(1)}% is below ${(minimumQuality * 100).toFixed(0)}%.` };
   if (medianNetEdge === null || medianNetEdge < minimumNetEdge) return { ...base, eligible: false, reason: `Median edge ${((medianNetEdge ?? 0) * 100).toFixed(1)}pp is below ${(minimumNetEdge * 100).toFixed(0)}pp.` };
-  return { ...base, eligible: true, reason: `${observations.length} qualifying snapshots; median edge ${(medianNetEdge * 100).toFixed(1)}pp.` };
+  // Last, so every cheaper check reports its own reason first and the spike arm is not polluted by
+  // decisions that would have been refused anyway. See docs/edge-spike-sentinel-design.md §3.
+  if (!spikeAdmits(spike, requirements.maximumEdgeSpike)) return {
+    ...base, eligible: false,
+    reason: `Edge ${((spike ?? 0) * 100).toFixed(1)}pp above its persistence median exceeds the ${(requirements.maximumEdgeSpike * 100).toFixed(1)}pp freshness ceiling.`,
+  };
+  return { ...base, eligible: true, reason: `${observations.length} qualifying snapshots; median edge ${(medianNetEdge * 100).toFixed(1)}pp; edge ${((spike ?? 0) * 100).toFixed(1)}pp from median.` };
 }
 
 /** Production remains on three snapshots; candidates call the explicit evaluator above. */
 export function evaluateSignalPersistence(state: SignalPersistenceState | undefined, nowMs: number, minimumNetEdge: number, minimumQuality: number): SignalEligibility {
-  return evaluateSignalPersistenceWithRequirements(state, nowMs, minimumNetEdge, minimumQuality, PRODUCTION_SIGNAL_PERSISTENCE);
+  return evaluateSignalPersistenceWithRequirements(state, nowMs, minimumNetEdge, minimumQuality, productionSignalPersistence());
+}
+
+/**
+ * Production's requirements with the freshness ceiling lifted, which is what the sentinel scores.
+ *
+ * The declined arm has to be built from an evaluation that reaches the spike check, so that both arms
+ * come from one code path on one population. Anything refused earlier belongs in neither arm.
+ */
+export function evaluateSignalPersistenceIgnoringSpike(state: SignalPersistenceState | undefined, nowMs: number, minimumNetEdge: number, minimumQuality: number): SignalEligibility {
+  return evaluateSignalPersistenceWithRequirements(state, nowMs, minimumNetEdge, minimumQuality, {
+    ...productionSignalPersistence(), maximumEdgeSpike: Number.POSITIVE_INFINITY,
+  });
 }

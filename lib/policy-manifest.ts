@@ -1,4 +1,5 @@
 import { excludedAssets } from './asset-exclusion';
+import { maximumEdgeSpike } from './edge-spike-policy';
 import { PRODUCTION_BASIS_LOG_ODDS_WEIGHT } from './calibration-replay';
 import { MAX_TRADEABLE_PROBABILITY, MIN_TRADEABLE_PROBABILITY } from './dashboard';
 import { classifiedRegimeRequired } from './paper-execution';
@@ -37,9 +38,33 @@ const component = (
  */
 const history: PolicyManifestHistoryEntry[] = [
   {
+    version: 'buy-binary-edge-net5to35-quality50-owned55-price5to97-fresh2pp-v18',
+    activatedAt: '2026-08-17T08:00:00.000Z',
+    status: 'active',
+    summary: 'Refused entries whose edge had just spiked above its own persistence median — made on an asymmetry, not on evidence clearing a bar.',
+    changes: [
+      'An entry is refused when its net edge sits 2pp or more above the median of its qualifying snapshots',
+      'The ceiling is a declared member of the persistence requirements, so a candidate lane states it rather than inheriting it',
+      'Restrictive only: it can refuse an entry, never authorize one, and tunes through MONEY_NOODLE_MAX_EDGE_SPIKE',
+      'edge-spike-sentinel-v1 records every decision reaching the gate, admitted or refused, at decision time',
+      'Known cost accepted: the version bump discards 156 accumulated v17 adaptive-regime windows and permits entries for 12 windows while it re-warms',
+    ],
+    // The bar this does not clear is stated deliberately. The threshold was chosen after inspecting the
+    // bins, on three days, with paper's own clustered interval spanning zero — retroactive screening,
+    // which §5.5 says promotes nothing. What authorizes it is that declining this volume costs roughly
+    // nothing while the book is negative, and not declining it costs real money if the effect is real.
+    // The sentinel exists so the figure is recomputed prospectively rather than re-argued from the
+    // script that produced it, which is precisely how the v14 DOWN suspension failed.
+    evidence: [
+      'reports/edge-policy-review-2026-08-17.md §3 · Edge spikes, 34.0% against 58.7% over 228 decisions',
+      'docs/edge-spike-sentinel-design.md §2 · Made on an asymmetry; rollback criterion',
+    ],
+  },
+  {
     version: 'buy-binary-edge-net5to35-quality50-owned55-price5to97-v17',
     activatedAt: '2026-08-14T01:05:00.000Z',
-    status: 'active',
+    deactivatedAt: '2026-08-17T08:00:00.000Z',
+    status: 'superseded',
     summary: 'One policy for both tracks: paper became a true mirror of live rather than a second, quietly different desk.',
     changes: [
       'Entry rules take no execution mode, so a live/paper policy divergence can no longer be expressed',
@@ -153,6 +178,7 @@ export function activePolicyManifest(providers: TradingProviderDescriptor[], mod
   const downEnabled = downEntryEnabled();
   const excluded = excludedAssets();
   const maximumEdge = maximumNetEdge();
+  const spikeCeiling = maximumEdgeSpike();
   const classifiedRequired = classifiedRegimeRequired();
   return {
     version: 'policy-manifest-v1',
@@ -171,6 +197,7 @@ export function activePolicyManifest(providers: TradingProviderDescriptor[], mod
         { label: 'Estimate quality', value: `≥${percent(MIN_ESTIMATE_QUALITY)}` },
         { label: 'Actionable ask', value: `${cents(MIN_ENTRY_PRICE)}–${cents(MAX_ENTRY_PRICE)}` },
         { label: 'Persistence', value: `${REQUIRED_QUALIFYING_SNAPSHOTS} snapshots spanning ${seconds(REQUIRED_OBSERVATION_SPAN_MS)}` },
+        { label: 'Signal freshness', value: `Edge must sit under ${points(spikeCeiling)} above its persistence median` },
         { label: 'Entry timing', value: `${EXECUTION_WARMUP_MS / 1000}-second warm-up; no entry in final ${EXECUTION_LATE_CUTOFF_MS / 1000} seconds` },
       ]),
       component('eligibility', 'Side and asset eligibility', 'side-and-asset-withholding-v2', 'production', 'Sides and assets withheld from new entry on their own measured evidence. One set of rules for live and paper alike: the mirror trades what live trades. Restrictive only — exits, reduce-only sells, and settlement of existing positions are unaffected.', [

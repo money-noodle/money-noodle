@@ -41,9 +41,6 @@ models, signing, tick ladders, adapters; elsewhere refer to as "the live venue" 
 
 ## 0. The shape of the code
 
-`lib/` is flat — no subdirectories. `SPEC.md` §8's service boundaries (`lib/venues/*`, `lib/models/*`, …) are
-labelled aspirational there and **do not exist**; do not look for them. Grep is the index, and this is the map:
-
 | Stage | Entry point |
 | --- | --- |
 | Collection | `startBackgroundCollector` (`lib/background-collector.ts`) |
