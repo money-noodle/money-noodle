@@ -523,7 +523,7 @@ export function Dashboard({ initialData, authenticated }: { initialData: Dashboa
         <Card className="bg-card/60 p-4"><div className="flex items-start gap-3"><div className="rounded-lg bg-secondary p-2 text-muted-foreground"><WalletCards className="size-4"/></div><div><p className="text-xs font-medium">Trading is isolated</p><p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">Future venue actions require preview, risk checks, and explicit confirmation.</p></div></div></Card>
       </section>
 
-      <footer className="mt-10 flex flex-col justify-between gap-3 border-t py-6 text-[10px] leading-relaxed text-muted-foreground sm:flex-row"><p className="max-w-3xl">{data?.disclaimer ?? 'Research only—not financial advice.'}</p><p className="shrink-0">Polymarket · Kalshi · CoinGecko · Kraken · CoinDesk</p></footer>
+      <footer className="mt-10 flex flex-col justify-between gap-3 border-t py-6 text-[10px] leading-relaxed text-muted-foreground sm:flex-row"><p className="max-w-3xl">{data?.disclaimer ?? 'Research only—not financial advice.'}</p><div className="flex shrink-0 flex-col gap-1 sm:text-right"><p>Polymarket · Kalshi · CoinGecko · Kraken · CoinDesk</p><p>© 2026 noodle.money</p></div></footer>
     </div>
   </main>;
 }
