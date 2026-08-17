@@ -1,6 +1,6 @@
 import { ACTION_COUNTERFACTUAL_VERSION, buildActionCounterfactuals, clusterByWindow } from './action-counterfactual';
 import { normalizeMarketId } from './market-registry';
-import { normalizeStrategyId } from './strategy-registry';
+import { EDGE_BINARY_BUY, normalizeStrategyId } from './strategy-registry';
 import { BUY_POLICY_VERSION } from './prediction-policy';
 import type { ExecutionMode, MakerExecutionSegment, MakerFillReport, MarketId, PaperOrder, ProviderTradeRecord, SegmentGroup, SegmentStat, StrategyId, TrackedForecast, TradeTrackRecord, TradingProviderId } from './types';
 
@@ -340,9 +340,9 @@ export function strategyOrders(orders: PaperOrder[], strategyId: StrategyId): Pa
  * Splits a mode's orders into one record per (provider, market). Ordered by settled count so the
  * provider with the most evidence reads first, with provider id as a stable tiebreak.
  */
-export function buildProviderTradeRecords(orders: PaperOrder[], mode: ExecutionMode): ProviderTradeRecord[] {
+export function buildProviderTradeRecords(orders: PaperOrder[], mode: ExecutionMode, strategyId: StrategyId = EDGE_BINARY_BUY): ProviderTradeRecord[] {
   const groups = new Map<string, { providerId: TradingProviderId; marketId: MarketId; orders: PaperOrder[] }>();
-  for (const order of orders.filter((item) => item.executionMode === mode)) {
+  for (const order of strategyOrders(orders, strategyId).filter((item) => item.executionMode === mode)) {
     const providerId = orderProviderId(order);
     const marketId = orderMarketId(order);
     const key = `${providerId}:${marketId}`;
@@ -351,12 +351,21 @@ export function buildProviderTradeRecords(orders: PaperOrder[], mode: ExecutionM
     groups.set(key, group);
   }
   return [...groups.values()]
-    .map((group) => ({ providerId: group.providerId, marketId: group.marketId, record: buildTradeRecord(group.orders, mode) }))
+    .map((group) => ({ providerId: group.providerId, marketId: group.marketId, record: buildTradeRecord(group.orders, mode, strategyId) }))
     .sort((a, b) => b.record.settled - a.record.settled || a.providerId.localeCompare(b.providerId));
 }
 
-export function buildTradeRecord(orders: PaperOrder[], mode: ExecutionMode): TradeTrackRecord {
-  const mine = orders.filter((order) => order.executionMode === mode);
+/**
+ * One strategy's realized trading record on one track.
+ *
+ * Narrowed by strategy as well as mode, per §4: the two strategies share one ledger because
+ * reconciliation is account-wide, so every money figure read out of it has to re-narrow. Filtering by
+ * mode alone blended the long-shot round trip into the edge policy's published track record — -1,167c
+ * against the policy's own -890c across 30 foreign orders — and a blended figure describes neither
+ * strategy. The long-shot has its own report in `buildLongShotReport`.
+ */
+export function buildTradeRecord(orders: PaperOrder[], mode: ExecutionMode, strategyId: StrategyId = EDGE_BINARY_BUY): TradeTrackRecord {
+  const mine = strategyOrders(orders, strategyId).filter((order) => order.executionMode === mode);
   const settled = mine.filter((order) => settledStatuses.has(order.status));
   const staked = settled.reduce((sum, order) => sum + actualStake(order), 0);
   const returned = settled.reduce((sum, order) => sum + (order.payoutCents ?? 0), 0);

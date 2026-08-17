@@ -342,7 +342,7 @@ function FundingHistory({ live, paper }: { live: EpochResult[]; paper: EpochResu
   return <div className="mt-4 rounded-lg border">
     <div className="border-b px-3 py-2">
       <h3 className="text-xs font-semibold">Funding history</h3>
-      <p className="mt-0.5 text-[9px] text-muted-foreground">Every funding of each budget. Live is funded by reconfiguring the control, paper by resetting the bankroll. Realized is the whole-cent budget view, so it reconciles with that funding&apos;s starting balance.</p>
+      <p className="mt-0.5 text-[9px] text-muted-foreground">Every funding of each budget. Live is funded by reconfiguring the control, paper by resetting the bankroll. Realized is the whole-cent budget view and includes any bankroll correction, so it reconciles with that funding&apos;s starting balance. It will not equal the exact realized figure in the record above, which reports what the orders themselves recorded.</p>
     </div>
     <div className="overflow-x-auto"><table className="w-full min-w-[38rem] text-[10px]">
       <thead className="text-muted-foreground"><tr className="border-b">

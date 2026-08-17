@@ -2,7 +2,7 @@ import 'server-only';
 
 import { getCyclePathReport } from './cycle-path-store';
 import { epochResults, type EpochResult } from './budget-epoch';
-import { buildProviderTradeRecords, buildTradeRecord } from './execution-report';
+import { buildProviderTradeRecords, buildTradeRecord, strategyOrders } from './execution-report';
 import { getForecastHistory, getPerformanceSummary } from './forecast-tracker';
 import { getExecutionOrders, getPaperBankrollFunding } from './paper-execution';
 import { summarizePerformance } from './performance';
@@ -59,7 +59,7 @@ function emptyPerformance(generatedAt: string): PublicPaperPerformance {
  * made — a reset zeroes that counter, so an earlier funding's correction is no longer reflected in it.
  */
 function publishedPaperFundings(orders: PaperOrder[], funding: { fundingId: string; correctionCents: number }): EpochResult[] {
-  const mine = orders.filter((order) => (order.strategyId ?? EDGE_BINARY_BUY) === EDGE_BINARY_BUY);
+  const mine = strategyOrders(orders, EDGE_BINARY_BUY);
   return epochResults(mine, 'paper', funding.fundingId).map((entry) => entry.current
     ? { ...entry, budgetPnlCents: entry.budgetPnlCents + funding.correctionCents }
     : entry);

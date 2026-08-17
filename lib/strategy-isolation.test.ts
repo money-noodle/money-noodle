@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-import { orderStrategyId, strategyOrders } from './execution-report';
+import { buildProviderTradeRecords, buildTradeRecord, orderStrategyId, strategyOrders } from './execution-report';
 import { makerCohortEvidence } from './entry-execution-policy';
 import { currentEpochAttribution, evaluateLiveRisk, lifetimeLiveRealizedPnlCents } from './live-risk-policy';
 import { countFilledLiveVenueOrders } from './order-rate-limit';
@@ -123,6 +123,49 @@ describe('the paper bankroll belongs to the edge policy alone', () => {
     // The guard must sit on the branch that mutates the bankroll, not merely appear somewhere nearby.
     const guardIndex = settlement.indexOf('orderStrategyId(order) === EDGE_BINARY_BUY');
     expect(settlement.indexOf('paperBudget.availableCents +=')).toBeGreaterThan(guardIndex);
+  });
+});
+
+describe('a published track record describes one strategy', () => {
+  const settled = (id: string, strategyId: string | undefined, pnlCents: number): PaperOrder => ({
+    id, executionMode: 'paper', strategyId, symbol: 'BTC', side: 'UP', venue: 'kalshi',
+    contractId: `c-${id}`, status: 'won', createdAt: '2026-08-17T00:00:00Z',
+    calculationAt: '2026-08-17T00:00:00Z', closesAt: '2026-08-17T00:15:00Z',
+    modelProbabilityUp: 0.6, confidence: 0.7, askPrice: 0.5, bidPrice: 0.48, spread: 0.02,
+    quantity: 2, stakeCents: 100, feeCents: 2, potentialPayoutCents: 200,
+    payoutCents: 100 + pnlCents, pnlCents,
+  } as PaperOrder);
+
+  const orders = [
+    settled('edge-win', 'edge-binary-buy', 250),
+    settled('edge-legacy', undefined, 50),
+    settled('long-shot-loss', 'long-shot-round-trip', -900),
+  ];
+
+  /**
+   * Filtering by execution mode alone blended the long-shot round trip into the edge policy's published
+   * figures. A blended number describes neither strategy, and this one was public.
+   */
+  it('keeps another strategy out of the edge policy record', () => {
+    const record = buildTradeRecord(orders, 'paper');
+    expect(record.settled).toBe(2);
+    expect(record.realizedPnlCents).toBe(300);
+  });
+
+  it('attributes an unstamped record to the edge policy, as the registry does', () => {
+    expect(buildTradeRecord([settled('edge-legacy', undefined, 50)], 'paper').settled).toBe(1);
+  });
+
+  it('reports the other strategy on its own when asked for it', () => {
+    const record = buildTradeRecord(orders, 'paper', 'long-shot-round-trip');
+    expect(record.settled).toBe(1);
+    expect(record.realizedPnlCents).toBe(-900);
+  });
+
+  it('narrows the per-provider split the same way, so a provider row cannot blend either', () => {
+    const rows = buildProviderTradeRecords(orders, 'paper');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].record.realizedPnlCents).toBe(300);
   });
 });
 
