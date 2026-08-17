@@ -528,7 +528,7 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
     if (!fill) {
       const priceCents = quote.ask * 100;
       const minimumQuantity = readiness.venue === 'kalshi' ? 0.01 : 1;
-      const minimumCents = Math.ceil(minimumQuantity * priceCents - 1e-9) + venueFeeCents(readiness.venue, priceCents, minimumQuantity);
+      const minimumCents = Math.ceil(minimumQuantity * priceCents - 1e-9) + venueFeeCents(readiness.venue, priceCents, minimumQuantity, 'taker');
       rejections.push(`${stakeLimitCents}c all-in cap is short of the ${minimumCents}c conservative reserve needed for ${minimumQuantity.toFixed(2)} ${readiness.venue} contract at ${priceCents.toFixed(1)}c`);
       return [];
     }
@@ -843,7 +843,9 @@ export function applyPaperMakerSimulation(order: PaperOrder, result: PaperMakerS
   }
 
   const purchaseCents = Math.ceil(result.purchaseCents - 1e-9);
-  const feeCents = venueFeeCents(order.venue, result.averagePrice * 100, result.filledCount);
+  // The simulated fill is a managed maker fill, so it settles at the maker schedule and the unused
+  // reserve is returned below — mirroring what live does with the venue's own `average_fee_paid`.
+  const feeCents = venueFeeCents(order.venue, result.averagePrice * 100, result.filledCount, 'maker');
   const accountedStakeCents = purchaseCents + feeCents;
   if (accountedStakeCents > reservedCents) throw new Error(`Simulated paper fill cost ${accountedStakeCents}c exceeded its ${reservedCents}c reservation.`);
   order.status = 'open';
@@ -1082,7 +1084,7 @@ function exitUncertainty(confidence: number): number {
 function applyExitObservation(order: PaperOrder, prediction: Prediction, observedAt: string): ReturnType<typeof evaluateExitPolicy> {
   const quote = venueQuote(prediction, order.venue, order.side);
   if (!quote || quote.bid <= 0 || quote.bid >= 1) return null;
-  const exitFee = venueFeeCents(order.venue, quote.bid * 100, order.quantity);
+  const exitFee = venueFeeCents(order.venue, quote.bid * 100, order.quantity, 'taker');
   const decision = evaluateExitPolicy({
     observedAt, side: order.side, quantity: order.quantity,
     exactCostCents: order.actualStakeCents ?? order.stakeCents,
@@ -1294,7 +1296,7 @@ function bestSwitch(dashboard: DashboardData, status: TradingControlData, ledger
         minimumOppositeSideAdvantage: settings.minimumOppositeSideAdvantage,
       });
       if (!probabilityGate?.allowed) continue;
-      const exitFee = venueFeeCents('kalshi', quote.bid * 100, incumbent.quantity);
+      const exitFee = venueFeeCents('kalshi', quote.bid * 100, incumbent.quantity, 'taker');
       const value = valueSwitch({
         incumbentQuantity: incumbent.quantity, incumbentProbability,
         exitBid: quote.bid, exitFeeCents: exitFee,
@@ -1778,7 +1780,7 @@ async function runLongShotExits(bidFor: OwnedSideBid, ledger: Ledger): Promise<b
       if (decision.action !== 'sell') continue;
 
       if (mode === 'paper') {
-        const feeCents = venueFeeCents('kalshi', decision.limitPriceCents, decision.count);
+        const feeCents = venueFeeCents('kalshi', decision.limitPriceCents, decision.count, 'taker');
         const settlement = targetExitSettlement({
           filledCount: decision.count, averagePriceCents: decision.limitPriceCents, feeCents,
           entryQuantity: order.quantity, entryStakeCents: order.actualStakeCents ?? order.stakeCents,

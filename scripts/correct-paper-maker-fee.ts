@@ -7,9 +7,10 @@
  * unused reserve. Paper recomputes the conservative taker reserve at simulated-fill time and keeps it, so
  * every paper maker fill since the 2026-08-14 mirror alignment has been charged a fee live did not pay.
  *
- * Cause, blast radius, and the code fix are in docs/paper-maker-fee-design.md. **This script does not fix
- * the defect** — it only returns what was already taken. Until the fee model is corrected the charge
- * re-accrues at roughly 5.3c per filled paper entry.
+ * Cause, blast radius, and the fix are in docs/paper-maker-fee-design.md. **The fee model was corrected
+ * on 2026-08-17**: `venueFeeCents` now takes a required liquidity role and a Kalshi maker fill is charged
+ * nothing, so no new phantom fee accrues. This script remains for the historical charge and as the way to
+ * settle any that a future regression reintroduces — a non-zero reading here means the model broke again.
  *
  *   npx jiti scripts/correct-paper-maker-fee.ts            # report only
  *   npx jiti scripts/correct-paper-maker-fee.ts --write    # apply
@@ -123,7 +124,7 @@ async function main(): Promise<void> {
   await writeFile(temporary, JSON.stringify(ledger, null, 2));
   await rename(temporary, LEDGER_FILE);
   console.log('\nApplied and recorded in paperBudget.makerFeeCorrections.');
-  console.log('The defect itself is unfixed; the charge re-accrues until docs/paper-maker-fee-design.md §6 lands.');
+  console.log('The fee model was corrected on 2026-08-17, so this should now find nothing on a re-run.');
 }
 
 main().catch((error) => { console.error(error); process.exitCode = 1; });

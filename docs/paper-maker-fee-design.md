@@ -92,6 +92,11 @@ has no invariant watching it.
 
 ## 6. The fix
 
+> **Implemented 2026-08-17.** `venueFeeCents` takes a required `role`, all seven call sites declare one,
+> and `lib/venue-fill.test.ts` pins both schedules, the 1c taker floor, the rounding direction and a
+> float-representation edge. The historical 694c plus the 12c that accrued before the fix landed have been
+> returned; both correction scripts now report nothing to do.
+
 **Extend `venueFeeCents`, never fork it**, per §1 of the agent rules — fee models live in one function.
 
 ```

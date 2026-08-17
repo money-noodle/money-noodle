@@ -184,7 +184,7 @@ export async function resolveSentinelOutcomes(sentinels: HoldSentinel[], nowMs =
 
 /** Exit fee for a sentinel's round trip, from the production fee model rather than a second copy of it. */
 export function longShotExitFeeCents(sentinel: Pick<HoldSentinel, 'exitMarkCents' | 'quantity'>): number {
-  return venueFeeCents('kalshi', sentinel.exitMarkCents, sentinel.quantity);
+  return venueFeeCents('kalshi', sentinel.exitMarkCents, sentinel.quantity, 'taker');
 }
 
 /**

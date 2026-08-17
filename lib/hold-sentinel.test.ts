@@ -23,7 +23,7 @@ const sentinel = (patch: Partial<HoldSentinel> = {}): HoldSentinel => ({
   ...patch,
 });
 
-const exitFee = (item: HoldSentinel) => venueFeeCents('kalshi', item.exitMarkCents, item.quantity);
+const exitFee = (item: HoldSentinel) => venueFeeCents('kalshi', item.exitMarkCents, item.quantity, 'taker');
 
 describe('hold and round-trip returns on one trigger', () => {
   it('prices holding a loser as the whole stake and a winner as the payout', () => {

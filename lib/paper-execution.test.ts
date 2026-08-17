@@ -37,7 +37,7 @@ describe('paper execution fills', () => {
     expect(plan.stakeCents).toBeLessThanOrEqual(100);
     // One more contract would breach the cap once its actual venue fee is added.
     const nextQuantity = Number((plan.quantity + 0.01).toFixed(2));
-    const nextTotal = Math.ceil(nextQuantity * plan.limitPriceCents) + venueFeeCents('kalshi', plan.limitPriceCents, nextQuantity);
+    const nextTotal = Math.ceil(nextQuantity * plan.limitPriceCents) + venueFeeCents('kalshi', plan.limitPriceCents, nextQuantity, 'taker');
     expect(nextTotal).toBeGreaterThan(100);
   });
 

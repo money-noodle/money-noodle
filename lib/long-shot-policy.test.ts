@@ -21,7 +21,7 @@ const candidate = (overrides: Partial<LongShotEntryInput> = {}): LongShotEntryIn
   dailyNetLossCents: 0, ...overrides,
 });
 
-const kalshiFee = (limitPriceCents: number, quantity: number) => venueFeeCents('kalshi', limitPriceCents, quantity);
+const kalshiFee = (limitPriceCents: number, quantity: number) => venueFeeCents('kalshi', limitPriceCents, quantity, 'taker');
 
 describe('long-shot settings', () => {
   it('defaults to disabled, so deploying the code cannot start trading', () => {

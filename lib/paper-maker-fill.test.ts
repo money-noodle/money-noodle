@@ -140,8 +140,13 @@ describe('independent paper maker manager', () => {
       filledCount: 2, averagePrice: 0.42, purchaseCents: 84, evidenceComplete: true,
       observations: [{ at: '2026-08-15T00:00:12Z', event: 'paper_fill', filledCount: 2 }],
     }, ledger);
-    expect(pending).toMatchObject({ status: 'open', quantity: 2, requestedQuantity: 4, stakeCents: 88, feeCents: 4 });
-    expect(ledger.paperBudget.availableCents).toBe(912);
+    // A managed maker fill pays no Kalshi fee, so the stake is the purchase alone and the whole unused
+    // reserve comes back. Charging the taker schedule here cost paper 4c on this fill and 694c overall
+    // before 2026-08-17, none of which live ever paid. See docs/paper-maker-fee-design.md.
+    expect(pending).toMatchObject({ status: 'open', quantity: 2, requestedQuantity: 4, stakeCents: 84, feeCents: 0 });
+    expect(ledger.paperBudget.availableCents).toBe(916);
+    // The reservation must balance exactly: what went out, minus what the fill cost, comes back.
+    expect(ledger.paperBudget.availableCents).toBe(800 + 200 - pending.stakeCents);
   });
 
   it('excludes a zero-fill attempt whose terminal trade evidence was unavailable', () => {
