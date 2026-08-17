@@ -491,6 +491,10 @@ Replace repository implementations without changing domain/services. Add TTL ind
 - **Data flow:** external adapter → cached raw data → normalized domain data → feature/model service → API → client dashboard.
 - **Freshness:** every API payload includes generation/expiry and per-source status. Stale cached values are labeled. Runtime cadence constants in `lib/freshness.ts` drive both collection behavior and the in-app cadence disclosure to prevent documentation drift.
 
+**Aspirational, not current.** `lib/` is flat; none of the directories below exist. They record an intended
+future decomposition, not a map of the code — for that, see the table in `AGENTS.md` §0. Do not cite this list
+as evidence of where anything lives.
+
 Recommended future service boundaries:
 - `lib/venues/*` — normalized trading-provider registry and Polymarket/Kalshi/Crypto.com/ForecastEx/Robinhood adapters.
 - `lib/market-data/*` — spot, derivatives, historical feeds.

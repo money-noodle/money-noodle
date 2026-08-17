@@ -1,5 +1,5 @@
 // Buy-and-hold versus buy-plus-exit, split by exit policy. Reads the order ledger only; changes nothing.
-// Run: node scripts/analyze-exit-counterfactuals.mjs > reports/exit-counterfactual-analysis-<date>.md
+// Run: npm run analyze:exit-counterfactuals > reports/exit-counterfactual-analysis-<date>.md
 import fs from 'node:fs';
 
 const orders = JSON.parse(fs.readFileSync(`${process.cwd()}/data/paper-orders.json`, 'utf8')).orders;
