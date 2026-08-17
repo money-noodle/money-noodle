@@ -20,7 +20,10 @@ vi.mock('./forecast-tracker', () => ({
   getPerformanceSummary: () => performanceSummary(),
   getForecastHistory: () => forecastHistory(),
 }));
-vi.mock('./paper-execution', () => ({ getExecutionOrders: () => executionOrders() }));
+vi.mock('./paper-execution', () => ({
+  getExecutionOrders: () => executionOrders(),
+  getPaperBankrollFunding: () => ({ fundingId: 'paper-original', fundingSequence: 1, resets: 0, correctionCents: 0 }),
+}));
 vi.mock('./cycle-path-store', () => ({ getCyclePathReport: () => cyclePaths() }));
 vi.mock('./model-evaluation-store', () => ({ getWalkForwardEvaluationHistory: () => walkForward() }));
 vi.mock('./postgres-paper-projection', () => ({
@@ -90,9 +93,22 @@ describe('public paper performance projection', () => {
     expect(projection).not.toHaveProperty('liveRecord');
     expect(projection).not.toHaveProperty('makerFillReport');
     expect(projection).not.toHaveProperty('modelEvaluations');
+    // Funding history is published for paper and never for live: live's fundings describe real money.
+    expect(projection).not.toHaveProperty('liveEpochs');
+    expect(projection).toHaveProperty('paperEpochs');
     expect(projection.paperRecord.mode).toBe('paper');
     // Publishing results must not read the walk-forward store at all, so fitted weights cannot leak.
     expect(walkForward).not.toHaveBeenCalled();
+  });
+
+  it('publishes only paper fundings, and none that name a live epoch', async () => {
+    const projection = await getPublicPaperPerformance();
+    for (const funding of projection.paperEpochs ?? []) {
+      // Live ids are minted as `epoch-N-...`; a paper funding carrying one would mean a paper order was
+      // attributed to a real funding that never paid for it, which is the defect the split identity closes.
+      expect(funding.epochId.startsWith('epoch-')).toBe(false);
+    }
+    expect(JSON.stringify(projection)).not.toContain('legacy-pre-epoch');
   });
 
   it('omits fitted model parameters from the serialized payload', async () => {
@@ -113,6 +129,20 @@ describe('public paper performance projection', () => {
       'confidence', 'correct', 'direction', 'directionalLikelihood', 'id', 'issuedAt',
       'modelVersion', 'outcome', 'policyVersion', 'status', 'symbol',
     ]);
+  });
+
+  it('reports the same money in the funding history as in the published bankroll', async () => {
+    executionOrders.mockResolvedValue([
+      order('paper-edge', 'paper', 250),
+      { ...order('paper-longshot', 'paper', -900), strategyId: 'long-shot-round-trip' } as PaperOrder,
+      order('live-win', 'live', 9_999),
+    ]);
+    const { paperEpochs } = await getPublicPaperPerformance();
+    // Another strategy draws on its own equity, not this bankroll, and live never appears at all. The
+    // history reports what the published bankroll did, so it narrows to the policy that owns it.
+    expect(paperEpochs).toHaveLength(1);
+    expect(paperEpochs![0].budgetPnlCents).toBe(250);
+    expect(paperEpochs![0].settled).toBe(1);
   });
 
   it('scores paper orders only, so a live result can never reach a public reader', async () => {

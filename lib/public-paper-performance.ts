@@ -1,13 +1,15 @@
 import 'server-only';
 
 import { getCyclePathReport } from './cycle-path-store';
+import { epochResults, type EpochResult } from './budget-epoch';
 import { buildProviderTradeRecords, buildTradeRecord } from './execution-report';
 import { getForecastHistory, getPerformanceSummary } from './forecast-tracker';
-import { getExecutionOrders } from './paper-execution';
+import { getExecutionOrders, getPaperBankrollFunding } from './paper-execution';
 import { summarizePerformance } from './performance';
 import { postgresPaperProjectionSyncEnabled, readPublicPaperPerformanceFromPostgres, syncPublicPaperPerformanceToPostgres } from './postgres-paper-projection';
 import { isStatelessDeployment } from './runtime-environment';
-import type { ForecastHistoryRow, PublicPaperPerformance, TrackedForecast } from './types';
+import { EDGE_BINARY_BUY } from './strategy-registry';
+import type { ForecastHistoryRow, PaperOrder, PublicPaperPerformance, TrackedForecast } from './types';
 
 /** Same bound as the signed history tab, so the public list is complete rather than a teaser. */
 const FORECAST_LIMIT = 500;
@@ -44,8 +46,23 @@ function emptyPerformance(generatedAt: string): PublicPaperPerformance {
     summary: { ...summary, recent: [] },
     paperRecord: buildTradeRecord([], 'paper'),
     paperProviderRecords: [],
+    paperEpochs: [],
     forecasts: [],
   };
+}
+
+
+/**
+ * Paper's funding history as the published bankroll actually experienced it.
+ *
+ * Corrections attach to the funding whose counter they adjusted, which is the one current when they were
+ * made — a reset zeroes that counter, so an earlier funding's correction is no longer reflected in it.
+ */
+function publishedPaperFundings(orders: PaperOrder[], funding: { fundingId: string; correctionCents: number }): EpochResult[] {
+  const mine = orders.filter((order) => (order.strategyId ?? EDGE_BINARY_BUY) === EDGE_BINARY_BUY);
+  return epochResults(mine, 'paper', funding.fundingId).map((entry) => entry.current
+    ? { ...entry, budgetPnlCents: entry.budgetPnlCents + funding.correctionCents }
+    : entry);
 }
 
 /**
@@ -60,14 +77,23 @@ export async function getPublicPaperPerformance(): Promise<PublicPaperPerformanc
   if (isStatelessDeployment()) {
     return await readPublicPaperPerformanceFromPostgres() ?? emptyPerformance(generatedAt);
   }
-  const [summary, forecasts, orders, cyclePaths] = await Promise.all([
+  const [summary, forecasts, orders, cyclePaths, paperFunding] = await Promise.all([
     getPerformanceSummary(), getForecastHistory(), getExecutionOrders(), getCyclePathReport(),
+    getPaperBankrollFunding(),
   ]);
   return {
     durable: true, generatedAt,
     summary: { ...summary, recent: summary.recent.map(historyRow) },
     paperRecord: buildTradeRecord(orders, 'paper'),
     paperProviderRecords: buildProviderTradeRecords(orders, 'paper'),
+    // Paper only, by the same rule as every other figure here: live's fundings are real money.
+    //
+    // Narrowed to the edge policy and adjusted by the bankroll's corrections, because this history sits
+    // beside the published budget and must report the same money. `epochResults` is account-wide and
+    // correction-blind, which is right for live — one real balance, shared by strategies — and wrong for
+    // a paper bankroll that is the edge policy's own. Unnarrowed it reads -1,269c against the panel's
+    // -296c: a second strategy's draw plus the returned maker fees.
+    paperEpochs: publishedPaperFundings(orders, paperFunding),
     forecasts: forecasts.filter((forecast) => forecast.qualified !== false).slice(0, FORECAST_LIMIT).map(historyRow),
     cyclePaths,
   };

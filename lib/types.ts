@@ -1,3 +1,5 @@
+import type { EpochResult } from './budget-epoch';
+
 export type Direction = 'bullish' | 'bearish' | 'neutral';
 export type PositionSide = 'UP' | 'DOWN';
 export type Signal = PositionSide | 'WATCH' | 'PASS';
@@ -1786,6 +1788,11 @@ export interface PublicPaperPerformance {
   paperRecord: TradeTrackRecord;
   /** Paper split per provider. The live split is never published. */
   paperProviderRecords: ProviderTradeRecord[];
+  /**
+   * Paper's funding history, one entry per bankroll reset. Paper only — live's fundings describe real
+   * money and are never published.
+   */
+  paperEpochs?: EpochResult[];
   forecasts: ForecastHistoryRow[];
   cyclePaths?: CyclePathReport;
 }

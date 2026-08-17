@@ -36,7 +36,7 @@ describe('hosted projection read', () => {
   it('drops fields an older snapshot still carries after they were withdrawn', async () => {
     const result = await read(stored);
     expect(result).not.toBeNull();
-    expect(Object.keys(result!).sort()).toEqual(['cyclePaths', 'durable', 'forecasts', 'generatedAt', 'paperProviderRecords', 'paperRecord', 'summary']);
+    expect(Object.keys(result!).sort()).toEqual(['cyclePaths', 'durable', 'forecasts', 'generatedAt', 'paperEpochs', 'paperProviderRecords', 'paperRecord', 'summary']);
     const serialized = JSON.stringify(result);
     for (const withdrawn of ['modelEvaluations', 'recommendedParameters', 'basisWeight', 'liveRecord']) {
       expect(serialized).not.toContain(withdrawn);

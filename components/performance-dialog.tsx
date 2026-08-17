@@ -331,6 +331,10 @@ function DegradedStorageNotice({ storage }: { storage: { missingRollups: number;
  * bankroll reset for paper — and closing one restarts its P&L without erasing what it did. The realized
  * column is the whole-cent budget view, which is the one that reconciles with a generation's starting
  * balance; the exact reporting view lives in the track records above and legitimately differs.
+ *
+ * The live half is passed empty on the public view rather than merely absent from the payload: a
+ * surface that publishes real-money fundings only because an endpoint happened not to return them is
+ * one endpoint change away from leaking. The paper half is public by design.
  */
 function FundingHistory({ live, paper }: { live: EpochResult[]; paper: EpochResult[] }) {
   const rows = [...live.map((epoch) => ({ epoch, mode: 'live' as const })), ...paper.map((epoch) => ({ epoch, mode: 'paper' as const }))];
@@ -388,7 +392,7 @@ export function PerformanceDialog({ publicView = false }: { publicView?: boolean
             <p className="mb-3 text-[10px] leading-relaxed text-muted-foreground">{publicView ? 'Executed simulated trades only, taken from the paper order ledger. These include modelled fill prices and venue fees, so they answer what the shadow bankroll did — not how good the forecast looked.' : 'Executed trades only, taken from the order ledger, with paper and live kept completely separate. These include real fill prices and venue fees, so they answer what the money did — not how good the forecast looked.'}</p>
             <div className="space-y-3">
               {data.liveRecord && <div><TradeRecordCard record={data.liveRecord}/><ProviderRecordRows records={data.liveProviderRecords ?? []} label="Live"/></div>}
-              <FundingHistory live={data.liveEpochs ?? []} paper={data.paperEpochs ?? []}/>
+              <FundingHistory live={publicView ? [] : data.liveEpochs ?? []} paper={data.paperEpochs ?? []}/>
               {data.paperRecord && <div><TradeRecordCard record={data.paperRecord}/><ProviderRecordRows records={data.paperProviderRecords ?? []} label="Paper"/></div>}
             </div>
           </TabsContent>

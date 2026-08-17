@@ -2205,13 +2205,19 @@ export function reconcileLiveExecution(options: { trigger?: 'startup' | 'manual'
  * counted so a restored bankroll is never mistaken for an unbroken run.
  */
 /** The bankroll funding currently backing the paper desk, for reports that group history by it. */
-export async function getPaperBankrollFunding(): Promise<{ fundingId: string; fundingSequence: number; startedAt?: string; resets: number }> {
+export async function getPaperBankrollFunding(): Promise<{ fundingId: string; fundingSequence: number; startedAt?: string; resets: number; correctionCents: number }> {
   const budget = (await readLedger()).paperBudget;
+  const since = budget.startedAt;
   return {
     fundingId: budget.fundingId ?? LEGACY_PAPER_BANKROLL_ID,
     fundingSequence: budget.fundingSequence ?? 1,
-    startedAt: budget.startedAt,
+    startedAt: since,
     resets: budget.resets ?? 0,
+    // Scoped exactly as `correctedPaperPnlCents` scopes it, so a history row and the budget panel cannot
+    // report different money for the same funding.
+    correctionCents: (budget.makerFeeCorrections ?? [])
+      .filter((entry) => !since || entry.at >= since)
+      .reduce((sum, entry) => sum + entry.realizedPnlCents, 0),
   };
 }
 
