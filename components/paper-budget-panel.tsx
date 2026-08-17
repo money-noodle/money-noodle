@@ -22,20 +22,44 @@ function PaperExecutionLedger({ records }: { records: PublicPaperExecutionRecord
   return <div className="mt-4 border-t pt-4"><div className="flex items-center justify-between gap-2"><div><h3 className="text-xs font-semibold">Recent paper executions</h3><p className="mt-0.5 text-[9px] text-muted-foreground">Newest 30 simulated intents. Live orders and provider/account identifiers are never shown.</p></div><span className="rounded border px-2 py-1 font-mono text-[8px] text-muted-foreground">{records.length} shown</span></div>{records.length ? <div className="mt-3 max-h-80 overflow-y-auto rounded-lg border"><div className="divide-y">{records.map((record, index) => <div key={`${record.createdAt}:${record.symbol}:${record.side}:${index}`} className="grid gap-2 p-3 sm:grid-cols-[1fr_auto_auto] sm:items-center"><div><div className="flex flex-wrap items-center gap-1.5"><span className="text-xs font-semibold">{record.symbol}</span><span className={cn('rounded border px-1.5 py-0.5 text-[8px]', record.side === 'UP' ? 'text-primary' : 'text-red-400')}>{record.side}</span><span className="rounded border px-1.5 py-0.5 text-[8px] uppercase text-muted-foreground">{record.venue}</span><span className="rounded border px-1.5 py-0.5 text-[8px] text-muted-foreground">{executionLabel(record)}</span></div><p className="mt-1 font-mono text-[8px] text-muted-foreground">{new Date(record.createdAt).toLocaleString()} · ask {(record.askPrice * 100).toFixed(1)}¢{record.liquidityRole ? ` · ${record.liquidityRole}` : ''}</p></div><div className="text-left sm:text-right"><p className="text-[8px] text-muted-foreground">Stake + fee</p><p className="font-mono text-xs">{dollars(record.stakeCents)} <span className="text-[8px] text-muted-foreground">({dollars(record.feeCents)})</span></p></div><div className="text-left sm:text-right"><p className="text-[8px] text-muted-foreground">P&amp;L</p><p className={cn('font-mono text-xs', (record.pnlCents ?? 0) > 0 ? 'text-primary' : (record.pnlCents ?? 0) < 0 ? 'text-red-400' : '')}>{record.pnlCents === undefined ? '—' : dollars(record.pnlCents)}</p></div></div>)}</div></div> : <div className="mt-3 rounded-lg border border-dashed p-5 text-center text-[10px] text-muted-foreground">No paper executions yet.</div>}</div>;
 }
 
+/**
+ * Cash and staked money must account for the whole bankroll, and the change in it must be the realized
+ * P&L: `available + staked = equity`, and `equity - starting = realized P&L`.
+ *
+ * Reported rather than assumed. The second identity does not currently hold — the bankroll counter the
+ * engine increments and the P&L summed from order records disagree by roughly 84c, a difference that
+ * predates the 2026-08-17 maker-fee correction and is not yet explained. Showing the residual is the
+ * point: a published figure that silently absorbs an unexplained difference is worse than one that names
+ * it. Money is never compared with `===`; a half-cent band keeps float dust from reading as a break.
+ */
+function reconciliation(budget: PublicPaperBudget): { residualCents: number; ties: boolean } {
+  const residualCents = budget.equityCents - (budget.startingCents + budget.realizedPnlCents);
+  return { residualCents, ties: Math.abs(residualCents) < 0.5 };
+}
+
 function PaperBudgetSummary({ budget }: { budget: PublicPaperBudget }) {
+  const { residualCents, ties } = reconciliation(budget);
   return <Card className="border-primary/20 bg-card/60 p-4">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="flex items-center gap-3"><div className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary"><FlaskConical className="size-4"/></div><div><h2 className="text-xs font-semibold">Paper budget</h2><p className="mt-0.5 text-[9px] text-muted-foreground">Read-only simulation summary. No real funds, account data, orders, or controls are shown.</p></div></div>
       <div className="flex items-center gap-1.5 text-[9px] text-primary"><LockKeyhole className="size-3.5"/>Read only · paper only</div>
     </div>
     {!budget.durable ? <div className="mt-4 rounded-lg border border-amber-300/25 bg-amber-300/5 p-3 text-[10px] leading-relaxed text-muted-foreground">This hosted dashboard is stateless, so it cannot report the continuously collected local paper ledger. Run the persistent worker for paper tracking, or connect a durable shared store before publishing its results here.</div> : <>
-      <div className="mt-4 grid grid-cols-2 gap-2 border-t pt-3 sm:grid-cols-4">
+      {/* Available and Staked sit next to each other because together they are Equity; a reader should be
+          able to add the two visible numbers and get the third rather than take it on trust. */}
+      <div className="mt-4 grid grid-cols-2 gap-2 border-t pt-3 sm:grid-cols-5">
         <div><p className="text-[8px] uppercase tracking-wider text-muted-foreground">Starting</p><p className="mt-1 font-mono text-sm">{dollars(budget.startingCents)}</p></div>
-        <div><p className="text-[8px] uppercase tracking-wider text-muted-foreground">Equity</p><p className="mt-1 font-mono text-sm">{dollars(budget.equityCents)}</p></div>
         <div><p className="text-[8px] uppercase tracking-wider text-muted-foreground">Available</p><p className="mt-1 font-mono text-sm">{dollars(budget.availableCents)}</p></div>
-        <div><p className="text-[8px] uppercase tracking-wider text-muted-foreground">Realized P&amp;L</p><p className={cn('mt-1 font-mono text-sm', budget.realizedPnlCents > 0 ? 'text-primary' : budget.realizedPnlCents < 0 ? 'text-red-400' : '')}>{dollars(budget.realizedPnlCents)}</p></div>
+        <div><p className="text-[8px] uppercase tracking-wider text-muted-foreground">Staked</p><p className="mt-1 font-mono text-sm">{dollars(budget.reservedCents)}</p><p className="mt-0.5 text-[8px] text-muted-foreground">{budget.openOrders} open</p></div>
+        <div><p className="text-[8px] uppercase tracking-wider text-muted-foreground">Equity</p><p className="mt-1 font-mono text-sm">{dollars(budget.equityCents)}</p><p className="mt-0.5 text-[8px] text-muted-foreground">available + staked</p></div>
+        <div><p className="text-[8px] uppercase tracking-wider text-muted-foreground">Realized P&amp;L</p><p className={cn('mt-1 font-mono text-sm', budget.realizedPnlCents > 0 ? 'text-primary' : budget.realizedPnlCents < 0 ? 'text-red-400' : '')}>{dollars(budget.realizedPnlCents)}</p><p className="mt-0.5 text-[8px] text-muted-foreground">{budget.settledOrders} settled</p></div>
       </div>
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-[9px] text-muted-foreground"><span>{budget.depleted ? 'Paper bankroll depleted' : budget.running ? 'Paper tracking active' : 'Paper tracking idle'} · {budget.openOrders} open simulated position{budget.openOrders === 1 ? '' : 's'} · {budget.settledOrders} settled · {dollars(budget.reservedCents)} reserved{budget.bankrollResets ? ` · ${budget.bankrollResets} bankroll reset${budget.bankrollResets === 1 ? '' : 's'}` : ''}</span><span className="font-mono">Next cap {dollars(budget.proposedStakeCents)}</span></div>
+      {!ties && <div className="mt-2 rounded-lg border border-amber-300/25 bg-amber-300/5 p-2.5">
+        <p className="text-[9px] font-medium text-amber-100">Bankroll and P&amp;L do not reconcile by {dollars(Math.abs(residualCents))}</p>
+        <p className="mt-0.5 text-[8px] leading-relaxed text-muted-foreground">Equity should equal starting plus realized P&amp;L. The bankroll counter and the P&amp;L summed from settled order records disagree, and the difference is shown rather than absorbed into either figure. It predates the maker-fee correction of 2026-08-17 and is not yet explained.</p>
+      </div>}
+      {/* Open, settled and staked now have their own tiles above, so this line carries only what they do not. */}
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-[9px] text-muted-foreground"><span>{budget.depleted ? 'Paper bankroll depleted' : budget.running ? 'Paper tracking active' : 'Paper tracking idle'}{budget.bankrollResets ? ` · ${budget.bankrollResets} bankroll reset${budget.bankrollResets === 1 ? '' : 's'}` : ''}</span><span className="font-mono">Next cap {dollars(budget.proposedStakeCents)}</span></div>
       <p className="mt-2 flex items-center gap-1.5 text-[8px] text-muted-foreground"><WalletCards className="size-3"/>Sign in to manage automation, provider permissions, live settings, or the paper bankroll.</p>
       <PaperExecutionLedger records={budget.recentExecutions}/>
     </>}
