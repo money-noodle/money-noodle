@@ -425,7 +425,11 @@ function LoadingState() {
   return <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{Array.from({ length: 7 }).map((_, index) => <Card key={index}><CardHeader><Skeleton className="h-8 w-28"/></CardHeader><CardContent><Skeleton className="h-10 w-32"/><Skeleton className="mt-6 h-16 w-full"/><Skeleton className="mt-5 h-10 w-full"/></CardContent></Card>)}</div>;
 }
 
-export function Dashboard({ initialData, authenticated }: { initialData: DashboardViewData | null; authenticated: boolean }) {
+/**
+ * `deskAvailable` is not `authenticated`. A signed-in reader on a stateless host has every right to the
+ * desk panel and no worker to serve it, so the two must be asked separately or the panel disappears.
+ */
+export function Dashboard({ initialData, authenticated, deskAvailable }: { initialData: DashboardViewData | null; authenticated: boolean; deskAvailable: boolean }) {
   const [data, setData] = useState(initialData);
   const [error, setError] = useState('');
   const [isPending, startTransition] = useTransition();
@@ -502,7 +506,7 @@ export function Dashboard({ initialData, authenticated }: { initialData: Dashboa
         </div>
       </section>
 
-      {authenticated ? <AutomationStatus/> : <PublicAutomationStatus/>}
+      {deskAvailable ? <AutomationStatus/> : <PublicAutomationStatus deskElsewhere={authenticated}/>}
       {data && <PositiveEdgeBuys predictions={data.predictions} updatedAt={data.generatedAt} publicView={!authenticated} onRefresh={refresh} refreshing={isPending}/>}
       {authenticated
         ? data?.performance && <PerformancePanel performance={data.performance}/>

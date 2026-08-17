@@ -233,15 +233,24 @@ function PublicOpenOrderRow({ record }: { record: PublicPaperExecutionRecord }) 
 }
 
 /**
+ * Said to a reader who is signed in but reading a host that keeps no ledger. Deliberately not the API's
+ * `STATELESS_WORKER_MESSAGE`: that module is server-only, and this is a different sentence — it answers
+ * "where did my desk go", not "why was this request refused".
+ */
+const DESK_ELSEWHERE = 'You are signed in, but this host keeps no ledger, so it has no live track, control state, or order history to show. The desk panel runs on the worker that publishes this record.';
+
+/**
  * Paper counterpart to the signed automation panel. Everything here is simulated: there is no live track
  * to report, no venue arming state, and no controls, so the panel says so rather than leaving a visitor
  * to assume the empty half is a real-money result.
  */
-export function PublicAutomationStatus() {
+export function PublicAutomationStatus({ deskElsewhere = false }: { deskElsewhere?: boolean } = {}) {
   const { budget } = usePublicPaperBudget();
   const { performance } = usePublicPaperPerformance();
 
-  if (!budget) return null;
+  // Never silently absent for a signed-in reader: an empty space is the symptom this panel is here to
+  // fix, and "no projection yet" has to be said rather than shown as nothing.
+  if (!budget) return deskElsewhere ? <section className="mb-6 rounded-xl border bg-card/60 px-4 py-3 text-[10px] text-muted-foreground">{DESK_ELSEWHERE}</section> : null;
   const openStatuses = new Set<PaperOrderStatus>(['pending_reservation', 'uncertain', 'open']);
   const openRecords = budget.recentExecutions.filter((record) => openStatuses.has(record.status));
   // Outcome counts come from the paper track record; without it the W/L cluster is omitted rather than
@@ -272,6 +281,7 @@ export function PublicAutomationStatus() {
     </div>
     <div className="flex flex-col gap-3 p-3">
       <TrackPanel track={track} title="Paper" subtitle="Simulated shadow · always on" equityLabel="Shadow bankroll"/>
+      {deskElsewhere && <p className="px-1 text-[9px] leading-relaxed text-muted-foreground">{DESK_ELSEWHERE}</p>}
       {!budget.durable && <p className="px-1 text-[9px] leading-relaxed text-muted-foreground">This hosted dashboard is stateless, so it cannot report the continuously collected paper ledger. Figures appear once the persistent worker publishes its projection.</p>}
     </div>
     <details className="group border-t">
