@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_FILLABLE_ASK, estimatePaperFill, groupedRecentOrders, venueFeeCents } from './paper-execution';
 import type { PaperOrder } from './types';
-import { MAX_ENTRY_PRICE, MIN_ENTRY_PRICE, MIN_NET_EDGE, venueFeeRate } from './prediction-policy';
+import { MAX_ENTRY_PRICE, MIN_ENTRY_PRICE, MIN_NET_EDGE, venueFeeRate, ENTRY_FEE_ROLE } from './prediction-policy';
 
 const liveAttempt = (patch: Partial<PaperOrder> = {}): PaperOrder => ({
   id: 'live:XRP:close', logicalOrderId: 'live:XRP:close', attemptNumber: 1, executionMode: 'live',
@@ -80,7 +80,7 @@ describe('paper execution fills', () => {
     // The price ceiling is permissive, so edge after fees is what actually binds: even a maximally
     // confident model cannot clear the bar near the top of the range.
     const mostConfident = 0.97;
-    const dearest = mostConfident - MIN_NET_EDGE - venueFeeRate('kalshi', 0.9);
+    const dearest = mostConfident - MIN_NET_EDGE - venueFeeRate('kalshi', 0.9, ENTRY_FEE_ROLE);
     expect(dearest).toBeLessThan(MAX_ENTRY_PRICE);
     expect(dearest).toBeLessThan(0.92);
   });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { bestEntry, hasTradableEdge, MIN_NET_EDGE, qualifiesAsBuyEdge, qualifiesVenueBuyEdge, venueEntryOptions, venueFeeRate } from './prediction-policy';
+import { bestEntry, hasTradableEdge, MIN_NET_EDGE, qualifiesAsBuyEdge, qualifiesVenueBuyEdge, venueEntryOptions, venueFeeRate, ENTRY_FEE_ROLE } from './prediction-policy';
 import type { MarketQuote, VenueQuote } from './types';
 
 const market: MarketQuote = {
@@ -52,8 +52,12 @@ describe('binary buy policy v13', () => {
   });
 
   it('subtracts venue fees before judging the edge', () => {
-    expect(venueFeeRate('kalshi', 0.5)).toBeCloseTo(0.0175, 6);
-    expect(venueFeeRate('polymarket', 0.5)).toBeCloseTo(0.005, 6);
+    expect(venueFeeRate('kalshi', 0.5, 'taker')).toBeCloseTo(0.0175, 6);
+    expect(venueFeeRate('polymarket', 0.5, 'taker')).toBeCloseTo(0.005, 6);
+    // Kalshi charges nothing on a resting fill, which is what production executes as. The gate still
+    // deducts the taker rate; that is tracked as ENTRY_FEE_ROLE, not an oversight here.
+    expect(venueFeeRate('kalshi', 0.5, 'maker')).toBe(0);
+    expect(ENTRY_FEE_ROLE).toBe('taker');
     // Gross edge is exactly at the bar, so fees must push it below.
     const marginal = candidate({ modelProbabilityUp: 0.5 + MIN_NET_EDGE, market: { ...market, askUp: 0.5 } });
     expect(bestEntry(marginal)!.netEdge).toBeLessThan(MIN_NET_EDGE);

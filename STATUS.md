@@ -57,6 +57,39 @@ policy is losing money on both tracks while the gate it enforces is not the reas
   buy-at-the-ask-and-hold — the exact counterfactual this review shows is biased. Hardening §3 below is
   now a prerequisite to promotion rather than parallel work.
 
+### OPEN: the entry gate charges a fee the desk does not pay
+
+**Close when v18's freshness sentinel reports.** Plan and measurements in
+[docs/entry-gate-fee-design.md](docs/entry-gate-fee-design.md).
+
+`venueFeeRate` deducts a Kalshi **taker** fee from every candidate's net edge, and production executes as
+a **maker**, which Kalshi charges nothing for — 497 live maker fills at a mean of 0.000c against 0.682c
+across 5 taker fills. At mid price that is 1.75pp, or 35% of the 5pp `MIN_NET_EDGE`.
+
+Done 2026-08-17, behaviour-neutral:
+
+- The two fee models are consolidated. `lib/venue-fee-schedule.ts` holds the schedule and the
+  maker-is-free fact; `venueFeeCents` (charged whole cents) and `venueFeeRate` (marginal rate) both derive
+  from it. They stay separate accessors because deriving the rate from the cents function would import a
+  1c floor and ceiling rounding into a continuous expected-value test.
+- `venueFeeRate` takes a required role, so all nine call sites declare which schedule they mean. Every one
+  currently passes `ENTRY_FEE_ROLE`, which is `'taker'` — so nothing moved, and the whole correction is
+  one constant.
+- `lib/venue-fill.test.ts` pins the refactor against the pre-refactor formula over 99 prices × 8 sizes ×
+  2 venues. That grid caught a real regression: composing the fee as a fraction and scaling back to cents
+  reintroduced float dust (`0.07 × 0.5 × 0.5 × 400 = 7.000000000000001`) that turned a clean 7c fee into
+  8c until the §1 epsilon was applied.
+
+Not done, and deliberately: flipping `ENTRY_FEE_ROLE` to `'maker'`. Measured over 11,479 admitted rows in
+2,154 windows it moves **1.0% of volume** — 201 rows cross the floor and are admitted, 125 cross the
+`MAX_NET_EDGE` ceiling and are refused, and both marginal cohorts are individually noise. It is a
+correctness fix with no expected improvement in return, and it shifts `edgeStrength` ranking and the
+`netEdge − medianNetEdge` measure that v18's sentinel is currently evaluating. Disturbing a running
+evaluation for that is not worth it.
+
+When the sentinel reports: flip the constant, bump the policy version, add a manifest entry citing the
+design doc, and correct the analysis scripts in the same change — each carries its own copy of the rate.
+
 ### Buy policy v18: the edge-spike freshness gate, shipped 2026-08-17
 
 `buy-binary-edge-net5to35-quality50-owned55-price5to97-fresh2pp-v18` refuses an entry whose net edge sits

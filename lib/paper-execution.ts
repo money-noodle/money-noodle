@@ -70,7 +70,7 @@ import { evaluateLiveRisk } from './live-risk-policy';
 import { liveBlockers, liveTradingEnabled, maxLiveOrdersPerHour, maxLiveStakeCents, placeKalshiBuy, placeKalshiSell, placeKalshiTakerBuy } from './live-orders';
 import { countFilledLiveVenueOrders } from './order-rate-limit';
 import { selectPortfolio, DEFAULT_PORTFOLIO_CONSTRAINTS, parseMaximumOpenPositions, type PortfolioConstraints } from './portfolio-policy';
-import { bestEntry, bestVenueEntry, BUY_POLICY_VERSION, edgeStrength, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, qualifiesAsBuyEdge, qualifiesVenueBuyEdge, sideProbability, venueFeeRate } from './prediction-policy';
+import { bestEntry, bestVenueEntry, BUY_POLICY_VERSION, edgeStrength, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, qualifiesAsBuyEdge, qualifiesVenueBuyEdge, sideProbability, venueFeeRate, ENTRY_FEE_ROLE } from './prediction-policy';
 import { getKalshiReconciliationStatus, serializedReconciliation, setKalshiReconciliationStatus, type KalshiReconciliationStatus } from './reconciliation-state';
 import { getRegimeGateStatus, updateRegimeGate, type RegimeGateStatus, type RegimeSentinelCandidate } from './regime-gate-store';
 import { TWO_SNAPSHOT_PERSISTENCE_CANDIDATE_VERSION, updatePersistenceCandidateStore, type PersistenceCandidateCycle } from './persistence-candidate-store';
@@ -302,7 +302,7 @@ async function persistenceCandidateCycle(dashboard: DashboardData, ledger: Ledge
       closesAt: prediction.kalshi.closesAt, createdAt: observedAt, calculationAt: observedAt,
       selectedSideProbability: sideProbability(prediction, side), confidence: prediction.confidence,
       askPrice: quote.ask, bidPrice: quote.bid, spread: quote.ask - quote.bid,
-      estimatedAskFeeRate: entry.feeRate, estimatedMakerFeeRate: venueFeeRate('kalshi', quote.bid),
+      estimatedAskFeeRate: entry.feeRate, estimatedMakerFeeRate: venueFeeRate('kalshi', quote.bid, ENTRY_FEE_ROLE),
       predictedNetEdge: entry.netEdge, qualifyingSnapshots: candidate.qualifyingSnapshots,
       observationSpanMs: spanMs, productionEligibleAtCandidate: production.eligible,
       ...(production.eligible ? { productionEligibleAt: observedAt, productionDelayMs: 0 } : {}),
@@ -431,8 +431,8 @@ function calendarEvaluationCycle(dashboard: DashboardData, ledger: Ledger): Cale
       probabilityUp: prediction.modelProbabilityUp, confidence: prediction.confidence,
       askUp: prediction.kalshi.askUp, bidUp: prediction.kalshi.bidUp,
       askDown: prediction.kalshi.askDown, bidDown: prediction.kalshi.bidDown,
-      estimatedFeeUp: venueFeeRate('kalshi', prediction.kalshi.askUp),
-      estimatedFeeDown: venueFeeRate('kalshi', prediction.kalshi.askDown),
+      estimatedFeeUp: venueFeeRate('kalshi', prediction.kalshi.askUp, ENTRY_FEE_ROLE),
+      estimatedFeeDown: venueFeeRate('kalshi', prediction.kalshi.askDown, ENTRY_FEE_ROLE),
       qualified: qualifiesAsBuyEdge(prediction), selectedSide: side,
       predictedNetEdge: entry?.netEdge, cycleRegime: prediction.cycleRegime?.regime,
       factors: prediction.factors.map(({ id, score, contribution, available }) => ({ id, score, contribution, available })),
@@ -466,7 +466,7 @@ function calendarEvaluationCycle(dashboard: DashboardData, ledger: Ledger): Cale
       symbol: prediction.symbol, contractId: prediction.kalshi!.ticker, side,
       createdAt: dashboard.generatedAt, selectedSideProbability: sideProbability(prediction, side),
       confidence: prediction.confidence, askPrice: quote.ask, bidPrice: quote.bid,
-      estimatedFeeRate: entry.feeRate, estimatedMakerFeeRate: venueFeeRate('kalshi', quote.bid),
+      estimatedFeeRate: entry.feeRate, estimatedMakerFeeRate: venueFeeRate('kalshi', quote.bid, ENTRY_FEE_ROLE),
       predictedNetEdge: entry.netEdge,
       makerFillProbability: makerEstimate?.probability ?? null, makerFillModel: makerEstimate?.model,
     };

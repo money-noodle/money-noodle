@@ -1,3 +1,4 @@
+import { venueFeeFraction, type LiquidityRole } from './venue-fee-schedule';
 import type { PositionSide, Prediction } from './types';
 
 /**
@@ -56,13 +57,32 @@ export const BUY_POLICY_VERSION = 'buy-binary-edge-net5to35-quality50-owned55-pr
 export const MIN_CALIBRATION_SAMPLE = 100;
 
 /**
- * Conservative fee estimates as a fraction of the $1 settlement payout. Kalshi charges a quadratic
- * per-contract trading fee; Polymarket is treated as a flat proportional cost so the gate cannot be
- * cleared by ignoring execution costs.
+ * Fee as a fraction of the $1 settlement payout, from the shared schedule.
+ *
+ * `role` is required so every caller states which schedule it means, because the gate currently means
+ * the wrong one. See `ENTRY_FEE_ROLE` below.
  */
-export function venueFeeRate(venue: 'polymarket' | 'kalshi', price: number): number {
-  return venue === 'kalshi' ? 0.07 * price * (1 - price) : 0.01 * price;
+export function venueFeeRate(venue: 'polymarket' | 'kalshi', price: number, role: LiquidityRole): number {
+  return venueFeeFraction(venue, price, role);
 }
+
+/**
+ * **Known wrong, deliberately unchanged, tracked in docs/entry-gate-fee-design.md.**
+ *
+ * The gate deducts a taker fee from every candidate's net edge, and production executes as a maker,
+ * which Kalshi charges nothing for. At mid price that is 1.75pp — 35% of the 5pp `MIN_NET_EDGE`.
+ *
+ * It is not corrected here because correcting it changes what the desk trades. Measured over 11,479
+ * admitted rows in 2,154 windows it moves 1.0% of volume: 201 rows cross the floor and are admitted,
+ * 125 cross the `MAX_NET_EDGE` ceiling and are refused, and both marginal cohorts are individually
+ * noise. It also shifts `edgeStrength` ranking and the `netEdge - medianNetEdge` measure that buy policy
+ * v18's freshness sentinel is currently evaluating.
+ *
+ * **Close this when that sentinel reports.** Flipping this constant to `'maker'` is the whole change,
+ * and it needs a policy version bump and a manifest entry stating it as a correctness fix with a
+ * measured 1.0% volume effect, not an expected improvement in return.
+ */
+export const ENTRY_FEE_ROLE: LiquidityRole = 'taker';
 
 export function directionalLikelihood(prediction: Pick<Prediction, 'modelProbabilityUp'>): number {
   return Math.max(prediction.modelProbabilityUp, 1 - prediction.modelProbabilityUp);
@@ -92,7 +112,7 @@ export function venueEntryOptions(prediction: EntryCandidate): VenueEntryOption[
   const options: VenueEntryOption[] = [];
   const consider = (venue: 'polymarket' | 'kalshi', side: PositionSide, price: number | undefined) => {
     if (price === undefined || !(price > 0) || price >= 1) return;
-    const feeRate = venueFeeRate(venue, price);
+    const feeRate = venueFeeRate(venue, price, ENTRY_FEE_ROLE);
     const probability = sideProbability(prediction, side);
     options.push({ venue, side, price, feeRate, probability, netEdge: probability - price - feeRate });
   };

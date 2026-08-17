@@ -50,6 +50,27 @@ describe('kalshi fee schedule', () => {
   });
 });
 
+describe('the schedule refactor charged not one cent differently', () => {
+  /** The single-expression form this derived from, before the schedule was shared with the entry gate. */
+  const before = (venue: 'polymarket' | 'kalshi', limitPriceCents: number, quantity: number) => {
+    const price = limitPriceCents / 100;
+    if (venue === 'kalshi') return Math.max(1, Math.ceil(7 * quantity * price * (1 - price)));
+    return Math.max(1, Math.ceil(quantity * limitPriceCents * 0.01));
+  };
+
+  it('matches the previous formula at every price and size on the taker schedule', () => {
+    // Composing the fee as a fraction and scaling back to cents reintroduces float dust the old form did
+    // not have — 0.07 * 0.5 * 0.5 * 400 is 7.000000000000001 — so this grid is the guard on the epsilon.
+    for (const venue of ['kalshi', 'polymarket'] as const) {
+      for (let priceCents = 1; priceCents <= 99; priceCents += 1) {
+        for (const quantity of [0.01, 0.5, 1, 2, 3.78, 4, 10, 99.99]) {
+          expect(venueFeeCents(venue, priceCents, quantity, 'taker')).toBe(before(venue, priceCents, quantity));
+        }
+      }
+    }
+  });
+});
+
 describe('polymarket fee schedule', () => {
   it('is proportional on both roles, because no maker rebate has been observed there', () => {
     // Deliberately unchanged by role: the zero-maker evidence is a Kalshi observation, and assuming it
