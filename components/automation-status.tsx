@@ -7,6 +7,7 @@ import { TradeHistoryDialog } from '@/components/trade-history-dialog';
 import { Badge } from '@/components/ui/badge';
 import { usePublicPaperBudget, usePublicPaperPerformance } from '@/components/use-public-paper';
 import { DATA_FRESHNESS } from '@/lib/freshness';
+import { fundingOpenedLabel, fundingScopeLine, fundingScopeTitle } from '@/lib/funding-label';
 import type { ExecutionSummary, PaperOrder, PaperOrderStatus, PublicPaperExecutionRecord, TradingControlData } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
@@ -19,7 +20,7 @@ const dollars = (cents: number) => usd.format(cents / 100);
  * instead of reporting 0W 0L beside a non-zero settled count.
  */
 type TrackFigures = Pick<ExecutionSummary, 'mode' | 'running' | 'depleted' | 'realizedPnlCents' | 'equityCents' | 'openOrders' | 'settledOrders'>
-  & Partial<Pick<ExecutionSummary, 'wins' | 'losses' | 'blockedReason' | 'lifetimePnlCents' | 'pnlScope' | 'epochStartedAt'>>;
+  & Partial<Pick<ExecutionSummary, 'wins' | 'losses' | 'blockedReason' | 'lifetimePnlCents' | 'pnlScope' | 'epochStartedAt' | 'fundingFirstOrderAt' | 'bankrollResets'>>;
 
 /**
  * One self-contained panel per execution track. Paper and live are deliberately given separate
@@ -34,6 +35,11 @@ function TrackPanel({ track, title, subtitle, equityLabel }: { track: TrackFigur
   // been re-funded reports the same number twice, which reads as a discrepancy rather than a detail.
   const epochScoped = track?.pnlScope === 'budget-epoch';
   const lifetimePnl = track?.lifetimePnlCents;
+  const funded = fundingOpenedLabel(track?.epochStartedAt);
+  const scopeLine = fundingScopeLine({
+    pnlScope: track?.pnlScope, epochStartedAt: track?.epochStartedAt,
+    fundingFirstOrderAt: track?.fundingFirstOrderAt, bankrollResets: track?.bankrollResets,
+  });
   return <div className={cn('flex-1 rounded-lg border p-3',
     running && isLive ? 'border-red-400/45 bg-red-400/[.06]' : running ? 'border-primary/30 bg-primary/[.04]' : 'border-border bg-background/40')}>
     <div className="flex items-center justify-between gap-2">
@@ -67,6 +73,13 @@ function TrackPanel({ track, title, subtitle, equityLabel }: { track: TrackFigur
       </div>
     </div>
 
+    {/* Dates both figures above, which is the only thing that makes them readable: each counts from the
+        moment its funding opened, not from the start of the track. A track whose record holds no opening
+        timestamp names the span and its first trade instead of guessing a funding date. */}
+    <p className="mt-1.5 text-[9px] leading-relaxed text-muted-foreground" title={fundingScopeTitle({ epochStartedAt: track?.epochStartedAt, fundingFirstOrderAt: track?.fundingFirstOrderAt })}>
+      {scopeLine}
+    </p>
+
     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t pt-2 font-mono text-[9px] text-muted-foreground">
       <span>{track?.openOrders ?? 0} open</span><span>·</span>
       <span>{track?.settledOrders ?? 0} settled</span>
@@ -74,7 +87,7 @@ function TrackPanel({ track, title, subtitle, equityLabel }: { track: TrackFigur
         <span className={cn(track.wins > (track.losses ?? 0) && 'text-primary')}>{track.wins}W</span>
         <span className={cn((track.losses ?? 0) > 0 && 'text-red-400')}>{track.losses ?? 0}L</span></>}
       {epochScoped && lifetimePnl !== undefined && <><span>·</span>
-        <span title={track?.epochStartedAt ? `Across every funding. The headline covers only the budget funded ${new Date(track.epochStartedAt).toLocaleString()}.` : undefined}>
+        <span title={funded ? `Across every funding — unlike the headline, which covers only the current budget. ${funded}.` : 'Across every funding.'}>
           lifetime <span className={cn(lifetimePnl > 0 ? 'text-primary' : lifetimePnl < 0 ? 'text-red-400' : '')}>{dollars(lifetimePnl)}</span>
         </span></>}
     </div>
@@ -239,6 +252,9 @@ export function PublicAutomationStatus() {
     realizedPnlCents: budget.realizedPnlCents, equityCents: budget.equityCents,
     openOrders: budget.openOrders, settledOrders: budget.settledOrders,
     wins: paperRecord?.wins, losses: paperRecord?.losses,
+    // The projection carries the reset count but no funding or first-order timestamp, so the public
+    // panel says how many times the bankroll was reset without dating a funding it cannot see.
+    bankrollResets: budget.bankrollResets,
   };
 
   return <section className="mb-6 overflow-hidden rounded-xl border bg-card/60">

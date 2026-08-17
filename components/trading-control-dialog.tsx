@@ -7,6 +7,7 @@ import { AllocationDialog } from '@/components/allocation-dialog';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Progress } from '@/components/ui/progress';
+import { fundingScopeLine, fundingScopeTitle } from '@/lib/funding-label';
 import type { TradingControlData, TradingProviderDescriptor } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
@@ -171,7 +172,7 @@ export function TradingControlDialog() {
                     {/* Two different quantities, never one. The first is the only one that reconciles:
                         starting + this epoch's P&L is the equity above it. Lifetime spans earlier
                         fundings and deliberately does not tie to anything on this row. */}
-                    <div className="rounded-md bg-secondary/50 p-2.5"><p className="text-[8px] uppercase text-muted-foreground">{track?.pnlScope === 'budget-epoch' ? 'Budget P&L' : 'Realized P&L'}</p><p className={cn('mt-0.5 font-mono text-base', (track?.realizedPnlCents ?? 0) > 0 ? 'text-primary' : (track?.realizedPnlCents ?? 0) < 0 ? 'text-red-400' : '')}>{track ? dollars(track.realizedPnlCents) : '—'}</p><p className="mt-0.5 text-[8px] text-muted-foreground">{track?.pnlScope === 'budget-epoch' ? `funded ${track.epochStartedAt ? new Date(track.epochStartedAt).toLocaleDateString() : 'this budget'}` : 'whole bankroll life'}</p></div>
+                    <div className="rounded-md bg-secondary/50 p-2.5"><p className="text-[8px] uppercase text-muted-foreground">{track?.pnlScope === 'budget-epoch' ? 'Budget P&L' : 'Realized P&L'}</p><p className={cn('mt-0.5 font-mono text-base', (track?.realizedPnlCents ?? 0) > 0 ? 'text-primary' : (track?.realizedPnlCents ?? 0) < 0 ? 'text-red-400' : '')}>{track ? dollars(track.realizedPnlCents) : '—'}</p><p className="mt-0.5 text-[8px] leading-relaxed text-muted-foreground" title={fundingScopeTitle(track ?? {})}>{fundingScopeLine(track ?? {})}</p></div>
                     <div className="rounded-md bg-secondary/50 p-2.5"><p className="text-[8px] uppercase text-muted-foreground">Lifetime P&L</p><p className={cn('mt-0.5 font-mono text-base', (track?.lifetimePnlCents ?? 0) > 0 ? 'text-primary' : (track?.lifetimePnlCents ?? 0) < 0 ? 'text-red-400' : '')}>{track ? dollars(track.lifetimePnlCents) : '—'}</p><p className="mt-0.5 text-[8px] text-muted-foreground">{track?.pnlScope === 'budget-epoch' ? 'across all fundings' : 'same as above'}</p></div>
                   </div>
                   <div className="mt-2 flex items-center justify-between gap-2 border-t pt-2"><span className="text-[9px] text-muted-foreground">{note}</span><span className="shrink-0 text-right"><span className="text-[8px] uppercase text-muted-foreground">Next all-in cap </span><span className={cn('font-mono text-base', isLive ? 'text-red-300' : 'text-primary')}>{track ? dollars(track.proposedStakeCents) : '—'}</span></span></div>

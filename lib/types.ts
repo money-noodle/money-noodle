@@ -1830,8 +1830,20 @@ export interface ExecutionSummary {
   lifetimePnlCents: number;
   /** What `realizedPnlCents` covers, so the two figures can never be read as the same quantity. */
   pnlScope: 'budget-epoch' | 'lifetime';
-  /** When the funding epoch behind `realizedPnlCents` opened; absent when the scope is lifetime. */
+  /**
+   * When the funding behind `realizedPnlCents` opened, so the figure and the equity beside it can be
+   * read against the moment they count from. Absent when the record holds no opening timestamp — as
+   * paper's original bankroll does not — and never inferred, because a guessed date misattributes
+   * every figure shown with it. Present independently of `pnlScope`: paper's P&L counts from its
+   * bankroll funding while still spanning that bankroll's whole life.
+   */
   epochStartedAt?: string;
+  /**
+   * Earliest order covered by `realizedPnlCents`, scoped the same way it is. The only anchor available
+   * for a funding that predates stamping — paper's original bankroll — and reported as a first trade,
+   * never as a funding moment: the record does not contain when that bankroll was opened.
+   */
+  fundingFirstOrderAt?: string;
   equityCents: number;
   recentOrders: PaperOrder[];
 }

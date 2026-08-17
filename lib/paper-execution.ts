@@ -2340,6 +2340,13 @@ export function summarize(orders: PaperOrder[], mode: ExecutionMode, running: bo
   /** Every strategy on this track. Only the money figures that mirror an account-wide counter use it. */
   const accountWide = orders.filter((order) => order.executionMode === mode && isSettled(order));
   const openOrders = mine.filter((order) => order.status === 'open' || order.status === 'pending_reservation' || order.status === 'uncertain').length;
+  // Scoped exactly as the headline P&L is scoped, per track: paper by the bankroll funding backing the
+  // desk, live by the current budget epoch. An anchor drawn from a wider cohort would date the figures
+  // beside it to a funding that never paid for them.
+  const funded = mode === 'paper'
+    ? currentFundingOrders(mine, budget)
+    : mine.filter((order) => !scope.epochId || order.budgetEpochId === scope.epochId);
+  const fundingFirstOrderAt = funded.map((order) => order.createdAt).filter(Boolean).sort()[0];
   return {
     mode, running,
     depleted: equityCents <= 0 && openOrders === 0,
@@ -2347,7 +2354,10 @@ export function summarize(orders: PaperOrder[], mode: ExecutionMode, running: bo
     availableCents: figures.availableCents,
     reservedCents: figures.reservedCents,
     proposedStakeCents: figures.proposedStakeCents,
-    bankrollResets: budget?.resets,
+    // A bankroll that has never been reset reports 0, not silence: the panel distinguishes "the counter
+    // has never moved" from "this track has no reset counter", which is live's case — its budget is
+    // re-funded through the control. Normalized exactly as `getPaperBankrollFunding` normalizes it.
+    bankrollResets: budget ? budget.resets ?? 0 : undefined,
     openOrders,
     settledOrders: settled.length,
     wins: mine.filter((order) => order.status === 'won').length,
@@ -2373,6 +2383,12 @@ export function summarize(orders: PaperOrder[], mode: ExecutionMode, running: bo
       : accountWide.reduce((sum, order) => sum + (order.pnlCents ?? 0), 0),
     pnlScope: scope.epochId ? 'budget-epoch' : 'lifetime',
     ...(scope.startedAt ? { epochStartedAt: scope.startedAt } : {}),
+    /**
+     * The earliest order the figures above cover. Paper's original bankroll predates funding stamping and
+     * holds no opening timestamp, so this is the only anchor it has; it is reported as a first trade and
+     * never as a funding moment, which is a different fact the record simply does not contain.
+     */
+    ...(fundingFirstOrderAt ? { fundingFirstOrderAt } : {}),
     equityCents,
     recentOrders: groupedRecentOrders(mine).slice(0, 30),
   };
@@ -2454,7 +2470,10 @@ export async function getExecutionSummaries(control: { state: string; mode: stri
     paper: summarize(ledger.orders, 'paper', paperAvailable > 0, paperAvailable + openPaper, {
       startingCents: ledger.paperBudget.startingCents, availableCents: paperAvailable,
       reservedCents: openPaper, proposedStakeCents: paperStake,
-    }, ledger.paperBudget),
+      // Dated, but not epoch-scoped. `correctedPaperPnlCents` already counts from the bankroll funding, so
+      // the opening moment belongs on the panel; passing an `epochId` as well would relabel the scope and
+      // publish a lifetime figure identical to the headline, which reads as a discrepancy.
+    }, ledger.paperBudget, EDGE_BINARY_BUY, { startedAt: ledger.paperBudget.startedAt }),
     live: {
       ...summarize(ledger.orders, 'live', control.state === 'active' && control.mode === 'live' && liveTradingEnabled(), control.workingEquityCents, {
         startingCents: control.startingBudgetCents,
