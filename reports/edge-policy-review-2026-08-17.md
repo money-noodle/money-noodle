@@ -254,6 +254,34 @@ the cycle, and §3 says the largest edge is disproportionately the freshly-spike
 Sample sizes remain thin everywhere it matters: 110 live and 117 paper settled entries under v17, 207
 position paths, 3 days. Every figure here should be re-read against a week.
 
+## Correction, 2026-08-17: paper's P&L figures are distorted by a phantom fee
+
+**Every paper P&L figure in this report is overstated as a loss, and every comparison drawn between the
+two tracks' P&L is contaminated.** The win-rate findings are not — §2's fill selection and §3's edge spike
+never touch fees, and both stand exactly as written.
+
+Paper is charged a taker fee on maker fills that live does not pay. Across every live fill, grouped by
+the liquidity role Kalshi itself reported, maker fills (497 of them) carry a mean fee of 0.000c and taker
+fills (5) carry 0.682c. Live reads the real fee from the venue and releases the unused reserve; paper
+recomputes the conservative taker reserve and keeps it.
+
+Under v17 paper paid 635c of entry fees across 119 settled entries — 4.04% of stake — against live's 0c:
+
+| | as this report states it | like-for-like with live |
+| --- | --- | --- |
+| paper, all settled v17 entries | −1,299c on 15,729c = −8.26% | **−664c = −4.22%** |
+| paper, the 76 decisions live also filled | −5.56% | **−1.39%**, against live's −2.98% |
+
+So the summary's "paper is −1,458c on 15,550c (−9.4%)" should be read as roughly **−4.2%**, and the claim
+that paper does worse than live inverts on the shared subset. The §3 realized-cents table's paper row is
+inflated the same way; its live row and every win rate are unaffected.
+
+This is not merely a reporting artefact — the reserved fee shrinks paper's position sizing and feeds
+`evaluateExitPolicy` through both cost basis and assumed exit fee, so paper has been making different sell
+decisions. Cause, blast radius and the fix are in
+[docs/paper-maker-fee-design.md](../docs/paper-maker-fee-design.md). No figure above has been edited; this
+correction is additive, per the rule that a superseded measurement is never deleted.
+
 ## Addendum, 2026-08-17: what was actually done
 
 Recorded here rather than by editing §6, because the decision differed from the recommendation and the
