@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_EDGE_SPIKE } from './edge-spike-policy';
-import { advanceSignalPersistence, evaluateSignalPersistence, evaluateSignalPersistenceIgnoringSpike, evaluateSignalPersistenceWithRequirements, type SignalPersistenceState } from './signal-persistence';
+import {
+  advanceSignalPersistence, evaluateSignalPersistence, evaluateSignalPersistenceIgnoringSpike,
+  evaluateSignalPersistenceWithRequirements, REQUIRED_OBSERVATION_SPAN_MS, REQUIRED_QUALIFYING_SNAPSHOTS,
+  type SignalPersistenceState,
+} from './signal-persistence';
 
 const close = '2026-01-01T00:15:00.000Z';
 const time = (seconds: number) => new Date(Date.parse(close) - 900_000 + seconds * 1000).toISOString();
@@ -71,7 +75,7 @@ describe('execution signal persistence', () => {
     let state: SignalPersistenceState | undefined;
     for (const seconds of [90, 105]) state = advance(state, seconds);
     expect(evaluateSignalPersistenceWithRequirements(state, Date.parse(time(105)), 0.05, 0.5, {
-      requiredSnapshots: 2, requiredSpanMs: 15_000, maximumEdgeSpike: MAX_EDGE_SPIKE,
+      requiredSnapshots: 2, requiredSpanMs: 15_000, maximumEdgeSpike: MAX_EDGE_SPIKE, spikeGateEnabled: true,
     }).eligible).toBe(true);
     expect(evaluateSignalPersistence(state, Date.parse(time(105)), 0.05, 0.5).eligible).toBe(false);
   });
@@ -83,10 +87,29 @@ describe('execution signal persistence', () => {
     state = advance(state, 60, true, 0.08);
     state = advance(state, 75, true, 0.08);
     state = advance(state, 90, true, 0.14);
-    const result = evaluateSignalPersistence(state, Date.parse(time(90)), 0.05, 0.5);
+    // Evaluated with the gate explicitly armed. Production disarmed it at v19 by operator decision, so
+    // the wrapper no longer refuses — the gate's *logic* is still live and still has to be right, because
+    // MONEY_NOODLE_EDGE_SPIKE_GATE re-arms it without a version bump.
+    const result = evaluateSignalPersistenceWithRequirements(state, Date.parse(time(90)), 0.05, 0.5, {
+      requiredSnapshots: REQUIRED_QUALIFYING_SNAPSHOTS, requiredSpanMs: REQUIRED_OBSERVATION_SPAN_MS,
+      maximumEdgeSpike: MAX_EDGE_SPIKE, spikeGateEnabled: true,
+    });
     expect(result.eligible).toBe(false);
     expect(result.edgeSpike).toBeCloseTo(0.06, 10);
     expect(result.reason).toContain('freshness ceiling');
+  });
+
+  it('does not refuse a spike in production, because v19 disarmed the gate', () => {
+    // The same state as above. What changed at v19 is only whether the ceiling may refuse; the spike is
+    // still measured and still reported, which is what keeps edge-spike-sentinel-v1 answering the
+    // question. If this ever starts refusing again without a manifest entry, something re-armed silently.
+    let state: SignalPersistenceState | undefined;
+    state = advance(state, 60, true, 0.08);
+    state = advance(state, 75, true, 0.08);
+    state = advance(state, 90, true, 0.14);
+    const result = evaluateSignalPersistence(state, Date.parse(time(90)), 0.05, 0.5);
+    expect(result.eligible).toBe(true);
+    expect(result.edgeSpike).toBeCloseTo(0.06, 10);
   });
 
   it('admits an edge that is merely high, so long as it is not fresh', () => {
@@ -114,7 +137,10 @@ describe('execution signal persistence', () => {
     state = advance(state, 60, true, 0.08);
     state = advance(state, 75, true, 0.08);
     state = advance(state, 90, true, 0.14);
-    const gated = evaluateSignalPersistence(state, Date.parse(time(90)), 0.05, 0.5);
+    const gated = evaluateSignalPersistenceWithRequirements(state, Date.parse(time(90)), 0.05, 0.5, {
+      requiredSnapshots: REQUIRED_QUALIFYING_SNAPSHOTS, requiredSpanMs: REQUIRED_OBSERVATION_SPAN_MS,
+      maximumEdgeSpike: MAX_EDGE_SPIKE, spikeGateEnabled: true,
+    });
     const ungated = evaluateSignalPersistenceIgnoringSpike(state, Date.parse(time(90)), 0.05, 0.5);
     expect(gated.eligible).toBe(false);
     expect(ungated.eligible).toBe(true);

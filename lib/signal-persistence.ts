@@ -1,4 +1,4 @@
-import { edgeSpike, maximumEdgeSpike, spikeAdmits } from './edge-spike-policy';
+import { edgeSpike, edgeSpikeGateEnabled, maximumEdgeSpike, spikeAdmits } from './edge-spike-policy';
 import { observationBucket } from './observation-window';
 import type { PositionSide } from './types';
 
@@ -45,6 +45,15 @@ export interface SignalPersistenceRequirements {
    * directly states what it is holding fixed instead of silently inheriting a production gate.
    */
   maximumEdgeSpike: number;
+  /**
+   * Whether the spike ceiling may refuse an entry at all.
+   *
+   * A separate field from the ceiling because the two answer different questions: the ceiling is where the
+   * gate sits, this is whether it is armed. Declared here rather than read from the environment inside the
+   * evaluator so this function stays pure and a caller states what it is holding fixed — the first version
+   * of the v19 disarm read `process.env` inside the evaluator and made the rule untestable from a fixture.
+   */
+  spikeGateEnabled: boolean;
 }
 
 /**
@@ -57,6 +66,7 @@ export function productionSignalPersistence(): SignalPersistenceRequirements {
     requiredSnapshots: REQUIRED_QUALIFYING_SNAPSHOTS,
     requiredSpanMs: REQUIRED_OBSERVATION_SPAN_MS,
     maximumEdgeSpike: maximumEdgeSpike(),
+    spikeGateEnabled: edgeSpikeGateEnabled(),
   };
 }
 
@@ -123,7 +133,9 @@ export function evaluateSignalPersistenceWithRequirements(
   if (medianNetEdge === null || medianNetEdge < minimumNetEdge) return { ...base, eligible: false, reason: `Median edge ${((medianNetEdge ?? 0) * 100).toFixed(1)}pp is below ${(minimumNetEdge * 100).toFixed(0)}pp.` };
   // Last, so every cheaper check reports its own reason first and the spike arm is not polluted by
   // decisions that would have been refused anyway. See docs/edge-spike-sentinel-design.md §3.
-  if (!spikeAdmits(spike, requirements.maximumEdgeSpike)) return {
+  // The spike is always measured and always reported, so the sentinel keeps recording whether or not the
+  // gate is armed. Only the refusal is conditional.
+  if (requirements.spikeGateEnabled && !spikeAdmits(spike, requirements.maximumEdgeSpike)) return {
     ...base, eligible: false,
     reason: `Edge ${((spike ?? 0) * 100).toFixed(1)}pp above its persistence median exceeds the ${(requirements.maximumEdgeSpike * 100).toFixed(1)}pp freshness ceiling.`,
   };

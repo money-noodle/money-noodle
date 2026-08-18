@@ -20,7 +20,25 @@
  * Pure and I/O free.
  */
 
-export const EDGE_SPIKE_POLICY_VERSION = 'edge-spike-fresh-2pp-v1';
+export const EDGE_SPIKE_POLICY_VERSION = 'edge-spike-observed-not-gating-v2';
+
+/**
+ * Whether the spike gate may refuse an entry.
+ *
+ * **Off since v19 (2026-08-18), by operator decision.** The spike is still computed and still recorded on
+ * every decision by `edge-spike-sentinel-v1`, because that sentinel is the only prospective evidence that
+ * can ever settle whether the effect is real — turning the gate off must not also turn off the measurement
+ * that would justify turning it back on.
+ *
+ * The evidence at the time of the decision pointed the other way and is recorded rather than suppressed:
+ * over 52 graded sentinels the gate refused 7, and the refused decisions returned −24.4% against −7.2%
+ * for those it admitted (+17.2pp in the gate's favour, t=0.43). That is directionally supportive and far
+ * from conclusive, and v18's book was not measurably worse than v17's (t=−1.36 paper, −0.41 live).
+ * Set MONEY_NOODLE_EDGE_SPIKE_GATE=true to re-arm it without another version bump.
+ */
+export function edgeSpikeGateEnabled(environment: NodeJS.ProcessEnv = process.env): boolean {
+  return environment.MONEY_NOODLE_EDGE_SPIKE_GATE === 'true';
+}
 
 /**
  * Maximum admissible gap between the firing edge and its persistence median.

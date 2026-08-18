@@ -38,9 +38,34 @@ const component = (
  */
 const history: PolicyManifestHistoryEntry[] = [
   {
+    version: 'buy-binary-edge-net5to35-quality50-owned55-price5to97-v19',
+    activatedAt: '2026-08-18T22:00:00.000Z',
+    status: 'active',
+    summary: 'Disarmed the edge-spike refusal by operator decision, against the direction of its own sentinel. The spike is still measured on every decision.',
+    changes: [
+      'The spike gate no longer refuses an entry; `edgeSpikeGateEnabled` is off unless MONEY_NOODLE_EDGE_SPIKE_GATE=true',
+      'edge-spike-sentinel-v1 keeps recording the spike on every decision, admitted or refused, so the question stays answerable',
+      'No other rule changes: edge bounds, quality floor, side floor, price bounds and persistence are v17/v18 unchanged',
+      'Known cost accepted again: a version bump discards the accumulated adaptive-regime windows and re-warms',
+    ],
+    // Recorded plainly because the evidence did not ask for this. Over 52 graded sentinels the gate
+    // refused 7, and those refusals returned -24.4% against -7.2% for admitted decisions — +17.2pp in the
+    // gate's favour at t=0.43, directionally supportive and far from conclusive. v18's book was not
+    // measurably worse than v17's (t=-1.36 paper, -0.41 live, n=37/44 over two days), so "v18 is
+    // underperforming" is not established either. This is an operator decision taken with that stated,
+    // and it is reversible through the environment variable without a further bump. The sentinel is
+    // deliberately left running so re-arming can be justified by evidence rather than re-argued.
+    evidence: [
+      'reports/fill-selection-robustness-2026-08-18.md · the v17 diagnosis is unstable across specifications',
+      'reports/edge-magnitude-2026-08-18.md · three reversals in one session; surviving effects at t=1.5-1.7',
+      'data/edge-spike-sentinels.json · 52 graded decisions, 7 refused, admitted minus refused +17.2pp (t=0.43)',
+    ],
+  },
+  {
     version: 'buy-binary-edge-net5to35-quality50-owned55-price5to97-fresh2pp-v18',
     activatedAt: '2026-08-17T08:00:00.000Z',
-    status: 'active',
+    deactivatedAt: '2026-08-18T22:00:00.000Z',
+    status: 'superseded',
     summary: 'Refused entries whose edge had just spiked above its own persistence median — made on an asymmetry, not on evidence clearing a bar.',
     changes: [
       'An entry is refused when its net edge sits 2pp or more above the median of its qualifying snapshots',

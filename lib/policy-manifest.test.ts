@@ -10,7 +10,7 @@ import type { ModelPromotionEntry, TradingProviderConfiguration, WalkForwardPara
 
 const parameters: WalkForwardParameters = {
   temperature: 1, basisWeight: 0.55, volatilityScale: 1, slowTiltScale: 0.8,
-  probabilityCap: 0.03, minimumEdge: 0.05, minimumQuality: 0.5,
+  probabilityCap: 0.03, minimumEdge: 0.05, maximumEdge: 0.35, minimumSelectedProbability: 0.55, minimumQuality: 0.5,
 };
 const promotion = (id: string, at: string, modelVersion: string, action: ModelPromotionEntry['action'] = 'promoted'): ModelPromotionEntry =>
   ({ id, at, action, modelVersion, parameters, reason: `${action} ${modelVersion}` });

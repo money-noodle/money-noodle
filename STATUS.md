@@ -52,10 +52,132 @@ policy is losing money on both tracks while the gate it enforces is not the reas
   `medianNetEdge` that `signalEligibility` already stamps win 34.0% against 58.7%, deduplicated to 228
   unique `(symbol, window, side)` decisions and clustered by window. It holds within every edge band and
   on 6 of 6 assets. It is retroactive screening on a threshold chosen after the fact and promotes nothing.
-- The walk-forward evaluator cannot referee any of this: `WalkForwardParameters` has no maximum-edge or
-  selected-side-floor dimension, so its baseline is not the production gate, and `selectedTrade` scores
-  buy-at-the-ask-and-hold — the exact counterfactual this review shows is biased. Hardening §3 below is
-  now a prerequisite to promotion rather than parallel work.
+- The walk-forward evaluator could not referee any of this. **Two of the three defects are fixed as of
+  2026-08-18:**
+  - `WalkForwardParameters` now carries `maximumEdge` and `minimumSelectedProbability`, defaulted to the
+    production constants and held fixed across the candidate sweep, so the baseline **is** the gate the
+    desk runs. Sweeping a gate bound would let the search rediscover a policy by fitting it; that belongs
+    in the manifest, not a candidate set.
+  - `selectedTrade` now scores **per dollar committed** rather than per contract. The desk sizes by stake,
+    so a win at cost 0.45 returns 1.22 per dollar against 0.55 per contract. Per-contract scoring
+    systematically misweights across price levels — the exact axis on which return per dollar rises with
+    edge while win rate falls. `profitPerContract` is retained beside it so earlier runs stay comparable.
+    **Every historical `meanWindowReturn` was produced in the old unit** and promotion-ledger entries
+    predating this are not restated.
+  - A structural property surfaced while testing: the 0.55 side floor and the 0.35 edge ceiling together
+    make any cost at or below 0.20 unreachable, since `cost > sideProbability − 0.35 ≥ 0.20`.
+  - **Still open:** `selectedTrade` scores buy-at-the-ask-and-hold, which the decomposition shows is
+    neither what the desk earns nor a clean bound — fill selection costs −19pp and the exits are worth
+    +14.6pp. An execution arm is the remaining piece.
+  - The suite did not catch the scoring-unit change: none of its seven assertions touched
+    `meanWindowReturn`. Six tests now pin both gates and the unit.
+
+### High edge is the best band — and the diagnosis is unstable, 2026-08-18
+
+[reports/edge-magnitude-2026-08-18.md](reports/edge-magnitude-2026-08-18.md). Measured on the **admitted**
+population rather than the desk's filled orders, return per $1 *rises* steeply with edge — 5–10pp earns
++11.6%, 25–35pp earns **+44.0% ±11.5**, positive on 8 of 9 days — even though the win rate falls from
+62.7% to 51.9%. **Win rate is the wrong statistic across price levels.** Ranking *filled* orders by edge
+shows the top quintile at 28.1%, which reads as calibration failure and is a selection artifact of
+execution. **Do not lower the max-edge ceiling**; that band is the most profitable thing the gate admits.
+
+Fill selection is not uniform: the gap widens from −6.4pp at 5–10pp edge to −17.3pp at 25–40pp, and
+high-edge orders fill *more* often (63–65%). The rows worth most are the ones execution damages most. No
+cell is individually significant; the monotone shape is what carries it.
+
+**Three reversals in one session**, each from a control that should have been applied first: fill selection
+−25pp → −19pp conditional; window selection −16pp → −0.1pp; high edge miscalibrated → most profitable.
+Surviving effects sit at t=1.5–1.7. Per AGENTS §6 the instability is itself the result, and **no execution
+or gate change is authorized on this evidence.**
+
+**The binding constraint is refereeing, not measurement.** Every open question ends at "needs prospective
+evidence," and the walk-forward evaluator cannot supply it — see §3 below.
+
+### v19 — the edge-spike gate is disarmed, 2026-08-18, by operator decision
+
+`buy-binary-edge-net5to35-quality50-owned55-price5to97-v19`, manifest entry in `lib/policy-manifest.ts`.
+The spike ceiling no longer refuses an entry. **The spike is still computed and still recorded on every
+decision** by `edge-spike-sentinel-v1`, because that sentinel is the only prospective evidence that could
+ever justify re-arming it — turning the gate off must not turn off the measurement.
+
+**Recorded plainly: the evidence did not ask for this.** Over 52 graded sentinels the gate refused 7, and
+those refusals returned −24.4% against −7.2% for admitted decisions — +17.2pp in the gate's favour at
+t=0.43, directionally supportive and far from conclusive. v18's book was *not* measurably worse than v17's
+(t=−1.36 paper, −0.41 live, n=37/44 over two days), so "v18 is underperforming" is not established either.
+This is an operator decision taken with that stated. It is reversible through
+`MONEY_NOODLE_EDGE_SPIKE_GATE=true` without a further version bump, and the bump's known cost — discarding
+the accumulated adaptive-regime windows and re-warming — was accepted again.
+
+A design defect was fixed in passing: the first version read `process.env` inside `evaluateSignalPersistence`,
+which made the rule untestable from a fixture. `spikeGateEnabled` is now a declared field on
+`SignalPersistenceRequirements` beside `maximumEdgeSpike`, so a caller states what it holds fixed. Tests
+pin both the armed logic and that production is disarmed.
+
+### Where the loss comes from — decomposed 2026-08-18
+
+Full chain in [reports/loss-decomposition-2026-08-18.md](reports/loss-decomposition-2026-08-18.md);
+`npm run analyze:loss-decomposition`. Each stage is conditional on the last, so the deltas sum to the gap
+between what the gate is worth and what the desk realizes. **It changes the diagnosis.**
+
+| stage | live | Δ |
+|---|---|---|
+| every admitted row, at ask, held | +14.4% | |
+| in windows the desk was active for | +14.3% | **−0.1%** |
+| contracts it actually ordered | −1.4% | **−15.7%** |
+| the ones that filled | −20.8% | **−19.4%** |
+| repriced at the maker fill | −17.5% | **+3.4%** |
+| with the exits it took = realized | −2.9% | **+14.6%** |
+
+- **Window selection costs nothing** (−0.1pp). The earlier "+16.2pp for passed-over contracts" was
+  contract selection, not window selection.
+- **Contract selection is a real and previously unseparated leak**: −15.7pp live, −11.8pp paper.
+- **Fill selection is half its reputation**: −19.4pp conditional against −44.5pp standalone. Every prior
+  reading of this policy used the inflated figure, which double-counts contract selection.
+- **The maker discount helps** (+3.4pp), confirming that switching to taking would forfeit it.
+- **The exit rule is the desk's strongest component** (+14.6pp live, +17.8pp paper). Execution is not
+  uniformly the problem — one part of it is carrying the rest.
+
+Two leaks of comparable size remain, both inside windows the desk was right to trade. A fix aimed only at
+fills addresses at most half.
+
+### Fill selection, stress-tested 2026-08-18 — real, stable, and conflated with window selection
+
+Full checks in [reports/fill-selection-robustness-2026-08-18.md](reports/fill-selection-robustness-2026-08-18.md).
+The −25pp fill-selection figure survives every robustness test except the decisive one:
+
+- **Not the price effect.** Mean limit prices differ by 1.6¢; pricing both arms at their own limit and
+  holding to settlement, the gap is −48.7pp (t=−3.23) live, −51.1pp (t=−3.77) paper.
+- **Not a method artifact.** Free permutation of fill labels: p=0.0004 live, p<0.0001 paper.
+- **Stable across all four days** of the cohort, with no drift toward zero, and negative in 26 of 26
+  sub-cohorts (8/8 days, 12/12 asset-tracks, 6/6 price bands).
+- **But the within-window permutation — which holds window quality fixed — is p=0.064 on live**, where
+  only **21 of 140 windows** contain both a filled and an unfilled order. Paper reaches p=0.002.
+
+So there are **two overlapping leaks**: the desk orders in worse windows (+16.2pp live, +21.3pp paper for
+passed-over contracts) *and* fills the worse orders within them. Which dominates is unresolved on live, and
+it decides the fix. The effect is also concentrated — DOGE/ETH/HYPE carry it on live while BNB/SOL/BTC
+show almost nothing. **No execution change is authorized until the decomposition below is measured.**
+
+### Taking the ask instead of resting — measured 2026-08-18, not supported
+
+Full measurement in [reports/take-the-ask-2026-08-18.md](reports/take-the-ask-2026-08-18.md); reproduce
+with `npm run analyze:take-the-ask`. It was proposed as the response to the v17 fill-selection leak and
+**the data contradicts the proposal.**
+
+With the proper control — the same maker fills held to settlement rather than exited — the three effects
+separate on the 206 live and 225 paper decisions of the v17 cohort:
+
+- **The maker discount is worth keeping**: repricing the same fills at the issuance ask with the taker fee
+  costs **−15.7pp live and −9.2pp paper**. Buying ~4¢ under the ask at zero fee is genuinely valuable.
+- **The standalone exits help**, adding +4.3pp live and +13.0pp paper. They are not the problem.
+- **The missed fills are the leak**, worth +2,869c live and +4,642c paper — the decisions the resting order
+  never filled, which win about 25pp more than the ones it did.
+
+**Taking the ask does not improve the rate of return** (−1.0% ±8.1 live, +1.8% ±7.8 paper, indistinguishable
+from as-traded and from zero); its apparent cash advantage comes entirely from deploying about twice the
+capital, which the 2,000c budget cannot do. It also does not replicate on v18, where it is worse on both
+tracks. The problem is not maker versus taker: **the maker fills the losers and misses the winners.** A
+selective rule — crossing only where the signal is worth 4¢ — is untested and is where this points.
 
 ### OPEN: the entry gate charges a fee the desk does not pay
 
@@ -207,8 +329,9 @@ Two follow-ups remain, neither of which is residency:
 ### 2. Build the Long-Shot Round-Trip Policy
 
 Started 2026-08-14. A second production policy on `crypto-15m`, running beside the edge policy: buy a side
-whose executable Kalshi ask reaches 10¢ within the first three minutes, sell through a resting reduce-only
-GTC limit at 90¢. Design, arithmetic, and the screening behind every parameter are in
+whose executable Kalshi ask reaches 10¢ with at least ten minutes left on the clock, sell through a
+one-second poll submitting a reduce-only IOC at 90¢. Design, arithmetic, and the screening behind every
+parameter are in
 [docs/long-shot-policy-design.md](/Users/raiphairow/code/money/docs/long-shot-policy-design.md);
 SPEC §12.10 and the 2026-08-14 decision-log entries carry the decisions.
 
@@ -220,9 +343,10 @@ can answer.
 
 What the screening does and does not support is recorded honestly. Buy-and-hold on this trigger has no edge:
 20.2% ± 3.7pp over 119 candidates against a 22.2% break-even, so the cheap side wins about exactly what it
-costs. The round-trip exit is **unmeasured** — path sampling is provably blind there, observing winners
-reach 90¢ in 68.4% of cases where the true figure must be 100% — and that is the reason to collect rather
-than a reason to believe.
+costs. The round-trip exit is **unmeasured**, and that is the reason to collect rather than a reason to
+believe. (The "68.4% where the true figure must be 100%" reading of that blindness is **withdrawn** as of
+2026-08-17: winners need not pass through 90¢, because these contracts settle on a close-price comparison.
+See design §14b.)
 
 Delivery order:
 
@@ -255,7 +379,7 @@ Delivery order:
    through the edge policy's selection, persistence, maker-retry, portfolio-ranking and regime-gate path
    would change behaviour the mirror invariant depends on. Exits run before entries so a position that
    reaches its mark frees its slot for a same-cycle re-entry.
-10. ~~Two-second exit poll.~~ **Done.** Quotes are fetched outside the write queue and only the ledger
+10. ~~One-second exit poll.~~ **Done.** `TARGET_EXIT_POLL_MS`. Quotes are fetched outside the write queue and only the ledger
     mutation is queued, per the 2026-08-14 decision that upstream waits must not sit inside the queue they
     serve. A tick never queues behind itself, so a slow venue produces fewer polls rather than a backlog.
 
@@ -267,10 +391,19 @@ drain, and the shared hourly filled-order ceiling.
 Funded at 30% of the Kalshi `crypto-15m` cap: 600¢, a 20¢ ticket, halting below 300¢. `npm run fund:long-shot`
 reports and re-applies it, refusing unless automation is paused with nothing reserved or open.
 
-Current state: the paper lane is live and the live lane is blocked by ordinary controls (`state: paused`,
-`mode: paper`) rather than by any breaker — the edge policy's loss gate is clear at 0¢ current-epoch
-drawdown and +225.85¢ lifetime. Contract paths are accumulating across all seven assets. No trigger has
-fired yet, which matches the ~4/day the screening measured.
+Current state, read 2026-08-18: the paper lane is live and **the long-shot live lane is blocked by its own
+per-strategy arming flag** — `liveEnabled` is false because `MONEY_NOODLE_LONG_SHOT_LIVE_ENABLED` is unset.
+It is *not* blocked by the desk controls, which are `state: active`, `mode: live`: the desk is armed for
+the edge policy. Distinguishing the two is the whole point of the separate flag, and conflating them is
+what placed three unintended live long-shot orders on 2026-08-15. No breaker is involved either way — the
+edge policy's loss gate is clear. Contract paths are accumulating across all seven assets.
+
+**Cohort as of 2026-08-17: 25 resolved paper attempts under `long-shot-round-trip-buy10-sell90-win600-v1`,
+of which 1 sold at the mark** — against the 60 `LONG_SHOT_REVIEW_ATTEMPTS` requires before a first review.
+Accumulating at roughly 12/day, so the bar is about three days out. The three `sold` rows in the earlier
+`buy40` cohort were strict-value exits, not round trips: `observeAndExecuteStandaloneExits` is now scoped
+to `EDGE_BINARY_BUY` precisely because it closed long-shot positions at 48–76¢ on 2026-08-15. Do not read
+them as the exit working.
 
 Live findings so far, in the order they were measured:
 
@@ -288,11 +421,144 @@ Live findings so far, in the order they were measured:
   0.48 and 0.72, and the flatness rather than the best cell is the finding. See
   [docs/long-shot-policy-design.md](/Users/raiphairow/code/money/docs/long-shot-policy-design.md) §14a and
   `npm run analyze:long-shot-marks`.
+- **No buy→sell *gap* is priced loosely enough to pay either**, measured 2026-08-17 over 1,506 windows
+  spanning 62 hours. Banding the entry (so a 40→60 row describes buying at 40, which a cumulative ≤40¢
+  cohort does not) and grading misses at their real settlement, 131 populated cells span 0.43–0.82. The
+  touch rate tracks break-even at ~0.6–0.8× of it everywhere: narrow gaps are achieved more often in
+  almost exact proportion to paying less. See §14b and `npm run analyze:long-shot-gaps`.
+- **Selling earlier trades return for the appearance of success.** Dropping the exit from 90¢ to 20¢ raises
+  the sold-at-mark rate from 8.2% to 26.5% by selling all five winners in the cohort at ~2× rather than
+  letting them settle at ~10×, in exchange for rescuing 8 of 44 losers. Paired on identical triggers, every
+  exit earlier than 90¢ is negative; only 95¢ (+0.044) and never selling (+0.088) are positive, both
+  t=1.76 among 17 comparisons. **Sold-at-mark rate is not a proxy for return, and moves against it here.**
+- **The coverage correction is withdrawn, and with it the last cell above break-even.** Both §14a's
+  1.36× and its successor rested on "every winner passed through 90¢ on its way to 100¢". **That is false
+  here**: these contracts settle on a close-price comparison, and over 1,033 resolved windows the winning
+  side was still bid **below 90¢ in 10.0% of cases**, below 10¢ in 0.8%. The like-for-like replacement —
+  dense 1s paths decimated to 15s — implies 1.00–1.25× where entry detection is stable and swings wildly
+  at ≤10¢, so **no correction is applied**. Uncorrected, **not one of the 131 grid cells clears 1.00**;
+  the best reaches 0.82. This also removes the structural argument in design §3.3 that selling early beats
+  holding — about a tenth of winners are reachable only by holding, which is the direction the paired
+  never-sell comparison already pointed.
+- **No entry filter screens out bad candidates.** Thirty entry-time filters measured 2026-08-17 on the
+  wide ≤30¢ cohort (n=429) and re-checked in the production band. Closed off as unsupported: **the
+  forecast model as a veto** (it prices the side at or above the ask on 100% of production-band
+  candidates — there is no disagreement to trade on, so the entry rule ignoring the forecast per design §2
+  costs nothing), **spread filtering** (98% of candidates sit inside 4¢), and **asset exclusion** (no
+  asset is 1.6 SE from the cohort mean; §13 stays empty). The stall filter measures a 1.04 lift here
+  against the 0.9%-vs-2.6% reading §7 records — a disagreement, reported rather than smoothed. See
+  [reports/long-shot-filter-screen-2026-08-17.md](/Users/raiphairow/code/money/reports/long-shot-filter-screen-2026-08-17.md)
+  and `npm run analyze:long-shot-filters`.
+- **The one signal that separates candidates does not select any.** Three separately-derived measures —
+  fell <10¢ from the window high, local volatility <0.1%, volatility ratio <1 — move together and all say
+  *the side that got cheap without a big move is the better bet*, which is the opposite of the intuition
+  that a long shot needs a large move. It **keeps 1 of 49 candidates at ≤10¢**: sides reach 10¢ *by*
+  collapsing, restating §7. The subset surviving the confound check is stronger (n=16, ratio 1.27, return
+  +0.834 ± 0.391) but its mean entry is **28.8¢** — a different strategy, not a filter on this one, and
+  n=16 after thirty tests is a hypothesis rather than a result.
 
-Current stance: **stop tuning, keep collecting.** Every touch rate measured so far is a floor taken at
-fifteen-second sampling, and closing the best ratio needs 1.39× more touches against a measured coverage
-shortfall of 1.36×. The one-second polling now running removes that bias; re-run the sweep against paths
-recorded under it before concluding anything. The paper lane costs nothing while that accumulates.
+Current stance: **stop tuning, keep collecting.** Nothing measured authorizes a parameter change. The live
+10¢→90¢ configuration sits in the best corner of the grid (0.77, with 95¢ at 0.82, n=48) and **no cell in
+the grid clears 1.00**. The direction the data leans is later exits, not earlier ones, and never-selling
+leads both — at t=1.76 on the best of many comparisons, a question rather than a result, but one the §3.3
+correction now makes more plausible rather than less.
+
+**Revisit trigger.** Re-run `npm run analyze:long-shot-gaps` and `npm run analyze:long-shot-filters` when
+either arrives, and record the result here whichever way it falls:
+
+1. **60 resolved attempts at one policy version** (`LONG_SHOT_REVIEW_ATTEMPTS`), which is the first review
+   the design permits. About three days out at the current rate.
+2. **Dense path coverage above a few hundred windows.** Only 45 of 1,506 windows currently carry the 1s
+   sampling added 2026-08-16, which is why the fifteen-second blindness can only be bounded at 1.00–1.25×
+   and not pinned. This is a smaller gap than the withdrawn correction implied, so it is no longer
+   plausible that it lifts the best cell from 0.82 above 1.00 — it is worth closing to retire the caveat,
+   not because a result is expected to change.
+
+**A proposed volatility-trading strategy was measured and does not work as described** (2026-08-18,
+[reports/maker-fill-adverse-selection-2026-08-18.md](/Users/raiphairow/code/money/reports/maker-fill-adverse-selection-2026-08-18.md),
+`npm run analyze:maker-fills`). Entering on an intra-cycle direction change far from the 50¢ open is a
+**coin flip**: eighteen configurations on the unbiased fifteen-second data, 1,200–2,000 signals each, all
+between 48.3% and 50.5% with every interval covering 50%. And the taking economics are prohibitive — a
+round trip at 70¢ needs an **8.14¢ move** at the current ticket and never less than ~4¢ at any size,
+because most of the cost is proportional. Fees peak at 50¢, so trading near the middle is worst.
+
+What survives is **execution, not prediction**: Kalshi charges nothing on a resting fill, so posting
+collects the spread rather than paying it. Resting buys show **no detectable adverse drift** — every
+horizon indistinguishable from zero across 15,000–17,000 fills over 1,611 windows, against an
+unconditional control at zero. That is *no evidence of* adverse selection rather than evidence of none:
+the mechanism is queue position, and a fifteen-second sample cannot distinguish a one-tick touch from a
+sweep. Settling it needs depth recorded at the posted price over time, which the contract-path recorder
+does not carry although the venue exposes it. **Nothing here authorizes a market-making strategy.**
+
+**A bounded maker-fill experiment is running** (design §17, started 2026-08-18). It records order-book
+depth and executed trade prints for the live `crypto-15m` contracts every 60 seconds, so a resting order
+can be scored on whether volume actually traded **through** its price rather than on whether the quote
+merely touched it — the distinction `analyze:maker-fills` cannot make and the one that decides whether
+patient execution survives here. `npm run experiment:maker-depth`, bounded by 48 hours, a 45,000-request
+cap, and a stop on repeated venue refusals, whichever binds first. It is a standalone script and is
+deliberately **not** wired into `processCycle`: an instrument that is not on the execution path cannot
+delay, gate, size, price, or trade. Both endpoints are public and unauthenticated. `data/maker-depth-experiment.jsonl`,
+about 0.6 MB a day, retained 14 days as an instrument rather than a track record.
+
+The fill rule it enables lives in `lib/maker-depth-experiment.ts`: a post fills once traded volume at or
+through its price exceeds the size displayed ahead of it, with the size ahead **fixed at posting** so a
+cancellation cannot fill an order and only executions advance the queue. It still cannot see private FIFO
+rank or hidden size, so `displayedAhead` remains a stated proxy. **Nothing here authorizes a market-making
+strategy.**
+
+**The swing-trading premise is measured and closed** (2026-08-18,
+[reports/swing-trading-2026-08-18.md](/Users/raiphairow/code/money/reports/swing-trading-2026-08-18.md),
+`npm run analyze:swing-exit`). The swing is **real** — the owned-side bid reaches entry +2¢ in 64–81% of
+positions — and selling into it loses to simply holding in every band and target size, by about 0.15 per $1
+over 2,835 positions. A high hit rate with a capped gain and an uncapped loss is the shape.
+
+Two further results from the same file:
+
+- **Trajectory is a real signal, and smaller than the cost of taking it.** Trend efficiency (`slope ÷
+  range`, already computed as `cycleRegime.trendEfficiency`) shows monotone mean reversion worth 2–3¢
+  between extreme quintiles, and it **survives** measurement on a single consistent price series — bid-only
+  t=3.52, ask-only t=2.64 — so it is not merely bid-ask bounce, though the spread's own reversion is
+  enormous (t=20.65) and accounts for roughly 1.5¢ of the 3.3¢ mid effect. Traded as a taker it still loses
+  (−1.4 to −2.1¢ gross before fees), because **the spread is widest exactly when trend efficiency is
+  extreme**: a ~2¢ signal cannot cover a ~3.5¢ entry. An earlier reading here called it pure bid-ask bounce
+  and is withdrawn. Any trajectory feature must be reported in traded form beside observed form.
+- **A stop helps substantially and does not rescue it**, cutting the loss from −0.20 to −0.07 per $1. This
+  **corrects §15b**, where stops appeared to hurt: that reading used the lowest bid of the whole window
+  with no ordering and so fired the stop on positions that had already hit their target. Note the
+  structural tilt it exposes — at a symmetric ±3¢ the stop fires 66% against the target's 30%, because
+  entry pays the ask and is marked against the bid, putting the stop about a spread closer.
+
+**Fine path recording is live** (design §18, 2026-08-18). Every eligible contract is now recorded at
+**two seconds** rather than fifteen, using quotes `longShotEntryTick` already fetches for the entry
+decision — **no additional venue requests**. Before this, fine sampling began only once a side fell below
+the entry mark, at roughly 9¢/91¢: across 57 such windows, **zero** had the 20–80¢ range inside the fine
+region, so every trajectory measurement in this repo was made at a resolution that hides ~37% of price
+movement and conceals a 2¢-or-larger swing in 8.7% of intervals. Compaction thins windows older than
+`CONTRACT_PATH_FINE_RETENTION_DAYS` back to the coarse grid, so the resolution is not a permanent ~130 MB
+liability.
+
+A standalone two-second poller was tried first and **withdrawn within a minute**: it rate-limited the live
+desk inside thirty seconds on the endpoint it was polling. Kalshi's budget is per account and the repo's
+limiter is per process, so a second process duplicating the desk's reads competes with it. Recorded here
+because the instinct to add a separate collector will recur.
+
+The one open hypothesis is the **quiet-market signal** above. If it is worth testing it needs a committed
+sentinel arm at a higher entry band, written at decision time and followed to settlement — not a filter
+bolted onto a policy whose candidates it does not select, and not a retroactive re-screen (§5.5). That is a
+design decision, not a parameter, and is unstarted.
+
+**Operator-defined analysis bands are implemented** (design §15a). The dashboard's long-shot dialog now
+carries a band editor: each band is one hypothesis — buy inside an entry range, sell at an exit — measured
+against every recorded window, with touch rate, break-even, ratio, and clustered return per $1. Saving
+starts no backfill, because the stored candidate summaries carry no band, entry mark, or entry window:
+`lib/long-shot-candidate.ts` keeps the first occurrence of each distinct ask with the peak bid reachable
+after it, so any band is a lookup. Measured on the current data, backfill of 1,590 paths takes 69ms and a
+band evaluates in single-digit milliseconds.
+
+Two guards are structural rather than procedural, because this is a retroactive-screening surface and
+AGENTS §5.5 says screening may filter an idea and may never promote one: no module that can price, size,
+gate, or trade may import the band store (`lib/analysis-bands.test.ts` asserts it), and the number of
+configurations ever evaluated is displayed as the multiple-comparison denominator.
 
 Remaining: the report surface, and the durable stores' retention policy once the journal starts growing.
 
@@ -338,6 +604,12 @@ Remaining work:
 - Measure independent-paper/live agreement and disagreements against the separately stored matched-live overlay; never substitute the selected live fill for the independent paper result.
 - Recalibrate maker fill probability only after enough prospective fills and no-fills exist under `paper-managed-maker-trade-queue-v2`.
 - Keep production `maker` execution unless maker/taker shadow results pass strict held-out gates. The review surface now clusters taker shadows by settlement window, compares them with the same intents' actual maker execution, and separates the active buy-policy cohort from historical policy mixtures; the prior unclustered +24.7% headline was not deployment-grade evidence.
+- **The concrete gate for flipping to `adaptive`, measured 2026-08-18: the shadow's taker-flagged orders must show a materially worse maker outcome than its maker-flagged ones. They do not.** Over 618 orders carrying an `entryExecutionDecision` (74 flagged taker, all executed as maker), the fill-selection gap is −11.2pp on taker-flagged against −13.1pp on maker-flagged, with identical fill rates (51% against 50%). The recommendation shows **no discriminating power on the thing that decides it** — the gap is slightly smaller where it says taker, which is the wrong way round. Re-grade when the flagged count roughly doubles; `MIN_TAKER_MAKER_SAMPLES=30` means the per-cohort recommendation is itself running on small samples. Until that reverses, flipping `adaptive` would be acting on a signal with no demonstrated skill.
+- A wholesale switch to taking is separately measured and **not supported**: see
+  [reports/take-the-ask-2026-08-18.md](reports/take-the-ask-2026-08-18.md). The maker discount is worth
+  +3.4pp live and +1.5pp paper, and taking everything changes the *rate* not at all — its apparent cash
+  gain comes from deploying about twice the capital, which the budget cannot do. The selective per-order
+  rule above is the only version of this question still open.
 
 Forbidden for now: depth-aware sizing, more retries, taker promotion, stale maker-to-taker fallback, or queue-aware live gates.
 
