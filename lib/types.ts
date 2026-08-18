@@ -788,6 +788,23 @@ export interface WalkForwardParameters {
   slowTiltScale: number;
   probabilityCap: number;
   minimumEdge: number;
+  /**
+   * Upper bound on net edge, mirroring `maximumNetEdge()` in the production gate.
+   *
+   * Absent until 2026-08-18, which meant the evaluator's baseline was **not the gate the desk runs**: it
+   * admitted candidates production rejects as implausible, so a candidate parameter set was compared
+   * against a policy that has never traded. Defaulted to the production constant so the existing baseline
+   * reproduces exactly.
+   */
+  maximumEdge: number;
+  /**
+   * Floor on the selected side's own probability, mirroring `MIN_SELECTED_PROBABILITY`.
+   *
+   * Also absent until 2026-08-18, and load-bearing: v13 restored this floor after prospective v12
+   * monitoring found that acquired 52.5–55% sides lost. An evaluator that cannot express it cannot
+   * re-derive that decision or defend it.
+   */
+  minimumSelectedProbability: number;
   minimumQuality: number;
 }
 

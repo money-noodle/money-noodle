@@ -11,7 +11,7 @@ import type { WalkForwardEvaluationRun, WalkForwardParameters } from './types';
 
 const parameters: WalkForwardParameters = {
   temperature: 1, basisWeight: 0.65, volatilityScale: 0.8, slowTiltScale: 1,
-  probabilityCap: 0.03, minimumEdge: 0.05, minimumQuality: 0.5,
+  probabilityCap: 0.03, minimumEdge: 0.05, maximumEdge: 0.35, minimumSelectedProbability: 0.55, minimumQuality: 0.5,
 };
 
 const run = (over: Partial<WalkForwardEvaluationRun> = {}): WalkForwardEvaluationRun => ({

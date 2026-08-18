@@ -1,4 +1,5 @@
 import { calibrationReplayForForecast, replayCalibrationProbability } from './calibration-replay';
+import { MAX_NET_EDGE, MIN_SELECTED_SIDE_PROBABILITY } from './prediction-policy';
 import type { CalibrationReplaySnapshot, TrackedForecast, WalkForwardEvaluationRun, WalkForwardParameters, WalkForwardScore } from './types';
 
 export const WALK_FORWARD_POLICY_VERSION = 'expanding-window-v2-replay';
@@ -36,6 +37,10 @@ export const PRODUCTION_BASELINE_PARAMETERS: WalkForwardParameters = {
   slowTiltScale: 1,
   probabilityCap: 0.03,
   minimumEdge: 0.05,
+  // Both mirror the production gate; see the field comments in `WalkForwardParameters`. Defaulting to the
+  // production constants is what makes this a baseline rather than a differently-shaped policy.
+  maximumEdge: MAX_NET_EDGE,
+  minimumSelectedProbability: MIN_SELECTED_SIDE_PROBABILITY,
   minimumQuality: 0.5,
 };
 
@@ -46,11 +51,21 @@ const slowTiltScales = [0.5, 1, 1.5];
 const probabilityCaps = [0.03, 0.05];
 const minimumEdges = [0.05, 0.08];
 const minimumQualities = [0.5, 0.6];
+/**
+ * The two production bounds are held at their live values across the sweep rather than tuned.
+ *
+ * They are here so the baseline *is* the production gate; sweeping them as well would multiply an already
+ * large grid and turn a bounded parameter search into one that can rediscover a gate by fitting it. A
+ * deliberate change to either belongs in the policy manifest, not in a candidate set.
+ */
 export const WALK_FORWARD_CANDIDATES: WalkForwardParameters[] = temperatures.flatMap((temperature) =>
   basisWeights.flatMap((basisWeight) => volatilityScales.flatMap((volatilityScale) =>
     slowTiltScales.flatMap((slowTiltScale) => probabilityCaps.flatMap((probabilityCap) =>
       minimumEdges.flatMap((minimumEdge) => minimumQualities.map((minimumQuality) => ({
-        temperature, basisWeight, volatilityScale, slowTiltScale, probabilityCap, minimumEdge, minimumQuality,
+        temperature, basisWeight, volatilityScale, slowTiltScale, probabilityCap, minimumEdge,
+        maximumEdge: PRODUCTION_BASELINE_PARAMETERS.maximumEdge,
+        minimumSelectedProbability: PRODUCTION_BASELINE_PARAMETERS.minimumSelectedProbability,
+        minimumQuality,
       }))))))));
 
 const clampProbability = (value: number) => Math.min(0.999999, Math.max(0.000001, value));
@@ -92,7 +107,7 @@ export function buildWalkForwardDataset(forecasts: TrackedForecast[]): Evaluatio
     .sort((a, b) => Date.parse(a.closesAt) - Date.parse(b.closesAt));
 }
 
-interface SelectedTrade { result: number }
+interface SelectedTrade { result: number; profitPerContract: number }
 
 function selectedTrade(window: EvaluationWindow, parameters: WalkForwardParameters): SelectedTrade | null {
   const candidates = window.rows.flatMap((row) => {
@@ -104,7 +119,18 @@ function selectedTrade(window: EvaluationWindow, parameters: WalkForwardParamete
     const cost = row.entryAsk + row.entryFeeRate;
     const sideProbability = row.entrySide === 'UP' ? probability : 1 - probability;
     const edge = sideProbability - cost;
-    return edge >= parameters.minimumEdge ? [{ edge, result: (row.outcome === row.entrySide ? 1 : 0) - cost }] : [];
+    // Both bounds mirror the production gate. Without them the evaluator admitted candidates the desk
+    // rejects, so its baseline described a policy that has never traded.
+    if (sideProbability < parameters.minimumSelectedProbability) return [];
+    if (edge < parameters.minimumEdge || edge >= parameters.maximumEdge) return [];
+    const profitPerContract = (row.outcome === row.entrySide ? 1 : 0) - cost;
+    // **Per dollar committed, not per contract.** The desk sizes by stake, so a win at cost 0.20 returns
+    // 4.00 per dollar while the same win at 0.80 returns 0.25 — the per-contract figures are 0.80 and
+    // 0.20 and rank the two almost equally. Scoring per contract systematically misweights across price
+    // levels, which is the exact axis on which return per dollar rises with edge while win rate falls
+    // (reports/edge-magnitude-2026-08-18.md). `profitPerContract` is retained beside it so runs scored
+    // under the old unit stay comparable rather than being silently restated.
+    return [{ edge, result: profitPerContract / cost, profitPerContract }];
   });
   // Select only the largest apparent edge in each correlated window. This makes the winner's curse
   // part of the out-of-sample result rather than treating all selected assets as independent wins.

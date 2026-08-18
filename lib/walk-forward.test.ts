@@ -87,3 +87,72 @@ describe('walk-forward evaluation', () => {
     expect(() => runWalkForwardEvaluation(dataset, 100)).toThrow(/requires 100 resolved windows/);
   });
 });
+
+/**
+ * The evaluator's baseline must be the gate the desk actually runs, and it must score the unit the desk
+ * actually sizes in. Both were wrong until 2026-08-18, and the existing suite did not notice: none of its
+ * assertions touched `meanWindowReturn`, so changing the scoring unit outright left every test green.
+ * See reports/edge-magnitude-2026-08-18.md.
+ */
+describe('the evaluator baseline is the production gate', () => {
+  const admitted = (patch: Partial<TrackedForecast>, parameters = PRODUCTION_BASELINE_PARAMETERS) =>
+    scoreWalkForward(buildWalkForwardDataset([forecast(0, patch)]), parameters).trades;
+
+  it('refuses an edge at or above the maximum, as maximumNetEdge() does', () => {
+    // probabilityUp 0.99 against a 0.20 ask is a ~78pp edge: implausible, and production rejects it.
+    expect(admitted({ probabilityUp: 0.99, entryAsk: 0.2, entrySide: 'UP' })).toBe(0);
+    // Relaxing only that bound admits it, proving the ceiling is what refused it.
+    expect(admitted({ probabilityUp: 0.99, entryAsk: 0.2, entrySide: 'UP' },
+      { ...PRODUCTION_BASELINE_PARAMETERS, maximumEdge: 1 })).toBe(1);
+  });
+
+  it('refuses a selected side below the probability floor, as MIN_SELECTED_SIDE_PROBABILITY does', () => {
+    // A 54% side clears the edge test against a cheap ask but not the floor v13 restored.
+    expect(admitted({ probabilityUp: 0.54, entryAsk: 0.4, entrySide: 'UP', entryFeeRate: 0 })).toBe(0);
+    expect(admitted({ probabilityUp: 0.54, entryAsk: 0.4, entrySide: 'UP', entryFeeRate: 0 },
+      { ...PRODUCTION_BASELINE_PARAMETERS, minimumSelectedProbability: 0.5 })).toBe(1);
+  });
+
+  it('keeps both bounds fixed across the candidate sweep rather than tuning them', () => {
+    // Sweeping a gate bound would let the search rediscover a policy by fitting it; that belongs in the
+    // manifest, not in a candidate set.
+    expect(new Set(WALK_FORWARD_CANDIDATES.map((c) => c.maximumEdge)).size).toBe(1);
+    expect(new Set(WALK_FORWARD_CANDIDATES.map((c) => c.minimumSelectedProbability)).size).toBe(1);
+  });
+});
+
+describe('scoring is per dollar committed', () => {
+  /**
+   * The defect this pins: `(won ? 1 : 0) - cost` is profit per contract, but the desk sizes by stake. A
+   * win at cost 0.20 returns 4.00 per dollar and 0.80 per contract; at cost 0.80 it returns 0.25 and 0.20.
+   * Per contract the two rank almost together, per dollar they differ sixteenfold — and that is the axis
+   * on which return per dollar rises with edge while win rate falls.
+   */
+  /**
+   * Prices are chosen inside what the gate can actually admit. The 0.55 side floor and the 0.35 edge
+   * ceiling together make any cost at or below 0.20 unreachable — `cost > sideProbability - 0.35 >= 0.20`
+   * — so a "cheap" fixture has to mean cheap *within the admissible band*, not cheap in the abstract.
+   */
+  const scoreOne = (probabilityUp: number, entryAsk: number, outcome: 'UP' | 'DOWN') =>
+    scoreWalkForward(buildWalkForwardDataset([
+      forecast(0, { probabilityUp, entryAsk, entryFeeRate: 0, outcome, direction: 'UP', entrySide: 'UP' }),
+    ]), PRODUCTION_BASELINE_PARAMETERS).meanWindowReturn;
+
+  it('scores a cheaper win above a dearer one at the same edge', () => {
+    // Both carry a 10pp edge. cost 0.45 -> (1 - 0.45)/0.45 = 1.222 ; cost 0.60 -> 0.667.
+    expect(scoreOne(0.55, 0.45, 'UP')).toBeCloseTo(0.55 / 0.45, 6);
+    expect(scoreOne(0.70, 0.60, 'UP')).toBeCloseTo(0.40 / 0.60, 6);
+  });
+
+  it('scores any loss as the whole stake, whatever it cost', () => {
+    expect(scoreOne(0.55, 0.45, 'DOWN')).toBeCloseTo(-1, 6);
+    expect(scoreOne(0.70, 0.60, 'DOWN')).toBeCloseTo(-1, 6);
+  });
+
+  it('is not the per-contract figure it replaced', () => {
+    // Per contract both wins score 0.55 and 0.40; per dollar they are 1.222 and 0.667. Guards the
+    // regression directly rather than only asserting the new value.
+    expect(scoreOne(0.55, 0.45, 'UP')).not.toBeCloseTo(0.55, 6);
+    expect(scoreOne(0.70, 0.60, 'UP')).not.toBeCloseTo(0.40, 6);
+  });
+});
