@@ -4,9 +4,9 @@ import { createReadStream } from 'node:fs';
 import readline from 'node:readline';
 import path from 'node:path';
 import {
-  CONTRACT_PATH_DENSE_BUCKET_MS, CONTRACT_PATH_VERSION, decodeContractPath, emptyContractPath,
-  encodeContractPath, observeContractPath, summarizeContractPath,
-  type ContractPathRecord, type ContractPathRollup,
+  CONTRACT_PATH_DENSE_BUCKET_MS, CONTRACT_PATH_FINE_RETENTION_DAYS, CONTRACT_PATH_VERSION,
+  decodeContractPath, emptyContractPath, encodeContractPath, observeContractPath, summarizeContractPath,
+  thinToCoarseGrid, type ContractPathRecord, type ContractPathRollup,
 } from './contract-path';
 import type { Prediction } from './types';
 
@@ -92,9 +92,11 @@ async function compactJournalIfLarge(nowMs = Date.now()): Promise<void> {
   if (size < JOURNAL_COMPACT_BYTES) return;
 
   const cutoff = contractPathRetentionCutoffMs(nowMs);
+  const fineCutoff = nowMs - CONTRACT_PATH_FINE_RETENTION_DAYS * 24 * 60 * 60_000;
   const temporary = `${JOURNAL_FILE}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
   let kept = 0;
   let dropped = 0;
+  let thinned = 0;
   const handle = await open(temporary, 'w');
   try {
     const stream = readline.createInterface({ input: createReadStream(JOURNAL_FILE) });
@@ -104,14 +106,23 @@ async function compactJournalIfLarge(nowMs = Date.now()): Promise<void> {
       try { parsed = JSON.parse(line); } catch { dropped += 1; continue; }
       const record = decodeContractPath(parsed);
       if (!record || Date.parse(record.closesAt) < cutoff) { dropped += 1; continue; }
-      await handle.write(`${line}\n`);
+      // Fine sampling is kept only while it is recent. Older windows are written back on the coarse grid,
+      // which is exactly what they would have contained before fine recording existed, so no analysis
+      // written against that grid loses history.
+      if (Date.parse(record.closesAt) < fineCutoff) {
+        const coarse = thinToCoarseGrid(record);
+        if (coarse.points.length < record.points.length) thinned += 1;
+        await handle.write(`${JSON.stringify(encodeContractPath(coarse))}\n`);
+      } else {
+        await handle.write(`${line}\n`);
+      }
       kept += 1;
     }
   } finally {
     await handle.close();
   }
   await rename(temporary, JOURNAL_FILE);
-  console.log(`Contract path journal compacted: kept ${kept} window(s), dropped ${dropped} older than ${CONTRACT_PATH_RETENTION_DAYS} days.`);
+  console.log(`Contract path journal compacted: kept ${kept} window(s), thinned ${thinned} to the coarse grid, dropped ${dropped} older than ${CONTRACT_PATH_RETENTION_DAYS} days.`);
 }
 
 async function updateContractPaths(predictions: Prediction[], observedAt: number): Promise<void> {
@@ -153,6 +164,7 @@ async function updateContractPaths(predictions: Prediction[], observedAt: number
 async function updateDenseQuote(
   input: { contractId: string; symbol: string; closesAt: string; askUpCents: number; askDownCents: number },
   observedAt: number,
+  bucketMs: number,
 ): Promise<void> {
   const store = await readActive();
   const key = `${input.contractId}:${input.closesAt}`;
@@ -160,7 +172,7 @@ async function updateDenseQuote(
     ?? emptyContractPath(input);
   const updated = observeContractPath(existing, {
     atMs: observedAt, askUpCents: input.askUpCents, askDownCents: input.askDownCents,
-  }, CONTRACT_PATH_DENSE_BUCKET_MS);
+  }, bucketMs);
   await writeActive({
     version: 1, pathVersion: CONTRACT_PATH_VERSION,
     active: [...store.active.filter((record) => `${record.contractId}:${record.closesAt}` !== key), updated],
@@ -181,8 +193,9 @@ async function updateDenseQuote(
 export function recordDenseContractQuote(
   input: { contractId: string; symbol: string; closesAt: string; askUpCents: number; askDownCents: number },
   observedAt = Date.now(),
+  bucketMs = CONTRACT_PATH_DENSE_BUCKET_MS,
 ): Promise<void> {
-  const operation = pathQueue.then(() => updateDenseQuote(input, observedAt));
+  const operation = pathQueue.then(() => updateDenseQuote(input, observedAt, bucketMs));
   pathQueue = operation.then(() => undefined, () => undefined);
   return operation;
 }

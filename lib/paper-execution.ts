@@ -17,6 +17,8 @@ import { selectedManagedMakerQuote } from './managed-maker';
 import { orderMarketId, orderProviderId, orderStrategyId } from './execution-report';
 import { EDGE_BINARY_BUY } from './strategy-registry';
 import { recordContractPaths, recordDenseContractQuote } from './contract-path-store';
+import { CONTRACT_PATH_FINE_BUCKET_MS } from './contract-path';
+import { backfillLongShotCandidates, resolveLongShotSettlements } from './long-shot-candidate-store';
 import { getHoldSentinels, updateHoldSentinelStore } from './hold-sentinel-store';
 import { collectLongShotEvidence, longShotAllocationCents } from './long-shot-execution';
 import { evaluateLongShotEntry, longShotSettings, type LongShotSettings } from './long-shot-policy';
@@ -75,7 +77,7 @@ import { getKalshiReconciliationStatus, serializedReconciliation, setKalshiRecon
 import { getRegimeGateStatus, updateRegimeGate, type RegimeGateStatus, type RegimeSentinelCandidate } from './regime-gate-store';
 import { TWO_SNAPSHOT_PERSISTENCE_CANDIDATE_VERSION, updatePersistenceCandidateStore, type PersistenceCandidateCycle } from './persistence-candidate-store';
 import { advanceSignalPersistence, evaluateSignalPersistence, evaluateSignalPersistenceIgnoringSpike, evaluateSignalPersistenceWithRequirements, type SignalEligibility, type SignalPersistenceState } from './signal-persistence';
-import { maximumEdgeSpike, spikeAdmits } from './edge-spike-policy';
+import { edgeSpikeGateEnabled, maximumEdgeSpike, spikeAdmits } from './edge-spike-policy';
 import { EDGE_SPIKE_SENTINEL_VERSION, edgeSpikeSentinelId, type EdgeSpikeSentinel } from './edge-spike-sentinel';
 import { updateEdgeSpikeSentinels } from './edge-spike-sentinel-store';
 import { REQUIRED_SWITCH_SNAPSHOTS, REQUIRED_SWITCH_SPAN_MS, advanceSwitchPersistence, switchCooldownRemainingMs, switchEvidenceReady, switchEvidenceSpanMs, type SwitchPersistenceState } from './switch-hysteresis';
@@ -282,6 +284,7 @@ async function persistenceCandidateCycle(dashboard: DashboardData, ledger: Ledge
     // count and span, so it must differ from production in that one variable and nothing else.
     const candidate = evaluateSignalPersistenceWithRequirements(state, nowMs, MIN_NET_EDGE, MIN_ESTIMATE_QUALITY, {
       requiredSnapshots: 2, requiredSpanMs: 15_000, maximumEdgeSpike: maximumEdgeSpike(),
+      spikeGateEnabled: edgeSpikeGateEnabled(),
     });
     const production = executionEligibility(prediction, side, ledger, nowMs);
     const id = `${TWO_SNAPSHOT_PERSISTENCE_CANDIDATE_VERSION}:${BUY_POLICY_VERSION}:${prediction.symbol}:${side}:${prediction.kalshi.closesAt}`;
@@ -1557,6 +1560,10 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
     .then((cycle) => updatePersistenceCandidateStore(cycle))
     .catch((error) => console.error('Two-snapshot persistence candidate collection failed:', error));
   void recordContractPaths(dashboard.predictions ?? [])
+    // Candidate summaries are derived from the paths just recorded, then ungraded windows are asked of the
+    // venue. Both are observation only, both are detached, and neither may delay a cycle with money in it.
+    .then(() => backfillLongShotCandidates())
+    .then(() => resolveLongShotSettlements())
     .catch((error) => console.error('Contract path collection failed:', error));
   void updateEdgeSpikeSentinels(edgeSpikeSentinelCycle(dashboard, ledger))
     .catch((error) => console.error('Edge spike sentinel collection failed:', error));
@@ -1937,6 +1944,21 @@ async function longShotEntryTick(): Promise<void> {
       if (quote) refreshed.set(ticker, quote);
     }));
     if (!refreshed.size) return;
+
+    // **Record every eligible contract finely, not only the ones that got cheap.**
+    // These quotes have already been fetched for the entry decision above, so this costs no venue request
+    // at all — it records what would otherwise be discarded. Before this, fine sampling began only once a
+    // side fell below the entry mark, by which point the book is roughly 9c/91c: across 57 such windows,
+    // zero had the 20-80c range inside the fine region, so that range existed only at fifteen seconds.
+    // Detached and never awaited, like every other collection call on this path.
+    void Promise.all([...refreshed.entries()].map(([ticker, quote]) => {
+      const prediction = eligible.find((item) => item.kalshi!.ticker === ticker);
+      if (!prediction) return undefined;
+      return recordDenseContractQuote({
+        contractId: ticker, symbol: prediction.symbol, closesAt: prediction.kalshi!.closesAt,
+        askUpCents: quote.askUp * 100, askDownCents: quote.askDown * 100,
+      }, Date.now(), CONTRACT_PATH_FINE_BUCKET_MS);
+    })).catch((error) => console.error('Fine contract path recording failed:', error));
 
     // A contract that reached the mark is followed to settlement from here, whether or not it is bought.
     for (const prediction of eligible) {

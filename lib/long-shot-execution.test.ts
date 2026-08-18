@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-import { LONG_SHOT_DEFAULT_ALLOCATION_PERCENT, longShotAllocationCents, longShotCycle, longShotSizingFor } from './long-shot-execution';
+import {
+  LONG_SHOT_DEFAULT_ALLOCATION_PERCENT, longShotAllocationCents, longShotCycle, longShotSizingFor,
+  sentinelPeakBids,
+} from './long-shot-execution';
+import { HOLD_SENTINEL_VERSION, type HoldSentinel } from './hold-sentinel';
 import { longShotSettings, longShotSizing } from './long-shot-policy';
 import type { DashboardData, PaperOrder, Prediction } from './types';
 
@@ -111,5 +115,70 @@ describe('long-shot allocation and sizing', () => {
   it('halts on its own drawdown', () => {
     const orders = [order({ id: 'ls-lost', status: 'lost', actualPnlCents: -301 })];
     expect(longShotSizingFor(orders, 600, settings).halted).toBe(true);
+  });
+});
+
+/**
+ * The peak recorder, which did not exist between 2026-08-15 and 2026-08-17.
+ *
+ * Its absence made `reachedExitMark` false for every sentinel, collapsing the round-trip arm onto the hold
+ * arm and reporting an advantage of exactly zero that nothing had measured. Every unit test of the report
+ * passed throughout, because each supplied `peakOwnedSideBidCents` in its fixture. These tests exercise the
+ * wiring instead of the arithmetic. See docs/long-shot-policy-design.md §10a.
+ */
+describe('sentinel peak bid observation', () => {
+  const sentinel = (patch: Partial<HoldSentinel> = {}): HoldSentinel => ({
+    id: 'BTC:UP:2026-08-15T00:15:00Z:1',
+    sentinelVersion: HOLD_SENTINEL_VERSION,
+    policyVersion: 'long-shot-round-trip-buy10-sell90-win600-v1',
+    observedAt: '2026-08-15T00:01:00Z',
+    symbol: 'BTC', side: 'UP', closesAt, contractId: 'KXBTC15M-TEST',
+    entryAskCents: 10, oppositeAskCents: 91, secondsRemaining: 840,
+    entryMarkCents: 10, exitMarkCents: 90,
+    quantity: 1.8, stakeCents: 20, estimatedFeeCents: 2,
+    entryGeneration: 1, executed: false,
+    ...patch,
+  });
+
+  const later = '2026-08-15T00:02:00Z';
+
+  it('derives the owned side bid from the opposite ask on the shared book', () => {
+    // bid(UP) = 100 - ask(DOWN); the owned side's own ask is never read.
+    const peaks = sentinelPeakBids(dashboard(prediction('BTC', 0.30, 0.72)), [sentinel()], later);
+    expect(peaks['BTC:UP:2026-08-15T00:15:00Z:1']).toBeCloseTo(28, 9);
+  });
+
+  it('derives the DOWN side bid from the UP ask', () => {
+    const peaks = sentinelPeakBids(dashboard(prediction('BTC', 0.72, 0.30)), [sentinel({ side: 'DOWN' })], later);
+    expect(peaks['BTC:UP:2026-08-15T00:15:00Z:1']).toBeCloseTo(28, 9);
+  });
+
+  it('never observes a sentinel on the cycle that created it', () => {
+    // Otherwise the quote that triggered the entry also becomes the peak it is judged against.
+    const peaks = sentinelPeakBids(dashboard(prediction('BTC', 0.30, 0.72)), [sentinel()], sentinel().observedAt);
+    expect(peaks).toEqual({});
+  });
+
+  it('stops observing once the sentinel has settled', () => {
+    const peaks = sentinelPeakBids(
+      dashboard(prediction('BTC', 0.30, 0.72)),
+      [sentinel({ resolvedAt: '2026-08-15T00:15:05Z', settledSide: 'DOWN' })],
+      later,
+    );
+    expect(peaks).toEqual({});
+  });
+
+  it('fails closed on a missing, dead, or nonsensical quote rather than recording a touch', () => {
+    expect(sentinelPeakBids(dashboard(), [sentinel()], later)).toEqual({});
+    const dead = prediction('BTC', 0.30, 0.72);
+    (dead.kalshi as { live: boolean }).live = false;
+    expect(sentinelPeakBids(dashboard(dead), [sentinel()], later)).toEqual({});
+    // ask(DOWN) = 0 would imply a 100c bid, which is not a price this book can show.
+    expect(sentinelPeakBids(dashboard(prediction('BTC', 0.99, 0)), [sentinel()], later)).toEqual({});
+  });
+
+  it('matches on the exact contract, so a price is never scored against another window', () => {
+    const peaks = sentinelPeakBids(dashboard(prediction('BTC', 0.30, 0.72)), [sentinel({ contractId: 'KXBTC15M-OTHER' })], later);
+    expect(peaks).toEqual({});
   });
 });

@@ -48,12 +48,64 @@ export interface LongShotCycle {
   sentinels: HoldSentinel[];
   /** Settled outcomes for this cycle's contracts, keyed `contractId:closesAt`. */
   outcomes: Record<string, PositionSide>;
+  /**
+   * Owned-side bid observed this cycle for each unresolved sentinel, keyed by sentinel id. The store keeps
+   * the running maximum. Without this the round-trip arm is a tautology — see `sentinelPeakBids`.
+   */
+  peakBids: Record<string, number>;
   /** Named reasons triggers were declined, for the cycle log. */
   skipped: string[];
 }
 
 const sideAsk = (prediction: Prediction, side: PositionSide): number | undefined =>
   side === 'UP' ? prediction.kalshi?.askUp : prediction.kalshi?.askDown;
+
+/**
+ * This cycle's owned-side bid for every sentinel still awaiting settlement.
+ *
+ * The hold arm's whole purpose is to compare holding against the round trip on one trigger, and the round
+ * trip is only distinguishable from the hold when the peak bid is known: `reachedExitMark` reads
+ * `peakOwnedSideBidCents`, so a sentinel without one collapses the two arms together and reports a
+ * difference of exactly zero. That is what shipped between 2026-08-15 and 2026-08-17, because this
+ * function did not exist and `peakBids` was never populated. See docs/long-shot-policy-design.md §10a.
+ *
+ * Two constraints are load-bearing:
+ *
+ * - **Strictly after the decision point.** A sentinel observed on this same cycle is skipped, so the quote
+ *   that triggered the entry can never also serve as the peak it is judged against.
+ * - **The bid is derived, never a stored field.** Kalshi's two sides share one book, so the owned side's
+ *   bid is `100¢ − ask(other side)` (§3.1). The opposite ask is the only quote read here.
+ *
+ * Sampled at the collection cadence, not the one-second exit poll — a sentinel holds no position to poll —
+ * so every peak here is a **floor**.
+ */
+export function sentinelPeakBids(
+  dashboard: DashboardData,
+  sentinels: HoldSentinel[],
+  observedAt: string,
+): Record<string, number> {
+  const peaks: Record<string, number> = {};
+  const observedMs = Date.parse(observedAt);
+  const byContract = new Map<string, Prediction>();
+  for (const prediction of dashboard.predictions ?? []) {
+    if (prediction.kalshi?.live && prediction.kalshi.ticker) byContract.set(prediction.kalshi.ticker, prediction);
+  }
+
+  for (const sentinel of sentinels) {
+    if (sentinel.resolvedAt) continue;
+    // A sentinel first seen on this cycle has no "after" yet; including now would be its own entry quote.
+    if (!(Date.parse(sentinel.observedAt) < observedMs)) continue;
+    const quote = byContract.get(sentinel.contractId)?.kalshi;
+    if (!quote) continue;
+    const oppositeAsk = sentinel.side === 'UP' ? quote.askDown : quote.askUp;
+    if (!(typeof oppositeAsk === 'number' && oppositeAsk > 0)) continue;
+    const bidCents = CENTS - oppositeAsk * CENTS;
+    // A malformed book must not manufacture a touch; fail closed rather than record an impossible bid.
+    if (!Number.isFinite(bidCents) || bidCents <= 0 || bidCents >= CENTS) continue;
+    peaks[sentinel.id] = bidCents;
+  }
+  return peaks;
+}
 
 /**
  * Entries already made on this asset and window by this strategy, counting every generation whether open
@@ -149,7 +201,7 @@ export function longShotCycle(
     }
   }
 
-  return { observedAt, sentinels, outcomes: {}, skipped };
+  return { observedAt, sentinels, outcomes: {}, peakBids: {}, skipped };
 }
 
 /**
@@ -215,7 +267,7 @@ export async function collectLongShotEvidence(input: {
   startingCents: number;
   existingSentinels: HoldSentinel[];
   nowMs?: number;
-}): Promise<{ sentinels: HoldSentinel[]; outcomes: Record<string, PositionSide>; observedAt: string; skipped: string[] }> {
+}): Promise<LongShotCycle> {
   const settings = longShotSettings();
   const nowMs = input.nowMs ?? Date.now();
   const sizing = longShotSizingFor(input.orders, input.startingCents, settings);
@@ -224,5 +276,12 @@ export async function collectLongShotEvidence(input: {
   // reported honestly, and a halted policy records a zero ticket.
   const cycle = longShotCycle(input.dashboard, input.orders, sizing.halted ? { ...sizing, halted: false } : sizing, settings, nowMs);
   const outcomes = await resolveSentinelOutcomes(input.existingSentinels, nowMs);
-  return { sentinels: cycle.sentinels, outcomes, observedAt: cycle.observedAt, skipped: cycle.skipped };
+  return {
+    sentinels: cycle.sentinels,
+    outcomes,
+    // Every sentinel already on file is re-observed each cycle; the store keeps the running maximum.
+    peakBids: sentinelPeakBids(input.dashboard, input.existingSentinels, cycle.observedAt),
+    observedAt: cycle.observedAt,
+    skipped: cycle.skipped,
+  };
 }

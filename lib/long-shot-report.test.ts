@@ -128,3 +128,103 @@ describe('long-shot report', () => {
     expect(report.overall.standardError).toBeNull();
   });
 });
+
+/**
+ * The exit rule scored against holding, paired on identical orders. See docs/long-shot-policy-design.md §10a.
+ *
+ * The load-bearing property is that an order which never sold contributes *exactly* zero, because its
+ * realized P&L is the hold outcome. That is asserted over a grid rather than on one fixture: the claim is
+ * "no settled unsold order reaches a different answer", not "this one does not".
+ */
+describe('exit versus hold', () => {
+  it('scores an unsold order at exactly zero, for every outcome, side and size', () => {
+    for (const side of ['UP', 'DOWN'] as const) {
+      for (const outcome of ['UP', 'DOWN'] as const) {
+        for (const quantity of [0.01, 1.8, 3.46, 12.5]) {
+          for (const stakeCents of [1, 13, 20, 250]) {
+            const payoutCents = Math.round(quantity * 100);
+            const won = outcome === side;
+            const report = buildLongShotReport({
+              orders: [order({
+                side, outcome, status: won ? 'won' : 'lost', quantity, potentialPayoutCents: payoutCents,
+                stakeCents, actualStakeCents: stakeCents,
+                actualPnlCents: (won ? payoutCents : 0) - stakeCents,
+              })],
+              mode: 'live',
+            });
+            expect(report.exitVersusHold.perDollar).toBe(0);
+            expect(report.exitVersusHold.totalCents).toBe(0);
+            expect(report.exitVersusHold.whenExercisedAttempts).toBe(0);
+          }
+        }
+      }
+    }
+  });
+
+  it('prices the difference as sale proceeds minus settlement payout, with the stake cancelling', () => {
+    // The only real sold long-shot to date: 13c staked bought 1.2 contracts, sold at the 90c mark for
+    // 107c, where settlement would have paid 120c. Selling cost 13c — one whole stake.
+    const report = buildLongShotReport({
+      orders: [order({
+        status: 'sold', side: 'UP', counterfactualHoldOutcome: 'UP',
+        quantity: 1.2, potentialPayoutCents: 120, stakeCents: 13, actualStakeCents: 13,
+        saleProceedsCents: 107, actualPnlCents: 94,
+      })],
+      mode: 'live',
+    });
+    expect(report.exitVersusHold.totalCents).toBe(-13);
+    expect(report.exitVersusHold.perDollar).toBeCloseTo(-1, 9);
+    expect(report.exitVersusHold.whenExercisedPerDollar).toBeCloseTo(-1, 9);
+    expect(report.exitVersusHold.whenExercisedAttempts).toBe(1);
+  });
+
+  it('credits the exit when the position would have settled worthless', () => {
+    const report = buildLongShotReport({
+      orders: [order({
+        status: 'sold', side: 'UP', counterfactualHoldOutcome: 'DOWN',
+        quantity: 1.8, potentialPayoutCents: 180, stakeCents: 20, actualStakeCents: 20, actualPnlCents: 140,
+      })],
+      mode: 'live',
+    });
+    // Sold for +140c against a hold that would have lost the 20c stake.
+    expect(report.exitVersusHold.totalCents).toBe(160);
+    expect(report.exitVersusHold.perDollar).toBeCloseTo(8, 9);
+  });
+
+  it('clusters on the settlement window rather than on the order', () => {
+    const window = '2026-08-15T00:15:00Z';
+    const other = '2026-08-15T00:30:00Z';
+    const sold = { status: 'sold' as const, side: 'UP' as const, counterfactualHoldOutcome: 'UP' as const,
+      quantity: 1.2, potentialPayoutCents: 120, stakeCents: 13, actualStakeCents: 13, actualPnlCents: 94 };
+    const report = buildLongShotReport({
+      orders: [
+        order({ ...sold, closesAt: window }),
+        order({ ...sold, closesAt: window }),
+        order({ outcome: 'DOWN', status: 'lost', closesAt: other }),
+      ],
+      mode: 'live',
+    });
+    // Two correlated sales in one window average to -1 before meeting the other window's 0, giving -0.5.
+    expect(report.exitVersusHold.windows).toBe(2);
+    expect(report.exitVersusHold.perDollar).toBeCloseTo(-0.5, 9);
+  });
+
+  it('counts an unresolved counterfactual instead of reading it as zero', () => {
+    const report = buildLongShotReport({
+      orders: [order({ status: 'sold', outcome: undefined, counterfactualHoldOutcome: undefined, actualPnlCents: 94 })],
+      mode: 'live',
+    });
+    expect(report.exitVersusHold.unresolvedCounterfactual).toBe(1);
+    expect(report.exitVersusHold.attempts).toBe(0);
+    expect(report.exitVersusHold.perDollar).toBeNull();
+  });
+
+  it('drops a settled order that carries an accepted venue exit, since a partial keeps no proceeds', () => {
+    const report = buildLongShotReport({
+      orders: [order({ status: 'lost', outcome: 'DOWN', exitVenueOrderId: 'venue-1' })],
+      mode: 'live',
+    });
+    expect(report.exitVersusHold.exitAttemptedUnsold).toBe(1);
+    expect(report.exitVersusHold.attempts).toBe(0);
+  });
+});

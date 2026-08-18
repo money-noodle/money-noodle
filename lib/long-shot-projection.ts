@@ -12,6 +12,11 @@ import { strategyOrders } from './execution-report';
 import { LONG_SHOT_ROUND_TRIP } from './strategy-registry';
 import { DEFAULT_MARKET_ID } from './market-registry';
 import { postgresPaperProjectionSyncEnabled, syncPublicLongShotToPostgres } from './postgres-paper-projection';
+import { estimatePaperFill, venueFeeCents } from './venue-fill';
+import { evaluateBand, type AnalysisBandResult } from './analysis-bands';
+import { readAnalysisBands } from './analysis-bands-store';
+import { getLongShotCandidates } from './long-shot-candidate-store';
+import { buildNearMoneySentinelReport } from './near-money-sentinel';
 
 /**
  * The long-shot surface, assembled once so the signed local route and the replicated public projection
@@ -24,6 +29,8 @@ export async function buildLongShotPayload(): Promise<Record<string, unknown>> {
     getHoldSentinelReport(longShotPolicyVersion(settings), longShotExitFeeCents),
     getContractPathRollups(200),
   ]);
+
+  const [bandStore, candidates] = await Promise.all([readAnalysisBands(), getLongShotCandidates()]);
 
   const allocation = budgets.providers.find((provider) => provider.providerId === 'kalshi')?.allocations
     .find((item) => item.marketId === DEFAULT_MARKET_ID)?.strategies
@@ -72,6 +79,56 @@ export async function buildLongShotPayload(): Promise<Record<string, unknown>> {
       samples: paths.reduce((total, path) => total + path.samples, 0),
       recent: paths.slice(0, 20),
     },
+    bands: buildBandReport(bandStore, candidates, settings),
+    // Approach (iii), committed as a prospective test rather than screened into existence. See §15b.
+    nearMoney: buildNearMoneySentinelReport(candidates, {
+      ticketCents: Math.max(settings.minimumTicketCents, 20),
+      fill: (stakeLimitCents: number, askPrice: number) => estimatePaperFill(stakeLimitCents, askPrice, 'kalshi'),
+      exitFeeCents: (priceCents: number, quantity: number) => venueFeeCents('kalshi', priceCents, quantity, 'taker'),
+    }),
+  };
+}
+
+/**
+ * Operator-defined bands measured over recorded candidates.
+ *
+ * The ticket and entry window come from the live settings so a band is scored on the same footing the desk
+ * would trade it, and `savedCount` is carried onto the surface because it is the multiple-comparison
+ * denominator — see docs/long-shot-policy-design.md §15a. This promotes nothing.
+ */
+function buildBandReport(
+  bandStore: Awaited<ReturnType<typeof readAnalysisBands>>,
+  candidates: Awaited<ReturnType<typeof getLongShotCandidates>>,
+  settings: ReturnType<typeof longShotSettings>,
+): {
+  bandsVersion: string;
+  savedCount: number;
+  lastSavedAt: string | null;
+  candidateRows: number;
+  gradedWindows: number;
+  ticketCents: number;
+  minimumSecondsRemaining: number;
+  results: AnalysisBandResult[];
+} {
+  // Scored at the launch ticket rather than current equity: return per $1 staked is what bands are
+  // compared on, and a ticket that drifts with the book would make two bands measured days apart
+  // incomparable for a reason that has nothing to do with either band.
+  const ticketCents = Math.max(settings.minimumTicketCents, 20);
+  const options = {
+    ticketCents,
+    minimumSecondsRemaining: settings.minimumSecondsRemaining,
+    fill: (stakeLimitCents: number, askPrice: number) => estimatePaperFill(stakeLimitCents, askPrice, 'kalshi'),
+    exitFeeCents: (priceCents: number, quantity: number) => venueFeeCents('kalshi', priceCents, quantity, 'taker'),
+  };
+  return {
+    bandsVersion: bandStore.bandsVersion,
+    savedCount: bandStore.savedCount,
+    lastSavedAt: bandStore.history[0]?.savedAt ?? null,
+    candidateRows: candidates.length,
+    gradedWindows: new Set(candidates.filter((candidate) => candidate.settledSide).map((candidate) => candidate.closesAt)).size,
+    ticketCents,
+    minimumSecondsRemaining: settings.minimumSecondsRemaining,
+    results: bandStore.current.map((band) => evaluateBand(candidates, band, options)),
   };
 }
 
@@ -95,6 +152,8 @@ export function publicLongShotPayload(full: Record<string, unknown>): Record<str
     paper: tracks.find((track) => track.mode === 'paper') ?? null,
     hold: full.hold,
     contractPaths: full.contractPaths,
+    bands: full.bands,
+    nearMoney: full.nearMoney,
   };
 }
 

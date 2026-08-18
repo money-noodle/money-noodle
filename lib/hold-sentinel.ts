@@ -71,7 +71,25 @@ export interface HoldSentinelReport {
   unexecutedSamples: number;
   hold: HoldSentinelArm;
   roundTrip: HoldSentinelArm;
-  /** roundTrip − hold in mean return per $1 staked. Positive means selling early paid. */
+  /**
+   * Resolved sentinels carrying an observed peak bid.
+   *
+   * `reachedExitMark` reads `peakOwnedSideBidCents`, and a sentinel without one is indistinguishable from
+   * one whose bid never moved: the round-trip arm silently collapses onto the hold arm and `advantage`
+   * becomes an identical zero. That is exactly what happened between 2026-08-15 and 2026-08-17, when
+   * `collectLongShotEvidence` returned no `peakBids` at all and the dashboard reported "selling early
+   * beats holding by +0.0%" — a number nothing had measured. See docs/long-shot-policy-design.md §10a.
+   *
+   * **Zero here means the round-trip arm is unmeasured, not measured at zero**, and every consumer must
+   * render it as such rather than showing a figure.
+   */
+  peakObservedSamples: number;
+  /**
+   * roundTrip − hold in mean return per $1 staked. Positive means selling early paid.
+   *
+   * Null when no resolved sentinel carries a peak, because the difference would then be a construction
+   * rather than a measurement.
+   */
   advantage: number | null;
   reviewWindowsRequired: number;
   reviewUnlocked: boolean;
@@ -168,6 +186,9 @@ export function buildHoldSentinelReport(input: {
 
   const hold = arm(resolved, holdReturn, (sentinel) => sentinel.settledSide === sentinel.side);
   const roundTrip = arm(resolved, (sentinel) => roundTripReturn(sentinel, input.exitFeeCents(sentinel)), reachedExitMark);
+  // Without a peak the round trip cannot differ from the hold, so the comparison is a tautology rather
+  // than an observation. Reported as unmeasured instead of as zero (§10a).
+  const peakObservedSamples = resolved.filter((sentinel) => sentinel.peakOwnedSideBidCents !== undefined).length;
 
   return {
     sentinelVersion: HOLD_SENTINEL_VERSION,
@@ -177,7 +198,8 @@ export function buildHoldSentinelReport(input: {
     unexecutedSamples: current.filter((sentinel) => !sentinel.executed).length,
     hold,
     roundTrip,
-    advantage: roundTrip.clusteredMeanReturn !== null && hold.clusteredMeanReturn !== null
+    peakObservedSamples,
+    advantage: peakObservedSamples > 0 && roundTrip.clusteredMeanReturn !== null && hold.clusteredMeanReturn !== null
       ? roundTrip.clusteredMeanReturn - hold.clusteredMeanReturn
       : null,
     reviewWindowsRequired: HOLD_SENTINEL_MINIMUM_REVIEW_WINDOWS,

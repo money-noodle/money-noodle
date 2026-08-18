@@ -100,6 +100,39 @@ describe('hold sentinel report', () => {
     expect(report.roundTrip.clusteredMeanReturn).toBeCloseTo(3, 6);
     expect(report.advantage).toBeCloseTo(4, 6);
     expect(report.roundTrip.rate).toBeCloseTo(0.5, 6);
+    expect(report.peakObservedSamples).toBe(2);
+  });
+
+  /**
+   * The defect of 2026-08-15 to 2026-08-17: `collectLongShotEvidence` returned no `peakBids`, so no
+   * sentinel ever carried a peak. Every existing test above supplies one in its fixture, which is exactly
+   * why they all passed while production reported "selling early beats holding by +0.0%" — a difference
+   * that is zero by construction whenever the peak is absent. See docs/long-shot-policy-design.md §10a.
+   */
+  it('reports the round trip as unmeasured, not as zero, when no sentinel carries a peak', () => {
+    const sentinels = [
+      sentinel({ settledSide: 'DOWN', closesAt: '2026-08-15T00:15:00Z' }),
+      sentinel({ settledSide: 'DOWN', closesAt: '2026-08-15T00:30:00Z' }),
+    ];
+    const report = buildHoldSentinelReport({ sentinels, policyVersion: 'long-shot-round-trip-buy10-sell90-v1', exitFeeCents: exitFee });
+
+    expect(report.peakObservedSamples).toBe(0);
+    // The arms are identical by construction here, so the difference between them measures nothing.
+    expect(report.roundTrip.clusteredMeanReturn).toBe(report.hold.clusteredMeanReturn);
+    expect(report.advantage).toBeNull();
+  });
+
+  it('measures the advantage as soon as any resolved sentinel carries a peak', () => {
+    const sentinels = [
+      sentinel({ settledSide: 'DOWN', peakOwnedSideBidCents: 95, closesAt: '2026-08-15T00:15:00Z' }),
+      sentinel({ settledSide: 'DOWN', closesAt: '2026-08-15T00:30:00Z' }),
+    ];
+    const report = buildHoldSentinelReport({ sentinels, policyVersion: 'long-shot-round-trip-buy10-sell90-v1', exitFeeCents: exitFee });
+
+    // A sentinel with no peak is scored as not having reached the mark, which is the honest reading for a
+    // position nobody observed; it must not suppress the arm for the ones that were observed.
+    expect(report.peakObservedSamples).toBe(1);
+    expect(report.advantage).not.toBeNull();
   });
 
   it('starts a fresh cohort when the policy version changes', () => {

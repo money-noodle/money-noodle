@@ -8,7 +8,10 @@
  * a change to either shows up here.
  *
  * Touch rates are **floors**: a path sampled every fifteen seconds cannot see a spike between samples, and
- * winners were observed reaching 90¢ in only 68.4% of cases where the true figure must be 100%. The
+ * winners were observed reaching 90¢ in only 68.4% of cases. NOTE: that was read as a coverage shortfall
+ * against a 100% baseline, and **that baseline is withdrawn** — these contracts settle on a close-price
+ * comparison, so ~10% of winners never trade near 90¢ (design §14b, and `npm run analyze:long-shot-gaps`
+ * which supersedes this file's method). The
  * one-second entry polling added 2026-08-16 is what removes that bias; re-run this against paths recorded
  * afterwards before drawing a conclusion from it.
  */

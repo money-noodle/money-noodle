@@ -16,6 +16,12 @@
     "analyze:kalshi-weight": "node --max-old-space-size=3072 scripts/analyze-kalshi-forecast-weight.mjs",
     "analyze:time-of-day": "node --max-old-space-size=3072 scripts/analyze-time-of-day.mjs",
     "analyze:long-shot-marks": "node scripts/analyze-long-shot-marks.mjs",
+    "analyze:long-shot-gaps": "node --max-old-space-size=6144 scripts/analyze-long-shot-gaps.mjs",
+    "analyze:long-shot-filters": "node --max-old-space-size=6144 scripts/analyze-long-shot-filters.mjs",
+    "analyze:swing-exit": "node --max-old-space-size=6144 scripts/analyze-swing-exit.mjs",
+    "analyze:maker-fills": "node --max-old-space-size=6144 scripts/analyze-maker-fills.mjs",
+    "experiment:fine-paths": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/experiment-fine-paths.ts",
+    "experiment:maker-depth": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/experiment-maker-depth.ts",
     "verify:forecast-storage": "jiti scripts/verify-forecast-storage.ts",
     "fund:long-shot": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/fund-long-shot.ts",
     "archive:local": "jiti scripts/archive-local-data.ts",
@@ -25,6 +31,8 @@
     "analyze:trading-clock": "node --max-old-space-size=6144 scripts/analyze-trading-clock.mjs",
     "analyze:exit-alternatives": "node --max-old-space-size=6144 scripts/analyze-exit-alternatives.mjs",
     "analyze:exit-counterfactuals": "node scripts/analyze-exit-counterfactuals.mjs",
+    "analyze:loss-decomposition": "node --max-old-space-size=6144 scripts/analyze-loss-decomposition.mjs",
+    "analyze:take-the-ask": "node --max-old-space-size=6144 scripts/analyze-take-the-ask.mjs",
     "analyze:entry-realization": "node --max-old-space-size=6144 scripts/analyze-entry-realization.mjs"
   },
   "dependencies": {

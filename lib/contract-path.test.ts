@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CONTRACT_PATH_BUCKET_MS, CONTRACT_PATH_DENSE_BUCKET_MS, decodeContractPath, emptyContractPath, encodeContractPath,
-  firstEntryOffsetSeconds, observeContractPath, peakBidAfterOffset, sideAskCents, sideBidCents,
-  summarizeContractPath, type ContractPathRecord,
+  CONTRACT_PATH_BUCKET_MS, CONTRACT_PATH_DENSE_BUCKET_MS, CONTRACT_PATH_FINE_BUCKET_MS, decodeContractPath,
+  emptyContractPath, encodeContractPath, firstEntryOffsetSeconds, observeContractPath, peakBidAfterOffset,
+  sideAskCents, sideBidCents, summarizeContractPath, thinToCoarseGrid, type ContractPathRecord,
 } from './contract-path';
 
 const closesAt = '2026-08-15T00:15:00Z';
@@ -147,5 +147,56 @@ describe('dense sampling for a watched candidate', () => {
     record = observeContractPath(record, at(301, 9, 92), CONTRACT_PATH_DENSE_BUCKET_MS);
     record = observeContractPath(record, at(302, 8, 93), CONTRACT_PATH_DENSE_BUCKET_MS);
     expect(record.points.map((point) => point.offsetSeconds)).toEqual([0, 301, 302]);
+  });
+});
+
+/**
+ * Thinning is what keeps fine sampling from becoming a permanent storage liability: recent windows keep
+ * every sample, older ones are written back on the coarse grid. It rewrites durable history, so the
+ * property that matters is that a thinned window is indistinguishable from one recorded coarsely.
+ */
+describe('thinning fine samples back to the coarse grid', () => {
+  const record = (offsets: number[]): ContractPathRecord => ({
+    ...emptyContractPath({ contractId: 'KXBTC15M-TEST', symbol: 'BTC', closesAt: '2026-08-18T00:15:00Z' }),
+    points: offsets.map((offsetSeconds) => ({ offsetSeconds, askUpCents: 40 + offsetSeconds, askDownCents: 61 })),
+  });
+
+  it('keeps one sample per fifteen-second bucket, the first', () => {
+    const thinned = thinToCoarseGrid(record([0, 2, 4, 6, 8, 10, 12, 14, 15, 17, 30, 32]));
+    expect(thinned.points.map((point) => point.offsetSeconds)).toEqual([0, 15, 30]);
+  });
+
+  it('leaves a window that is already coarse completely unchanged', () => {
+    const coarse = record([0, 15, 30, 45, 900]);
+    expect(thinToCoarseGrid(coarse)).toEqual(coarse);
+  });
+
+  it('restores the coarse sampling density, within one bucket of the coarse offsets', () => {
+    // Not byte-identical: an observation is bucketed when stored, so a fine sample sits on the two-second
+    // grid and survives thinning at offset 16 where the coarse recorder would have written 15. What must
+    // hold is the density and the ordering, not the exact offsets.
+    let fine = emptyContractPath({ contractId: 'c', symbol: 'BTC', closesAt: '2026-08-18T00:15:00Z' });
+    let coarse = fine;
+    const openMs = Date.parse('2026-08-18T00:00:00Z');
+    for (let second = 0; second < 60; second += 2) {
+      const observation = { atMs: openMs + second * 1000, askUpCents: 40 + second, askDownCents: 61 };
+      fine = observeContractPath(fine, observation, CONTRACT_PATH_FINE_BUCKET_MS);
+      coarse = observeContractPath(coarse, observation, CONTRACT_PATH_BUCKET_MS);
+    }
+    const thinnedOffsets = thinToCoarseGrid(fine).points.map((p) => p.offsetSeconds);
+    const coarseOffsets = coarse.points.map((p) => p.offsetSeconds);
+    expect(thinnedOffsets).toHaveLength(coarseOffsets.length);
+    for (const [index, offset] of thinnedOffsets.entries()) {
+      expect(Math.abs(offset - coarseOffsets[index])).toBeLessThan(CONTRACT_PATH_BUCKET_MS / 1000);
+    }
+  });
+
+  it('never invents or reorders a sample', () => {
+    const original = record([0, 3, 6, 15, 18, 45]);
+    const thinned = thinToCoarseGrid(original);
+    expect(thinned.points.length).toBeLessThanOrEqual(original.points.length);
+    for (const point of thinned.points) expect(original.points).toContainEqual(point);
+    expect(thinned.points.map((p) => p.offsetSeconds))
+      .toEqual([...thinned.points.map((p) => p.offsetSeconds)].sort((a, b) => a - b));
   });
 });

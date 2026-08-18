@@ -80,10 +80,23 @@ The ratio of exit break-even to hold break-even is ~1.1–1.2 and improves at de
 selling at 90¢ after buying at 5¢ forfeits 10% of the payoff while selling at 80¢ after buying at 20¢
 forfeits 20% of a far smaller multiple.
 
-**Selling early beats holding whenever the touch rate exceeds the win rate by that ratio.** It very likely
-does, and the reason is structural: every contract that settles YES passes through 90¢ on its way to 100¢,
-so **every winner is also a toucher**, plus every near-miss that ran up and fell back. The touch rate is
-strictly greater than the win rate. By how much is the open question.
+**Selling early beats holding whenever the touch rate exceeds the win rate by that ratio.**
+
+> **Corrected 2026-08-17 (§14b).** The original argument here was that this holds *structurally*: every
+> contract settling YES passes through 90¢ on its way to 100¢, so every winner is also a toucher. **That is
+> false for this market.** These contracts settle on a price comparison at the close, so the final move to
+> 100¢ happens *at* settlement rather than through the book. Measured over 1,033 resolved windows with a
+> sample inside the last 30 seconds, the winning side was still bid **below 90¢ in 10.0% of cases**, and
+> below 10¢ in 0.8%. A contract can trade at 25¢ with seconds left and settle in the money.
+>
+> The touch rate is therefore *not* strictly greater than the win rate, and about a tenth of winners are
+> reachable only by holding. Measurement has since confirmed the direction the correction implies: paired
+> on identical triggers, never selling beat the 90¢ exit by +0.088 per $1 (t=1.76). The claim that selling
+> early beats holding is **unsupported**, and the exit-versus-hold comparison in §10 is the only thing that
+> can settle it.
+
+Near-misses that run up and fall back still favour the touch rate, and by how much remains the open
+question; the structural guarantee does not exist.
 
 **These break-even rates are conservative, and deliberately so.** They price a miss as a total loss, which
 it is not: with no fallback exit, a position that never reaches the mark simply settles, exactly as the hold
@@ -115,9 +128,14 @@ candidates at the 10¢ mark over 3.6 days.
 
 **Not established — anything about the exit.** The journal samples qualifying calculations every 15 seconds
 and everything else about once a minute; the median gap is 52 seconds and the median last sample lands 55
-seconds before settlement. The measurement is provably blind: winners were observed reaching 80¢ in only
-76.6% of cases and 90¢ in 68.4%, where both must be 100%. A transient spike lasting under a minute is
-missed far more often than that. **Every touch rate produced by screening is a floor.**
+seconds before settlement. Winners were observed reaching 80¢ in only 76.6% of cases and 90¢ in 68.4%.
+
+> **Corrected 2026-08-17 (§14b).** Those figures were read as coverage against a "must be 100%" baseline,
+> and that baseline is false — see the correction in §3.3. Roughly a tenth of the shortfall is a settlement
+> discontinuity no sampling rate can see, not sampling blindness, so 68.4% cannot be converted into a
+> 1.36× correction. The like-for-like measurement (dense 1s paths decimated to 15s) puts the blindness at
+> **1.00–1.25×** where it can be read at all. Touch rates from screening remain **floors** — that part
+> stands — but the floor is much closer to the measured value than these figures implied.
 
 Candidate frequency is a genuine market measurement rather than a trade-conditional one, because the
 journal records calculations and carries both sides' asks regardless of whether anything traded. But it is
@@ -280,6 +298,104 @@ outcome. Because settlement is authoritative, the hold arm is **exact**, not app
 Fill realism is reported as a separate coverage figure rather than folded in: (i) runs in paper and live on
 the identical trigger, so real fill evidence accrues alongside at no extra cost.
 
+## 10a. Repairing the hold arm, 2026-08-17 — it was reporting a number it never measured
+
+§10's design is sound and its implementation was silently inert. This section records the defect, the fix,
+and a second measurement added beside it. **This changes no rule, no parameter, and no execution path.**
+
+### The defect
+
+`collectLongShotEvidence` returns `{ sentinels, outcomes, observedAt, skipped }`. It never returns
+`peakBids`, which is the field `updateHoldSentinelStore` reads to record how high a sentinel's owned-side
+bid ever went. So no sentinel has ever carried `peakOwnedSideBidCents` — 0 of 26 in the current cohort.
+
+Everything downstream follows mechanically:
+
+| step | result |
+| --- | --- |
+| `reachedExitMark(sentinel)` | `(undefined ?? 0) >= 90` — **always false** |
+| `roundTripReturn(sentinel)` | always falls back to `holdReturn(sentinel)` |
+| `roundTrip` arm | **identical to `hold`, by construction** |
+| `advantage` | **identically 0** |
+| `roundTrip.rate` | **identically 0%** |
+
+Built against the live store the whole report reads `hold` −100%, `roundTrip` −100%, `advantage` 0. The
+dashboard renders that as *"Round trip … reached 0.0%"* and *"Selling early beats holding by +0.0% per $1
+staked."*
+
+**A zero that means "never measured" is worse than a gap**, because it is indistinguishable from a measured
+null and it is the exact figure this policy exists to determine. It is also the figure §3.3's retracted
+structural argument was standing in for, so nothing was checking it.
+
+### The fix, in three parts, shipped separately
+
+**Part 0 — stop asserting the zero.** `HoldSentinelReport` gains `peakObservedSamples`. Where it is zero the
+round-trip arm has no input, and the surface reports *unmeasured* rather than a number. This ships alone and
+first: it is a live correctness defect, and it must not wait on the measurement that fills the gap.
+
+**Part 1 — record the peaks.** `collectLongShotEvidence` returns `peakBids`, keyed by sentinel id, deriving
+the owned-side bid from the shared book as `100¢ − oppositeAsk` — the same expression §3.1 gives and
+`longShotEntry` already uses. Two constraints are load-bearing:
+
+- **Strictly after the decision point.** Only sentinels observed on an earlier cycle are updated. Including
+  the entry tick would fold the decision quote into the peak and make the arm mildly self-fulfilling.
+- **This arm is sampled at the collection cadence, not the exit cadence.** The one-second poll exists to
+  sell *open positions*; a sentinel holds nothing to poll. So the sentinel round-trip arm is a **floor**,
+  measured at fifteen seconds, and must be labelled as one wherever it is shown. §14b's measurement bounds
+  that floor at 1.00–1.25× on the evidence available.
+
+**Part 2 — a second, paired arm over executed orders.** The sentinel arm is unbiased by execution but coarse.
+The order ledger is the reverse: selected by what actually filled, but recording real fills, real fees, and
+the one-second exit. `buildLongShotReport` gains `exitMinusHold`, computed uniformly over settled orders:
+
+```
+settledSide  = order.outcome ?? order.counterfactualHoldOutcome
+holdPnlCents = (settledSide === order.side ? order.potentialPayoutCents : 0) − stake
+difference   = pnl(order) − holdPnlCents
+```
+
+Three properties make this safe rather than fiddly:
+
+- **Never-sold orders yield exactly zero**, because their realized P&L *is* the hold outcome. No branch is
+  needed, and a nonzero difference on an unsold order means something upstream is wrong — which a test pins
+  as an invariant rather than a case.
+- **The stake cancels**: `exit − hold = saleProceeds − settlementPayout`. So §1's two P&L views cannot mix
+  in the numerator. Confirmed against the only real sold order: stake 13¢, payout 120¢, proceeds 107¢ →
+  `94 − 107 = −13` and `107 − 120 = −13`.
+- Two figures are reported, because they answer different questions: **over every settled attempt** ("does
+  having the exit rule help?", the decision-relevant one) and **over attempts where the exit fired** ("when
+  it fires, is it right?", diagnostic, far smaller n). Both clustered on the settlement window.
+
+Two exclusions are **counted and surfaced, never silently dropped** — a missing counterfactual that reads as
+zero would say selling was free:
+
+- `unresolvedCounterfactual` — sold, but neither `outcome` nor `counterfactualHoldOutcome` has resolved yet.
+- `partiallyExited` — `exitVenueOrderId` set with status not `sold`. The partial branch of `runLongShotExits`
+  reduces the parent's quantity, payout, and stake **and discards the sold portion's proceeds**, so that
+  order's P&L record is genuinely incomplete. Live-only today, since paper always exits the whole position,
+  and the live lane is unarmed. Recorded here as a known record gap rather than repaired inside this change.
+
+### What the surface must show
+
+- The assertion *"Selling early beats holding by X"* is replaced by a neutral, signed **"Exit vs hold"**. The
+  sign can go either way, and on current evidence it leans negative; copy that only reads correctly when the
+  answer is positive is a way of not noticing.
+- The **paired standard error**, which the surface currently omits. `advantage` is a difference of two
+  clustered means shown with no uncertainty at all, while the per-arm errors overstate the noise — pairing
+  cancels the window-level variance, and measured on paths it tightened the same comparison from ±0.48 to
+  ±0.05.
+- **Both arms, labelled and never summed**: triggers *(15s, unbiased by execution)* and executed orders
+  *(1s, realized money)*, each with its sample count, so neither is read as corroborating the other.
+
+### An open discrepancy, recorded not resolved
+
+`hold.rate` is 0: none of 26 resolved sentinels settled in the money, and the order ledger agrees at 0 of 24
+unsold attempts. §14b's path cohort puts the settle-in-the-money rate for ≤10¢ candidates near 10% (5 of 49).
+At p=0.10 a 0-of-26 run is a 6.5% event, so small samples may be the whole story — but the two routes are
+measuring the same thing and disagreeing, which §6 says to report rather than reconcile by preference. It
+should be settled before either figure is read at the 60-attempt review; a cohort-definition difference and
+an outcome-mapping error would both produce exactly this.
+
 ## 11. Evidence design
 
 The two parameters we know least about are the sell mark and the entry filter. Both are chosen once and
@@ -416,6 +532,10 @@ clustered by settlement window, split by entry generation and by regime label.
 
 ## 14a. First parameter sweep, 2026-08-16 — no configuration clears break-even
 
+> **Retained as the record; its coverage figures are withdrawn by §14b (2026-08-17).** The conclusion below
+> stands and was reproduced on better data. The "68.4% where the true figure must be 100%" reasoning at the
+> end of this section does not — read §14b before using any correction factor from here.
+
 Run `npm run analyze:long-shot-marks`. Over 757 recorded windows, with the still-falling cohort excluded:
 
 | entry | exit | n | touch | break-even | ratio |
@@ -446,6 +566,56 @@ against paths recorded afterwards before concluding anything. The stall filter i
 candidates reached 90¢ 0.9% of the time against 2.6% for stalled ones — but it moves 2.2% to 2.6% against a
 12.5% bar, so it belongs in evidence collection rather than being treated as a rescue.
 
+## 14b. Gap sweep, 2026-08-17 — §14a's method is superseded, its conclusion is not
+
+`npm run analyze:long-shot-gaps`, written up in
+[reports/long-shot-gap-sweep-2026-08-17.md](/Users/raiphairow/code/money/reports/long-shot-gap-sweep-2026-08-17.md).
+Over 1,506 windows across 62 hours, asking which **gap** between buy and sell is achieved often enough to
+pay, rather than which fixed marks work.
+
+**Three corrections to §14a's method**, each of which changes numbers:
+
+1. **Entry is a band, not a cumulative mark.** "Ask ≤40¢" is dominated by 10¢ entries, so §14a's 20¢ and
+   25¢ rows do not describe buying at those prices. Gap sizes are only comparable banded.
+2. **Settlement is authoritative**, joined to the resolved `outcome` in the forecast history rather than
+   inferred. §14a had no settlement view at all; an intermediate attempt inferred it from the last path
+   sample, which is circular against the 90¢ mark.
+3. **Misses are graded at settlement, not as total losses.** §3.3 already noted the break-even table is
+   conservative for this reason; the return column now measures it instead of noting it.
+
+**§14a's conclusion survives all three.** 131 populated cells span 0.43–0.82 uncorrected. The touch rate
+tracks break-even at roughly 0.6–0.8× of it everywhere: narrow gaps are achieved more often in almost exact
+proportion to paying less, which is what an efficiently priced book looks like. There is no gap size and no
+entry band where this market misprices the round trip.
+
+Two results §14a could not have produced:
+
+- **§14a's coverage correction is withdrawn, and so is this section's first version of it.** Both rested
+  on "every contract settling in the money passed through every mark below 100¢ on its way there", which
+  is **false for this market**. These contracts settle on a price comparison at the close, so the move to
+  100¢ happens *at* settlement rather than through the book: over 1,033 resolved windows with a sample
+  inside the last 30 seconds, the winning side was still bid **below 90¢ in 10.0% of cases** and below 10¢
+  in 0.8%. "Observed reaching 90¢" therefore conflates sampling blindness with a discontinuity no sampling
+  rate can see. §14a's 68.4%/1.36× figure and the 72%/1.39× figure derived here are both retracted.
+
+  The replacement — dense 1s paths decimated to a 15-second grid, which assumes nothing about winners —
+  implies **1.00–1.25×** where entry detection is stable (≤20¢, ≤30¢ cohorts) and swings between 1.7× and
+  4.3× at ≤10¢, where decimation also changes which candidates qualify. Per AGENTS §6 that instability is
+  the reportable result: n=45 windows cannot estimate this. **No correction is applied**, and with none
+  applied **not one of the 131 cells clears 1.00** — the best, 6–10¢ entry at 95¢, reaches 0.82.
+- **A lower exit mark moves the sold-at-mark rate against return.** Dropping the exit from 90¢ to 20¢
+  raises the rate from 8.2% to 26.5%, entirely by selling all five winners in the cohort at ~2× instead of
+  letting them settle at ~10×, in exchange for rescuing 8 of 44 losers. Paired on identical triggers,
+  **every exit earlier than 90¢ has a negative mean difference**; the only positives are 95¢ (+0.044) and
+  never selling (+0.088), both t=1.76 among 17 comparisons. Sold-at-mark rate is not a proxy for return
+  here, and §8's "no fallback exit and no stop-loss" gains an empirical argument it previously lacked only
+  a structural one for.
+
+**Nothing here promotes anything** (AGENTS §5.5). With the correction withdrawn there is no cell above
+break-even to argue about, and the sampling question is smaller than it appeared: the like-for-like
+measurement puts 15-second blindness at 1.00–1.25×, not the 1.36–1.39× the retracted method implied. Denser
+sampling remains the way to settle it, but it is no longer plausible that it lifts 0.82 above 1.00.
+
 ## 15. Open parameters
 
 Everything below the allocation is derived from it, so the **budget slice is the only free judgment call.**
@@ -464,6 +634,270 @@ Everything below the allocation is derived from it, so the **budget slice is the
 | Entry window | ≥12 min remaining | first ~3 minutes |
 | Prior-cycle filter | none | measured; both readings failed (§4) |
 | Excluded assets | none | see §13 |
+
+## 15a. Operator-defined analysis bands — design, 2026-08-17
+
+A research surface for evaluating candidate `(entry range, exit)` pairs against recorded data, defined by
+the operator in the dashboard. **It promotes nothing, trades nothing, and no module that can move money may
+read it.** §5.5 governs: retroactive screening may filter an idea and may never promote one.
+
+### What a band is
+
+A band is one hypothesis, not a grid axis:
+
+```
+{ label, entryLowCents, entryHighCents, exitCents }
+```
+
+A candidate qualifies for a band when its executable ask first falls inside `(entryLowCents,
+entryHighCents]` with at least `minimumSecondsRemaining` on the clock; it pays if the owned-side bid later
+reaches `exitCents`. Each band produces exactly one row of measured results.
+
+**Entry bands crossed against a fixed exit ladder was the wrong shape and is rejected.** It produces a
+170-cell matrix, which is a fishing expedition by construction, and it makes the exit a second-class
+parameter when it is the one this policy most needs to test. A list of N deliberate bands also makes the
+multiple-comparison count legible: N is the number of hypotheses, stated on the surface.
+
+### What is stored, and why this shape
+
+Answering an arbitrary band cheaply needs a **band-independent** primitive, because the alternative —
+storing results per band — would mean every new band required re-reading months of paths, and
+`lib/contract-path.ts` refuses to bake a mark into a stored summary for exactly that reason.
+
+Per `(contract, side)`, at seal: **the first occurrence of each distinct ask, with its offset, paired with
+the highest owned-side bid reachable strictly after it.**
+
+```
+[contractId, symbol, closesAt, side, settledSide, [[offsetSeconds, askCents, peakBidAfterCents], …]]
+```
+
+Any band is then the earliest stored triple whose ask lands in range and whose offset is inside the entry
+window, compared against the exit. Carrying the offset keeps `minimumSecondsRemaining` a **query** rather
+than a stored assumption — it has already changed once, from 180s to 600s, and §7 says the evidence would
+support widening it further.
+
+Offsets are stored only to **600 seconds**, which is the one deliberate limit: every
+`minimumSecondsRemaining` of 300 or more stays answerable, and going wider than the first ten minutes would
+need re-collection. Measured over 1,541 windows that is **mean 11.25 triples per side, maximum 46, about
+7.4 MB at the 45-day retention** — against 9.7 MB to cover the full configurable range and 3.7 MB to
+support nothing but today's setting.
+
+**A running-minimum "ladder" was tried first and is wrong.** It records only new lows, but the first ask
+inside a band is frequently not a new low — a side at 30¢ that rises to 42¢ enters `(40, 45]` on a rise.
+Checked against a direct path scan it disagreed on 55 of 77 triples, worst at high bands (1,090 candidates
+against 795). The corrected primitive above reproduces the direct scan on **89 of 89** triples, including
+overlapping and non-aligned bands. Any future change to this structure must be re-checked the same way; the
+failure is silent and looks like a plausible number.
+
+### Settlement
+
+Resolved from the venue when the window seals, on the path the sentinels already use. Deliberately **not**
+the last-sample inference — it agrees 98.9% of the time and was still the construction behind a retracted
+conclusion (§14b) — and **not** the sealed forecast shards, which AGENTS §3 forbids reading to answer a
+summary question.
+
+### Collection and backfill
+
+The primitive is derived read-only from contract paths and never mutates them. Because it is
+band-independent, **saving a band starts no backfill**: the grid recomputes in milliseconds over the stored
+pairs. The only backfill is a one-time build of the candidate journal from existing paths, measured at
+about 1.5 seconds over the current 1,541 windows. It runs detached, never on a cycle that has money in it,
+and never on a stateless host.
+
+### Safety boundaries
+
+The long-shot surface is read-only today; this adds the first write path to it, and what it writes is a
+machine for retroactive screening. Three guards, built in rather than bolted on:
+
+- **Naming enforces the gap.** These are *analysis* bands, never entry bands. No module that can price,
+  size, gate, or trade may import the store, asserted by a test in the spirit of
+  `lib/strategy-isolation.test.ts`, so wiring a good-looking band into `entryMarkCents` breaks the build
+  rather than shipping.
+- **Every saved configuration is retained and counted.** The surface displays how many band sets have been
+  evaluated, because that count is the multiple-comparison denominator. Without it on the face of the
+  panel, forty configurations get tried and one gets remembered — which is precisely how a 0.82 cell would
+  become a policy change.
+- **Stateless hosts neither write nor backfill** (§3), and the panel carries the same "promotes nothing"
+  statement as the rest of the evidence surface.
+
+### Reported per band
+
+Candidates, independent settlement windows, touch rate, break-even, ratio, and clustered return per $1
+staked with its standard error — returns averaged within a settlement window before being averaged across
+windows (§5.1). Ratio is primary; return is the honest figure but carries the wide errors §14b documents.
+
+### Defaults
+
+Overlapping bands are allowed, since they are distinct hypotheses rather than a partition. Bands are capped
+at 20, require a label, and validate `1 ≤ entryLow < entryHigh ≤ 99` and `entryHigh < exit ≤ 99`.
+
+## 15b. Approach (iii) — near-money hold, committed 2026-08-18
+
+**A prospective test, committed before the evidence.** The rule is fixed in `NEAR_MONEY_HOLD`
+(`lib/near-money-sentinel.ts`) with the date it was written; windows closing at or after that instant are
+the only arm that could promote anything, and everything before it is screening (§5.5). Changing any field
+is a new `id` and a new cohort, never an edit.
+
+**Where it came from, stated plainly so the bias is on the record.** It was found by sweeping bands in the
+dashboard: near-money entries returned −0.020 ± 0.040 per $1 held, the best cell on the board. That is
+indistinguishable from zero and consistent with an efficiently priced book minus a ~5% fee drag at a 20¢
+ticket, so this is a test of whether anything is there, expecting nothing.
+
+**Rule.** Buy the side whose ask first lands in `(70, 75]` with at least ten minutes left; hold to
+settlement. Stops are evaluated as a family — none, −5¢, −10¢, −15¢, −20¢ **below the entry ask** — rather
+than one chosen level, for the same reason no entry mark is stored: choosing now would mean re-collecting
+to re-choose.
+
+**Why the stop is not "sell if it drops to or below entry".** You buy at the ask and mark against the bid,
+and at 70–75¢ the spread is a median 1¢, mean 1.79¢, with 40% at 2¢ or more (measured over 540 entries). A
+stop at the entry price is therefore breached the instant the position opens, and would measure the spread
+rather than the thesis. Every stop level here sits strictly below the entry bid.
+
+**What it needed from storage.** `CandidateMark` gained `troughBidAfterCents`, the mirror of the peak, so
+any stop level stays evaluable — bumping the candidate schema to `v2` and quarantining the `v1` journal,
+which is derived from paths and rebuilt in ~105ms. Ordering of trough against peak is deliberately not
+recorded: this rule has no take-profit, so which came first cannot change whether the stop fired. **A rule
+with both a stop and a target would need more than this.**
+
+**First screening read, 536 positions over 138 windows.** Every stop is worse than holding, monotonically —
+the tighter the stop, the worse:
+
+| arm | fires | return per $1 |
+|---|---|---|
+| hold | — | −0.025 ± 0.035 |
+| stop −20¢ | 46% | −0.034 ± 0.023 |
+| stop −15¢ | 51% | −0.039 ± 0.021 |
+| stop −10¢ | 59% | −0.050 ± 0.019 |
+| stop −5¢ | 73% | −0.067 ± 0.016 |
+
+A near-money contract dipping and recovering is ordinary, so a stop converts a temporary drawdown into a
+realised loss; it fires on between half and three-quarters of positions. Stops do cut variance — the
+standard error falls from 0.035 to 0.016 — but they pay for it in the mean.
+
+**Both biases in the stop's favour.** It assumes a fill at the stop level, and a bid gapping through fills
+worse; and it cannot see a dip between samples, which understates how often it fires. A stop that loses
+here loses by more than this says.
+
+## 17. Maker-fill experiment — bounded, 2026-08-18
+
+**A bounded instrument for one question, not a permanent lane.** Does a resting order fill on ordinary
+trades, or only on the ones about to go against it? Everything else about patient execution on this venue
+depends on the answer, and nothing currently recorded can supply it.
+
+### Why the existing measurement cannot answer it
+
+`npm run analyze:maker-fills` found no adverse drift on 15,000–17,000 simulated fills over 1,611 windows —
+but it treats a post as filled the moment the ask **touches** it. The mechanism that produces adverse
+selection is queue position: a resting order fills when price *sweeps through* its level and is passed over
+when price merely brushes it, and sweeps are the adverse case. Touch and sweep are indistinguishable in a
+quote-only record at any sampling rate, so that measurement is permissive by construction.
+
+### What already exists
+
+Four of the five pieces are built and in production use for the edge policy's managed maker:
+
+| piece | where |
+| --- | --- |
+| Full ladder, depth 20 | `fetchKalshiOrderBookNow` (`lib/kalshi-depth.ts`) |
+| Size at our price and ahead of it | `selectedSideDepth` (`lib/order-book-depth.ts`) |
+| Real executions since a timestamp | `fetchKalshiTradePrintsSince` (`lib/kalshi-market-data.ts`) |
+| Queue consumption, with the right rule | `simulatePaperMaker` (`lib/paper-maker-simulation.ts`) |
+
+`simulatePaperMaker` already encodes the distinction this needs: *a selected-side resting bid is consumed
+by a taker buying the opposite outcome, and an ask touch alone is deliberately not a fill.* The gap is only
+that none of it is recorded for contracts the desk never traded — which is exactly the unbiased sample.
+
+### The load-bearing observation
+
+**Depth snapshots alone cannot answer this.** A level shrinking between samples may mean someone traded
+through it or may mean someone cancelled, and those are opposite signals for a resting order.
+
+**Trade prints disambiguate, and they are cumulative.** `fetchKalshiTradePrintsSince` returns every
+execution since a timestamp, so traded volume at a price is exact *regardless of sampling cadence*. Only
+the depth snapshot is coarse. That is what makes a slow, cheap experiment viable.
+
+### Shape
+
+Bounded rather than continuous: it answers the current question and stops. The collection lane can be
+promoted to permanent later if the answer justifies more maker questions.
+
+- **Runs as a standalone script**, never wired into `processCycle`. That is the strongest available
+  boundary: it cannot delay, gate, size, price, or trade, because it is not on the path at all. Both
+  endpoints it uses are public and unauthenticated.
+- **Contracts** come from the active set in `data/contract-paths.json`, which the collector already keeps
+  current — market selection is not duplicated.
+- **Cadence 60 seconds**, roughly 14 requests a minute across ~7 live contracts. Kalshi publishes no budget
+  and sends no `Retry-After`, so the repo's rate limiting is reactive; this starts conservative and stops
+  itself on repeated 429s rather than probing for a ceiling.
+- **Bounded twice**, by wall-clock duration and by a hard request cap, whichever binds first.
+- **Storage** `data/maker-depth-experiment.jsonl`, append-only, one row per contract per sample carrying
+  best bid and ask, displayed size at and ahead of the post price, and traded volume by price since the
+  previous sample. About 0.6 MB a day.
+
+### What it then answers
+
+The analysis replays hypothetical posts under the real rule — a post at `P` fills only once volume traded
+at or through `P` since posting exceeds the size displayed ahead of it — in place of the optimistic touch
+rule, and re-reports drift after fill. A negative drift under that rule is adverse selection; a flat one,
+measured this way, is the first real evidence that patient execution survives here.
+
+### What it still will not answer
+
+`displayedAhead` is *displayed* size, not private FIFO rank, and the module says so. Hidden size and true
+queue position are not in public data at any cadence. This upgrades the finding from **"cannot distinguish
+a brush from a sweep"** to **"can distinguish, using a stated proxy for rank"** — a real improvement, and
+not certainty. **Nothing here authorizes a market-making strategy**; §5.5 applies unchanged.
+
+## 18. Fine path recording, 2026-08-18 — the range being traded was never recorded finely
+
+**Every trajectory measurement in this repo has been made at fifteen seconds.** That was not a stated
+choice; it was an unnoticed consequence of where the fine recorder's trigger sat.
+
+### The gap
+
+`denseWatch` admits a contract only once `cheapest <= entryMarkCents` — a side below the long-shot entry
+mark. That happens three to five minutes into a cycle, by which point the book is roughly 9¢/91¢. Measured
+across 57 windows carrying a real one-second run, **zero** had the 20–80¢ range inside the fine region. The
+range an operator watching the app actually trades has only ever existed at fifteen seconds.
+
+That resolution hides real movement, measured on those same windows: mean 0.69¢ of travel per fifteen-second
+block is invisible, about **37% of all price movement**, and **8.7% of blocks conceal a swing of 2¢ or
+more** (p99 is 9.5¢).
+
+An attempt to close this with a standalone two-second poller was withdrawn within a minute: seven contracts
+every two seconds is ~210 requests a minute, and **the live desk was rate-limited inside thirty seconds**
+on the very endpoint being polled. Kalshi's budget is per account and the repo's limiter is per process, so
+a second process duplicating the desk's own reads competes with it for real.
+
+### What was done instead
+
+`longShotEntryTick` **already fetches every eligible contract at the entry cadence**, through a shared
+quote cache, to make the entry decision. Those quotes were discarded unless the contract happened to be
+cheap. They are now recorded at `CONTRACT_PATH_FINE_BUCKET_MS` (two seconds) for every eligible contract.
+
+**This costs no venue request at all.** It records what was already being fetched and thrown away, which is
+why it is the only version of this change that does not compete with the desk.
+
+Coverage follows eligibility: `minimumSecondsRemaining` or more left on the clock, so the first five
+minutes of a window — which is where the 20–80¢ range lives and where the entry decision is made.
+
+### Storage, and why history is rewritten
+
+Fine sampling is roughly five times the points, a permanent ~130 MB liability at the 45-day retention for a
+resolution only recent analysis needs. Compaction therefore **thins windows older than
+`CONTRACT_PATH_FINE_RETENTION_DAYS` back to the fifteen-second grid**, keeping one sample per coarse bucket.
+
+Journals are append-only and are not rewritten to change history (AGENTS §3); this rewrites *resolution*,
+not content, and restores exactly the sampling density every existing measurement was written against. The
+thinned form is **not** byte-identical to a coarsely recorded window: an observation is bucketed when it is
+stored, so a fine sample survives at offset 16 where the coarse recorder would have written 15. Offsets
+differ by less than one coarse bucket and carry the same information. `lib/contract-path.test.ts` pins the
+density, the ordering, and that no sample is ever invented.
+
+### What it does not change
+
+No entry rule, no exit rule, no sizing, no arming. Recording is detached and never awaited on the trading
+path, exactly as the coarse recorder is. It adds resolution to an observation lane and nothing else.
 
 ## 16. Out of scope
 

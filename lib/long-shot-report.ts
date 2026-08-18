@@ -29,6 +29,49 @@ export interface LongShotSegment {
   standardError: number | null;
 }
 
+/**
+ * The exit rule scored against holding, paired on identical orders.
+ *
+ * The sentinel arm (`lib/hold-sentinel.ts`) answers the same question without execution selection bias but
+ * only at the collection cadence. This one is its complement: selected by what actually filled, and
+ * therefore biased, but measuring realized proceeds, real fees, and the one-second exit poll. The two are
+ * reported side by side and never summed. See docs/long-shot-policy-design.md §10a.
+ */
+export interface LongShotExitVersusHold {
+  /**
+   * Mean paired difference — exit minus hold — per $1 staked, over **every** settled attempt.
+   *
+   * Positive means the exit rule added value. Attempts that never sold contribute exactly zero, which is
+   * correct rather than a filler: their realized P&L *is* the hold outcome. This is the figure that answers
+   * "is the desk better off having the exit rule at all".
+   */
+  perDollar: number | null;
+  standardError: number | null;
+  windows: number;
+  attempts: number;
+  /** The same difference over only the attempts where the exit fired: "when it fires, is it right?" */
+  whenExercisedPerDollar: number | null;
+  whenExercisedStandardError: number | null;
+  whenExercisedAttempts: number;
+  /** Raw cash across the cohort. A per-$1 figure gets loud on a 13c stake; the operator should see both. */
+  totalCents: number;
+  /**
+   * Sold, but neither the settled outcome nor its counterfactual has resolved yet. Excluded and counted:
+   * treating an unresolved counterfactual as zero would silently report that selling cost nothing.
+   */
+  unresolvedCounterfactual: number;
+  /**
+   * Settled without a `sold` status while carrying an accepted venue exit. Excluded and counted.
+   *
+   * This conflates two cases the ledger cannot currently tell apart: an exit that filled nothing, whose
+   * record is fine, and a **partial** exit, whose record is not — the partial branch of `runLongShotExits`
+   * reduces the parent's quantity, payout and stake and does not retain the sold portion's proceeds, so
+   * that order's P&L understates what happened. Both are dropped because only one is safe to keep and
+   * separating them needs a durable marker that does not exist. Live-only: paper always exits in full.
+   */
+  exitAttemptedUnsold: number;
+}
+
 export interface LongShotReport {
   reportVersion: string;
   mode: ExecutionMode;
@@ -49,6 +92,7 @@ export interface LongShotReport {
    * have paid, without waiting for another month of collection under a changed parameter.
    */
   peakBidBuckets: Array<{ atLeastCents: number; count: number }>;
+  exitVersusHold: LongShotExitVersusHold;
   reviewAttemptsRequired: number;
   reviewUnlocked: boolean;
 }
@@ -93,6 +137,77 @@ function segment(label: string, orders: PaperOrder[]): LongShotSegment {
     standardError: average !== null && perWindow.length > 1
       ? Math.sqrt(perWindow.reduce((sum, value) => sum + (value - average) ** 2, 0) / (perWindow.length - 1) / perWindow.length)
       : null,
+  };
+}
+
+/** Mean and standard error over settlement windows, averaging within a window first (AGENTS §5.1). */
+function clusterByWindow(rows: Array<{ key: string; value: number }>): { mean: number | null; standardError: number | null; windows: number } {
+  const windows = new Map<string, number[]>();
+  for (const row of rows) windows.set(row.key, [...(windows.get(row.key) ?? []), row.value]);
+  const perWindow = [...windows.values()].map((values) => mean(values)!);
+  const average = mean(perWindow);
+  return {
+    mean: average,
+    standardError: average !== null && perWindow.length > 1
+      ? Math.sqrt(perWindow.reduce((sum, value) => sum + (value - average) ** 2, 0) / (perWindow.length - 1) / perWindow.length)
+      : null,
+    windows: perWindow.length,
+  };
+}
+
+/**
+ * Return per $1 staked from holding this order to settlement instead of exiting.
+ *
+ * Computed uniformly for sold and unsold orders alike rather than branching on status. For an order that
+ * was never sold this necessarily equals its realized P&L, so the paired difference is exactly zero — an
+ * invariant the tests pin, which is stronger than a special case would be.
+ *
+ * The stake cancels out of the difference: `exit − hold = saleProceeds − settlementPayout`. So §1's exact
+ * and whole-cent P&L views cannot mix inside the numerator, whichever view `pnl` returns.
+ */
+function holdPnlCents(order: PaperOrder): number | null {
+  const settledSide = order.outcome ?? order.counterfactualHoldOutcome;
+  if (!settledSide) return null;
+  const payoutCents = settledSide === order.side ? order.potentialPayoutCents : 0;
+  if (!Number.isFinite(payoutCents)) return null;
+  return payoutCents - stake(order);
+}
+
+function exitVersusHold(settled: PaperOrder[]): LongShotExitVersusHold {
+  const all: Array<{ key: string; value: number }> = [];
+  const exercised: Array<{ key: string; value: number }> = [];
+  let totalCents = 0;
+  let unresolvedCounterfactual = 0;
+  let exitAttemptedUnsold = 0;
+
+  for (const order of settled) {
+    // An accepted venue exit on an order that did not close `sold` may have filled partially, and a
+    // partial does not retain its proceeds. Dropped rather than trusted.
+    if (order.status !== 'sold' && order.exitVenueOrderId) { exitAttemptedUnsold += 1; continue; }
+    const hold = holdPnlCents(order);
+    if (hold === null) { unresolvedCounterfactual += 1; continue; }
+    const staked = stake(order);
+    if (!(staked > 0)) continue;
+    const differenceCents = pnl(order) - hold;
+    totalCents += differenceCents;
+    const row = { key: windowKey(order), value: differenceCents / staked };
+    all.push(row);
+    if (order.status === 'sold') exercised.push(row);
+  }
+
+  const overall = clusterByWindow(all);
+  const fired = clusterByWindow(exercised);
+  return {
+    perDollar: overall.mean,
+    standardError: overall.standardError,
+    windows: overall.windows,
+    attempts: all.length,
+    whenExercisedPerDollar: fired.mean,
+    whenExercisedStandardError: fired.standardError,
+    whenExercisedAttempts: exercised.length,
+    totalCents,
+    unresolvedCounterfactual,
+    exitAttemptedUnsold,
   };
 }
 
@@ -145,6 +260,7 @@ export function buildLongShotReport(input: {
       atLeastCents,
       count: unsold.filter((order) => (order.peakOwnedSideBidCents ?? 0) >= atLeastCents).length,
     })),
+    exitVersusHold: exitVersusHold(settled),
     reviewAttemptsRequired: LONG_SHOT_REVIEW_ATTEMPTS,
     reviewUnlocked: settled.length >= LONG_SHOT_REVIEW_ATTEMPTS,
   };
