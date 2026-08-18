@@ -160,11 +160,18 @@ describe('execution signal persistence', () => {
     expect(result.medianNetEdge).toBeCloseTo(0.03);
   });
 
-  it('blocks all new entries inside the final two minutes', () => {
+  it('blocks all new entries inside the final 30 seconds', () => {
+    let state: SignalPersistenceState | undefined;
+    for (const seconds of [825, 840, 855, 870]) state = advance(state, seconds);
+    const result = evaluateSignalPersistence(state, Date.parse(time(870)), 0.05, 0.5);
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toContain('final 30s');
+  });
+
+  it('admits the 120s-to-30s band that v20 opened', () => {
     let state: SignalPersistenceState | undefined;
     for (const seconds of [735, 750, 765, 780]) state = advance(state, seconds);
-    const result = evaluateSignalPersistence(state, Date.parse(time(780)), 0.05, 0.5);
-    expect(result.eligible).toBe(false);
-    expect(result.reason).toContain('final 120s');
+    // 120 seconds remaining: refused before v20, admitted now.
+    expect(evaluateSignalPersistence(state, Date.parse(time(780)), 0.05, 0.5).eligible).toBe(true);
   });
 });

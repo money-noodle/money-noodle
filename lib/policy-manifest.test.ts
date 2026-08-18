@@ -68,9 +68,9 @@ describe('published policy manifest', () => {
     delete process.env.MONEY_NOODLE_ALLOW_DOWN_ENTRY;
     delete process.env.MONEY_NOODLE_MAX_NET_EDGE;
     delete process.env.MONEY_NOODLE_EXCLUDED_ASSETS;
-    expect(detail('buy', 'Net edge after fees')).toBe('≥5pp and <35pp');
+    expect(detail('buy', 'Net edge after fees')).toBe('≥-5pp and <100pp');
     expect(detail('buy', 'Selected-side probability')).toBe('≥55%');
-    expect(detail('buy', 'Entry timing')).toBe('90-second warm-up; no entry in final 120 seconds');
+    expect(detail('buy', 'Entry timing')).toBe('90-second warm-up; no entry in final 30 seconds');
     // One row each, not one per track: the published policy says the tracks cannot differ.
     expect(detail('eligibility', 'DOWN/NO entry')).toBe('Permitted');
     expect(detail('eligibility', 'Assets withheld')).toBe('XRP');
@@ -85,7 +85,7 @@ describe('published policy manifest', () => {
     process.env.MONEY_NOODLE_REGIME_MIN_POLICY_WINDOWS = '20';
     process.env.MONEY_NOODLE_MIN_SWITCH_PROBABILITY_ADVANTAGE = '0.25';
     process.env.MONEY_NOODLE_MAX_LIVE_MAKER_ATTEMPTS = '2';
-    expect(detail('buy', 'Net edge after fees')).toBe('≥5pp and <25pp');
+    expect(detail('buy', 'Net edge after fees')).toBe('≥-5pp and <25pp');
     expect(detail('eligibility', 'DOWN/NO entry')).toBe('Suspended by operator switch');
     expect(detail('eligibility', 'Assets withheld')).toBe('DOGE, SOL');
     expect(detail('regime', 'Status')).toBe('Disabled; entries are not gated');

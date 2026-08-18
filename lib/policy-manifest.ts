@@ -38,9 +38,54 @@ const component = (
  */
 const history: PolicyManifestHistoryEntry[] = [
   {
+    version: 'buy-binary-edge-netminus5-nocap-quality50-owned55-price5to97-late30-v20',
+    activatedAt: '2026-08-18T23:30:00.000Z',
+    status: 'active',
+    summary: 'Admitted substantially more entries: the net-edge floor to −5pp, the ceiling off, and the late cutoff from 120s to 30s. An operator decision to trade volume the measurement says is profitable, accepting an execution risk the measurement does not cover.',
+    changes: [
+      'MIN_NET_EDGE 5pp → −5pp; the 402 decisions this admits returned +17.5% ±6.5 held to settlement',
+      'MAX_NET_EDGE default 35pp → 1, disarming the ceiling; re-arm with MONEY_NOODLE_MAX_NET_EDGE=0.35',
+      'EXECUTION_LATE_CUTOFF_MS 120s → 30s; the 248 decisions this admits returned +19.8% ±12.0, positive on 8 of 8 days',
+      'No change to the selected-side floor, the quality floor, the price band, warm-up, or persistence',
+      'Known cost accepted: the version bump discards the accumulated adaptive-regime windows and re-warms',
+    ],
+    // Put in writing at the operator's instruction, and the parts that are not established are named
+    // rather than folded into the summary.
+    //
+    // What the evidence does support: measured over 8 days, the combined increment is 686 decisions at
+    // +32.4% ±10.5 per window and +20.2% stake-weighted, positive on 8 of 8 days. 537 of those are
+    // ordinary 50–85c contracts carrying 73% of the profit, where the per-window and stake-weighted views
+    // agree to within a point — so it is not an artefact of weighting, and it is not tail-driven: the best
+    // ten decisions are 11% of the total. The prior objection that capacity would make this substitutional
+    // rather than additive was refuted by measurement: the desk sat at its 3-position cap on 0 of 67 v19
+    // orders and 3 of 348 since v17.
+    //
+    // What it does not support, stated plainly:
+    //   - Under the durability proxy the same increment falls from +20.2% to +10.3% ±10.8. The relaxed
+    //     floor admits edges that may not survive contact with a resting order.
+    //   - Every figure is at the ask, held to settlement. Production rests a maker order and fills about
+    //     half the time, adversely selected. None of this measures what these entries would fill at.
+    //   - The 30-second cutoff is the piece with an operational risk the measurement cannot see: no time
+    //     to reprice, no retry inside 120s, and no time to exit. Exit availability there is 64% against
+    //     82% for the population.
+    //   - Eight days, one venue, one strategy. The edge-floor increment exists on only three of them.
+    //
+    // This is an operator decision taken with all of that stated. Every safety control remains in force:
+    // environment gating, typed-confirmation arming, the per-trade all-in cap, rate limits, the kill
+    // switch, reduce-only exits, and reconciliation before execution. Nothing here relaxes one, and the
+    // decision is reversible by restoring the three constants.
+    evidence: [
+      'reports/missed-entry-review-2026-08-18.md · gate relaxations scored against the live rule',
+      'npm run analyze:missed-entries §2c-2d · increment worth +81c over 8 days; 73% from 50-85c contracts',
+      'npm run analyze:contract-selection · at the 3-position cap on 0 of 67 v19 orders, so the slots are empty',
+      'reports/loss-decomposition-2026-08-18.md · v19 contract selection −21.8pp, fill selection −8.4pp',
+    ],
+  },
+  {
     version: 'buy-binary-edge-net5to35-quality50-owned55-price5to97-v19',
     activatedAt: '2026-08-18T22:00:00.000Z',
-    status: 'active',
+    deactivatedAt: '2026-08-18T23:30:00.000Z',
+    status: 'superseded',
     summary: 'Disarmed the edge-spike refusal by operator decision, against the direction of its own sentinel. The spike is still measured on every decision.',
     changes: [
       'The spike gate no longer refuses an entry; `edgeSpikeGateEnabled` is off unless MONEY_NOODLE_EDGE_SPIKE_GATE=true',

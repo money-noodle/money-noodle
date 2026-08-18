@@ -23,7 +23,7 @@
  *   - Exits are priced optimistically at exactly the mark.
  *   - Read-only. Places no order and writes nothing.
  */
-import { readFile, readdir } from 'node:fs/promises';
+import { readForecastHistory } from './lib/forecast-history.mjs';
 import { createReadStream, existsSync } from 'node:fs';
 import readline from 'node:readline';
 import path from 'node:path';
@@ -52,13 +52,11 @@ async function loadPaths() {
 
 async function loadOutcomes() {
   const outcomes = new Map();
-  const absorb = (list) => { for (const row of list) if (row.status === 'resolved' && row.outcome) outcomes.set(`${row.symbol}|${row.closesAt}`, row.outcome); };
-  for (const file of (await readdir(SHARDS)).filter((name) => /^\d{4}-\d{2}-\d{2}\.json$/.test(name)).sort()) {
-    absorb(JSON.parse(await readFile(path.join(SHARDS, file), 'utf8')));
-    global.gc?.();
+  // Shards + open shard + journal patches. `open.json` is rewritten only on compaction, so reading it
+  // alone drops every window settled since the last one — hours of them on a running collector.
+  for (const row of await readForecastHistory(DATA)) {
+    if (row.status === 'resolved' && row.outcome) outcomes.set(`${row.symbol}|${row.closesAt}`, row.outcome);
   }
-  const open = path.join(SHARDS, 'open.json');
-  if (existsSync(open)) absorb(JSON.parse(await readFile(open, 'utf8')));
   return outcomes;
 }
 

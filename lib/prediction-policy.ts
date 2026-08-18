@@ -12,8 +12,20 @@ import type { PositionSide, Prediction } from './types';
  * forecast and then subtracting that same price would shrink the disagreement the desk exists to trade.
  */
 
-/** Minimum expected value per $1 of payout, after fees, before a buy qualifies. */
-export const MIN_NET_EDGE = 0.05;
+/**
+ * Minimum expected value per $1 of payout, after fees, before a buy qualifies.
+ *
+ * **Lowered from 5pp to −5pp at v20.** The 5pp floor was refusing 402 decisions that returned +17.5%
+ * ±6.5 held to settlement — at or above the rate of the population it was already admitting. The bulk of
+ * that increment is ordinary 50–85¢ contracts where the per-window and stake-weighted views agree to
+ * within a point, so it is not an artefact of how the cohort is weighted.
+ *
+ * A negative floor is deliberate and reads oddly: it admits contracts the model prices at or slightly
+ * below the ask. Those are not edge trades. They are favourites the market has priced correctly and the
+ * model agrees with, and they paid because the desk's slots were empty — measured at 0 of 67 v19 orders
+ * at the 3-position cap.
+ */
+export const MIN_NET_EDGE = -0.05;
 /**
  * Upper bound on claimed edge, above which the claim is treated as model failure rather than opportunity.
  *
@@ -26,7 +38,19 @@ export const MIN_NET_EDGE = 0.05;
  * loudly, and it concentrates at cheap prices where it disagrees most. Restrictive only: this can refuse
  * a trade, never authorize one. Set MONEY_NOODLE_MAX_NET_EDGE to change or 1 to disable.
  */
-export const MAX_NET_EDGE = 0.35;
+/**
+ * **Disarmed at v20** by raising the default to 1, which admits every edge the model can express.
+ *
+ * The calibration inversion this describes is real and is not withdrawn: above 35pp the model predicted
+ * 64.0% and realized 37.6% over 218 windows. What changed is the statistic that decides. Win rate is the
+ * wrong one for comparing across price levels — a high edge means a low price, and a lower win rate at a
+ * much lower price still pays. Measured on return per dollar, the refused cohort returned +144% ±141 over
+ * 18 decisions and contributed 8% of the v20 increment's profit on negligible stake.
+ *
+ * That is a wide interval on a small cohort. It is included because it is nearly free, not because it is
+ * established. Restrictive only: re-arm with MONEY_NOODLE_MAX_NET_EDGE=0.35.
+ */
+export const MAX_NET_EDGE = 1;
 
 export function maximumNetEdge(): number {
   const configured = Number(process.env.MONEY_NOODLE_MAX_NET_EDGE);
@@ -52,7 +76,7 @@ export const MIN_SELECTED_SIDE_PROBABILITY = 0.55;
  */
 export const MIN_ENTRY_PRICE = 0.05;
 export const MAX_ENTRY_PRICE = 0.97;
-export const BUY_POLICY_VERSION = 'buy-binary-edge-net5to35-quality50-owned55-price5to97-v19';
+export const BUY_POLICY_VERSION = 'buy-binary-edge-netminus5-nocap-quality50-owned55-price5to97-late30-v20';
 /** Minimum unique resolved 15-minute settlement timestamps, never updates or per-asset cycles. */
 export const MIN_CALIBRATION_SAMPLE = 100;
 

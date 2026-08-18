@@ -48,6 +48,7 @@
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { readForecastHistory } from './lib/forecast-history.mjs';
 
 const DATA = path.resolve(process.cwd(), 'data');
 const SHARDS = path.join(DATA, 'forecast-history-shards');
@@ -55,6 +56,9 @@ const SHARDS = path.join(DATA, 'forecast-history-shards');
 const COHORTS = [
   { label: 'v17', suffix: '-v17' },
   { label: 'v18 (fresh2pp)', suffix: 'fresh2pp-v18' },
+  // v19 disarmed the edge-spike gate. It is the policy the desk is running, so it is the one that has to
+  // be decomposed; carrying only the retired eras is how a current loss goes unmeasured.
+  { label: 'v19 (spike gate disarmed)', suffix: '-v19' },
 ];
 
 const feeRate = (venue, price) => (venue === 'kalshi' ? 0.07 * price * (1 - price) : 0.01 * price);
@@ -81,9 +85,9 @@ function take(list) {
     });
   }
 }
-const index = JSON.parse(await readFile(path.join(SHARDS, 'index.json'), 'utf8'));
-for (const shard of index.shards) take(JSON.parse(await readFile(path.join(SHARDS, shard.file), 'utf8')));
-if (existsSync(path.join(SHARDS, 'open.json'))) take(JSON.parse(await readFile(path.join(SHARDS, 'open.json'), 'utf8')));
+// Shards + open shard + journal patches. Reading shards alone reported zero rows for v19 while the desk
+// was trading it, because `open.json` was hours stale and resolution arrives as a journal patch.
+take(await readForecastHistory(DATA));
 
 const allOrders = JSON.parse(await readFile(path.join(DATA, 'paper-orders.json'), 'utf8')).orders
   .filter((o) => !o.id.includes(':exit:') && o.strategyId !== 'long-shot-round-trip');

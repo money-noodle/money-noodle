@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_FILLABLE_ASK, estimatePaperFill, groupedRecentOrders, venueFeeCents } from './paper-execution';
 import type { PaperOrder } from './types';
-import { MAX_ENTRY_PRICE, MIN_ENTRY_PRICE, MIN_NET_EDGE, venueFeeRate, ENTRY_FEE_ROLE } from './prediction-policy';
+import { MAX_ENTRY_PRICE, MIN_ENTRY_PRICE, MIN_NET_EDGE, bestEntry, venueFeeRate, ENTRY_FEE_ROLE } from './prediction-policy';
 
 const liveAttempt = (patch: Partial<PaperOrder> = {}): PaperOrder => ({
   id: 'live:XRP:close', logicalOrderId: 'live:XRP:close', attemptNumber: 1, executionMode: 'live',
@@ -81,7 +81,14 @@ describe('paper execution fills', () => {
     // confident model cannot clear the bar near the top of the range.
     const mostConfident = 0.97;
     const dearest = mostConfident - MIN_NET_EDGE - venueFeeRate('kalshi', 0.9, ENTRY_FEE_ROLE);
-    expect(dearest).toBeLessThan(MAX_ENTRY_PRICE);
-    expect(dearest).toBeLessThan(0.92);
+    // **Reversed at v20.** With the floor at -5pp the expected-value test no longer binds before the
+    // price ceiling: the dearest price a 97% belief can clear is above MAX_ENTRY_PRICE, so the 97c
+    // ceiling is now a live constraint rather than a backstop the EV gate reaches first.
+    expect(dearest).toBeGreaterThan(MAX_ENTRY_PRICE);
+    expect(bestEntry({
+      modelProbabilityUp: mostConfident, enabledTradingVenues: ['kalshi'],
+      market: { live: false } as never,
+      kalshi: { live: true, askUp: 0.98, askDown: 0.03 } as never,
+    })).toBeUndefined();
   });
 });

@@ -43,10 +43,10 @@
  *   - Settlement is authoritative, from the resolved forecast history.
  *   - Read-only. Places no order, writes nothing.
  */
-import { readFile, readdir } from 'node:fs/promises';
 import { createReadStream, existsSync } from 'node:fs';
 import readline from 'node:readline';
 import path from 'node:path';
+import { readForecastHistory } from './lib/forecast-history.mjs';
 
 const DATA = path.resolve(process.cwd(), 'data');
 const SHARDS = path.join(DATA, 'forecast-history-shards');
@@ -91,48 +91,26 @@ async function loadPaths() {
 // ------------------------------------------------------------------ resolved forecast history
 async function loadWindows() {
   const windows = new Map();
-  const absorb = (list) => {
-    for (const row of list) {
-      if (row.status !== 'resolved' || !row.outcome) continue;
-      const quotes = row.actionableVenuePrices?.filter((quote) => quote.venue === 'kalshi');
-      if (!quotes?.length) continue;
-      const asks = {};
-      for (const { side, price } of quotes) if (price > 0 && price < 1) asks[side] = price;
-      if (asks.UP === undefined || asks.DOWN === undefined) continue;
-      const key = `${row.symbol}|${row.closesAt}`;
-      const window = windows.get(key)
-        ?? { key, symbol: row.symbol, closesAt: row.closesAt, outcome: row.outcome, day: row.closesAt.slice(0, 10), rows: [] };
-      window.rows.push({
-        t: CYCLE_SECONDS - (row.secondsRemaining ?? 0),
-        probabilityUp: row.probabilityUp, confidence: row.confidence ?? 0, asks,
-      });
-      windows.set(key, window);
-    }
-  };
-  for (const file of (await readdir(SHARDS)).filter((name) => /^\d{4}-\d{2}-\d{2}\.json$/.test(name)).sort()) {
-    absorb(JSON.parse(await readFile(path.join(SHARDS, file), 'utf8')));
-    global.gc?.();
-  }
-  const open = path.join(SHARDS, 'open.json');
-  if (existsSync(open)) absorb(JSON.parse(await readFile(open, 'utf8')));
-  const journal = path.join(DATA, 'forecast-history.journal.jsonl');
-  if (existsSync(journal)) {
-    const seen = new Set();
-    const stream = readline.createInterface({ input: createReadStream(journal) });
-    for await (const line of stream) {
-      if (!line.trim()) continue;
-      try {
-        const parsed = JSON.parse(line);
-        const record = parsed.forecast ?? parsed;
-        if (!record?.id || seen.has(record.id)) continue;
-        seen.add(record.id);
-        absorb([record]);
-      } catch { /* damaged line */ }
-    }
+  // Shards + open shard + journal patches. An earlier version read shards and `open.json` only, which on a
+  // running collector is hours stale, so the newest policy era was missing from every table below.
+  for (const row of await readForecastHistory(DATA)) {
+    if (row.status !== 'resolved' || !row.outcome) continue;
+    const quotes = row.actionableVenuePrices?.filter((quote) => quote.venue === 'kalshi');
+    if (!quotes?.length) continue;
+    const asks = {};
+    for (const { side, price } of quotes) if (price > 0 && price < 1) asks[side] = price;
+    if (asks.UP === undefined || asks.DOWN === undefined) continue;
+    const key = `${row.symbol}|${row.closesAt}`;
+    const window = windows.get(key)
+      ?? { key, symbol: row.symbol, closesAt: row.closesAt, outcome: row.outcome, day: row.closesAt.slice(0, 10), rows: [] };
+    window.rows.push({
+      t: CYCLE_SECONDS - (row.secondsRemaining ?? 0),
+      probabilityUp: row.probabilityUp, confidence: row.confidence ?? 0, asks,
+    });
+    windows.set(key, window);
   }
   for (const window of windows.values()) {
     window.rows.sort((a, b) => a.t - b.t);
-    // One row per sampled instant; duplicates would manufacture persistence.
     window.rows = window.rows.filter((row, index) => index === 0 || row.t > window.rows[index - 1].t);
   }
   return windows;
@@ -279,6 +257,10 @@ const ARMS = [
   relax('price band 2–99c', { minPrice: 0.02, maxPrice: 0.99 }),
   relax('late cutoff 30s', {}, { cutoff: 30 }),
   relax('warmup 30s', {}, { warmup: 30 }),
+  // Every relaxation whose increment scored positive, applied together. The side-probability floor and the
+  // warmup are excluded: their increments are negative and near-zero respectively.
+  relax('COMBINED floor 0pp + cutoff 30s', { minEdge: 0 }, { cutoff: 30 }),
+  relax('COMBINED floor −5pp + cutoff 30s + ceiling off', { minEdge: -0.05, maxEdge: 1 }, { cutoff: 30 }),
 ];
 
 const sides = ['UP', 'DOWN'];
@@ -340,6 +322,55 @@ console.log('\n=== 2. the increment: decisions the live rule never admits in tha
 console.log(HEADER);
 for (const arm of ARMS.slice(1)) {
   report(arm.label, armResults.get(arm.label).increment);
+}
+
+console.log('\n=== 2c. what the increment is worth in cents, at one ticket per decision ===');
+console.log('Total profit the increment would have produced over the whole sample, at the ask, held to');
+console.log('settlement, one entry per decision. This is the number that answers "is admitting more worth it".');
+console.log(`${'arm'.padEnd(38)} ${'decisions'.padStart(9)} ${'cost'.padStart(8)} ${'profit'.padStart(9)} ${'per day'.padStart(8)}`);
+{
+  const days = new Set(windows.map((w) => w.day)).size;
+  for (const arm of ARMS.slice(1)) {
+    const increment = armResults.get(arm.label).increment;
+    if (!increment.length) { console.log(`${arm.label.padEnd(38)} ${'0'.padStart(9)}`); continue; }
+    const cost = increment.reduce((sum, r) => sum + r.cost, 0);
+    const profit = increment.reduce((sum, r) => sum + r.holdReturn * r.cost, 0);
+    console.log(`${arm.label.padEnd(38)} ${String(increment.length).padStart(9)} ${`${cost.toFixed(0)}c`.padStart(8)} `
+      + `${`${profit >= 0 ? '+' : ''}${profit.toFixed(0)}c`.padStart(9)} ${`${(profit / days).toFixed(0)}c`.padStart(8)}`);
+  }
+}
+
+console.log('\n=== 2d. where the combined increment\'s money actually comes from ===');
+console.log('Per-window mean and stake-weighted disagree whenever a cohort mixes price levels, so both are');
+console.log('shown with the cents each slice contributes. A slice carrying the mean on a small stake is');
+console.log('fragile; one carrying it on real stake is not.');
+{
+  const increment = armResults.get('COMBINED floor −5pp + cutoff 30s + ceiling off')?.increment ?? [];
+  const total = increment.reduce((sum, r) => sum + r.holdReturn * r.cost, 0);
+  const slice = (label, rows) => {
+    if (!rows.length) return console.log(`${label.padEnd(26)} none`);
+    const cost = rows.reduce((sum, r) => sum + r.cost, 0);
+    const profit = rows.reduce((sum, r) => sum + r.holdReturn * r.cost, 0);
+    const per = clustered(rows, (r) => r.holdReturn);
+    console.log(`${label.padEnd(26)} n=${String(rows.length).padStart(4)} cost=${`${cost.toFixed(0)}c`.padStart(6)} `
+      + `perWindow=${`${per.mean >= 0 ? '+' : ''}${(100 * per.mean).toFixed(1)}%`.padStart(8)} `
+      + `stakeWtd=${`${profit / cost >= 0 ? '+' : ''}${(100 * profit / cost).toFixed(1)}%`.padStart(8)} `
+      + `profit=${`${profit >= 0 ? '+' : ''}${profit.toFixed(0)}c`.padStart(7)} ` 
+      + `share=${`${(100 * profit / total).toFixed(0)}%`.padStart(5)}`);
+  };
+  console.log(`total increment profit ${total.toFixed(0)}c over ${increment.length} decisions\n`);
+  for (const [lo, hi] of [[0, 0.15], [0.15, 0.3], [0.3, 0.5], [0.5, 0.7], [0.7, 0.85], [0.85, 1]]) {
+    slice(`  cost ${(100 * lo).toFixed(0)}-${(100 * hi).toFixed(0)}c`, increment.filter((r) => r.cost >= lo && r.cost < hi));
+  }
+  console.log('');
+  slice('  won', increment.filter((r) => r.won));
+  slice('  lost', increment.filter((r) => !r.won));
+  console.log('');
+  const sorted = [...increment].sort((a, b) => b.holdReturn * b.cost - a.holdReturn * a.cost);
+  const top = sorted.slice(0, 10).reduce((sum, r) => sum + r.holdReturn * r.cost, 0);
+  const top50 = sorted.slice(0, 50).reduce((sum, r) => sum + r.holdReturn * r.cost, 0);
+  console.log(`  best 10 decisions contribute ${top.toFixed(0)}c = ${(100 * top / total).toFixed(0)}% of the total`);
+  console.log(`  best 50 decisions contribute ${top50.toFixed(0)}c = ${(100 * top50 / total).toFixed(0)}% of the total`);
 }
 
 console.log('\n=== 2b. the same increments, demanding the durability proxy of both rules ===');

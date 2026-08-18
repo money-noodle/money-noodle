@@ -25,8 +25,10 @@ describe('binary buy policy v13', () => {
     expect(qualifiesAsBuyEdge(candidate())).toBe(true);
     // The same 70% belief bought at 90c is a losing trade and must be rejected.
     expect(qualifiesAsBuyEdge(candidate({ market: { ...market, askUp: 0.90 } }))).toBe(false);
-    // A high directional likelihood is not sufficient on its own.
-    expect(qualifiesAsBuyEdge(candidate({ modelProbabilityUp: 0.95, market: { ...market, askUp: 0.94 } }))).toBe(false);
+    // A high directional likelihood is not sufficient on its own. At v20 the floor is -5pp, so the
+    // price has to be far enough above the belief to fail even a gate that tolerates negative edge.
+    expect(qualifiesAsBuyEdge(candidate({ modelProbabilityUp: 0.95, market: { ...market, askUp: 0.94 } }))).toBe(true);
+    expect(qualifiesAsBuyEdge(candidate({ modelProbabilityUp: 0.80, market: { ...market, askUp: 0.90 } }))).toBe(false);
     // v13 restores the 55% floor after the prospective 52.5–55% v12 cohort lost when filled live.
     expect(qualifiesAsBuyEdge(candidate({ modelProbabilityUp: 0.55, market: { ...market, askUp: 0.42 } }))).toBe(true);
     expect(qualifiesAsBuyEdge(candidate({ modelProbabilityUp: 0.549, market: { ...market, askUp: 0.42 } }))).toBe(false);
@@ -58,8 +60,10 @@ describe('binary buy policy v13', () => {
     // deducts the taker rate; that is tracked as ENTRY_FEE_ROLE, not an oversight here.
     expect(venueFeeRate('kalshi', 0.5, 'maker')).toBe(0);
     expect(ENTRY_FEE_ROLE).toBe('taker');
-    // Gross edge is exactly at the bar, so fees must push it below.
-    const marginal = candidate({ modelProbabilityUp: 0.5 + MIN_NET_EDGE, market: { ...market, askUp: 0.5 } });
+    // Gross edge sits exactly at the bar, so the fee alone must push it below — the property under test,
+    // stated relative to whatever the floor currently is rather than to a hardcoded 5pp.
+    // Belief 60% priced so the gross edge lands exactly on the floor; the side floor still passes.
+    const marginal = candidate({ modelProbabilityUp: 0.60, market: { ...market, askUp: 0.60 - MIN_NET_EDGE } });
     expect(bestEntry(marginal)!.netEdge).toBeLessThan(MIN_NET_EDGE);
     expect(hasTradableEdge(marginal)).toBe(false);
   });
@@ -84,7 +88,8 @@ describe('binary buy policy v13', () => {
   });
 
   it('does not let a Polymarket-only edge authorize a live Kalshi order', () => {
-    const mixed = candidate({ market: { ...market, askUp: 0.4 }, kalshi: { ...kalshi, askUp: 0.68 } });
+    // Kalshi must be dear enough to fail the v20 -5pp floor, not merely dearer than Polymarket.
+    const mixed = candidate({ market: { ...market, askUp: 0.4 }, kalshi: { ...kalshi, askUp: 0.79 } });
     expect(qualifiesAsBuyEdge(mixed)).toBe(true);
     expect(qualifiesVenueBuyEdge(mixed, 'polymarket')).toBe(true);
     expect(qualifiesVenueBuyEdge(mixed, 'kalshi')).toBe(false);

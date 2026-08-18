@@ -160,6 +160,64 @@ This configuration is also the **only cell above break-even** in the retroactive
 (10¢/90¢ ratio 1.12, 10¢/70¢ 1.03; every other entry band 0.68–0.85). Two routes agree it is marginally
 positive; neither has the sample to establish it. Nothing is authorized: keep collecting.
 
+### v20 — admit substantially more entries, 2026-08-18, by operator decision
+
+`buy-binary-edge-netminus5-nocap-quality50-owned55-price5to97-late30-v20`, manifest entry in
+`lib/policy-manifest.ts`. Three bounds moved at once:
+
+| bound | v19 | v20 | the increment it admits |
+| --- | --- | --- | --- |
+| `MIN_NET_EDGE` | 5pp | **−5pp** | 402 decisions, +17.5% ±6.5 |
+| `MAX_NET_EDGE` | 35pp | **disarmed (1)** | 18 decisions, +144% ±141 |
+| `EXECUTION_LATE_CUTOFF_MS` | 120s | **30s** | 248 decisions, +19.8% ±12.0, 8/8 days |
+
+Combined: **686 additional decisions at +32.4% ±10.5 per window, +20.2% stake-weighted, positive on 8 of
+8 days**, against a live rule admitting 2,227 at +17.2%. 537 of the 686 are ordinary 50–85¢ contracts
+carrying 73% of the profit, with the per-window and stake-weighted views agreeing to within a point, and
+the best ten decisions are only 11% of the total — it is neither a weighting artefact nor tail-driven.
+
+**Why this is additive rather than substitutional.** The earlier objection was that capacity binds, so
+loosening would only reallocate. `npm run analyze:contract-selection` refutes it: the desk sat at its
+3-position cap on **0 of 67** v19 orders and 3 of 348 since v17. The slots are empty.
+
+**What the evidence does not cover, recorded plainly:**
+
+- Under the durability proxy the same increment falls from +20.2% to **+10.3% ±10.8**.
+- Every figure is at the ask, held to settlement. Production rests a maker order, fills about half the
+  time, and those fills are adversely selected. Nothing here measures what these entries would fill at.
+- The 30-second cutoff carries an operational risk the measurement cannot see: no time to reprice, no
+  retry inside 120s (`MAKER_RETRY_LATE_CUTOFF_MS` is unchanged), and no time to exit. Exit availability in
+  that band is 64% against 82% for the population.
+- Eight days, one venue, one strategy; the edge-floor increment exists on three of those days.
+
+Every safety control remains in force — environment gating, typed-confirmation arming, the per-trade
+all-in cap, rate limits, kill switch, reduce-only exits, and reconciliation before execution. Reversible
+by restoring the three constants; the ceiling alone re-arms with `MONEY_NOODLE_MAX_NET_EDGE=0.35`.
+
+**A consequence to expect:** the price ceiling now binds. With a −5pp floor the expected-value test no
+longer refuses expensive contracts before `MAX_ENTRY_PRICE` does, which reverses a property
+`lib/paper-execution.test.ts` had pinned since v9.
+
+### Why the edge policy loses — v19 decomposed, 2026-08-18
+
+`npm run analyze:loss-decomposition` now covers v19, and a loader bug had been hiding it: the script read
+sealed shards and `open.json` only, `open.json` is rewritten just on compaction and was **7 hours stale**,
+and resolution arrives as a journal patch. It reported **zero rows for v19** while the desk traded it.
+Fixed with a shared journal-aware loader, `scripts/lib/forecast-history.mjs`; v17 and v18 are unchanged.
+
+| era, live | gate | realized | contract selection | fill selection | exits |
+| --- | --- | --- | --- | --- | --- |
+| v17 | +14.4% | −2.9% | −15.7 | −19.4 | +14.6 |
+| v18 | +13.5% | −11.8% | −26.0 | −16.2 | +18.0 |
+| **v19** | **+20.9%** | −9.7% | **−21.8** | **−8.4** | **−2.9** |
+
+The gate is at its best reading yet. Fill selection more than halved. **Contract selection is now the
+dominant leak** — which contract the desk picks inside a window it is right to be trading — and the exits
+have stopped paying. `npm run analyze:contract-selection` splits it: against alternatives already admitted
+at the moment of choice, the chosen contract is −29.7pp (v19); of the better-ranked alternatives that no
+constraint refused, 23 returned **+78.6% ±37.3** while the chosen returned −4.7%, and they had been
+admitted a median of 95 seconds — long past the 30-second persistence span. Cause not yet established.
+
 ### Missed entries — the selection gates are not what keeps volume out, 2026-08-18
 
 Full measurement in [reports/missed-entry-review-2026-08-18.md](reports/missed-entry-review-2026-08-18.md);

@@ -4,7 +4,19 @@ import type { PositionSide } from './types';
 
 export const CYCLE_DURATION_MS = 15 * 60_000;
 export const EXECUTION_WARMUP_MS = 90_000;
-export const EXECUTION_LATE_CUTOFF_MS = 120_000;
+/**
+ * No new entry inside this much of the close.
+ *
+ * **Shortened from 120s to 30s at v20.** The 248 decisions the 120s cutoff refused returned +19.8% ±12.0
+ * held to settlement and were positive on 8 of 8 days — the most day-stable increment measured.
+ *
+ * **The operational risk this accepts is real and is not covered by that measurement.** The figure is at
+ * the ask, held to settlement. Production rests a maker order: with 30 seconds left there is no time to
+ * reprice, no time for the bounded retry (`MAKER_RETRY_LATE_CUTOFF_MS` still refuses a retry inside 120s),
+ * and no time to exit — a position taken here is held to settlement whether or not the exit rule would
+ * have sold it. Exit availability in that band was 64% against 82% for the population as a whole.
+ */
+export const EXECUTION_LATE_CUTOFF_MS = 30_000;
 export const REQUIRED_QUALIFYING_SNAPSHOTS = 3;
 export const REQUIRED_OBSERVATION_SPAN_MS = 30_000;
 export const MAX_PERSISTENCE_SNAPSHOTS = 4;

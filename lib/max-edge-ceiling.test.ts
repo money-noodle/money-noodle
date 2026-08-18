@@ -20,13 +20,17 @@ const ordinary = {
 afterEach(() => { delete process.env.MONEY_NOODLE_MAX_NET_EDGE; });
 
 describe('maximum net edge', () => {
-  it('defaults to the 35pp line where forecasts stop being calibrated', () => {
+  it('is disarmed by default at v20, so the ceiling refuses nothing until it is configured', () => {
     expect(maximumNetEdge()).toBe(MAX_NET_EDGE);
-    expect(MAX_NET_EDGE).toBe(0.35);
+    expect(MAX_NET_EDGE).toBe(1);
+    // The absurd claim is now admitted, which is the whole of what v20 changed here.
+    expect(bestEntry(absurd)?.side).toBe('UP');
+    expect(qualifiesVenueBuyEdge(absurd, 'kalshi', 'UP')).toBe(true);
   });
 
-  it('refuses a claim above the ceiling, which the option list still ranks first', () => {
-    expect(venueEntryOptions(absurd)[0].netEdge).toBeGreaterThan(MAX_NET_EDGE);
+  it('still refuses a claim above the ceiling once one is configured', () => {
+    process.env.MONEY_NOODLE_MAX_NET_EDGE = '0.35';
+    expect(venueEntryOptions(absurd)[0].netEdge).toBeGreaterThan(0.35);
     expect(bestEntry(absurd)).toBeUndefined();
     expect(qualifiesVenueBuyEdge(absurd, 'kalshi', 'UP')).toBe(false);
   });
@@ -34,15 +38,15 @@ describe('maximum net edge', () => {
   it('leaves ordinary edges untouched', () => {
     const entry = bestEntry(ordinary);
     expect(entry?.side).toBe('UP');
-    expect(entry!.netEdge).toBeLessThan(MAX_NET_EDGE);
+    expect(entry!.netEdge).toBeLessThan(maximumNetEdge());
     expect(qualifiesVenueBuyEdge(ordinary, 'kalshi', 'UP')).toBe(true);
   });
 
   it('is restrictive only: it can refuse a trade but never authorize one below the floor', () => {
     process.env.MONEY_NOODLE_MAX_NET_EDGE = '1';
     expect(maximumNetEdge()).toBe(1);
-    // A candidate failing the minimum edge is still refused with the ceiling wide open.
-    const flat = { ...ordinary, modelProbabilityUp: 0.56, kalshi: { live: true, askUp: 0.55, askDown: 0.5 } as never };
+    // A candidate below the v20 floor of -5pp is still refused with the ceiling wide open.
+    const flat = { ...ordinary, modelProbabilityUp: 0.56, kalshi: { live: true, askUp: 0.65, askDown: 0.4 } as never };
     expect(qualifiesVenueBuyEdge(flat, 'kalshi', 'UP')).toBe(false);
   });
 

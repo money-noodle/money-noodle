@@ -98,12 +98,13 @@ describe('the evaluator baseline is the production gate', () => {
   const admitted = (patch: Partial<TrackedForecast>, parameters = PRODUCTION_BASELINE_PARAMETERS) =>
     scoreWalkForward(buildWalkForwardDataset([forecast(0, patch)]), parameters).trades;
 
-  it('refuses an edge at or above the maximum, as maximumNetEdge() does', () => {
-    // probabilityUp 0.99 against a 0.20 ask is a ~78pp edge: implausible, and production rejects it.
-    expect(admitted({ probabilityUp: 0.99, entryAsk: 0.2, entrySide: 'UP' })).toBe(0);
-    // Relaxing only that bound admits it, proving the ceiling is what refused it.
+  it('tracks maximumNetEdge(), which v20 disarmed', () => {
+    // probabilityUp 0.99 against a 0.20 ask is a ~78pp edge. v20 admits it: the baseline ceiling is 1.
+    expect(PRODUCTION_BASELINE_PARAMETERS.maximumEdge).toBe(1);
+    expect(admitted({ probabilityUp: 0.99, entryAsk: 0.2, entrySide: 'UP' })).toBe(1);
+    // Tightening only that bound refuses it, which is what proves the ceiling is the binding rule.
     expect(admitted({ probabilityUp: 0.99, entryAsk: 0.2, entrySide: 'UP' },
-      { ...PRODUCTION_BASELINE_PARAMETERS, maximumEdge: 1 })).toBe(1);
+      { ...PRODUCTION_BASELINE_PARAMETERS, maximumEdge: 0.35 })).toBe(0);
   });
 
   it('refuses a selected side below the probability floor, as MIN_SELECTED_SIDE_PROBABILITY does', () => {
