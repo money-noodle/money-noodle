@@ -8,7 +8,7 @@ import { holdSentinelId } from './hold-sentinel-store';
 import { LONG_SHOT_ROUND_TRIP } from './strategy-registry';
 import { orderStrategyId } from './execution-report';
 import { estimatePaperFill, venueFeeCents } from './venue-fill';
-import type { DashboardData, PaperOrder, PositionSide, Prediction } from './types';
+import type { DashboardData, ExecutionMode, PaperOrder, PositionSide, Prediction } from './types';
 
 /**
  * Per-cycle evaluation of the long-shot round-trip policy.
@@ -39,6 +39,35 @@ export function longShotAllocationCents(marketCapCents: number, configuredStarti
   if (Number.isFinite(configuredStartingCents) && (configuredStartingCents as number) > 0) return Math.floor(configuredStartingCents as number);
   if (!Number.isFinite(marketCapCents) || marketCapCents <= 0) return 0;
   return Math.floor(marketCapCents * LONG_SHOT_DEFAULT_ALLOCATION_PERCENT / 100);
+}
+
+/**
+ * The capital basis one track sizes from.
+ *
+ * **Paper sizes from the paper bankroll; live sizes from the funded market allocation.** They are
+ * different pots and they answer different questions. Live is bounded by cash actually on deposit at the
+ * venue. Paper's job is to collect evidence, and at a live-sized allocation the ticket is small enough
+ * that Kalshi's 1c minimum fee is a double-digit tax on every recorded trade — which distorts the very
+ * return the evidence is measuring. Sizing paper from the paper bankroll removes that distortion without
+ * touching a real-money control.
+ *
+ * SPEC 12.3 permits exactly this: tracks differ in execution and capital — fill model, budget and sizing,
+ * rate limits, risk stops, reconciliation — and never in the entry decision. The entry rule layer still
+ * takes no execution-mode parameter.
+ *
+ * The live allocation's configured `startingCents` is deliberately ignored for paper: it is the amount an
+ * operator committed to the live venue, and spending it as a paper basis would make a paper stake read as
+ * a live commitment.
+ */
+export function longShotTrackStartingCents(input: {
+  mode: ExecutionMode;
+  marketCapCents: number;
+  paperBankrollCents: number;
+  configuredStartingCents?: number;
+}): number {
+  return input.mode === 'paper'
+    ? longShotAllocationCents(input.paperBankrollCents)
+    : longShotAllocationCents(input.marketCapCents, input.configuredStartingCents);
 }
 
 const CENTS = 100;

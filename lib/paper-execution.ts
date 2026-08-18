@@ -20,7 +20,7 @@ import { recordContractPaths, recordDenseContractQuote } from './contract-path-s
 import { CONTRACT_PATH_FINE_BUCKET_MS } from './contract-path';
 import { backfillLongShotCandidates, resolveLongShotSettlements } from './long-shot-candidate-store';
 import { getHoldSentinels, updateHoldSentinelStore } from './hold-sentinel-store';
-import { collectLongShotEvidence, longShotAllocationCents } from './long-shot-execution';
+import { collectLongShotEvidence, longShotTrackStartingCents } from './long-shot-execution';
 import { evaluateLongShotEntry, longShotSettings, type LongShotSettings } from './long-shot-policy';
 import { LONG_SHOT_ROUND_TRIP } from './strategy-registry';
 import {
@@ -1582,7 +1582,13 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
   void getHoldSentinels()
     .then((existingSentinels) => collectLongShotEvidence({
       dashboard, orders: ledger.orders, existingSentinels,
-      startingCents: longShotAllocationCents(status.control.startingBudgetCents),
+      // Evidence is sized from the paper bankroll: a live-sized ticket makes Kalshi's 1c minimum fee a
+      // double-digit tax on every recorded trade, which distorts the return being measured.
+      startingCents: longShotTrackStartingCents({
+        mode: 'paper',
+        marketCapCents: status.control.startingBudgetCents,
+        paperBankrollCents: ledger.paperBudget.startingCents,
+      }),
     }))
     .then((cycle) => updateHoldSentinelStore(cycle))
     .catch((error) => console.error('Long-shot evidence collection failed:', error));
@@ -1633,10 +1639,16 @@ async function runLongShot(
     .find((provider) => provider.providerId === 'kalshi')?.allocations
     .find((item) => item.marketId === DEFAULT_MARKET_ID)?.strategies
     ?.find((strategy) => strategy.strategyId === LONG_SHOT_ROUND_TRIP);
-  const startingCents = longShotAllocationCents(status.control.startingBudgetCents, allocation?.startingCents);
+  const startingCents = longShotTrackStartingCents({
+    mode,
+    marketCapCents: status.control.startingBudgetCents,
+    paperBankrollCents: ledger.paperBudget.startingCents,
+    configuredStartingCents: allocation?.startingCents,
+  });
   // Equity counts only what this strategy earned since it was last funded. Re-funding sets a new starting
   // amount, so carrying a prior period's losses across would report equity the operator never committed.
-  const funding = longShotFunding(ledger.orders, mode, startingCents, settings, Date.parse(allocation?.fundedAt ?? '') || 0);
+  const funding = longShotFunding(ledger.orders, mode, startingCents, settings,
+    mode === 'live' ? Date.parse(allocation?.fundedAt ?? '') || 0 : 0);
   if (funding.sizing.halted) return false;
 
   if (mode === 'live') {
@@ -2427,6 +2439,11 @@ export function summarize(orders: PaperOrder[], mode: ExecutionMode, running: bo
 /** Raw order ledger for reporting. */
 export async function getExecutionOrders(): Promise<PaperOrder[]> {
   return (await readLedger()).orders;
+}
+
+/** Funded paper bankroll. The paper track's strategy allocations are percentages of this, not of live cash. */
+export async function getPaperBankrollStartingCents(): Promise<number> {
+  return (await readLedger()).paperBudget.startingCents;
 }
 
 function publicPaperExecution(order: PaperOrder): PublicPaperExecutionRecord {

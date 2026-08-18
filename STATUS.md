@@ -113,6 +113,53 @@ which made the rule untestable from a fixture. `spikeGateEnabled` is now a decla
 `SignalPersistenceRequirements` beside `maximumEdgeSpike`, so a caller states what it holds fixed. Tests
 pin both the armed logic and that production is disarmed.
 
+### Long-shot: there is no exit mark that works, 2026-08-18
+
+Full measurement in [reports/long-shot-roundtrip-2026-08-18.md](reports/long-shot-roundtrip-2026-08-18.md);
+`npm run analyze:long-shot-roundtrip`. Opened on the premise that the long shot needs a better entry gate.
+**The entry gate is not where the loss is.**
+
+- **A contract that prints a 90¢ bid has essentially already won.** Spike-and-lose is ~1% of entries in
+  every band (0 of 77, 1 of 474, 3 of 549, 4 of 664, 14 of 1,074). The mark is not harvesting a reversal.
+- **The 90¢ mark reaches fewer contracts than holding wins**, by 1.3–5.9 points in every band, because
+  these settle on a close-price comparison and a winner need never trade near 90¢.
+- **The retrace population is real but sits at 30–50¢**, where the payoff multiple cannot cover break-even.
+  No cell in the grid clears break-even except 0–10¢/≥600s at 90¢ (10.4% against 10.1%) — the same cell
+  where the mark loses to holding.
+- **Holding alone** falls monotonically with entry price: +16.8% ±72.3 at 0–10¢/≥600s (9 winners in 77),
+  +3.1% at 0–10¢/≥300s, then −3.7%, −5.3%, −8.9%.
+- Realized paper ledger: −309¢ on 493¢, **0 of 33 settled in the money**. Three `sold` rows are
+  strict-value exits from the since-scoped bug; the three live entries were manual tests at a higher entry
+  price to prove the mechanism executes, not policy execution.
+
+**Open decision for the maintainer:** removing the mark is a policy version bump that changes what the
+strategy is — without a mark, `long-shot-round-trip` is not a round trip. Removing it does not make the
+strategy positive; it stops one measured leak.
+
+### Long-shot hold sentinel — not ready, and one day carries every winner, 2026-08-18
+
+Full review in [reports/long-shot-hold-sentinel-2026-08-18.md](reports/long-shot-hold-sentinel-2026-08-18.md).
+`long-shot-hold-v1` has **38 windows with a recorded peak against its bar of 60**, not the 64 a naive count
+of the store suggests.
+
+- **`peakOwnedSideBidCents` was not written before 2026-08-18.** It is absent on 26 of 64 records, and a
+  naive comparison reads the absence as "did not touch". Anything computed from the earlier cohort is
+  silently wrong rather than missing — the same class of bug the 2026-08-17 filter screen hit with
+  `cycleRegime.regime`.
+- The store pools three configurations. Only `buy10-sell90-win600-v1` has a sample (64); the two 40¢ arms
+  hold 2 records each and should be retired or fixed.
+- On the covered day: touched the 90¢ mark **6 of 38 (15.8%)** against a **10.6%** break-even; sell-at-mark
+  **+64.0% ±111.7**, hold +55.3% ±115.8. Positive, and unmeasurable at this width.
+- **All six in-the-money settlements fall on 2026-08-18**; the three prior days are 0 of 26. Not explained
+  by volatility — 08-17 was the most volatile of the four days (0.149% mean local 15m against 0.129%) and
+  produced zero winners in 18 records.
+- The peak distribution is bimodal: median 14¢, p75 31¢, p90 99.2¢. Eight of 38 peaked above 50¢, six above
+  90¢, almost nothing between.
+
+This configuration is also the **only cell above break-even** in the retroactive sweep across 2,131 paths
+(10¢/90¢ ratio 1.12, 10¢/70¢ 1.03; every other entry band 0.68–0.85). Two routes agree it is marginally
+positive; neither has the sample to establish it. Nothing is authorized: keep collecting.
+
 ### Missed entries — the selection gates are not what keeps volume out, 2026-08-18
 
 Full measurement in [reports/missed-entry-review-2026-08-18.md](reports/missed-entry-review-2026-08-18.md);

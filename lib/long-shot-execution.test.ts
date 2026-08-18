@@ -4,6 +4,7 @@ vi.mock('server-only', () => ({}));
 
 import {
   LONG_SHOT_DEFAULT_ALLOCATION_PERCENT, longShotAllocationCents, longShotCycle, longShotSizingFor,
+  longShotTrackStartingCents,
   sentinelPeakBids,
 } from './long-shot-execution';
 import { HOLD_SENTINEL_VERSION, type HoldSentinel } from './hold-sentinel';
@@ -180,5 +181,42 @@ describe('sentinel peak bid observation', () => {
   it('matches on the exact contract, so a price is never scored against another window', () => {
     const peaks = sentinelPeakBids(dashboard(prediction('BTC', 0.30, 0.72)), [sentinel({ contractId: 'KXBTC15M-OTHER' })], later);
     expect(peaks).toEqual({});
+  });
+});
+
+describe('longShotTrackStartingCents', () => {
+  it('sizes paper from the paper bankroll and live from the funded market allocation', () => {
+    const input = { marketCapCents: 2_000, paperBankrollCents: 10_000, configuredStartingCents: 600 };
+    // 30% of each pot; live prefers the explicitly funded amount.
+    expect(longShotTrackStartingCents({ ...input, mode: 'paper' })).toBe(3_000);
+    expect(longShotTrackStartingCents({ ...input, mode: 'live' })).toBe(600);
+  });
+
+  it('ignores the live funded allocation for paper, so a paper stake never reads as a live commitment', () => {
+    expect(longShotTrackStartingCents({
+      mode: 'paper', marketCapCents: 2_000, paperBankrollCents: 10_000, configuredStartingCents: 1,
+    })).toBe(3_000);
+  });
+
+  it('falls back to the percentage when live has no funded allocation', () => {
+    expect(longShotTrackStartingCents({ mode: 'live', marketCapCents: 2_000, paperBankrollCents: 10_000 })).toBe(600);
+  });
+
+  it('never returns a negative or non-finite basis', () => {
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(longShotTrackStartingCents({ mode: 'paper', marketCapCents: 2_000, paperBankrollCents: bad })).toBeGreaterThanOrEqual(0);
+      expect(longShotTrackStartingCents({ mode: 'live', marketCapCents: bad, paperBankrollCents: 10_000 })).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('un-halts the paper track that a live-sized basis would have stopped', () => {
+    const settings = longShotSettings({
+      ...process.env, MONEY_NOODLE_LONG_SHOT_ENABLED: 'true', MONEY_NOODLE_LONG_SHOT_DRAWDOWN_DIVISOR: '50',
+    });
+    const liveBasis = longShotTrackStartingCents({ mode: 'live', marketCapCents: 2_000, paperBankrollCents: 10_000, configuredStartingCents: 600 });
+    const paperBasis = longShotTrackStartingCents({ mode: 'paper', marketCapCents: 2_000, paperBankrollCents: 10_000 });
+    // The measured paper drawdown that halted the policy: 600c funded, -308c realized.
+    expect(longShotSizing(liveBasis - 308, settings).halted).toBe(true);
+    expect(longShotSizing(paperBasis - 308, settings).halted).toBe(false);
   });
 });

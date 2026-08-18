@@ -1,11 +1,11 @@
 import 'server-only';
-import { getExecutionOrders } from './paper-execution';
+import { getExecutionOrders, getPaperBankrollStartingCents } from './paper-execution';
 import { getTradingControl } from './trading-control';
 import { getProviderBudgets } from './provider-budget-store';
 import { getHoldSentinelReport } from './hold-sentinel-store';
 import { getContractPathRollups } from './contract-path-store';
 import { buildLongShotReport } from './long-shot-report';
-import { longShotExitFeeCents, longShotAllocationCents, longShotPolicyVersion } from './long-shot-execution';
+import { longShotExitFeeCents, longShotAllocationCents, longShotPolicyVersion, longShotTrackStartingCents } from './long-shot-execution';
 import { longShotFunding } from './long-shot-engine';
 import { longShotDailyLossCapCents, longShotSettings } from './long-shot-policy';
 import { strategyOrders } from './execution-report';
@@ -24,10 +24,11 @@ import { buildNearMoneySentinelReport } from './near-money-sentinel';
  */
 export async function buildLongShotPayload(): Promise<Record<string, unknown>> {
   const settings = longShotSettings();
-  const [orders, control, budgets, hold, paths] = await Promise.all([
+  const [orders, control, budgets, hold, paths, paperBankrollCents] = await Promise.all([
     getExecutionOrders(), getTradingControl(), getProviderBudgets(),
     getHoldSentinelReport(longShotPolicyVersion(settings), longShotExitFeeCents),
     getContractPathRollups(200),
+    getPaperBankrollStartingCents(),
   ]);
 
   const [bandStore, candidates] = await Promise.all([readAnalysisBands(), getLongShotCandidates()]);
@@ -35,13 +36,21 @@ export async function buildLongShotPayload(): Promise<Record<string, unknown>> {
   const allocation = budgets.providers.find((provider) => provider.providerId === 'kalshi')?.allocations
     .find((item) => item.marketId === DEFAULT_MARKET_ID)?.strategies
     ?.find((strategy) => strategy.strategyId === LONG_SHOT_ROUND_TRIP);
-  const startingCents = longShotAllocationCents(control.control.startingBudgetCents, allocation?.startingCents);
   const fundedAtMs = Date.parse(allocation?.fundedAt ?? '') || 0;
+  const liveStartingCents = longShotAllocationCents(control.control.startingBudgetCents, allocation?.startingCents);
   const mine = strategyOrders(orders, LONG_SHOT_ROUND_TRIP);
   const policyVersion = longShotPolicyVersion(settings);
 
   const track = (mode: 'paper' | 'live') => {
-    const funding = longShotFunding(orders, mode, startingCents, settings, fundedAtMs);
+    // Per-track basis, matching the engine exactly: a reporting surface that sizes differently from the
+    // executor would show the operator a ticket the desk would never place.
+    const startingCents = longShotTrackStartingCents({
+      mode,
+      marketCapCents: control.control.startingBudgetCents,
+      paperBankrollCents,
+      configuredStartingCents: allocation?.startingCents,
+    });
+    const funding = longShotFunding(orders, mode, startingCents, settings, mode === 'live' ? fundedAtMs : 0);
     return {
       mode,
       equityCents: funding.equityCents,
@@ -71,7 +80,12 @@ export async function buildLongShotPayload(): Promise<Record<string, unknown>> {
       dailyLossTickets: settings.dailyLossTickets,
       excludedAssets: settings.excludedAssets,
     },
-    allocation: { startingCents, funded: startingCents > 0, fundedAt: allocation?.fundedAt ?? null },
+    // The live funded allocation. Paper's basis is the paper bankroll and is reported per track below.
+    allocation: {
+      startingCents: liveStartingCents,
+      funded: liveStartingCents > 0,
+      fundedAt: allocation?.fundedAt ?? null,
+    },
     tracks: [track('paper'), track('live')],
     hold,
     contractPaths: {
