@@ -76,6 +76,7 @@ import { bestEntry, bestVenueEntry, BUY_POLICY_VERSION, edgeStrength, MIN_ESTIMA
 import { getKalshiReconciliationStatus, serializedReconciliation, setKalshiReconciliationStatus, type KalshiReconciliationStatus } from './reconciliation-state';
 import { getRegimeGateStatus, updateRegimeGate, type RegimeGateStatus, type RegimeSentinelCandidate } from './regime-gate-store';
 import { TWO_SNAPSHOT_PERSISTENCE_CANDIDATE_VERSION, updatePersistenceCandidateStore, type PersistenceCandidateCycle } from './persistence-candidate-store';
+import { observeMakerPosts } from './maker-post-observer';
 import { advanceSignalPersistence, evaluateSignalPersistence, evaluateSignalPersistenceIgnoringSpike, evaluateSignalPersistenceWithRequirements, type SignalEligibility, type SignalPersistenceState } from './signal-persistence';
 import { edgeSpikeGateEnabled, maximumEdgeSpike, spikeAdmits } from './edge-spike-policy';
 import { EDGE_SPIKE_SENTINEL_VERSION, edgeSpikeSentinelId, type EdgeSpikeSentinel } from './edge-spike-sentinel';
@@ -1557,7 +1558,14 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
     .then(() => updateCalendarEvaluationStore(calendarEvaluationCycle(dashboard, ledger)))
     .catch((error) => console.error('Calendar evaluation collection failed:', error));
   void persistenceCandidateCycle(dashboard, ledger, regimeGate.allowsEntries)
-    .then((cycle) => updatePersistenceCandidateStore(cycle))
+    .then(async (cycle) => {
+      await updatePersistenceCandidateStore(cycle);
+      // Whether those entries would have filled, simulated against observed prints. Chained after the
+      // store write so decision-time evidence is durable before any observation request is made, and
+      // still inside the detached branch so no venue call reaches the execution path.
+      // See docs/maker-post-observation-design.md §5.
+      await observeMakerPosts(cycle.intents);
+    })
     .catch((error) => console.error('Two-snapshot persistence candidate collection failed:', error));
   void recordContractPaths(dashboard.predictions ?? [])
     // Candidate summaries are derived from the paths just recorded, then ungraded windows are asked of the

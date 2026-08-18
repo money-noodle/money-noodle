@@ -11,7 +11,7 @@ import { DATA_FRESHNESS } from '@/lib/freshness';
 import { MIN_ESTIMATE_QUALITY, MIN_NET_EDGE } from '@/lib/prediction-policy';
 import type { EpochResult } from '@/lib/budget-epoch';
 import type { PromotionEligibility } from '@/lib/model-promotion';
-import type { CalendarEvaluationReport, ContractComparabilityReport, CyclePathReport, ForecastHistoryRow, MakerFillReport, ModelPromotionEntry, PerformanceSlice, PerformanceSummary, PersistenceCandidateReport, ProviderTradeRecord, SegmentGroup, TradeTrackRecord, WalkForwardEvaluationHistory } from '@/lib/types';
+import type { CalendarEvaluationReport, ContractComparabilityReport, CyclePathReport, ForecastHistoryRow, MakerFillReport, MakerObservedFillSummary, ModelPromotionEntry, PerformanceSlice, PerformanceSummary, PersistenceCandidateReport, ProviderTradeRecord, SegmentGroup, TradeTrackRecord, WalkForwardEvaluationHistory } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 /**
@@ -227,6 +227,53 @@ function MakerExecutionPanel({ report }: { report: MakerFillReport }) {
   </div>;
 }
 
+
+/**
+ * Observed fills, replacing the tile previously labelled "Maker-touch benchmark".
+ *
+ * That tile showed `bid-priced return x fill probability`, which prices the fill as a random draw the
+ * desk's adverse-selection measurements refute, and which — being a positive scaling — could never
+ * disagree with the ask benchmark beside it. What replaces it is the return **conditional on an observed
+ * fill**. Sources are shown apart and never added: the backfill is a coarser 60-second replay whose fills
+ * are an upper bound. See docs/maker-post-observation-design.md.
+ */
+function ObservedFillPanel({ summary, backfill, modelledCoverage }: { summary: MakerObservedFillSummary; backfill: MakerObservedFillSummary; modelledCoverage: number | null }) {
+  const row = (label: string, entry: MakerObservedFillSummary, note: string) => {
+    const decided = entry.ladderFilled + entry.ladderUnfilled;
+    const staticDecided = entry.staticFilled + entry.staticUnfilled;
+    return <div key={entry.source} className="grid grid-cols-[1fr_auto] gap-3 px-3 py-2 text-[9px]">
+      <div>
+        <p className="font-medium">{label}</p>
+        <p className="text-[8px] text-muted-foreground">
+          {decided > 0 ? `ladder ${entry.ladderFilled}/${decided} filled` : 'ladder not scored'}
+          {staticDecided > 0 ? ` · static ${entry.staticFilled}/${staticDecided} filled` : ''}
+          {entry.unobservedIntents > 0 ? ` · ${entry.unobservedIntents} unobserved` : ''}
+        </p>
+        <p className="text-[8px] text-muted-foreground">{note}</p>
+      </div>
+      <div className="text-right">
+        <p className={cn('font-mono text-sm', (entry.meanRealizedProfitPerContract ?? 0) > 0 ? 'text-primary' : entry.meanRealizedProfitPerContract === null ? '' : 'text-red-400')}>
+          {entry.meanRealizedProfitPerContract === null ? '—' : cents(entry.meanRealizedProfitPerContract)}
+        </p>
+        <p className="font-mono text-[8px] text-muted-foreground">
+          {entry.meanRealizedProfitPerContract === null ? 'no observed fill yet' : `conditional on fill · ${entry.realizedWindows} windows${entry.realizedStandardError === null ? '' : ` · ±${(entry.realizedStandardError * 100).toFixed(1)}¢ SE`}`}
+        </p>
+      </div>
+    </div>;
+  };
+  return <div className="rounded-lg border">
+    <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+      <p className="text-[9px] font-medium">Observed fills</p>
+      <Badge variant="outline" className="font-mono text-[8px]">modelled fill coverage {modelledCoverage === null ? '—' : `${(modelledCoverage * 100).toFixed(0)}%`}</Badge>
+    </div>
+    <div className="divide-y">
+      {row('Live, 2-second path', summary, 'Post walked from the bid toward the ask over six checks, scored against observed prints.')}
+      {row('Backfill, 60-second sampler', backfill, 'Static arm only, one 60-second print window against a 12-second horizon: an upper bound, never pooled with the row above.')}
+    </div>
+    <p className="border-t px-3 py-2 text-[8px] text-muted-foreground">A simulated post is not a filled order: it cannot see hidden size, and it cannot know our own resting size would have changed the book.</p>
+  </div>;
+}
+
 function PersistenceCandidatePanel({ report }: { report: PersistenceCandidateReport }) {
   const makerCoverage = report.candidateIntents ? report.modelledMakerIntents / report.candidateIntents : null;
   return <div className="space-y-3">
@@ -238,8 +285,9 @@ function PersistenceCandidatePanel({ report }: { report: PersistenceCandidateRep
       <div className="rounded-lg border p-3"><p className="text-[8px] uppercase text-muted-foreground">Candidate intents</p><p className="mt-1 font-mono text-lg">{report.candidateIntents}</p><p className="text-[8px] text-muted-foreground">{report.incrementalIntents} earlier than production</p></div>
       <div className="rounded-lg border p-3"><p className="text-[8px] uppercase text-muted-foreground">Resolved incremental</p><p className="mt-1 font-mono text-lg">{report.resolvedIncrementalIntents}</p><p className="text-[8px] text-muted-foreground">{report.resolvedIncrementalWindows} independent windows</p></div>
       <div className="rounded-lg border p-3"><p className="text-[8px] uppercase text-muted-foreground">Ask benchmark</p><p className={cn('mt-1 font-mono text-lg', (report.meanIncrementalAskProfitPerContract ?? 0) > 0 ? 'text-primary' : report.meanIncrementalAskProfitPerContract === null ? '' : 'text-red-400')}>{report.meanIncrementalAskProfitPerContract === null ? '—' : cents(report.meanIncrementalAskProfitPerContract)}</p><p className="text-[8px] text-muted-foreground">per $1 payout{report.incrementalAskStandardError === null ? '' : ` · ±${(report.incrementalAskStandardError * 100).toFixed(1)}¢ SE`}</p></div>
-      <div className="rounded-lg border p-3"><p className="text-[8px] uppercase text-muted-foreground">Maker-touch benchmark</p><p className={cn('mt-1 font-mono text-lg', (report.meanIncrementalMakerExpectedProfitPerContract ?? 0) > 0 ? 'text-primary' : report.meanIncrementalMakerExpectedProfitPerContract === null ? '' : 'text-red-400')}>{report.meanIncrementalMakerExpectedProfitPerContract === null ? '—' : cents(report.meanIncrementalMakerExpectedProfitPerContract)}</p><p className="text-[8px] text-muted-foreground">empirical fill-weighted · coverage {makerCoverage === null ? '—' : `${(makerCoverage * 100).toFixed(0)}%`}</p></div>
+      <div className="rounded-lg border p-3"><p className="text-[8px] uppercase text-muted-foreground">Bid-priced return</p><p className={cn('mt-1 font-mono text-lg', (report.meanIncrementalBidPricedProfitPerContract ?? 0) > 0 ? 'text-primary' : report.meanIncrementalBidPricedProfitPerContract === null ? '' : 'text-red-400')}>{report.meanIncrementalBidPricedProfitPerContract === null ? '—' : cents(report.meanIncrementalBidPricedProfitPerContract)}</p><p className="text-[8px] text-muted-foreground">the price effect alone · no fill assumption</p></div>
     </div>
+    <ObservedFillPanel summary={report.observedFill} backfill={report.backfilledFill} modelledCoverage={makerCoverage}/>
     <div className="rounded-lg border p-3"><div className="flex items-center justify-between gap-2"><p className="text-[9px] font-medium">Production comparison</p><Badge variant="outline" className={report.reviewReady ? 'border-amber-300/30 text-amber-200' : 'text-muted-foreground'}>{report.reviewReady ? 'sample ready for manual review' : 'collecting'}</Badge></div><p className="mt-1 text-[9px] text-muted-foreground">Production later reached its three-snapshot gate on {report.productionCaughtUp}/{report.incrementalIntents} incremental intents{report.meanProductionDelayMs === null ? '.' : `, after an average ${(report.meanProductionDelayMs / 1000).toFixed(0)} seconds.`} Reaching {report.minimumReviewWindows} windows only opens a manual review; it never promotes the candidate.</p><p className="mt-2 font-mono text-[8px] text-primary">Production changed: no</p></div>
     {report.recent.length > 0 && <details className="rounded-lg border"><summary className="cursor-pointer px-3 py-2 text-[9px] font-medium">Recent candidate intents ({report.recent.length})</summary><div className="divide-y border-t">{report.recent.map((intent) => <div key={intent.id} className="grid grid-cols-[1fr_auto] gap-3 px-3 py-2 text-[9px]"><div><span className="font-medium">{intent.symbol} {intent.side}</span><span className="ml-2 font-mono text-muted-foreground">{(intent.askPrice * 100).toFixed(1)}¢ ask · {(intent.predictedNetEdge * 100).toFixed(1)}pp edge</span><p className="text-[8px] text-muted-foreground">{new Date(intent.createdAt).toLocaleString()} · {intent.productionEligibleAtCandidate ? 'production already eligible' : intent.productionEligibleAt ? `production caught up in ${Math.round((intent.productionDelayMs ?? 0) / 1000)}s` : 'incremental so far'}</p></div><div className="text-right font-mono text-[8px]"><p>{intent.makerFillProbability === null || intent.makerFillProbability === undefined ? 'fill —' : `fill ${(intent.makerFillProbability * 100).toFixed(0)}%`}</p><p className="text-muted-foreground">{intent.outcome ?? 'pending'}</p></div></div>)}</div></details>}
   </div>;

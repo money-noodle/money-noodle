@@ -1,7 +1,9 @@
 import 'server-only';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { PersistenceCandidateIntent, PersistenceCandidateReport } from './types';
+import { venueFeeFraction } from './venue-fee-schedule';
+import { ENTRY_FEE_ROLE } from './prediction-policy';
+import type { MakerObservationSource, MakerObservedFillSummary, PersistenceCandidateIntent, PersistenceCandidateReport } from './types';
 
 export const TWO_SNAPSHOT_PERSISTENCE_CANDIDATE_VERSION = 'persistence-two-consecutive-v1';
 export const PERSISTENCE_CANDIDATE_MINIMUM_REVIEW_WINDOWS = 100;
@@ -90,6 +92,40 @@ function clustered(intents: PersistenceCandidateIntent[], value: (intent: Persis
   return { windows: windows.size, mean: average, standardError };
 }
 
+/**
+ * Observed-fill evidence for one source.
+ *
+ * Sources are never pooled. The backfill replays a 60-second sampler that has already discarded taker
+ * direction, so it can only score the static arm and it fills slightly too often; blending it with live
+ * 2-second observation would hide both facts inside one average. See docs/maker-post-observation-design.md §7.
+ */
+function summarizeObservedFills(intents: PersistenceCandidateIntent[], source: MakerObservationSource): MakerObservedFillSummary {
+  const observed = intents.filter((intent) => intent.makerObservationSource === source && intent.makerObservationModel);
+  const decided = (outcome: PersistenceCandidateIntent['makerLadderFill']) => outcome === 'filled' || outcome === 'unfilled';
+  // Conditional on an observed fill: the only figure here that can contradict the ask benchmark.
+  const realized = clustered(
+    observed.filter((intent) => intent.makerLadderFill === 'filled' && intent.makerRealizedProfitPerContract !== undefined),
+    (intent) => intent.makerRealizedProfitPerContract,
+  );
+  const settled = (intent: PersistenceCandidateIntent) => decided(intent.makerLadderFill) || decided(intent.makerStaticFill);
+  return {
+    source,
+    observedIntents: observed.filter(settled).length,
+    unobservedIntents: observed.filter((intent) => !settled(intent)).length,
+    ladderFilled: observed.filter((intent) => intent.makerLadderFill === 'filled').length,
+    ladderUnfilled: observed.filter((intent) => intent.makerLadderFill === 'unfilled').length,
+    staticFilled: observed.filter((intent) => intent.makerStaticFill === 'filled').length,
+    staticUnfilled: observed.filter((intent) => intent.makerStaticFill === 'unfilled').length,
+    meanRealizedProfitPerContract: realized.mean,
+    realizedStandardError: realized.standardError,
+    realizedWindows: realized.windows,
+  };
+}
+
+/** Settlement return at the bid, with no fill assumption applied to it at all. */
+const bidPricedProfit = (intent: PersistenceCandidateIntent): number | undefined =>
+  intent.outcome === undefined ? undefined : (intent.outcome === intent.side ? 1 : 0) - intent.bidPrice - intent.estimatedMakerFeeRate;
+
 /** Pure report builder used by the API and tests; sample readiness can never change production. */
 export function buildPersistenceCandidateReport(store: Pick<PersistenceCandidateStore, 'candidateVersion' | 'productionPolicyVersion' | 'startedAt' | 'updatedAt' | 'intents'>): PersistenceCandidateReport {
   // A production policy change starts a new evidence cohort. Persistence cannot be credited with
@@ -123,6 +159,9 @@ export function buildPersistenceCandidateReport(store: Pick<PersistenceCandidate
     meanIncrementalAskProfitPerContract: incrementalAsk.mean,
     meanIncrementalMakerExpectedProfitPerContract: incrementalMaker.mean,
     incrementalAskStandardError: incrementalAsk.standardError,
+    meanIncrementalBidPricedProfitPerContract: clustered(resolvedIncremental, bidPricedProfit).mean,
+    observedFill: summarizeObservedFills(resolvedIncremental, 'live-2s'),
+    backfilledFill: summarizeObservedFills(resolvedIncremental, 'depth-experiment-60s'),
     minimumReviewWindows: PERSISTENCE_CANDIDATE_MINIMUM_REVIEW_WINDOWS,
     reviewReady: incrementalAsk.windows >= PERSISTENCE_CANDIDATE_MINIMUM_REVIEW_WINDOWS,
     productionChanged: false,
@@ -149,7 +188,107 @@ async function resolveIntent(intent: PersistenceCandidateIntent): Promise<boolea
   intent.makerExpectedProfitPerContract = Number.isFinite(intent.makerFillProbability)
     ? makerReturn * intent.makerFillProbability!
     : undefined;
+  // Return at the price the simulated post actually paid, which is a rung of the ladder rather than the
+  // bid it started from. The fee role is `ENTRY_FEE_ROLE` like every other figure in this store, so the
+  // two are comparable; that role is known wrong and is tracked in docs/entry-gate-fee-design.md, not
+  // quietly corrected here where it would flatter this benchmark by about 1.5pp.
+  if (intent.makerLadderFill === 'filled' && Number.isFinite(intent.makerLadderFillCents)) {
+    const fillPrice = intent.makerLadderFillCents! / 100;
+    if (fillPrice > 0 && fillPrice < 1) {
+      intent.makerRealizedProfitPerContract = (won ? 1 : 0) - fillPrice - venueFeeFraction('kalshi', fillPrice, ENTRY_FEE_ROLE);
+    }
+  }
   return true;
+}
+
+export interface MakerPostObservationRecord {
+  id: string;
+  makerObservationModel: string;
+  makerObservationSource: MakerObservationSource;
+  makerPostCents: number;
+  makerQueueAheadCents?: number;
+  makerLadderFill: PersistenceCandidateIntent['makerLadderFill'];
+  makerLadderFillCents?: number;
+  makerLadderFillAt?: string;
+  makerStaticFill: PersistenceCandidateIntent['makerStaticFill'];
+  makerStaticFillCents?: number;
+}
+
+/**
+ * Attaches observed-fill evidence to intents that do not already carry it.
+ *
+ * **Write-once.** An intent that already has an observation is left alone, so a re-run of the backfill
+ * cannot overwrite a live 2-second observation with a coarser one, and no observation is ever revised
+ * after the fact. Settlement figures are recomputed on the next resolution pass for anything that gains
+ * a fill after it resolved.
+ */
+export function applyMakerPostObservations(
+  intents: PersistenceCandidateIntent[],
+  observations: MakerPostObservationRecord[],
+): number {
+  const byId = new Map(intents.map((intent) => [intent.id, intent]));
+  let applied = 0;
+  for (const observation of observations) {
+    const intent = byId.get(observation.id);
+    if (!intent || intent.makerObservationModel) continue;
+    Object.assign(intent, observation);
+    // An intent that settled before its observation landed still needs its conditional return.
+    if (intent.outcome && intent.makerLadderFill === 'filled' && Number.isFinite(intent.makerLadderFillCents)) {
+      const fillPrice = intent.makerLadderFillCents! / 100;
+      if (fillPrice > 0 && fillPrice < 1) {
+        intent.makerRealizedProfitPerContract = (intent.outcome === intent.side ? 1 : 0)
+          - fillPrice - venueFeeFraction('kalshi', fillPrice, ENTRY_FEE_ROLE);
+      }
+    }
+    applied += 1;
+  }
+  return applied;
+}
+
+/**
+ * Removes backfilled observations, and only those.
+ *
+ * The backfill replays a coarser data source and a defect in that replay must be correctable without
+ * hand-editing the store (AGENTS §3). Live observations are never touched, and the decision-time record
+ * every intent carries is never touched by either path.
+ */
+export function clearBackfilledMakerPostObservations(): Promise<number> {
+  const operation = operationQueue.then(async () => {
+    const store = await readStore(TWO_SNAPSHOT_PERSISTENCE_CANDIDATE_VERSION);
+    let cleared = 0;
+    for (const intent of store.intents) {
+      if (intent.makerObservationSource !== 'depth-experiment-60s') continue;
+      delete intent.makerObservationModel; delete intent.makerObservationSource;
+      delete intent.makerPostCents; delete intent.makerQueueAheadCents;
+      delete intent.makerLadderFill; delete intent.makerLadderFillCents; delete intent.makerLadderFillAt;
+      delete intent.makerStaticFill; delete intent.makerStaticFillCents;
+      delete intent.makerRealizedProfitPerContract;
+      cleared += 1;
+    }
+    if (cleared) {
+      store.updatedAt = new Date().toISOString();
+      await writeStore(store);
+    }
+    return cleared;
+  });
+  operationQueue = operation.then(() => undefined, () => undefined);
+  return operation;
+}
+
+/** Durable write path for observations produced outside a trading cycle, e.g. the one-day backfill. */
+export function recordMakerPostObservations(observations: MakerPostObservationRecord[]): Promise<number> {
+  const operation = operationQueue.then(async () => {
+    if (!observations.length) return 0;
+    const store = await readStore(TWO_SNAPSHOT_PERSISTENCE_CANDIDATE_VERSION);
+    const applied = applyMakerPostObservations(store.intents, observations);
+    if (applied) {
+      store.updatedAt = new Date().toISOString();
+      await writeStore(store);
+    }
+    return applied;
+  });
+  operationQueue = operation.then(() => undefined, () => undefined);
+  return operation;
 }
 
 /**

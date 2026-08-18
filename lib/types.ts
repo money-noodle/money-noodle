@@ -1237,9 +1237,37 @@ export interface PersistenceCandidateIntent {
   outcome?: PositionSide;
   resolvedAt?: string;
   askProfitPerContract?: number;
+  /**
+   * **Superseded, retained because the store is committed evidence.** It multiplies an unconditional
+   * settlement return by `makerFillProbability`, which prices the fill as a random draw — the assumption
+   * the desk's adverse-selection measurements refute — and is a positive scaling that can never disagree
+   * with `askProfitPerContract`. Read `makerRealizedProfitPerContract` instead. See
+   * docs/maker-post-observation-design.md §1.
+   */
   makerExpectedProfitPerContract?: number;
+  /** Observed-fill simulation, written once. Absent means it was never attempted. */
+  makerObservationModel?: string;
+  makerObservationSource?: MakerObservationSource;
+  makerPostCents?: number;
+  makerQueueAheadCents?: number;
+  makerLadderFill?: MakerPostOutcome;
+  makerLadderFillCents?: number;
+  makerLadderFillAt?: string;
+  makerStaticFill?: MakerPostOutcome;
+  makerStaticFillCents?: number;
+  /** Settlement return at the observed ladder fill price. Written only when the ladder actually filled. */
+  makerRealizedProfitPerContract?: number;
   invalidReason?: string;
 }
+
+/**
+ * Where an observed fill came from. Never pooled: the backfill is a coarser method on a 60-second sampler
+ * that has already discarded taker direction. See docs/maker-post-observation-design.md §7.
+ */
+export type MakerObservationSource = 'live-2s' | 'depth-experiment-60s';
+
+/** Outcome of one simulated resting post. `unobserved` means the evidence to decide it was not captured. */
+export type MakerPostOutcome = 'filled' | 'unfilled' | 'unobserved';
 
 export interface PersistenceCandidateReport {
   candidateVersion: string;
@@ -1260,10 +1288,33 @@ export interface PersistenceCandidateReport {
   meanIncrementalAskProfitPerContract: number | null;
   meanIncrementalMakerExpectedProfitPerContract: number | null;
   incrementalAskStandardError: number | null;
+  /** Bid-priced settlement return, never multiplied by a fill rate: the price effect on its own. */
+  meanIncrementalBidPricedProfitPerContract: number | null;
+  observedFill: MakerObservedFillSummary;
+  /** Kept separate from `observedFill` on purpose; the two are never added together. */
+  backfilledFill: MakerObservedFillSummary;
   minimumReviewWindows: number;
   reviewReady: boolean;
   productionChanged: false;
   recent: PersistenceCandidateIntent[];
+}
+
+/**
+ * Observed-fill evidence, reported per source and never pooled across them. `unobserved` is a
+ * first-class outcome: coverage is reported rather than assumed.
+ */
+export interface MakerObservedFillSummary {
+  source: MakerObservationSource;
+  observedIntents: number;
+  unobservedIntents: number;
+  ladderFilled: number;
+  ladderUnfilled: number;
+  staticFilled: number;
+  staticUnfilled: number;
+  /** Return per contract conditional on an observed ladder fill, clustered on the settlement window. */
+  meanRealizedProfitPerContract: number | null;
+  realizedStandardError: number | null;
+  realizedWindows: number;
 }
 
 export interface AdaptiveRegimeGateStatus {

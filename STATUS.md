@@ -113,6 +113,80 @@ which made the rule untestable from a fixture. `spikeGateEnabled` is now a decla
 `SignalPersistenceRequirements` beside `maximumEdgeSpike`, so a caller states what it holds fixed. Tests
 pin both the armed logic and that production is disarmed.
 
+### Missed entries — the selection gates are not what keeps volume out, 2026-08-18
+
+Full measurement in [reports/missed-entry-review-2026-08-18.md](reports/missed-entry-review-2026-08-18.md);
+`npm run analyze:missed-entries`. It asks whether the desk should be admitting more buys, judged the way an
+operator watching the app judges it — could this have been sold at a positive exit?
+
+- **"Sellable at a profit" barely selects.** 81% of live-rule entries with a recorded path were sellable at
+  a profit after entry, and so were **60% of the ones that expired worthless**.
+- **No relaxation of the edge floor, edge ceiling, price band, quality floor, or selected-side floor
+  produces an increment that beats the live rule** (+16.7% ±4.5 per $1 over 1,970 decisions in 1,803
+  windows). The edge-floor increments match it; both side-probability increments are negative, −13.3%
+  ±12.9 at a 50% floor, independently confirming the v13 restoration.
+- **`MIN_ESTIMATE_QUALITY` and the price band are inert**: relaxing either admits **zero** additional
+  decisions across 3,017 windows. AGENTS §5.7 — do not describe them as risk controls.
+- **The venue price is calibrated from 30¢ up**, so there is no price band to harvest; below 30¢ it costs
+  19–27¢ on the dollar.
+- **Capacity binds first.** The live rule already admits a median of 3 and a mean of 3.6 simultaneous
+  decisions per settlement time against `DEFAULT_MAX_OPEN_POSITIONS` = 3. A looser gate changes which trade
+  is taken, not how many.
+- **The gate that costs volume is signal persistence**, and §6 below is where that is measured.
+
+Fill-optimistic throughout: entries are bought at the recorded ask. Three to five days, Kalshi only.
+
+### OVERDUE: `persistence-two-consecutive-v1` has 5x the sample it was locked for
+
+The committed sentinel of SPEC §706 records, at decision time, every entry two qualifying observations over
+15s would have taken that production's three over 30s did not. At the 2026-08-18T20:33:05Z read it holds
+**553 resolved incremental settlement windows against the 100 it was locked for**, returning **+13.2% ±8.4
+per $1** at the ask, positive on all 5 days. The value is concentrated where production never caught up at
+all — **+23.5% ±13.0 over 224 windows** — while the half production reached a median 17s later is
+indistinguishable from noise.
+
+**It is not promotable and the first review has not run.** Three blockers, in order of force:
+
+1. **~~The maker benchmark could not answer the fill question~~ — instrumented 2026-08-18.** The recorded
+   benchmark is `bid-priced return × modelled fill probability`: it prices the fill as a random draw the
+   adverse-selection evidence refutes, and as a positive scaling it can never disagree with the ask
+   benchmark. Intents now also carry a resting post simulated against observed trade prints, and the
+   report gives **return conditional on an observed fill**. See the section below.
+2. **SPEC §706 scopes evidence to the active buy-policy version.** Under that rule only the v19 cohort
+   counts: 92 windows, +16.0% ±19.9 — below both the bar and significance.
+3. Promotion is a manual act recorded in an immutable ledger.
+
+### Observed maker fills on the persistence sentinel, shipped 2026-08-18
+
+Design in [docs/maker-post-observation-design.md](docs/maker-post-observation-design.md).
+`persistence-two-consecutive-v1` now records, per intent, whether the resting entry production would have
+placed **actually would have filled**, simulated against observed trade prints.
+
+- **What was wrong.** `makerExpectedProfitPerContract` = bid-priced settlement return × modelled fill
+  probability. That prices the fill as a random draw, which the desk's own −19pp adverse-selection finding
+  refutes; and being a positive scaling it can never disagree with the ask benchmark beside it. On the v19
+  cohort the modelled probability ran 43–70% with a mean of 50.8%, so the tile was the bid return times
+  roughly one half. It was also labelled "Maker-touch benchmark", which it never was — touch is
+  `touchProbability`, documented in `lib/maker-fill-model.ts` as *inverted* against real fill rates.
+- **What it does now.** One order-book snapshot at post time (depth is not historical), the reprice ladder
+  reconstructed from the **2-second contract path**, and one trade-print fetch after the 12-second managed
+  horizon — two venue requests per intent. A post fills only when volume traded at or through its price
+  exceeds the size displayed ahead of it (`lib/maker-depth-experiment.ts`), never on a touch. Both arms
+  are scored: the ladder production actually walks, and a static post as a conservative floor.
+- **Where it runs.** Off the existing detached `persistenceCandidateCycle` branch, which the execution path
+  already fires and never awaits. Public unauthenticated endpoints, hard per-cycle request cap, one attempt
+  per intent, and every failure records `unobserved` rather than retrying.
+- **The recorded fields are untouched.** `makerExpectedProfitPerContract` and `makerFillProbability` stay
+  exactly as written — the store is committed evidence — and are simply no longer reported as the maker
+  benchmark. The report gains return **conditional on an observed fill**, plus the bid-priced return with
+  no fill assumption applied at all.
+- **Backfill: 16 intents, labelled separately and never pooled.** Of 103 intents with 60-second depth
+  coverage, the bid had already moved on 87, so only 16 could be posted at the price production would have
+  chosen. Those 16 score the static arm only and their fills are an **upper bound** — one 60-second print
+  window against a 12-second horizon, with taker direction already discarded by that sampler.
+- **The live cohort starts at zero** and accrues from the next collector restart; depth cannot be
+  reconstructed for the 611 intents already recorded.
+
 ### Where the loss comes from — decomposed 2026-08-18
 
 Full chain in [reports/loss-decomposition-2026-08-18.md](reports/loss-decomposition-2026-08-18.md);

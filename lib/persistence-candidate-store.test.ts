@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-import { buildPersistenceCandidateReport, PERSISTENCE_CANDIDATE_MINIMUM_REVIEW_WINDOWS } from './persistence-candidate-store';
+import { applyMakerPostObservations, buildPersistenceCandidateReport, PERSISTENCE_CANDIDATE_MINIMUM_REVIEW_WINDOWS } from './persistence-candidate-store';
 import type { PersistenceCandidateIntent } from './types';
 
 const intent = (patch: Partial<PersistenceCandidateIntent> = {}): PersistenceCandidateIntent => ({
@@ -60,5 +60,93 @@ describe('two-snapshot persistence candidate report', () => {
     }));
     expect(buildPersistenceCandidateReport(store(intents)).reviewReady).toBe(true);
     expect(buildPersistenceCandidateReport(store(intents.slice(1))).reviewReady).toBe(false);
+  });
+});
+
+describe('observed maker-post evidence', () => {
+  const observed = (patch: Partial<PersistenceCandidateIntent> = {}) => intent({
+    makerObservationModel: 'maker-post-observed-v1', makerObservationSource: 'live-2s',
+    makerPostCents: 39, makerQueueAheadCents: 12,
+    makerLadderFill: 'filled', makerLadderFillCents: 40, makerStaticFill: 'unfilled',
+    resolvedAt: '2026-01-01T00:16:00Z', outcome: 'UP', askProfitPerContract: 0.5832,
+    makerRealizedProfitPerContract: 0.5832, ...patch,
+  });
+
+  it('reports the conditional return only over intents with an observed fill', () => {
+    const report = buildPersistenceCandidateReport(store([
+      observed({ id: 'a', makerRealizedProfitPerContract: 0.5 }),
+      observed({ id: 'b', symbol: 'ETH', closesAt: '2026-01-01T00:30:00Z', makerLadderFill: 'unfilled', makerLadderFillCents: undefined, makerRealizedProfitPerContract: undefined }),
+    ]));
+    expect(report.observedFill).toMatchObject({ source: 'live-2s', ladderFilled: 1, ladderUnfilled: 1, realizedWindows: 1 });
+    expect(report.observedFill.meanRealizedProfitPerContract).toBeCloseTo(0.5, 9);
+  });
+
+  it('never pools the 60-second backfill with live observation', () => {
+    const report = buildPersistenceCandidateReport(store([
+      observed({ id: 'a', makerRealizedProfitPerContract: 0.5 }),
+      observed({ id: 'b', symbol: 'ETH', closesAt: '2026-01-01T00:30:00Z',
+        makerObservationSource: 'depth-experiment-60s', makerLadderFill: 'unobserved',
+        makerStaticFill: 'filled', makerRealizedProfitPerContract: -0.4 }),
+    ]));
+    expect(report.observedFill.ladderFilled).toBe(1);
+    expect(report.observedFill.meanRealizedProfitPerContract).toBeCloseTo(0.5, 9);
+    expect(report.backfilledFill).toMatchObject({ source: 'depth-experiment-60s', staticFilled: 1, ladderFilled: 0 });
+  });
+
+  it('reports the bid-priced return without applying any fill assumption to it', () => {
+    // A losing settlement: the price effect must stay negative rather than being shrunk toward zero the
+    // way multiplying by a 0.5 fill probability would.
+    const report = buildPersistenceCandidateReport(store([
+      intent({ resolvedAt: '2026-01-01T00:16:00Z', outcome: 'DOWN', askProfitPerContract: -0.4168,
+        makerExpectedProfitPerContract: -(0.39 + 0.0167) * 0.5 }),
+    ]));
+    expect(report.meanIncrementalBidPricedProfitPerContract).toBeCloseTo(-(0.39 + 0.0167), 9);
+    expect(report.meanIncrementalBidPricedProfitPerContract).toBeLessThan(report.meanIncrementalMakerExpectedProfitPerContract!);
+  });
+
+  it('counts an intent with no observation as neither filled nor unfilled', () => {
+    const report = buildPersistenceCandidateReport(store([
+      intent({ resolvedAt: '2026-01-01T00:16:00Z', outcome: 'UP', askProfitPerContract: 0.5832 }),
+    ]));
+    expect(report.observedFill).toMatchObject({ observedIntents: 0, ladderFilled: 0, ladderUnfilled: 0, meanRealizedProfitPerContract: null });
+  });
+});
+
+describe('applyMakerPostObservations', () => {
+  it('is write-once, so a coarse backfill cannot overwrite a live observation', () => {
+    const intents = [intent({ id: 'a', makerObservationModel: 'maker-post-observed-v1', makerObservationSource: 'live-2s', makerLadderFill: 'unfilled' })];
+    const applied = applyMakerPostObservations(intents, [{
+      id: 'a', makerObservationModel: 'maker-post-observed-v1', makerObservationSource: 'depth-experiment-60s',
+      makerPostCents: 39, makerLadderFill: 'unobserved', makerStaticFill: 'filled',
+    }]);
+    expect(applied).toBe(0);
+    expect(intents[0]).toMatchObject({ makerObservationSource: 'live-2s', makerLadderFill: 'unfilled' });
+  });
+
+  it('computes the conditional return for an intent that settled before its observation landed', () => {
+    const intents = [intent({ id: 'a', resolvedAt: '2026-01-01T00:16:00Z', outcome: 'UP', askProfitPerContract: 0.5832 })];
+    applyMakerPostObservations(intents, [{
+      id: 'a', makerObservationModel: 'maker-post-observed-v1', makerObservationSource: 'live-2s',
+      makerPostCents: 39, makerLadderFill: 'filled', makerLadderFillCents: 40, makerStaticFill: 'unfilled',
+    }]);
+    // Won at a 40c fill, less the fee charged at the price actually paid.
+    expect(intents[0].makerRealizedProfitPerContract).toBeCloseTo(1 - 0.4 - 0.07 * 0.4 * 0.6, 9);
+  });
+
+  it('leaves the conditional return unset when the post never filled', () => {
+    const intents = [intent({ id: 'a', resolvedAt: '2026-01-01T00:16:00Z', outcome: 'UP', askProfitPerContract: 0.5832 })];
+    applyMakerPostObservations(intents, [{
+      id: 'a', makerObservationModel: 'maker-post-observed-v1', makerObservationSource: 'live-2s',
+      makerPostCents: 39, makerLadderFill: 'unfilled', makerStaticFill: 'unfilled',
+    }]);
+    expect(intents[0].makerRealizedProfitPerContract).toBeUndefined();
+  });
+
+  it('ignores an observation for an intent the store does not hold', () => {
+    const intents = [intent({ id: 'a' })];
+    expect(applyMakerPostObservations(intents, [{
+      id: 'missing', makerObservationModel: 'maker-post-observed-v1', makerObservationSource: 'live-2s',
+      makerPostCents: 39, makerLadderFill: 'filled', makerLadderFillCents: 40, makerStaticFill: 'filled',
+    }])).toBe(0);
   });
 });

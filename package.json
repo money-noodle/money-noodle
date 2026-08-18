@@ -33,7 +33,9 @@
     "analyze:exit-counterfactuals": "node scripts/analyze-exit-counterfactuals.mjs",
     "analyze:loss-decomposition": "node --max-old-space-size=6144 scripts/analyze-loss-decomposition.mjs",
     "analyze:take-the-ask": "node --max-old-space-size=6144 scripts/analyze-take-the-ask.mjs",
-    "analyze:entry-realization": "node --max-old-space-size=6144 scripts/analyze-entry-realization.mjs"
+    "analyze:entry-realization": "node --max-old-space-size=6144 scripts/analyze-entry-realization.mjs",
+    "analyze:missed-entries": "node --max-old-space-size=8192 --expose-gc scripts/analyze-missed-entries.mjs",
+    "backfill:maker-posts": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/backfill-maker-post-observations.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1111.0",
