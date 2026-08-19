@@ -1,4 +1,4 @@
-import { ENTRY_EXECUTION_POLICY_VERSION } from './entry-execution-policy';
+import { ADAPTIVE_ENTRY_ATTEMPTS } from './entry-execution-policy';
 import type { ExecutionMode, PaperOrder } from './types';
 
 export const MAX_MAKER_ATTEMPTS_PER_CONTRACT = 2;
@@ -11,14 +11,6 @@ export function maximumLiveMakerAttempts(): number {
   return Number.isSafeInteger(configured) && configured >= 1
     ? Math.min(MAX_MAKER_ATTEMPTS_PER_CONTRACT, configured)
     : 1;
-}
-
-/** Paper can retry once by default so an early simulated miss does not hide a later live-aligned buy. */
-export function maximumPaperMakerAttempts(): number {
-  const configured = Number(process.env.MONEY_NOODLE_MAX_PAPER_MAKER_ATTEMPTS ?? MAX_MAKER_ATTEMPTS_PER_CONTRACT);
-  return Number.isSafeInteger(configured) && configured >= 1
-    ? Math.min(MAX_MAKER_ATTEMPTS_PER_CONTRACT, configured)
-    : MAX_MAKER_ATTEMPTS_PER_CONTRACT;
 }
 
 export interface MakerRetryDecision {
@@ -40,42 +32,20 @@ export function entryAttemptsForLogicalOrder(orders: PaperOrder[], logicalOrderI
     .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
 }
 
-/**
- * Adaptive live attempt 2 is available only after an explicitly stamped maker zero-fill. There is no
- * wall-clock cooldown: the caller must prove fresh post-completion persistence before submission.
- */
+/** Adaptive v4 permits one attempt. The historical function name is retained for durable read paths. */
 export function adaptiveTakerFallbackDecision(
-  attempts: PaperOrder[], nowMs: number, closesAt: string, maximumAttempts = MAX_MAKER_ATTEMPTS_PER_CONTRACT,
+  attempts: PaperOrder[], _nowMs: number, _closesAt: string, maximumAttempts = ADAPTIVE_ENTRY_ATTEMPTS,
 ): MakerRetryDecision {
   const ordered = [...attempts].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-  if (!ordered.length) return { allowed: true, attemptNumber: 1, reason: 'First adaptive attempt for this contract window.' };
-  const latest = ordered.at(-1)!;
+  if (!ordered.length) return { allowed: true, attemptNumber: 1, reason: 'First and only adaptive attempt for this contract window.' };
   if (ordered.some((order) => order.status === 'open' || order.status === 'pending_reservation'
     || order.status === 'uncertain' || (order.filledCount ?? 0) > 0)) {
     return { allowed: false, attemptNumber: ordered.length + 1, reason: 'A filled, open, working, or uncertain entry already exists for this contract window.' };
   }
-  const effectiveMaximum = Math.max(1, Math.min(MAX_MAKER_ATTEMPTS_PER_CONTRACT, Math.floor(maximumAttempts)));
-  if (ordered.length >= effectiveMaximum) return {
+  const effectiveMaximum = Math.max(1, Math.min(ADAPTIVE_ENTRY_ATTEMPTS, Math.floor(maximumAttempts)));
+  return {
     allowed: false, attemptNumber: ordered.length + 1,
     reason: `Maximum ${effectiveMaximum} adaptive entry attempt${effectiveMaximum === 1 ? '' : 's'} reached for this asset/contract window.`,
-  };
-  if (latest.status !== 'unfilled') return {
-    allowed: false, attemptNumber: ordered.length + 1,
-    reason: `Latest entry state ${latest.status} is not safely retryable.`,
-  };
-  if (latest.entryExecutionDecision?.policyVersion !== ENTRY_EXECUTION_POLICY_VERSION
-    || latest.entryExecutionDecision.configuredMode !== 'adaptive'
-    || latest.entryExecutionDecision.executedStyle !== 'maker' || !latest.makerCompletedAt) return {
-    allowed: false, attemptNumber: ordered.length + 1,
-    reason: 'Attempt 2 requires a current-policy adaptive maker attempt with an authoritative zero-fill.',
-  };
-  if (Date.parse(closesAt) - nowMs <= MAKER_RETRY_LATE_CUTOFF_MS) return {
-    allowed: false, attemptNumber: ordered.length + 1, retryOfOrderId: latest.id,
-    reason: `Inside the final ${MAKER_RETRY_LATE_CUTOFF_MS / 1000}s; no adaptive fallback is allowed.`,
-  };
-  return {
-    allowed: true, attemptNumber: ordered.length + 1, retryOfOrderId: latest.id,
-    reason: 'Fresh post-miss persistence and every current execution guard may authorize one capped taker fallback.',
   };
 }
 

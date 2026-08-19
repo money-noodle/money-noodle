@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { MAX_FILLABLE_ASK, applyTakerQuoteMovementReserve, estimatePaperFill, groupedRecentOrders, venueFeeCents } from './paper-execution';
 import type { PaperOrder } from './types';
@@ -48,6 +49,13 @@ describe('paper execution fills', () => {
     expect(estimatePaperFill(9, 0.28, 'kalshi')).toMatchObject({ quantity: 0.28, stakeCents: 9 });
     expect(estimatePaperFill(1, 0.50, 'kalshi')).toBeNull();
     expect(estimatePaperFill(100, 0, 'polymarket')).toBeNull();
+  });
+
+  it('stamps reduce-only sizing before fill estimation and reuses its cap for taker reserve', () => {
+    const source = readFileSync(new URL('./paper-execution.ts', import.meta.url), 'utf8');
+    expect(source).toContain('evaluateEntrySizing(stakeLimitCents, entry.netEdge)');
+    expect(source).toContain('entrySizingDecision: { ...selected.sizing }');
+    expect(source).toContain('built.order.entrySizingDecision?.stakeLimitCents ?? liveStakeCeiling');
   });
 
   it('sizes taker quantity and fees against the one-cent worst-case cap', () => {

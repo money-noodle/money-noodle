@@ -3,7 +3,8 @@ import { maximumEdgeSpike } from './edge-spike-policy';
 import { PRODUCTION_BASIS_LOG_ODDS_WEIGHT } from './calibration-replay';
 import { MAX_TRADEABLE_PROBABILITY, MIN_TRADEABLE_PROBABILITY } from './dashboard';
 import { classifiedRegimeRequired } from './paper-execution';
-import { ENTRY_EXECUTION_POLICY_VERSION, parseEntryExecutionMode } from './entry-execution-policy';
+import { ADAPTIVE_ENTRY_ATTEMPTS, ENTRY_EXECUTION_POLICY_VERSION, HIGH_EDGE_TAKER_THRESHOLD, parseEntryExecutionMode } from './entry-execution-policy';
+import { ENTRY_SIZING_POLICY_VERSION, FULL_SIZE_EDGE_THRESHOLD, REDUCED_ENTRY_MULTIPLIER } from './entry-sizing-policy';
 import { POST_EXIT_REENTRY_COOLDOWN_MS, PROFIT_REVERSAL_ARM_PERCENT, STRICT_EXIT_MIN_GAIN_CENTS, profitReversalExitEnabled, standaloneExitPolicyVersion } from './exit-policy';
 import { maximumLiveMakerAttempts } from './maker-retry-policy';
 import { activeModel } from './model-promotion';
@@ -325,14 +326,15 @@ export function activePolicyManifest(providers: TradingProviderDescriptor[], mod
         { label: 'Applies to', value: 'Live and paper identically' },
       ]),
       component('execution', 'Entry execution', ENTRY_EXECUTION_POLICY_VERSION, 'production', executionMode === 'maker'
-        ? 'Maker-only live execution with separately measured taker shadows.'
-        : 'Adaptive live execution: strict attempt-1 selection, then one fresh capped taker fallback after an authoritative maker miss.', [
-        { label: 'Production mode', value: executionMode === 'maker' ? 'Managed post-only maker' : 'Adaptive maker/taker' },
-        { label: 'Attempt 1', value: executionMode === 'maker' ? 'Managed maker; taker recommendation is shadow-only' : 'Taker only when all six strict gates clear; otherwise managed maker' },
-        { label: 'Taker spread ceiling', value: '2¢; the separate 10¢ ceiling rejects the entry entirely' },
+        ? 'Maker-only live execution with separately measured high-edge taker shadows.'
+        : 'One live attempt: fresh 30pp+ edges may take; every lower edge receives one managed maker.', [
+        { label: 'Production mode', value: executionMode === 'maker' ? 'Managed post-only maker' : 'High-edge adaptive maker/taker' },
+        { label: 'High-edge route', value: `Issuance and refreshed taker edge ≥${points(HIGH_EDGE_TAKER_THRESHOLD)}; median ≥10pp; quality ≥65%; spread ≤2¢` },
+        { label: 'Ordinary route', value: `Below ${points(HIGH_EDGE_TAKER_THRESHOLD)}: one managed maker; zero-fill ends the sequence` },
         { label: 'Pre-submit ask movement', value: '≤1.0¢; fresh quote re-runs gates, all-in reserve uses worst price' },
-        { label: 'Attempt 2', value: executionMode === 'adaptive' ? 'After maker zero-fill: two new snapshots over 15s, four absolute gates, one capped IOC' : 'Existing bounded maker retry behavior' },
-        { label: 'Live attempts per contract', value: `${maximumLiveMakerAttempts()}` },
+        { label: 'Live attempts per contract', value: `${executionMode === 'adaptive' ? ADAPTIVE_ENTRY_ATTEMPTS : maximumLiveMakerAttempts()}` },
+        { label: 'Sizing policy', value: ENTRY_SIZING_POLICY_VERSION },
+        { label: 'Sizing', value: `${REDUCED_ENTRY_MULTIPLIER}× below ${points(FULL_SIZE_EDGE_THRESHOLD)}; 1× at or above; no upsizing` },
       ]),
       component('exit', 'Standalone exits', standaloneExitPolicyVersion(), 'production', 'Reduce-only value exits, with armed profit reversal recorded whether or not it may sell.', [
         { label: 'Strict value margin', value: `${STRICT_EXIT_MIN_GAIN_CENTS}¢` },

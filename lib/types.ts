@@ -1555,6 +1555,34 @@ export interface PaperOrder {
   actualFeeCents?: number;
   actualStakeCents?: number;
   actualPnlCents?: number;
+  /** Issuance-time reduce-only sizing decision. Absent on orders before the sizing policy existed. */
+  entrySizingDecision?: {
+    policyVersion: string;
+    baseStakeLimitCents: number;
+    netEdge: number;
+    multiplier: number;
+    stakeLimitCents: number;
+    reason: string;
+  };
+  /** Prospective reporting-only selected-side quote direction; no production decision may read it. */
+  entryDirectionObservation?: {
+    version: 'entry-direction-observation-v1';
+    issuanceAsk: number;
+    preSubmit?: {
+      at: string;
+      selectedAsk: number;
+      movementCents: number;
+      direction: 'adverse' | 'stable' | 'favorable';
+      candidateDecision: 'continue' | 'refuse' | 'cancel';
+    };
+    firstUnfilledManagement?: {
+      at: string;
+      selectedAsk: number;
+      movementCents: number;
+      direction: 'adverse' | 'stable' | 'favorable';
+      candidateDecision: 'continue' | 'refuse' | 'cancel';
+    };
+  };
   /** Issuance-time maker/taker decision. Maker mode records taker recommendations as shadow only. */
   entryExecutionDecision?: {
     policyVersion: string;
@@ -1570,7 +1598,9 @@ export interface PaperOrder {
     makerCohort: string;
     makerSamples: number;
     makerFillRate: number | null;
-    /** Attempt 2 follows one authoritative maker zero-fill for this exact logical entry sequence. */
+    /** v4 route identity; absent on historical execution decisions. */
+    route?: 'ordinary-maker' | 'high-edge-taker';
+    /** Historical v3 fallback metadata; v4 never opens attempt 2. */
     makerMissFallback?: boolean;
     fallbackFromOrderId?: string;
   };

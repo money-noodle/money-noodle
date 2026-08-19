@@ -48,6 +48,8 @@ export interface PortfolioChoiceSetCandidate {
   liveFiltersAdmitted: boolean;
   portfolioState: PortfolioDecisionState;
   portfolioReason: string;
+  sizingPolicyVersion?: string;
+  sizingMultiplier?: number;
   quantity?: number;
   stakeCents?: number;
   feeCents?: number;
@@ -77,6 +79,7 @@ export interface PortfolioChoiceSetRecord {
   forecastModelVersion?: string;
   buyPolicyVersion: string;
   executionPolicyVersion?: string;
+  sizingPolicyVersion?: string;
   issuedOrderId: string;
   issuedLogicalOrderId: string;
   issuedCandidateId: string;

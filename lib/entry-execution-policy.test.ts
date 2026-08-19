@@ -1,50 +1,58 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateEntryExecutionPolicy, makerCohortEvidence, parseEntryExecutionMode } from './entry-execution-policy';
+import {
+  ADAPTIVE_ENTRY_ATTEMPTS, ENTRY_EXECUTION_POLICY_VERSION, HIGH_EDGE_TAKER_THRESHOLD,
+  evaluateEntryExecutionPolicy, makerCohortEvidence, parseEntryExecutionMode,
+} from './entry-execution-policy';
 import type { PaperOrder } from './types';
 
 const base = {
-  mode: 'maker' as const, currentNetEdge: 0.18, medianNetEdge: 0.14, confidence: 0.72,
-  spread: 0.01, makerNetEdge: 0.20,
+  mode: 'maker' as const, currentNetEdge: 0.32, medianNetEdge: 0.14, confidence: 0.72,
+  spread: 0.01, makerNetEdge: 0.34,
   makerEvidence: { label: '25-50c · 1-2c', accepted: 40, fills: 20, fillRate: 0.5 },
-  minimumTakerNetEdge: 0.15, minimumMedianNetEdge: 0.10, minimumConfidence: 0.65,
-  maximumSpread: 0.02, minimumMakerSamples: 30, minimumTakerAdvantage: 0.02,
+  minimumMedianNetEdge: 0.10, minimumConfidence: 0.65, maximumSpread: 0.02,
 };
 
-describe('adaptive maker/taker entry policy', () => {
-  it('records a taker recommendation without changing live maker execution in maker mode', () => {
+describe('high-edge maker/taker entry policy v4', () => {
+  it('records the new policy identity and one-attempt ceiling', () => {
+    expect(ENTRY_EXECUTION_POLICY_VERSION).toBe('maker-high30-one-attempt-fresh1c-v4');
+    expect(ADAPTIVE_ENTRY_ATTEMPTS).toBe(1);
+  });
+
+  it('records a high-edge taker recommendation without changing maker mode', () => {
     const decision = evaluateEntryExecutionPolicy(base);
-    expect(decision).toMatchObject({ recommendedStyle: 'taker', executedStyle: 'maker' });
-    expect(decision.takerAdvantage).toBeCloseTo(0.08);
+    expect(decision).toMatchObject({ recommendedStyle: 'taker', executedStyle: 'maker', route: 'high-edge-taker' });
     expect(decision.reason).toContain('Shadow only');
   });
 
-  it('allows adaptive attempt 1 only after every strict gate clears', () => {
+  it('takes adaptively only when fresh edge is at least 30pp and every absolute gate clears', () => {
     expect(evaluateEntryExecutionPolicy({ ...base, mode: 'adaptive' }).executedStyle).toBe('taker');
-    expect(evaluateEntryExecutionPolicy({ ...base, mode: 'adaptive', currentNetEdge: 0.149 }).executedStyle).toBe('maker');
+    expect(evaluateEntryExecutionPolicy({ ...base, mode: 'adaptive', currentNetEdge: 0.299 }).executedStyle).toBe('maker');
     expect(evaluateEntryExecutionPolicy({ ...base, mode: 'adaptive', medianNetEdge: 0.09 }).executedStyle).toBe('maker');
     expect(evaluateEntryExecutionPolicy({ ...base, mode: 'adaptive', confidence: 0.64 }).executedStyle).toBe('maker');
     expect(evaluateEntryExecutionPolicy({ ...base, mode: 'adaptive', spread: 0.03 }).executedStyle).toBe('maker');
-    expect(evaluateEntryExecutionPolicy({ ...base, mode: 'adaptive', makerEvidence: { ...base.makerEvidence, accepted: 29 } }).executedStyle).toBe('maker');
-    expect(evaluateEntryExecutionPolicy({ ...base, mode: 'adaptive', minimumTakerAdvantage: 0.081 }).executedStyle).toBe('maker');
   });
 
-  it('keeps the 2c spread ceiling fail-safe at its floating-point boundary', () => {
+  it('does not use maker sample count or random-fill captured edge as a high-edge gate', () => {
+    const decision = evaluateEntryExecutionPolicy({
+      ...base, mode: 'adaptive',
+      makerEvidence: { ...base.makerEvidence, accepted: 0, fills: 0, fillRate: null },
+    });
+    expect(decision).toMatchObject({ executedStyle: 'taker', makerSamples: 0, makerExpectedCapturedEdge: null });
+  });
+
+  it('holds the 30pp and 2c boundaries to their named tolerances', () => {
+    expect(evaluateEntryExecutionPolicy({ ...base, mode: 'adaptive', currentNetEdge: HIGH_EDGE_TAKER_THRESHOLD - 2e-12 }).executedStyle).toBe('maker');
+    expect(evaluateEntryExecutionPolicy({ ...base, mode: 'adaptive', currentNetEdge: HIGH_EDGE_TAKER_THRESHOLD - 0.5e-12 }).executedStyle).toBe('taker');
     expect(evaluateEntryExecutionPolicy({ ...base, mode: 'adaptive', spread: 0.02 }).executedStyle).toBe('taker');
     expect(evaluateEntryExecutionPolicy({ ...base, mode: 'adaptive', spread: 0.020_000_000_002 }).executedStyle).toBe('maker');
   });
 
-  it('waives only comparative gates after an authoritative maker miss', () => {
-    const fallback = {
-      ...base, mode: 'adaptive' as const, makerMissFallback: true, fallbackFromOrderId: 'live:BTC:first',
-      makerEvidence: { ...base.makerEvidence, accepted: 0, fillRate: null },
-    };
-    const decision = evaluateEntryExecutionPolicy(fallback);
-    expect(decision).toMatchObject({ executedStyle: 'taker', makerMissFallback: true, fallbackFromOrderId: 'live:BTC:first' });
-    expect(decision.reason).toContain('comparative maker gates are waived');
-    expect(evaluateEntryExecutionPolicy({ ...fallback, currentNetEdge: 0.149 }).executedStyle).toBe('maker');
-    expect(evaluateEntryExecutionPolicy({ ...fallback, medianNetEdge: 0.099 }).executedStyle).toBe('maker');
-    expect(evaluateEntryExecutionPolicy({ ...fallback, confidence: 0.649 }).executedStyle).toBe('maker');
-    expect(evaluateEntryExecutionPolicy({ ...fallback, spread: 0.021 }).executedStyle).toBe('maker');
+  it('refuses fallback authority even if a historical caller supplies it', () => {
+    const decision = evaluateEntryExecutionPolicy({
+      ...base, mode: 'adaptive', makerMissFallback: true, fallbackFromOrderId: 'live:BTC:first',
+    });
+    expect(decision).toMatchObject({ executedStyle: 'maker', makerMissFallback: true, fallbackFromOrderId: 'live:BTC:first' });
+    expect(decision.reason).toContain('do not open fallback authority');
   });
 
   it('defaults invalid configuration to maker mode', () => {

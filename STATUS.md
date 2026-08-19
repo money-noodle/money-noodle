@@ -34,6 +34,70 @@ Snapshot from local durable files at 2026-08-19T01:44:04Z. Full method, cohorts,
 - Latest walk-forward run: `walk-forward:875:fnv1a-27542176`, generated 2026-08-18T22:00:08Z. Candidate mean window return was 5.75% against baseline 2.37% over 438 test windows; it beat baseline 5/5 folds but was positive only 3/5 with modal parameters in 3/5. Decision: `baseline_retained`.
 - The current Next development server occupied about 3.7 GB RSS. RSS is not retained heap and dev mode carries compiler/cache overhead, but this materially disagrees with the prior 70 MB post-sharding RSS measurement and needs a like-for-like profile.
 
+### High-edge execution, direction observation, and reduce-only sizing deployed live, 2026-08-19
+
+Full 2026-08-19T22:43:38Z durable-data review in
+[reports/execution-direction-sizing-review-2026-08-19.md](reports/execution-direction-sizing-review-2026-08-19.md);
+reproduce with `npm run analyze:execution-direction-sizing`. The supplied realized-edge shape reproduced:
+30pp+ returned +46.2% ±46.9 live over 18 rows / 17 windows and +56.3% ±45.4 paper over 29 / 25. It is
+not ready to lever: the three largest positive rows exceed each track's total high-edge profit, and each
+standard error is about as large as its point estimate.
+
+The prior 0.3×–3× proportional-sizing result does **not** reproduce on executed money. It raises modeled
+capital about 76% while clustered realized return remains negative and nearly unchanged. The maintainer
+instead approved an explicit restrictive deployment on retrospective evidence:
+`entry-sizing-reduce30-below-edge30-v1` commits 0.3× of each track's current base ticket below 30pp and 1×
+at 30pp+, with no arbitrary minimum and no upsizing. `maker-high30-one-attempt-fresh1c-v4` gives every
+logical sequence one attempt: below 30pp one managed maker whose zero-fill ends the sequence; at 30pp+ one
+IOC only if an immediate exact quote still clears 30pp fresh taker edge, 10pp persistence median, 65%
+quality, 2¢ spread, and the existing 1¢ movement and safety gates. The old random-fill maker comparison no
+longer gates high-edge taking. Design and stated departure:
+[docs/high-edge-execution-reduced-sizing-design.md](docs/high-edge-execution-reduced-sizing-design.md).
+
+Exact-quote direction explains many misses but does not yet supply a production rule. The
+2026-08-19T23:19:35Z rerun read 2,723 orders / 65,381 resolved forecasts: across 77 live attempts / 36
+windows and 208 paper attempts / 60 windows, favorable one-cent moves filled 31.7% live / 18.3% paper while
+adverse moves filled 63.6% / 68.9%. Refusing adverse pre-submit movement improves live +12.6pp ±8.2 but
+paper only +0.3pp ±7.1 and drops 6 live and 22 paper winning fills. The post-deployment rows are not an
+independent validation cohort, and the direction result remains track-discordant. `entry-direction-observation-v1`
+now stamps the pre-submit and first-unfilled-management direction plus the fixed refusal/cancel candidates,
+but production never reads them.
+
+**Deployment check, 2026-08-19T23:08–23:14Z.** Automation was manually paused and drained; reconciliation
+passed with 0¢ reserved, zero local/venue positions, and zero resting orders canceled. The built production
+server restarted, startup reconciliation passed against 5,541.96¢ venue cash with zero recovered fills, and
+the operator explicitly resumed live mode. The first v4 runtime trace was SOL UP at 3.7pp issuance edge: the
+100¢ base sized to a 30¢ reservation, one maker filled 0.54 contracts for 28.62¢ exact all-in spend, and the
+order stamped both v4 execution and direction evidence. After a final current-source build, a second
+quiescent restart reconciled that one open position exactly against 5,513.34¢ venue cash and 29¢ local
+reservation, with zero recovered fills or resting orders; live mode was explicitly resumed with no blockers.
+At the 2026-08-19T23:17:34Z follow-up, that first order had settled DOWN for an exact −28.62¢, and a
+second v4 trace (BTC UP, 4.7pp issuance edge) completed its single 30¢-cap maker attempt unfilled. Live mode
+remained active with 0¢ reserved and 1,836¢ available. These are two attempts in two settlement windows and
+verify routing, sizing, settlement, and terminal zero-fill wiring only; they do not estimate economics.
+
+### Winner-preserving loss screen: no production filter qualifies, 2026-08-19
+
+Full 2026-08-19T22:20Z durable-data review in
+[reports/winner-preserving-loss-filter-review-2026-08-19.md](reports/winner-preserving-loss-filter-review-2026-08-19.md);
+reproduce with `npm run analyze:winner-preserving-filters`. At that read, v21's first
+qualified population remained positive at **+12.0% ±5.1 over 591 decisions / 84 windows**, while its 42
+live fills over 26 windows were **−31.6% ±19.8** ask-priced and held. Tightening entry is not the supported
+response.
+
+The predeclared 2pp maker-spike restriction is the lead, not a promotion. Retrospectively across v21 it
+improves the all-attempt mean by +13.8pp ±7.2 live and +3.9pp ±5.9 paper, but refuses **6 live and 13 paper
+winning fills** at the report read. On the 2026-08-19T23:19:35Z rerun, its prospective cohort had refused
+five losing fills and zero winning fills across the two tracks, but only over **1 resolved live window and
+13 paper windows**, far below the locked 60-window / 20-differing-window review requirement. The greatest
+threat is the tiny, repeatedly observed prospective cohort; the 2¢ spread restriction also disagrees by
+track. This screen authorizes no additional buy, execution, sizing, exit, or live-authority change.
+
+The separate paper-only long-shot ledger now has 42 settled attempts in 28 windows, zero `won` statuses,
+and −754.27¢ exact P&L on 940¢. Its latest settled 12¢→97¢ predecessor cohort is 0/9 over five windows;
+the derived v2 cohort has no settled order. Retiring that lane is an operator choice about research value,
+not a live-risk action.
+
 ### Eleven ideas screened; sizing is the one worth effort, 2026-08-19
 
 Full measurement in [reports/edge-buy-opportunities-2026-08-19.md](reports/edge-buy-opportunities-2026-08-19.md).
@@ -305,7 +369,7 @@ What it fixes is bigger than the entry rule. A single non-qualifying snapshot re
 at the collector's ~17s cadence one blip cost ~51 seconds of re-earning. Measured over 12 hours,
 **115 of 205 admitted decisions never persisted at all.**
 
-**Execution discrepancy found and resolved as selective adaptive, 2026-08-19.** The audit found
+**Historical v3 execution discrepancy, superseded later on 2026-08-19 by v4.** The audit found
 `MONEY_NOODLE_ENTRY_EXECUTION_MODE=taker` still applied the same recommendation as `adaptive`, while local
 threshold overrides had relaxed most of the six gates. The maintainer chose adaptive rather than
 unconditional taking. Attempt 1 now takes only at ≥15pp current edge, ≥10pp persistence median, ≥65%
@@ -764,8 +828,8 @@ Interpretation: the newer exact ledger snapshot is slightly negative lifetime an
 ### Execution and Safety
 
 - Signed Kalshi balances, positions, orders, fills, cancellation, and v2 order submission.
-- Managed post-only maker entries for UP/YES and DOWN/NO with passive repricing, bounded retries, cancellation confirmation polling, fill/fee reconciliation, and exact sub-cent accounting.
-- Paper execution now mirrors live's exact-contract managed maker pricing instead of assuming immediate ask fills or holding one stale dashboard bid. A shared pure state machine chooses the refreshed initial passive limit and all progressive reprices. Paper polls independently every two seconds while live management runs concurrently, keeps live's issuance-sized quantity, and requires opposite-outcome public taker prints to consume displayed queue-ahead volume; ask touch alone is telemetry, not a fill. Incomplete terminal trade evidence is excluded rather than scored as a miss. The two-attempt paper retry ceiling, portfolio/correlation/funding limits, and separate bankroll remain unchanged.
+- `maker-high30-one-attempt-fresh1c-v4` gives each edge-entry sequence one attempt: a managed post-only maker below 30pp issuance edge, or a capped fresh-quote IOC evaluation at 30pp+. Maker execution supports UP/YES and DOWN/NO with passive repricing, cancellation confirmation polling, fill/fee reconciliation, and exact sub-cent accounting; an authoritative zero-fill is terminal.
+- Paper execution mirrors live's relative `entry-sizing-reduce30-below-edge30-v1` sizing and exact-contract managed-maker pricing while retaining independent fills. A shared pure state machine chooses the refreshed initial passive limit and all progressive reprices. Paper polls independently every two seconds while live management runs concurrently, keeps live's issuance-sized quantity, and requires opposite-outcome public taker prints to consume displayed queue-ahead volume; ask touch alone is telemetry, not a fill. Incomplete terminal trade evidence is excluded rather than scored as a miss. Paper also receives one attempt; portfolio/correlation/funding limits and its separate bankroll remain unchanged.
 - Contemporaneous paper intents receive a separate `matched-live-fill-shadow-v1` overlay when live fills authoritatively. It is capped at observed live and requested paper quantity and records exact live price/fee terms, but cannot alter the independent paper status, budget, P&L, or public track record. The maker report exposes matched, both-filled, and live-only counts without blending the lanes.
 - Explicit live arming, environment opt-in, kill switch, pause/resume, per-trade cap, order-rate cap, budget allocation, loss stops, and automatic safety suspension on ambiguous failures.
 - Pause is a quiescent drain: withdraw intent, serialize behind execution, cancel/confirm managed remainders, reconcile authoritatively, and report restart-safe only when no working or uncertain transaction remains.
@@ -1108,18 +1172,21 @@ Remaining work:
 - Compare accepted filled orders with accepted no-fills by settlement window.
 - Measure independent-paper/live agreement and disagreements against the separately stored matched-live overlay; never substitute the selected live fill for the independent paper result.
 - Recalibrate maker fill probability only after enough prospective fills and no-fills exist under `paper-managed-maker-trade-queue-v2`.
-- Execution identity is resolved as `adaptive` under `maker-taker-adaptive-one-miss-slippage1c-v3`. The
-  previous `taker` label, permissive local threshold overrides, and prose claim of unconditional taking are
-  superseded. Historical v21 rows remain stamped as they executed and must not be pooled with v2.
+- Current execution identity is `maker-high30-one-attempt-fresh1c-v4` with
+  `entry-sizing-reduce30-below-edge30-v1`. Below 30pp there is one reduced-size managed maker; at 30pp+
+  there is one full-base capped IOC only after the exact refreshed quote re-clears every absolute gate.
+  There is no second attempt or fallback. Historical v3 rows retain
+  `maker-taker-adaptive-one-miss-slippage1c-v3` and must not be pooled with v4.
 - The pre-decision shadow had shown no discrimination: over 618 stamped orders on 2026-08-18, 74 were
   taker-flagged but all executed maker; flagged and unflagged fill rates were 51% and 50%, and fill-selection
-  gaps were −11.2pp and −13.1pp. That evidence did not authorize adaptive execution; the 2026-08-19 change
-  is an explicit operator execution decision with its strict limits stated, not a claimed promotion.
+  gaps were −11.2pp and −13.1pp. That evidence did not authorize v4; the 2026-08-19 deployment is an explicit
+  operator decision on retrospective, concentrated evidence, not a claimed promotion.
 - A wholesale switch to taking remains only the counterfactual in
   [reports/take-the-ask-2026-08-18.md](reports/take-the-ask-2026-08-18.md). It is not the deployed policy.
 
-Forbidden for now: depth-aware sizing, a third attempt, fallback after anything except an authoritative
-maker zero-fill, bypassing any of the four absolute fallback gates, or queue-aware live gates.
+Forbidden for now: depth-aware sizing, any multiplier above 1, a second entry attempt, taker fallback after
+a maker miss, direction-based production cancellation, bypassing any fresh high-edge gate, or queue-aware
+live gates.
 
 ### 6. Verify First Organic Live Switch and Continue Exit Verification
 

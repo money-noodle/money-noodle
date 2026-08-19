@@ -1,5 +1,9 @@
 # Adaptive entry execution and one-miss taker fallback
 
+> **Superseded on 2026-08-19 by**
+> [`high-edge-execution-reduced-sizing-design.md`](high-edge-execution-reduced-sizing-design.md). Historical
+> v3 orders retain these semantics; v4 permits one attempt and no fallback.
+>
 > Design agreed with the maintainer on 2026-08-19 before implementation. This changes funded execution,
 > not the buy rule. The mirror invariant remains intact: live and paper still make the same entry decision;
 > execution style and capital remain track-specific under SPEC §12.3.

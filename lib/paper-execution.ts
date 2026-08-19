@@ -4,7 +4,9 @@ import path from 'node:path';
 import { beginLiveTransaction, blockExecutionDrain, completeExecutionDrain, endLiveTransaction, getExecutionDrainStatus, startExecutionDrain } from './execution-drain-state';
 import { CALENDAR_EVALUATION_VERSION, calendarFixedSnapshotDue, updateCalendarEvaluationStore, type CalendarEvaluationCycle } from './calendar-evaluation-store';
 import { reconcileExecutionLedger } from './execution-reconciliation';
-import { ENTRY_EXECUTION_POLICY_VERSION, entrySideProbability, evaluateEntryExecutionPolicy, makerCohortEvidence, parseEntryExecutionMode, type EntryExecutionDecision } from './entry-execution-policy';
+import { ADAPTIVE_ENTRY_ATTEMPTS, ENTRY_EXECUTION_POLICY_VERSION, entrySideProbability, evaluateEntryExecutionPolicy, makerCohortEvidence, parseEntryExecutionMode, type EntryExecutionDecision } from './entry-execution-policy';
+import { observeEntryDirection } from './entry-direction-observation';
+import { evaluateEntrySizing } from './entry-sizing-policy';
 import { POST_EXIT_REENTRY_COOLDOWN_MS, evaluateExitPolicy } from './exit-policy';
 import { estimateMakerFill } from './maker-fill-model';
 import { fetchKalshiManagedMakerQuote, fetchKalshiQuote, fetchKalshiTradePrintsSince } from './kalshi-market-data';
@@ -67,7 +69,7 @@ import { getProviderBudgets, providerBudget } from './provider-budget-store';
 import { isStatelessDeployment } from './runtime-environment';
 import { postgresPaperProjectionSyncEnabled, readPublicPaperBudgetFromPostgres, syncPublicPaperBudgetToPostgres } from './postgres-paper-projection';
 import { fetchKalshiReconciliationSnapshot } from './kalshi-reconciliation';
-import { adaptiveTakerFallbackDecision, entryAttemptsForLogicalOrder, makerAttemptId, makerRetryDecision, maximumLiveMakerAttempts, maximumPaperMakerAttempts, type MakerRetryDecision } from './maker-retry-policy';
+import { adaptiveTakerFallbackDecision, entryAttemptsForLogicalOrder, makerAttemptId, makerRetryDecision, maximumLiveMakerAttempts, type MakerRetryDecision } from './maker-retry-policy';
 import { evaluateLiveRisk } from './live-risk-policy';
 import { liveBlockers, liveTradingEnabled, maxLiveOrdersPerHour, maxLiveStakeCents, placeKalshiBuy, placeKalshiSell, placeKalshiTakerBuy } from './live-orders';
 import { countFilledLiveVenueOrders } from './order-rate-limit';
@@ -177,12 +179,9 @@ function entryExecutionSettings() {
   };
   return {
     mode: parseEntryExecutionMode(process.env.MONEY_NOODLE_ENTRY_EXECUTION_MODE),
-    minimumTakerNetEdge: bounded('MONEY_NOODLE_MIN_TAKER_NET_EDGE', 0.15, 0.5),
     minimumMedianNetEdge: bounded('MONEY_NOODLE_MIN_TAKER_MEDIAN_EDGE', 0.10, 0.5),
     minimumConfidence: bounded('MONEY_NOODLE_MIN_TAKER_QUALITY', 0.65, 1),
     maximumSpread: bounded('MONEY_NOODLE_MAX_TAKER_SPREAD', 0.02, 0.25),
-    minimumMakerSamples: Math.max(1, Math.floor(bounded('MONEY_NOODLE_MIN_TAKER_MAKER_SAMPLES', 30, 10_000))),
-    minimumTakerAdvantage: bounded('MONEY_NOODLE_MIN_TAKER_ADVANTAGE', 0.02, 0.5),
   };
 }
 
@@ -273,9 +272,9 @@ interface LiveAttemptState {
 }
 
 /**
- * One source of truth for every live selection/readiness/submission call site. In adaptive mode attempt 2
- * has no timer: two production-policy observations strictly after confirmed maker completion provide the
- * fresh authority. Other modes retain the existing bounded maker-retry behavior.
+ * One source of truth for every live selection/readiness/submission call site. Adaptive v4 has one
+ * attempt; historical fallback fields remain readable but can no longer open authority. Other configured
+ * modes retain the bounded maker-retry helper.
  */
 function liveAttemptState(
   prediction: Prediction, side: PositionSide, ledger: Ledger, nowMs = Date.now(),
@@ -283,7 +282,7 @@ function liveAttemptState(
   const attempts = liveAttempts(ledger, prediction, side);
   const adaptive = entryExecutionSettings().mode === 'adaptive';
   const retry = adaptive
-    ? adaptiveTakerFallbackDecision(attempts, nowMs, prediction.market.closesAt, maximumLiveMakerAttempts())
+    ? adaptiveTakerFallbackDecision(attempts, nowMs, prediction.market.closesAt, ADAPTIVE_ENTRY_ATTEMPTS)
     : makerRetryDecision(attempts, nowMs, prediction.market.closesAt, maximumLiveMakerAttempts());
   const fallback = adaptive && retry.allowed && retry.attemptNumber === 2 && Boolean(retry.retryOfOrderId);
   const parent = fallback ? attempts.find((attempt) => attempt.id === retry.retryOfOrderId) : undefined;
@@ -534,12 +533,14 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
     const spread = quote.ask - quote.bid;
     if (spread > MAX_SPREAD) { rejections.push(`${readiness.venue} spread ${(spread * 100).toFixed(1)}c exceeds the ${MAX_SPREAD * 100}c limit`); return []; }
     if (Date.parse(quote.closesAt) - Date.now() < MIN_TIME_TO_CLOSE_MS) { rejections.push(`${readiness.venue} contract is inside the final ${MIN_TIME_TO_CLOSE_MS / 1000}s`); return []; }
-    const fill = estimatePaperFill(stakeLimitCents, quote.ask, readiness.venue);
+    const sizing = evaluateEntrySizing(stakeLimitCents, entry.netEdge);
+    if (!sizing) { rejections.push('Entry sizing could not produce a valid whole-cent control amount.'); return []; }
+    const fill = estimatePaperFill(sizing.stakeLimitCents, quote.ask, readiness.venue);
     if (!fill) {
       const priceCents = quote.ask * 100;
       const minimumQuantity = readiness.venue === 'kalshi' ? 0.01 : 1;
       const minimumCents = Math.ceil(minimumQuantity * priceCents - 1e-9) + venueFeeCents(readiness.venue, priceCents, minimumQuantity, 'taker');
-      rejections.push(`${stakeLimitCents}c all-in cap is short of the ${minimumCents}c conservative reserve needed for ${minimumQuantity.toFixed(2)} ${readiness.venue} contract at ${priceCents.toFixed(1)}c`);
+      rejections.push(`${sizing.stakeLimitCents}c sized all-in cap is short of the ${minimumCents}c conservative reserve needed for ${minimumQuantity.toFixed(2)} ${readiness.venue} contract at ${priceCents.toFixed(1)}c`);
       return [];
     }
     // Signed venue cash already excludes principal committed to positions; subtracting open exposure
@@ -548,7 +549,7 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
       rejections.push(`${readiness.venue} cash ${readiness.balanceCents ?? 0}c is below the ${fill.stakeCents}c stake`);
       return [];
     }
-    return [{ venue: readiness.venue, quote, spread, fill, entry, score: -entry.netEdge }];
+    return [{ venue: readiness.venue, quote, spread, fill, entry, sizing, score: -entry.netEdge }];
   }).sort((a, b) => a.score - b.score);
   const selected = candidates[0];
   if (!selected) return { reason: rejections[0] ?? 'No enabled venue had a usable quote' };
@@ -573,6 +574,7 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
     contractId: contractId(prediction, selected.venue), side, status: 'pending_reservation',
     createdAt: new Date().toISOString(), calculationAt, closesAt: selected.quote.closesAt,
     modelProbabilityUp: prediction.modelProbabilityUp, confidence: prediction.confidence,
+    entrySizingDecision: { ...selected.sizing },
     entryDecision: {
       version: 'entry-decision-v2',
       providerId: selected.venue,
@@ -689,7 +691,8 @@ function updatePortfolioDecisions(
       continue;
     }
     if (decision.executedStyle === 'taker') {
-      const reserveFailure = applyTakerQuoteMovementReserve(candidate.order, Math.min(status.proposedStakeCents, maxLiveStakeCents()));
+      const reserveFailure = applyTakerQuoteMovementReserve(candidate.order, candidate.order.entrySizingDecision?.stakeLimitCents
+        ?? Math.min(status.proposedStakeCents, maxLiveStakeCents()));
       if (reserveFailure) {
         next[key] = { state: 'blocked', reason: reserveFailure, updatedAt: now };
         continue;
@@ -892,6 +895,11 @@ export function applyPaperMakerSimulation(order: PaperOrder, result: PaperMakerS
   order.restingUntil = result.restingUntil;
   order.makerCompletedAt = result.completedAt;
   order.entryExecutionObservations = result.observations;
+  for (const observation of result.observations) {
+    order.entryDirectionObservation = observeEntryDirection(
+      order.entryDirectionObservation, order.issuanceAskPrice ?? order.askPrice, observation,
+    );
+  }
   order.liquidityRole = 'maker';
   if (result.filledCount <= 0) {
     ledger.paperBudget.availableCents += reservedCents;
@@ -970,10 +978,10 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
       const side = selectedSide(prediction);
       if (!side || !executionEligibility(prediction, side, ledger).eligible) return [];
       if (reentryCooldownRemainingMs(ledger, prediction, 'paper', side) > 0) return [];
-      // The mirror uses the same bounded-attempt policy as live. Before this check, each paper miss
-      // could be submitted again every collector tick under the same id, overstating its fill rate.
+      // V4 gives both tracks one attempt. Before bounded attempts, each paper miss could be submitted
+      // again every collector tick under the same id, overstating its fill rate.
       const logicalId = orderId(prediction, 'paper', side, ledger);
-      const retry = makerRetryDecision(paperAttempts(ledger, prediction, side), Date.now(), prediction.market.closesAt, maximumPaperMakerAttempts());
+      const retry = makerRetryDecision(paperAttempts(ledger, prediction, side), Date.now(), prediction.market.closesAt, ADAPTIVE_ENTRY_ATTEMPTS);
       if (!retry.allowed) return [];
       const candidate = buildOrder(prediction, side, {
         ...status, venues: status.venues.map((readiness) => ({ ...readiness, enabled: paperProviders.has(readiness.venue) })),
@@ -1076,6 +1084,11 @@ async function executePreparedLiveBuy(
     const onAccepted = async (venueOrderId: string) => { order.venueOrderId = venueOrderId; await writeLedger(ledger); };
     const onObservation = async (observation: NonNullable<PaperOrder['entryExecutionObservations']>[number]) => {
       order.entryExecutionObservations = [...(order.entryExecutionObservations ?? []), observation];
+      if (executionStyle === 'maker') {
+        order.entryDirectionObservation = observeEntryDirection(
+          order.entryDirectionObservation, order.issuanceAskPrice ?? order.askPrice, observation,
+        );
+      }
       if (order.initialSubmittedPrice === undefined && observation.event === 'create_quote' && observation.limitPrice !== undefined) {
         order.initialSubmittedPrice = observation.limitPrice;
       }
@@ -1595,6 +1608,7 @@ function buildPortfolioChoiceSetRecord(input: {
     forecastModelVersion: input.dashboard.modelVersion,
     buyPolicyVersion: BUY_POLICY_VERSION,
     executionPolicyVersion: input.order.entryDecision?.executionPolicyVersion,
+    sizingPolicyVersion: input.order.entrySizingDecision?.policyVersion,
     issuedOrderId: input.order.id,
     issuedLogicalOrderId: input.order.logicalOrderId ?? input.order.id,
     issuedCandidateId: input.candidateId,
@@ -1657,6 +1671,8 @@ function buildPortfolioChoiceSetRecord(input: {
         regimeAdmitted: regimeAdmits(input.regimeByCandidate.get(candidate.id)),
         liveFiltersAdmitted: input.regimeAllowedIds.has(candidate.id),
         portfolioState: candidate.decision.state, portfolioReason: candidate.decision.reason,
+        sizingPolicyVersion: built?.entrySizingDecision?.policyVersion,
+        sizingMultiplier: built?.entrySizingDecision?.multiplier,
         quantity: built?.quantity, stakeCents: built?.stakeCents, feeCents: built?.feeCents,
         potentialPayoutCents: built?.potentialPayoutCents,
         expectedProfitCents: candidate.decision.expectedProfitCents,
@@ -1819,15 +1835,14 @@ async function runLive(
     built.order.id = makerAttemptId(logicalId, retry.attemptNumber);
     built.order.clientOrderId = built.order.id;
     built.order.entryExecutionDecision = entryExecutionDecision(candidate, side, built.order, ledger, attempt);
-    // Attempt 2 is taker-or-wait, never another maker chase. Absolute gates can continue collecting until
-    // they clear or the final retry cutoff expires, without consuming the durable second-attempt id.
+    // V4 permits one attempt. Historical fallback state cannot manufacture a second durable intent.
     if (attempt.makerMissFallback && built.order.entryExecutionDecision.executedStyle !== 'taker') {
       priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason: built.order.entryExecutionDecision.reason });
       if (!placed) return skip(`${candidate.symbol}: ${built.order.entryExecutionDecision.reason}`);
       continue;
     }
     if (built.order.entryExecutionDecision.executedStyle === 'taker') {
-      const reserveFailure = applyTakerQuoteMovementReserve(built.order, liveStakeCeiling);
+      const reserveFailure = applyTakerQuoteMovementReserve(built.order, built.order.entrySizingDecision?.stakeLimitCents ?? liveStakeCeiling);
       if (reserveFailure) {
         priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason: reserveFailure });
         if (!placed) return skip(`${candidate.symbol}: ${reserveFailure}`);
@@ -2911,7 +2926,7 @@ export async function getExecutionSummaries(control: { state: string; mode: stri
         const liveOrder = attempts.at(-1);
         const adaptive = entryExecutionSettings().mode === 'adaptive';
         const retry = adaptive
-          ? adaptiveTakerFallbackDecision(attempts, now, state.closesAt, maximumLiveMakerAttempts())
+          ? adaptiveTakerFallbackDecision(attempts, now, state.closesAt, ADAPTIVE_ENTRY_ATTEMPTS)
           : makerRetryDecision(attempts, now, state.closesAt, maximumLiveMakerAttempts());
         const portfolio = ledger.portfolioDecisions[`${state.symbol}:${state.side}:${state.closesAt}`];
         const fallbackOpen = adaptive && retry.allowed && retry.attemptNumber === 2 && Boolean(liveOrder?.makerCompletedAt);
@@ -2933,7 +2948,7 @@ export async function getExecutionSummaries(control: { state: string; mode: stri
           liveAttempt: liveOrder ? {
             status: liveOrder.status, createdAt: liveOrder.createdAt, filledCount: liveOrder.filledCount,
             quantity: liveOrder.quantity, reason: liveOrder.reason, noFillReason: inferredNoFillReason(liveOrder),
-            attemptNumber: liveOrder.attemptNumber ?? attempts.length, maximumAttempts: maximumLiveMakerAttempts(),
+            attemptNumber: liveOrder.attemptNumber ?? attempts.length, maximumAttempts: adaptive ? ADAPTIVE_ENTRY_ATTEMPTS : maximumLiveMakerAttempts(),
             retryEligible: fallbackState === 'ready', executedStyle: liveOrder.entryExecutionDecision?.executedStyle,
             fallbackState,
             fallbackQualifyingSnapshots: fallbackOpen ? result.qualifyingSnapshots : undefined,
@@ -2943,7 +2958,7 @@ export async function getExecutionSummaries(control: { state: string; mode: stri
       }),
     liveAvailable: liveTradingEnabled(),
     liveBlockers: liveBlockers(),
-    maximumLiveMakerAttempts: maximumLiveMakerAttempts(),
+    maximumLiveMakerAttempts: entryExecutionSettings().mode === 'adaptive' ? ADAPTIVE_ENTRY_ATTEMPTS : maximumLiveMakerAttempts(),
     regimeGate,
     portfolioConstraints: (() => {
       const constraints = portfolioConstraints();

@@ -85,13 +85,15 @@ describe('published policy manifest', () => {
     process.env.MONEY_NOODLE_REGIME_MIN_POLICY_WINDOWS = '20';
     process.env.MONEY_NOODLE_MIN_SWITCH_PROBABILITY_ADVANTAGE = '0.25';
     process.env.MONEY_NOODLE_MAX_LIVE_MAKER_ATTEMPTS = '2';
+    process.env.MONEY_NOODLE_ENTRY_EXECUTION_MODE = 'adaptive';
     expect(detail('buy', 'Net edge after fees')).toBe('≥-5pp and <25pp');
     expect(detail('eligibility', 'DOWN/NO entry')).toBe('Suspended by operator switch');
     expect(detail('eligibility', 'Assets withheld')).toBe('DOGE, SOL');
     expect(detail('regime', 'Status')).toBe('Disabled; entries are not gated');
     expect(detail('regime', 'Warm-up')).toBe('20 policy windows');
     expect(detail('switch', 'Replacement advantage')).toBe('25pp');
-    expect(detail('execution', 'Live attempts per contract')).toBe('2');
+    expect(detail('execution', 'Live attempts per contract')).toBe('1');
+    expect(detail('execution', 'Sizing')).toBe('0.3× below 30pp; 1× at or above; no upsizing');
     expect(manifest().components.find((item) => item.kind === 'regime')?.status).toBe('observation');
   });
 });
