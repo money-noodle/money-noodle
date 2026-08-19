@@ -508,7 +508,7 @@ export function Dashboard({ initialData, authenticated, deskAvailable }: { initi
 
       {deskAvailable ? <AutomationStatus/> : <PublicAutomationStatus deskElsewhere={authenticated}/>}
       {data && <PositiveEdgeBuys predictions={data.predictions} updatedAt={data.generatedAt} publicView={!authenticated} onRefresh={refresh} refreshing={isPending}/>}
-      {authenticated
+      {authenticated && deskAvailable
         ? data?.performance && <PerformancePanel performance={data.performance}/>
         : <PublicPaperPerformancePanel/>}
 
