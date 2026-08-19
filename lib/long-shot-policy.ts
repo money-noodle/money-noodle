@@ -12,7 +12,7 @@ import type { PositionSide } from './types';
  * Scheme version. Bumped when the *shape* of the policy changes — a new gate, a different exit mechanism —
  * rather than when a parameter moves, which the derived version below already captures.
  */
-export const LONG_SHOT_POLICY_SCHEME = 'v1';
+export const LONG_SHOT_POLICY_SCHEME = 'v2';
 
 /**
  * Policy version, **derived from the settings that define a cohort** rather than typed by hand.

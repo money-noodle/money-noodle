@@ -396,6 +396,60 @@ measuring the same thing and disagreeing, which §6 says to report rather than r
 should be settled before either figure is read at the 60-attempt review; a cohort-definition difference and
 an outcome-mapping error would both produce exactly this.
 
+## 10b. Repairing trigger capture, 2026-08-19
+
+The v1 collector outlived its original collection-only implementation. `collectLongShotEvidence` still ran
+on the 15-second dashboard, stamped every record `executed: false` with “the execution path is not wired in
+yet,” and raced the one-second trailing entry path that actually placed paper orders. First-write-wins then
+made the stale record immutable. The faster entry path could also fire between dashboard samples, leaving
+an execution with no sentinel at all. Under the active 12¢→97¢ policy, nine paper orders existed while only
+two sentinels existed, both carrying the obsolete unexecuted reason. That cohort cannot support a paired
+review and is not backfilled.
+
+`long-shot-hold-v2` starts a fresh prospective measurement with one authoritative decision point:
+
+- `runLongShot` builds the sentinel inside the paper entry decision from the same quote, sizing,
+  generation, fee, and policy version used to build the order. This covers both its regular-cycle caller
+  and the faster trailing caller without reconstructing either decision on a different cadence.
+- A qualifying paper order is stamped with the sentinel version before it is written to the shared ledger.
+  The ledger is made durable first; the sentinel store is then updated. The detached evidence pass
+  reconstructs only version-stamped orders, so a failed store write is recovered without admitting old
+  fills retrospectively.
+- A trigger that clears the entry rule and venue sizing but is refused for strategy headroom is recorded
+  `executed: false` with that exact reason. Policy disqualifications remain non-triggers.
+- The former 15-second collector no longer creates trigger records. It only reconciles version-stamped
+  decision records, observes later peak bids, and resolves settlements.
+- v1 rows remain immutable historical evidence. They are excluded from the v2 review rather than rewritten
+  to agree with the order ledger.
+
+This changes observation wiring only. Entry marks, trailing, caps, sizing, paper execution, live arming, and
+exit behaviour are unchanged.
+
+## 10c. One deterministic entry owner, 2026-08-19
+
+The trigger-capture repair exposed two competing entry callers. The regular 15-second `processCycle` called
+`runLongShot` directly on dashboard quotes, while `longShotEntryTick` refreshed at one second, waited for a
+fall to stall, and then called the same function. The serialized queue prevented concurrent writes but did
+not make the decision deterministic: whichever caller arrived first decided whether trailing applied.
+All nine 12¢→97¢ paper orders happened to carry trailing evidence, but nine selected outcomes cannot prove
+the bypass inert.
+
+The maintainer chose trailing as mandatory:
+
+- `longShotEntryTick` is the sole caller allowed to enter, for both paper and live.
+- `processCycle` still refreshes the dashboard identity set and handles evidence, exits, settlement, and the
+  other strategy, but cannot call `runLongShot`.
+- The entry poller continues to refresh exact-contract quotes outside the serialized queue. Only a side in
+  its `buyable` set after `evaluateTrailingEntry` may reach the paper/live decision.
+- `LONG_SHOT_POLICY_SCHEME` advances to v2. Although the intended trailing implementation already existed,
+  removing a timing-dependent bypass changes the set of reachable entries and therefore starts new order,
+  hold-sentinel, and review cohorts.
+- Live remains separately disarmed. This restriction does not grant authority, increase a cap, or change
+  sizing and exit behavior.
+
+A source-level invariant test protects sole ownership because the defect was duplicate runtime wiring, not
+an error inside the trailing arithmetic.
+
 ## 11. Evidence design
 
 The two parameters we know least about are the sell mark and the entry filter. Both are chosen once and

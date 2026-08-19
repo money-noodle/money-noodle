@@ -13,15 +13,15 @@ const returnPercent = (value: number) => `${value >= 0 ? '+' : ''}${(value * 100
 
 function PromotionEntry({ entry, current }: { entry: ModelPromotionEntry; current: boolean }) {
   const parameters = entry.parameters;
-  return <div className={cn('rounded-xl border p-4', current && 'border-primary/25 bg-primary/[.03]')}>
+  return <div className={cn('rounded-xl border p-4', current && 'border-data/25 bg-data/[.03]')}>
     <div className="flex flex-wrap items-start justify-between gap-2">
       <div>
         <p className="break-all font-mono text-[10px] font-semibold">{entry.modelVersion}</p>
         <p className="mt-1 flex items-center gap-1 text-[9px] text-muted-foreground"><Clock3 className="size-3"/>{new Date(entry.at).toLocaleString()}</p>
       </div>
       <div className="flex flex-wrap justify-end gap-1">
-        {current && <Badge variant="outline" className="border-primary/25 text-primary">in production</Badge>}
-        <Badge variant="outline" className={cn('uppercase', entry.action === 'rolled-back' ? 'border-amber-300/30 text-amber-200' : 'text-muted-foreground')}>{entry.action}</Badge>
+        {current && <Badge variant="outline" className="border-data/25 text-data">in production</Badge>}
+        <Badge variant="outline" className={cn('uppercase', entry.action === 'rolled-back' ? 'border-warn/30 text-warn' : 'text-muted-foreground')}>{entry.action}</Badge>
       </div>
     </div>
     <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">{entry.reason}</p>
@@ -108,11 +108,11 @@ function ModelPromotionControls() {
     } finally { setBusy(false); }
   }
 
-  return <div className="mt-3 rounded-xl border border-amber-300/25 bg-amber-300/[.03] p-4">
+  return <div className="mt-3 rounded-xl border border-warn/25 bg-warn/[.03] p-4">
     <div className="flex flex-wrap items-start justify-between gap-2">
-      <div className="flex items-start gap-2"><ShieldAlert className="mt-0.5 size-3.5 shrink-0 text-amber-200"/>
+      <div className="flex items-start gap-2"><ShieldAlert className="mt-0.5 size-3.5 shrink-0 text-warn"/>
         <div>
-          <p className="text-[10px] font-semibold text-amber-100">Record a promotion or rollback</p>
+          <p className="text-[10px] font-semibold text-warn">Record a promotion or rollback</p>
           <p className="mt-1 text-[9px] leading-relaxed text-muted-foreground">
             Production parameters are compile-time constants, so this records a decision about the deployed model — it cannot change what production forecasts with. Requires paused automation and a quiescent, restart-safe drain.
           </p>
@@ -134,12 +134,12 @@ function ModelPromotionControls() {
 
     {!rollback && <div className="mt-2 space-y-1">
       {state.eligibility.criteria.map((item) => (
-        <p key={item.id} className={cn('flex items-start gap-1.5 text-[9px]', item.met ? 'text-muted-foreground' : 'text-amber-100')}>
-          {item.met ? <CheckCircle2 className="mt-0.5 size-2.5 shrink-0 text-primary"/> : <XCircle className="mt-0.5 size-2.5 shrink-0"/>}
+        <p key={item.id} className={cn('flex items-start gap-1.5 text-[9px]', item.met ? 'text-muted-foreground' : 'text-warn')}>
+          {item.met ? <CheckCircle2 className="mt-0.5 size-2.5 shrink-0 text-data"/> : <XCircle className="mt-0.5 size-2.5 shrink-0"/>}
           {item.detail}
         </p>
       ))}
-      {unmet.length > 0 && <p className="text-[9px] text-amber-100/70">Promotion is refused until every criterion holds. Rollback is not gated on evidence, so a bad model can always be reverted.</p>}
+      {unmet.length > 0 && <p className="text-[9px] text-warn/70">Promotion is refused until every criterion holds. Rollback is not gated on evidence, so a bad model can always be reverted.</p>}
     </div>}
 
     {rollback && <div className="mt-2">
@@ -162,13 +162,13 @@ function ModelPromotionControls() {
     <div className="mt-2 flex flex-wrap gap-2">
       <input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={`Type ${required}`}
         className="h-8 min-w-48 flex-1 rounded-md border bg-background px-2 font-mono text-[10px] outline-none"/>
-      <Button size="sm" variant="outline" className="shrink-0 border-amber-300/30 text-amber-100" disabled={busy || blocked} onClick={() => void submit()}>
+      <Button size="sm" variant="outline" className="shrink-0 border-warn/30 text-warn" disabled={busy || blocked} onClick={() => void submit()}>
         {busy && <Loader2 className="animate-spin"/>}{rollback ? 'Record rollback' : 'Record promotion'}
       </Button>
     </div>
 
-    {error && <p className="mt-2 flex items-start gap-1.5 text-[9px] text-red-300"><AlertTriangle className="mt-0.5 size-3 shrink-0"/>{error}</p>}
-    {recorded && <p className="mt-2 flex items-start gap-1.5 text-[9px] text-primary"><CheckCircle2 className="mt-0.5 size-3 shrink-0"/>Recorded {recorded.action} for {recorded.modelVersion}. The provenance list updates on the next dashboard refresh.</p>}
+    {error && <p className="mt-2 flex items-start gap-1.5 text-[9px] text-loss"><AlertTriangle className="mt-0.5 size-3 shrink-0"/>{error}</p>}
+    {recorded && <p className="mt-2 flex items-start gap-1.5 text-[9px] text-data"><CheckCircle2 className="mt-0.5 size-3 shrink-0"/>Recorded {recorded.action} for {recorded.modelVersion}. The provenance list updates on the next dashboard refresh.</p>}
   </div>;
 }
 
@@ -179,11 +179,11 @@ function ModelPromotionControls() {
 function ModelProvenance({ model }: { model: PolicyManifestModel }) {
   return <section>
     <div className="mb-2 flex items-center gap-2"><Cpu className="size-4 text-muted-foreground"/><h3 className="text-xs font-semibold">Forecast-model provenance</h3></div>
-    {model.unrecorded && <div className="mb-2 flex items-start gap-2 rounded-xl border border-amber-300/25 bg-amber-300/[.04] p-4 text-amber-100">
+    {model.unrecorded && <div className="mb-2 flex items-start gap-2 rounded-xl border border-warn/25 bg-warn/[.04] p-4 text-warn">
       <AlertTriangle className="mt-0.5 size-3.5 shrink-0"/>
       <div>
         <p className="text-[10px] font-semibold">Production model has no promotion record</p>
-        <p className="mt-1 text-[9px] leading-relaxed text-amber-100/80">
+        <p className="mt-1 text-[9px] leading-relaxed text-warn/80">
           {model.productionVersion} is what production runs, but {model.currentPromotion
             ? `the newest ledger entry promotes ${model.currentPromotion.modelVersion}.`
             : 'the promotion ledger is empty, so no recorded decision explains it.'} Promotion is manual and append-only; until an entry is written, this model’s justification lives outside the audit trail.
@@ -197,8 +197,8 @@ function ModelProvenance({ model }: { model: PolicyManifestModel }) {
   </section>;
 }
 const statusStyle = (status: 'production' | 'paper' | 'observation') => status === 'production'
-  ? 'border-primary/25 text-primary'
-  : status === 'paper' ? 'border-brand-green/30 text-brand-green' : 'text-muted-foreground';
+  ? 'border-data/25 text-data'
+  : status === 'paper' ? 'border-primary/30 text-primary' : 'text-muted-foreground';
 
 /**
  * `badge` is the production placement: the hero already prints the active policy version, so that
@@ -224,21 +224,21 @@ export function PolicyDialog({ manifest, providers, variant = 'button' }: { mani
         <DialogDescription>Production details and immutable policy history. A signed-in operator may record a model promotion or rollback here; this surface cannot arm, size, or trade, and recording a decision never changes what production forecasts with.</DialogDescription>
       </DialogHeader>
       <div className="max-h-[80vh] space-y-5 overflow-y-auto p-5">
-        <section className="rounded-xl border border-primary/20 bg-primary/[.035] p-4">
+        <section className="rounded-xl border border-data/20 bg-data/[.035] p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <div><p className="text-[9px] uppercase tracking-[.16em] text-muted-foreground">Active binary buy policy</p><p className="mt-1 break-all font-mono text-sm font-semibold text-primary">{manifest.activeBuyPolicyVersion}</p><p className="mt-1 flex items-center gap-1 text-[9px] text-muted-foreground"><Clock3 className="size-3"/>Activated {new Date(manifest.activeBuyPolicyActivatedAt).toLocaleString()}</p></div>
-            <Badge variant="outline" className="border-primary/25 text-primary"><CheckCircle2/>production</Badge>
+            <div><p className="text-[9px] uppercase tracking-[.16em] text-muted-foreground">Active binary buy policy</p><p className="mt-1 break-all font-mono text-sm font-semibold text-data">{manifest.activeBuyPolicyVersion}</p><p className="mt-1 flex items-center gap-1 text-[9px] text-muted-foreground"><Clock3 className="size-3"/>Activated {new Date(manifest.activeBuyPolicyActivatedAt).toLocaleString()}</p></div>
+            <Badge variant="outline" className="border-data/25 text-data"><CheckCircle2/>production</Badge>
           </div>
           {providers && <div className="mt-3 grid gap-2 sm:grid-cols-2"><div className="rounded-lg bg-background/50 p-3"><p className="text-[8px] uppercase text-muted-foreground">Live-enabled providers</p><p className="mt-1 text-xs">{live.join(', ') || 'None'}</p></div><div className="rounded-lg bg-background/50 p-3"><p className="text-[8px] uppercase text-muted-foreground">Paper providers</p><p className="mt-1 text-xs">{paper.join(', ') || 'None'}</p></div></div>}
         </section>
 
         <section><div className="mb-2 flex items-center gap-2"><Layers3 className="size-4 text-muted-foreground"/><h3 className="text-xs font-semibold">Active components</h3></div><div className="grid gap-3 lg:grid-cols-2">{manifest.components.map((item) => <div key={item.kind} className="rounded-xl border bg-background/35 p-4"><div className="flex items-start justify-between gap-2"><div><p className="text-xs font-semibold">{item.label}</p><p className="mt-1 break-all font-mono text-[9px] text-muted-foreground">{item.version}</p></div><Badge variant="outline" className={cn('uppercase', statusStyle(item.status))}>{item.status}</Badge></div><p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">{item.summary}</p><div className="mt-3 divide-y rounded-lg border">{item.details.map((detail) => <div key={`${detail.label}:${detail.value}`} className="grid grid-cols-[minmax(0,.8fr)_minmax(0,1.2fr)] gap-3 px-3 py-2 text-[9px]"><span className="text-muted-foreground">{detail.label}</span><span className="break-words text-right font-mono">{detail.value}</span></div>)}</div></div>)}</div></section>
 
-        {providers && <section><div className="mb-2 flex items-center gap-2"><Layers3 className="size-4 text-muted-foreground"/><h3 className="text-xs font-semibold">Provider registry</h3></div><div className="grid gap-2 lg:grid-cols-2">{providers.map((provider) => <div key={provider.id} className="rounded-xl border p-4"><div className="flex items-start justify-between gap-2"><div><p className="text-xs font-semibold">{provider.name}</p><p className="mt-1 font-mono text-[8px] text-muted-foreground">{provider.adapterVersion} · {provider.selectedVariantId}</p></div><Badge variant="outline" className={provider.liveEnabled ? 'border-red-400/30 text-red-300' : provider.paperEnabled ? 'border-brand-green/30 text-brand-green' : 'text-muted-foreground'}>{provider.liveEnabled ? 'live + paper' : provider.paperEnabled ? 'paper' : provider.implementation}</Badge></div><p className="mt-2 text-[9px] leading-relaxed text-muted-foreground">{provider.readiness}</p><div className="mt-2 flex flex-wrap gap-1"><Badge variant="outline" className={provider.researchEnabled ? 'text-primary' : 'text-muted-foreground'}>research {provider.researchEnabled ? 'on' : 'off'}</Badge><Badge variant="outline" className={provider.paperEnabled ? 'text-brand-green' : 'text-muted-foreground'}>paper {provider.paperEnabled ? 'on' : 'off'}</Badge><Badge variant="outline" className={provider.liveEnabled ? 'text-red-300' : 'text-muted-foreground'}>live {provider.liveEnabled ? 'on' : 'off'}</Badge></div></div>)}</div></section>}
+        {providers && <section><div className="mb-2 flex items-center gap-2"><Layers3 className="size-4 text-muted-foreground"/><h3 className="text-xs font-semibold">Provider registry</h3></div><div className="grid gap-2 lg:grid-cols-2">{providers.map((provider) => <div key={provider.id} className="rounded-xl border p-4"><div className="flex items-start justify-between gap-2"><div><p className="text-xs font-semibold">{provider.name}</p><p className="mt-1 font-mono text-[8px] text-muted-foreground">{provider.adapterVersion} · {provider.selectedVariantId}</p></div><Badge variant="outline" className={provider.liveEnabled ? 'border-live/30 text-live' : provider.paperEnabled ? 'border-brand-green/30 text-brand-green' : 'text-muted-foreground'}>{provider.liveEnabled ? 'live + paper' : provider.paperEnabled ? 'paper' : provider.implementation}</Badge></div><p className="mt-2 text-[9px] leading-relaxed text-muted-foreground">{provider.readiness}</p><div className="mt-2 flex flex-wrap gap-1"><Badge variant="outline" className={provider.researchEnabled ? 'text-data' : 'text-muted-foreground'}>research {provider.researchEnabled ? 'on' : 'off'}</Badge><Badge variant="outline" className={provider.paperEnabled ? 'text-brand-green' : 'text-muted-foreground'}>paper {provider.paperEnabled ? 'on' : 'off'}</Badge><Badge variant="outline" className={provider.liveEnabled ? 'text-live' : 'text-muted-foreground'}>live {provider.liveEnabled ? 'on' : 'off'}</Badge></div></div>)}</div></section>}
 
         {manifest.model && <ModelProvenance model={manifest.model}/>}
 
-        <section><div className="mb-2 flex items-center gap-2"><History className="size-4 text-muted-foreground"/><h3 className="text-xs font-semibold">Buy-policy history</h3></div><div className="space-y-2">{manifest.history.map((entry) => <div key={entry.version} className="rounded-xl border p-4"><div className="flex flex-wrap items-start justify-between gap-2"><div><p className="break-all font-mono text-[10px] font-semibold">{entry.version}</p><p className="mt-1 text-[9px] text-muted-foreground">{new Date(entry.activatedAt).toLocaleString()}{entry.deactivatedAt ? ` → ${new Date(entry.deactivatedAt).toLocaleString()}` : ' → current'}</p></div><Badge variant="outline" className={entry.status === 'active' ? 'border-primary/25 text-primary' : 'text-muted-foreground'}>{entry.status}</Badge></div><p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">{entry.summary}</p><ul className="mt-2 space-y-1">{entry.changes.map((change) => <li key={change} className="flex gap-2 text-[9px]"><span className="mt-1 size-1 shrink-0 rounded-full bg-primary"/>{change}</li>)}</ul>{entry.evidence.length > 0 && <p className="mt-2 break-words font-mono text-[8px] text-muted-foreground">Evidence: {entry.evidence.join(' · ')}</p>}</div>)}</div></section>
+        <section><div className="mb-2 flex items-center gap-2"><History className="size-4 text-muted-foreground"/><h3 className="text-xs font-semibold">Buy-policy history</h3></div><div className="space-y-2">{manifest.history.map((entry) => <div key={entry.version} className="rounded-xl border p-4"><div className="flex flex-wrap items-start justify-between gap-2"><div><p className="break-all font-mono text-[10px] font-semibold">{entry.version}</p><p className="mt-1 text-[9px] text-muted-foreground">{new Date(entry.activatedAt).toLocaleString()}{entry.deactivatedAt ? ` → ${new Date(entry.deactivatedAt).toLocaleString()}` : ' → current'}</p></div><Badge variant="outline" className={entry.status === 'active' ? 'border-data/25 text-data' : 'text-muted-foreground'}>{entry.status}</Badge></div><p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">{entry.summary}</p><ul className="mt-2 space-y-1">{entry.changes.map((change) => <li key={change} className="flex gap-2 text-[9px]"><span className="mt-1 size-1 shrink-0 rounded-full bg-data"/>{change}</li>)}</ul>{entry.evidence.length > 0 && <p className="mt-2 break-words font-mono text-[8px] text-muted-foreground">Evidence: {entry.evidence.join(' · ')}</p>}</div>)}</div></section>
       </div>
     </DialogContent>
   </Dialog>;

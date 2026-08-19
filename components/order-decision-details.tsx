@@ -24,7 +24,7 @@ export function OrderDecisionDetails({ order, defaultOpen = false }: { order: Pa
     <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-2.5 py-2 marker:content-none">
       <span className="text-[9px] font-medium">Edge-buy decision and calculations</span>
       <div className="flex items-center gap-1.5">
-        <Badge variant="outline" className={cn('h-4 px-1.5 font-mono text-[8px]', netEdge >= 0.05 ? 'border-primary/25 text-primary' : 'text-muted-foreground')}>{points(netEdge)} edge</Badge>
+        <Badge variant="outline" className={cn('h-4 px-1.5 font-mono text-[8px]', netEdge >= 0.05 ? 'border-gain/25 text-gain' : 'text-muted-foreground')}>{points(netEdge)} edge</Badge>
         <ChevronDown className="size-3 text-muted-foreground transition-transform group-open:rotate-180"/>
       </div>
     </summary>
@@ -82,7 +82,7 @@ export function OrderDecisionDetails({ order, defaultOpen = false }: { order: Pa
 
       {!!order.entryExecutionObservations?.length && <details className="rounded-md border"><summary className="cursor-pointer px-2 py-1.5 text-[8px] font-medium">Execution quote and reprice path ({order.entryExecutionObservations.length})</summary><div className="divide-y border-t">{order.entryExecutionObservations.map((observation, index) => <div key={`${observation.at}:${index}`} className="grid grid-cols-[1fr_auto] gap-2 px-2 py-1.5 text-[8px]"><div><span className="font-medium">{observation.event.replaceAll('_', ' ')}</span><span className="ml-2 font-mono text-muted-foreground">{new Date(observation.at).toLocaleTimeString()}</span><p className="font-mono text-[7px] text-muted-foreground">book {observation.selectedBid === undefined ? '—' : percent(observation.selectedBid)} / {observation.selectedAsk === undefined ? '—' : percent(observation.selectedAsk)} · limit {observation.limitPrice === undefined ? '—' : percent(observation.limitPrice)}</p></div><div className="text-right font-mono text-[7px]"><p>ahead {observation.displayedAhead?.toFixed(2) ?? '—'}</p><p className="text-muted-foreground">fill {observation.filledCount?.toFixed(2) ?? '—'}</p></div></div>)}</div></details>}
 
-      {!!order.positionObservations?.length && <details className="rounded-md border"><summary className="cursor-pointer px-2 py-1.5 text-[8px] font-medium">Position lifecycle ({order.positionObservations.length} snapshots)</summary><div className="divide-y border-t">{order.positionObservations.slice(-30).map((observation) => <div key={observation.at} className="grid grid-cols-[1fr_auto] gap-2 px-2 py-1.5 text-[8px]"><div><span className="font-mono">{new Date(observation.at).toLocaleTimeString()}</span><span className="ml-2 text-muted-foreground">bid/ask {percent(observation.selectedBid)} / {percent(observation.selectedAsk)} · P({order.side}) {percent(observation.ownedSideProbability)}</span></div><span className={cn('font-mono', observation.unrealizedPnlCents >= 0 ? 'text-primary' : 'text-red-400')}>{observation.unrealizedPnlCents >= 0 ? '+' : ''}{observation.unrealizedPnlCents.toFixed(2)}¢</span></div>)}</div></details>}
+      {!!order.positionObservations?.length && <details className="rounded-md border"><summary className="cursor-pointer px-2 py-1.5 text-[8px] font-medium">Position lifecycle ({order.positionObservations.length} snapshots)</summary><div className="divide-y border-t">{order.positionObservations.slice(-30).map((observation) => <div key={observation.at} className="grid grid-cols-[1fr_auto] gap-2 px-2 py-1.5 text-[8px]"><div><span className="font-mono">{new Date(observation.at).toLocaleTimeString()}</span><span className="ml-2 text-muted-foreground">bid/ask {percent(observation.selectedBid)} / {percent(observation.selectedAsk)} · P({order.side}) {percent(observation.ownedSideProbability)}</span></div><span className={cn('font-mono', observation.unrealizedPnlCents >= 0 ? 'text-gain' : 'text-loss')}>{observation.unrealizedPnlCents >= 0 ? '+' : ''}{observation.unrealizedPnlCents.toFixed(2)}¢</span></div>)}</div></details>}
 
       <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
         <DecisionValue label="Issuance ask" value={percent(order.issuanceAskPrice ?? decisionAsk)}/>
@@ -99,5 +99,5 @@ export function OrderDecisionDetails({ order, defaultOpen = false }: { order: Pa
 }
 
 function DecisionValue({ label, value, emphasis = false }: { label: string; value: string; emphasis?: boolean }) {
-  return <div className="rounded bg-secondary/35 p-1.5"><p className="text-[7px] uppercase tracking-wider text-muted-foreground">{label}</p><p className={cn('mt-0.5 font-mono text-[9px]', emphasis && 'text-primary')}>{value}</p></div>;
+  return <div className="rounded bg-secondary/35 p-1.5"><p className="text-[7px] uppercase tracking-wider text-muted-foreground">{label}</p><p className={cn('mt-0.5 font-mono text-[9px]', emphasis && 'text-data')}>{value}</p></div>;
 }

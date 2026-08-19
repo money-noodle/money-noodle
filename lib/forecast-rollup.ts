@@ -15,7 +15,7 @@ import {
   isQualified,
   settlementWindowKey,
 } from './performance';
-import { BUY_POLICY_VERSION, MIN_CALIBRATION_SAMPLE, MIN_ENTRY_PRICE, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, MIN_SELECTED_SIDE_PROBABILITY, venueFeeRate, ENTRY_FEE_ROLE } from './prediction-policy';
+import { BUY_POLICY_VERSION, MIN_CALIBRATION_SAMPLE, MIN_ENTRY_PRICE, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, MIN_SELECTED_SIDE_PROBABILITY, venueFeeRate } from './prediction-policy';
 import type { PerformanceSlice, PerformanceSummary, PerformanceTimelinePoint, SegmentGroup, TrackedForecast } from './types';
 
 /**
@@ -199,7 +199,7 @@ function counterfactualRollup(forecasts: TrackedForecast[]): ForecastSummaryRoll
       const outcome = nearest.venueOutcomes!.kalshi!.outcome!;
       for (const quote of nearest.actionableVenuePrices?.filter((item) => item.venue === 'kalshi') ?? []) {
         const probability = quote.side === 'UP' ? nearest.probabilityUp : 1 - nearest.probabilityUp;
-        const fee = venueFeeRate('kalshi', quote.price, ENTRY_FEE_ROLE);
+        const fee = venueFeeRate('kalshi', quote.price, 'taker');
         const edge = probability - quote.price - fee;
         if (quote.price < MIN_ENTRY_PRICE || quote.price > 0.97 || edge < MIN_NET_EDGE || probability >= MIN_SELECTED_SIDE_PROBABILITY) continue;
         candidates.push({

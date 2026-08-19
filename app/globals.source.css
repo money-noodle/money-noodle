@@ -21,6 +21,19 @@
   --color-ring: var(--ring);
   --color-brand-green: var(--brand-green);
   --color-brand-green-foreground: var(--brand-green-foreground);
+  /* Semantic signal tokens. Outcome colors are reserved: `gain` and `loss` mean
+     direction (UP/DOWN, bullish/bearish) or win/loss (settled results, realized
+     P&L, returns, edge, win rate) and nothing else; `warn` means pending, stale,
+     degraded, or blocked-and-recoverable. Everything else that carries data --
+     diagnostics, quality metrics, counts, category and readiness badges, chart
+     chrome -- is `data`. `live` is the live track's identity, the counterpart to
+     gold `primary` for the paper track. A number that is not an outcome never
+     gets an outcome color. */
+  --color-gain: var(--gain);
+  --color-loss: var(--loss);
+  --color-warn: var(--warn);
+  --color-live: var(--live);
+  --color-data: var(--data);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -52,6 +65,11 @@
   --border: #d8e0d9;
   --input: #c9d4cc;
   --ring: #b77d1d;
+  --gain: #1f7a34;
+  --loss: #b03434;
+  --warn: #6d4a06;
+  --live: #6b2fc9;
+  --data: #5b4795;
 }
 
 .dark {
@@ -76,6 +94,11 @@
   --border: #202728;
   --input: #293132;
   --ring: #c18c2f;
+  --gain: #45c162;
+  --loss: #ff6969;
+  --warn: #f0cf82;
+  --live: #b389f8;
+  --data: #a294dc;
 }
 
 /* Browser-level fallback: system-dark visitors paint dark before the synchronous preference script runs. */
@@ -102,6 +125,11 @@
     --border: #202728;
     --input: #293132;
     --ring: #c18c2f;
+    --gain: #45c162;
+    --loss: #ff6969;
+    --warn: #f0cf82;
+    --live: #b389f8;
+    --data: #a294dc;
     color-scheme: dark;
   }
 }
@@ -132,10 +160,6 @@ body {
 }
 button, a { -webkit-tap-highlight-color: transparent; }
 ::selection { background: rgba(227, 176, 75, 0.28); }
-html:not(.dark) .text-red-200, html:not(.dark) .text-red-300, html:not(.dark) .text-red-400 { color: #a92f2f; }
-/* Warning copy must still clear contrast on the live panel's soft-red surface. */
-html:not(.dark) .text-amber-100, html:not(.dark) .text-amber-200, html:not(.dark) .text-amber-300 { color: #624000; }
-html:not(.dark) .text-amber-100\/80, html:not(.dark) .text-amber-200\/90, html:not(.dark) .text-amber-300\/80 { color: #624000; opacity: 1; }
 
 /* Raise dense evidence labels by one pixel without changing component spacing or control heights. */
 .text-\[7px\] { font-size: 8px; }

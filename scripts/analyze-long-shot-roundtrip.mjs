@@ -34,6 +34,7 @@
  */
 import { readForecastHistory } from './lib/forecast-history.mjs';
 import { createReadStream, existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import readline from 'node:readline';
 import path from 'node:path';
 

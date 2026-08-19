@@ -21,7 +21,6 @@
     "analyze:swing-exit": "node --max-old-space-size=6144 scripts/analyze-swing-exit.mjs",
     "analyze:maker-fills": "node --max-old-space-size=6144 scripts/analyze-maker-fills.mjs",
     "experiment:fine-paths": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/experiment-fine-paths.ts",
-    "experiment:maker-depth": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/experiment-maker-depth.ts",
     "verify:forecast-storage": "jiti scripts/verify-forecast-storage.ts",
     "fund:long-shot": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/fund-long-shot.ts",
     "archive:local": "jiti scripts/archive-local-data.ts",
@@ -38,8 +37,7 @@
     "analyze:contract-selection": "node --max-old-space-size=8192 --expose-gc scripts/analyze-contract-selection.mjs",
     "analyze:long-shot-fine-marks": "node --max-old-space-size=8192 --expose-gc scripts/analyze-long-shot-fine-marks.mjs",
     "analyze:long-shot-roundtrip": "node --max-old-space-size=8192 --expose-gc scripts/analyze-long-shot-roundtrip.mjs",
-    "analyze:missed-entries": "node --max-old-space-size=8192 --expose-gc scripts/analyze-missed-entries.mjs",
-    "backfill:maker-posts": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/backfill-maker-post-observations.ts"
+    "analyze:missed-entries": "node --max-old-space-size=8192 --expose-gc scripts/analyze-missed-entries.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1111.0",

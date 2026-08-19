@@ -50,7 +50,7 @@ export function TradeHistoryDialog({ triggerLabel = 'Trade history' }: { trigger
           <span className="ml-auto font-mono text-[9px] text-muted-foreground">{data ? `${data.orders.length}/${data.total}` : '—'} orders</span>
         </div>
         <div className="overflow-y-auto p-3">
-          {error && <div className="mb-3 rounded-md border border-red-400/20 bg-red-400/5 p-3 text-[10px] text-red-300">{error}</div>}
+          {error && <div className="mb-3 rounded-md border border-loss/20 bg-loss/5 p-3 text-[10px] text-loss">{error}</div>}
           {loading && !data ? <div className="grid h-52 place-items-center"><Loader2 className="size-5 animate-spin text-muted-foreground"/></div> : null}
           {data && !data.orders.length ? <div className="grid h-40 place-items-center rounded-lg border border-dashed text-[10px] text-muted-foreground">No orders match this view.</div> : null}
           <div className="space-y-2">{data?.orders.map((order) => <HistoryOrder key={order.id} order={order}/>)}</div>
@@ -68,8 +68,8 @@ function HistoryOrder({ order }: { order: PaperOrder }) {
   const pnl = order.actualPnlCents ?? order.pnlCents;
   return <div className="rounded-lg border p-3">
     <div className="flex flex-wrap items-start justify-between gap-2">
-      <div><div className="flex flex-wrap items-center gap-1.5"><span className="text-[11px] font-semibold">{order.symbol} {order.side}</span><Badge variant="outline" className={order.executionMode === 'live' ? 'border-red-400/30 text-red-300' : 'border-primary/25 text-primary'}>{order.executionMode}</Badge><Badge variant="outline">{order.status.replaceAll('_', ' ')}</Badge>{order.liquidityRole && <Badge variant="outline">{order.liquidityRole}</Badge>}</div><p className="mt-1 font-mono text-[8px] text-muted-foreground">{new Date(order.createdAt).toLocaleString()} · closes {new Date(order.closesAt).toLocaleString()} · {order.contractId}</p></div>
-      <div className="text-right"><p className="font-mono text-[10px]">P({order.side}) {(selectedProbability * 100).toFixed(1)}% · edge {edge >= 0 ? '+' : ''}{(edge * 100).toFixed(1)}pp</p><p className={cn('font-mono text-[10px]', (pnl ?? 0) > 0 ? 'text-primary' : (pnl ?? 0) < 0 ? 'text-red-400' : 'text-muted-foreground')}>{pnl === undefined ? 'pending' : `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}¢ P&L`}</p></div>
+      <div><div className="flex flex-wrap items-center gap-1.5"><span className="text-[11px] font-semibold">{order.symbol} {order.side}</span><Badge variant="outline" className={order.executionMode === 'live' ? 'border-live/30 text-live' : 'border-primary/25 text-primary'}>{order.executionMode}</Badge><Badge variant="outline">{order.status.replaceAll('_', ' ')}</Badge>{order.liquidityRole && <Badge variant="outline">{order.liquidityRole}</Badge>}</div><p className="mt-1 font-mono text-[8px] text-muted-foreground">{new Date(order.createdAt).toLocaleString()} · closes {new Date(order.closesAt).toLocaleString()} · {order.contractId}</p></div>
+      <div className="text-right"><p className="font-mono text-[10px]">P({order.side}) {(selectedProbability * 100).toFixed(1)}% · edge {edge >= 0 ? '+' : ''}{(edge * 100).toFixed(1)}pp</p><p className={cn('font-mono text-[10px]', (pnl ?? 0) > 0 ? 'text-gain' : (pnl ?? 0) < 0 ? 'text-loss' : 'text-muted-foreground')}>{pnl === undefined ? 'pending' : `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}¢ P&L`}</p></div>
     </div>
     <OrderDecisionDetails order={order}/>
   </div>;

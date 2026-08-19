@@ -3,6 +3,7 @@ import { MAX_EDGE_SPIKE } from './edge-spike-policy';
 import {
   advanceSignalPersistence, evaluateSignalPersistence, evaluateSignalPersistenceIgnoringSpike,
   evaluateSignalPersistenceWithRequirements, REQUIRED_OBSERVATION_SPAN_MS, REQUIRED_QUALIFYING_SNAPSHOTS,
+  signalPersistenceAfter,
   type SignalPersistenceState,
 } from './signal-persistence';
 
@@ -29,6 +30,17 @@ describe('execution signal persistence', () => {
     expect(result.eligible).toBe(true);
     expect(result.qualifyingSnapshots).toBe(4);
     expect(result.medianNetEdge).toBeCloseTo(0.08);
+  });
+
+  it('builds fallback evidence only from observations after maker completion', () => {
+    let state: SignalPersistenceState | undefined;
+    for (const seconds of [90, 105, 120, 135]) state = advance(state, seconds);
+    const fresh = signalPersistenceAfter(state, time(105));
+    expect(fresh?.observations.map((observation) => observation.at)).toEqual([time(120), time(135)]);
+    expect(evaluateSignalPersistence(fresh, Date.parse(time(135)), 0.05, 0.5)).toMatchObject({
+      eligible: true, qualifyingSnapshots: 2,
+    });
+    expect(evaluateSignalPersistence(signalPersistenceAfter(state, time(120)), Date.parse(time(135)), 0.05, 0.5).eligible).toBe(false);
   });
 
   it('does not count the same calculation timestamp more than once', () => {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { bestEntry, hasTradableEdge, MIN_NET_EDGE, qualifiesAsBuyEdge, qualifiesVenueBuyEdge, venueEntryOptions, venueFeeRate, ENTRY_FEE_ROLE } from './prediction-policy';
+import { bestEntry, hasTradableEdge, MIN_NET_EDGE, qualifiesAsBuyEdge, qualifiesVenueBuyEdge, venueEntryOptions, venueFeeRate, ENTRY_ADMISSION_FEE_ROLE } from './prediction-policy';
 import type { MarketQuote, VenueQuote } from './types';
 
 const market: MarketQuote = {
@@ -57,9 +57,9 @@ describe('binary buy policy v13', () => {
     expect(venueFeeRate('kalshi', 0.5, 'taker')).toBeCloseTo(0.0175, 6);
     expect(venueFeeRate('polymarket', 0.5, 'taker')).toBeCloseTo(0.005, 6);
     // Kalshi charges nothing on a resting fill, which is what production executes as. The gate still
-    // deducts the taker rate; that is tracked as ENTRY_FEE_ROLE, not an oversight here.
+    // uses immediate taker economics before adaptive execution chooses a placement style.
     expect(venueFeeRate('kalshi', 0.5, 'maker')).toBe(0);
-    expect(ENTRY_FEE_ROLE).toBe('taker');
+    expect(ENTRY_ADMISSION_FEE_ROLE).toBe('taker');
     // Gross edge sits exactly at the bar, so the fee alone must push it below — the property under test,
     // stated relative to whatever the floor currently is rather than to a hardcoded 5pp.
     // Belief 60% priced so the gross edge lands exactly on the floor; the side floor still passes.

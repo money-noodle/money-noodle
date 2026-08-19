@@ -1,15 +1,15 @@
 # Money Noodle - Implementation Status
 
-> Living status document. Updated 2026-08-14.
+> Living status document. Updated 2026-08-19.
 > Product requirements and architecture decisions live in [SPEC.md](SPEC.md).
 
 ## Executive Summary
 
 Money Noodle is operational as a local research dashboard, continuous paper shadow trader, public paper-track-record publisher, and explicitly armed live Kalshi trader. Core UP/YES and DOWN/NO entry, managed maker execution, paper maker mirroring, signed Kalshi reconciliation, quiescent pause/drain, loss gates, budget epochs, provider permissions, contract provenance, target integrity, standalone reduce-only exits, protected switching, model evaluation, and immutable promotion accounting are implemented.
 
-The system is mechanically capable. The unresolved question is economic: current evidence does not justify stake expansion, taker execution, looser entry gates, queue-aware live gates, or adding a second live venue. None of those change here.
+The system is mechanically capable. The unresolved question is economic: current evidence does not justify stake expansion, unconditional taker execution, another entry relaxation, queue-aware live gates, or adding a second live venue. The configured v21 execution mode is itself under review because runtime behavior is selective maker/taker rather than the unconditional taking its manifest and earlier status prose describe.
 
-A second production policy is being added on the same market — the long-shot round trip, §2 below. It is a new trading feature, which this guidance deprioritizes, and it proceeds as an explicit operator decision under a bounded learning budget carved from the existing allocation rather than added to it. It relaxes none of the constraints above and changes no rule of the edge policy.
+A second policy runs on the same market — the long-shot round trip, §2 below. Its current 12¢→97¢/600s cohort is paper-only; live arming is false. The parameters were selected from a retrospective sweep and therefore define a new collection cohort rather than evidence-backed promotion. It relaxes none of the edge policy's constraints and changes no edge rule.
 
 | Area | Status |
 | --- | --- |
@@ -23,15 +23,16 @@ A second production policy is being added on the same market — the long-shot r
 
 ## Current Measured State
 
-Snapshot from local durable files on 2026-08-14:
+Snapshot from local durable files at 2026-08-19T01:44:04Z. Full method, cohorts, corrections, and caveats in [reports/open-experiment-status-2026-08-19.md](reports/open-experiment-status-2026-08-19.md).
 
-- Forecast history: 49,600 rows, 29,600 qualifying rows, 29,577 resolved qualifying rows, 2,426 resolved asset-cycles, and 519 resolved qualifying close windows.
-- Live ledger lifetime: 821 non-exit orders, 396 settled entries, 230 settled windows, -112.11 cents exact realized P&L on 12,128.40 cents exact stake, 1 open and 0 working orders, 420 unfilled entries.
-- Paper ledger lifetime: 781 non-exit orders, 746 settled entries, 332 settled windows, +366.70 cents exact realized P&L on 27,600 cents stake, 0 open and 0 working orders, 35 unfilled entries.
-- Current live budget control: active, live mode, 2,000 cents starting budget, 679 cents available, 171 cents reserved, -1,150 cents current-epoch whole-cent realized P&L, 2,000 cents peak-equity reference.
-- Budget audit: live control roll-forward matches the durable budget audit and current open reservation exactly. The 2026-08-14 BNB partial-exit chain is balanced: 200c reserved, 13c released, 108c partial exit settled for 126c, and the 79c remainder settled for 0c. Paper spendable budget matches the current reset epoch using whole-cent `pnlCents`; exact sold-exit `payoutCents` remain a reporting/accounting view and explain the apparent lifetime difference.
-- Latest reviewed walk-forward run: `walk-forward:550:fnv1a-866cfdc4`, generated 2026-08-15T00:00:23.891Z, 550 checkpoint windows, decision `baseline_retained`. Candidate mean window return was 4.37% versus baseline 4.81%; it beat baseline in only 2 of 5 folds and had a larger maximum drawdown, so it is not citable for promotion.
-- Forecast storage is a memory-residency risk, not a cadence risk. `data/forecast-history.json` is 188.7 MB and `data/forecast-history.journal.jsonl` is 12.2 MB. The parse itself costs ~1.2 s once per process behind a promise cache; the ~10 s blocks previously attributed to it were quadratic grouping in `summarizePerformance`, now fixed and 643 ms. What binds is that the process holds ~396 MB of retained heap to serve a hot set of 135 rows, and grows ~40 MB a day.
+- Forecast storage index: 58,360 rows, 632 open and 57,728 sealed across 12 shards. Collection and settlement journals were advancing.
+- Edge ledger lifetime, exact reporting view: live −124.14c on 28,855.67c over 567 settled entries and 367 settlement windows; paper −2,242.36c on 47,984c over 945 settled entries and 485 windows. These are not the whole-cent budget view.
+- Long-shot ledger lifetime, exact reporting view: live −28.26c on 55.19c over three manual mechanism tests in one window; paper −709.27c on 895c over 41 settled attempts and 27 windows.
+- Live budget control, whole-cent view: active live mode, 2,000c starting budget, 1,610c available, 0c reserved, and −390c current-epoch realized P&L. No entry was open, pending-reservation, or uncertain.
+- v21 had run for about one hour. A policy-aware reconstruction found 43 admitted decisions, 35 satisfying 2-over-15 persistence, 15 matched live orders and 6 fills. The ledger held 18 live v21 orders: 13 labelled taker with 4 fills, and 5 labelled maker with 2 fills. This is operational attribution, not an economic sample.
+- The active local long-shot cohort is `long-shot-round-trip-buy12-sell97-win600-v1`, paper only: 8 resolved attempts in 4 windows, all losses, −402c on 402c, no mark exits, and 0 current-policy hold-sentinel records.
+- Latest walk-forward run: `walk-forward:875:fnv1a-27542176`, generated 2026-08-18T22:00:08Z. Candidate mean window return was 5.75% against baseline 2.37% over 438 test windows; it beat baseline 5/5 folds but was positive only 3/5 with modal parameters in 3/5. Decision: `baseline_retained`.
+- The current Next development server occupied about 3.7 GB RSS. RSS is not retained heap and dev mode carries compiler/cache overhead, but this materially disagrees with the prior 70 MB post-sharding RSS measurement and needs a like-for-like profile.
 
 ### Edge policy v17, reviewed 2026-08-17
 
@@ -156,9 +157,24 @@ of the store suggests.
 - The peak distribution is bimodal: median 14¢, p75 31¢, p90 99.2¢. Eight of 38 peaked above 50¢, six above
   90¢, almost nothing between.
 
-This configuration is also the **only cell above break-even** in the retroactive sweep across 2,131 paths
-(10¢/90¢ ratio 1.12, 10¢/70¢ 1.03; every other entry band 0.68–0.85). Two routes agree it is marginally
-positive; neither has the sample to establish it. Nothing is authorized: keep collecting.
+This configuration was also the **only cell above break-even** in the 2026-08-18 retroactive sweep across
+2,131 paths (10¢/90¢ ratio 1.12, 10¢/70¢ 1.03; every other entry band 0.68–0.85). Two routes agreed it was
+marginally positive; neither had the sample to establish it.
+
+**Current update, 2026-08-19:** the configured marks are 12¢→97¢/600s. The deterministic entry-owner fix
+advances the active derived policy to `long-shot-round-trip-buy12-sell97-win600-v2`; the prior v1 order and
+10¢→90¢ sentinel cohorts are historical. `long-shot-hold-v1` ended with nine 12¢→97¢ paper executions but only two sentinel
+records, both falsely stamped unexecuted with the obsolete collection-only reason. Those rows remain
+immutable and are excluded. `long-shot-hold-v2` starts a fresh zero-window cohort: `runLongShot` now stamps
+the exact paper decision, persists the order first, and writes the sentinel; the detached pass only recovers
+version-stamped decisions, observes later peaks, and settles outcomes. No prior fill is backfilled. The
+parameter change came from a 50-cell retrospective sweep and therefore nominates a paper collection cohort;
+it is not prospective promotion evidence. The worker restarted on hold capture at 2026-08-19T04:53Z and
+on deterministic entry ownership at 2026-08-19T05:17Z; both startup reconciliations passed with 0¢
+reserved, zero recovered fills, and zero managed remainders canceled. The initial
+hold-v2/order-policy-v2 cohort is zero by design until the next prospective trigger. The
+one-second refreshed trailing poll is now the sole paper/live entry owner; the regular 15-second cycle can
+no longer bypass `evaluateTrailingEntry`. See `docs/long-shot-policy-design.md` §§10b–10c.
 
 ### v21 — promote the persistence candidate, and take the ask, 2026-08-19
 
@@ -178,8 +194,58 @@ What it fixes is bigger than the entry rule. A single non-qualifying snapshot re
 at the collector's ~17s cadence one blip cost ~51 seconds of re-earning. Measured over 12 hours,
 **115 of 205 admitted decisions never persisted at all.**
 
-**Entry execution maker to taker.** `MONEY_NOODLE_ENTRY_EXECUTION_MODE=taker`. Every accepted decision now
-fills at the ask instead of resting a post-only limit that missed 51% of the time.
+**Execution discrepancy found and resolved as selective adaptive, 2026-08-19.** The audit found
+`MONEY_NOODLE_ENTRY_EXECUTION_MODE=taker` still applied the same recommendation as `adaptive`, while local
+threshold overrides had relaxed most of the six gates. The maintainer chose adaptive rather than
+unconditional taking. Attempt 1 now takes only at ≥15pp current edge, ≥10pp persistence median, ≥65%
+quality, ≤2¢ selected-side spread, ≥30 comparable accepted maker samples, and ≥2pp estimated advantage over
+maker capture; otherwise it uses managed maker. The 2¢ ceiling limits the cost of immediacy and is not
+claimed to predict maker fills. The separate 10¢ spread ceiling rejects the entry entirely.
+
+One authoritative attempt-1 maker zero-fill may open one capped taker fallback for that exact
+asset/side/window/generation. There is no fixed cooldown: two new qualifying observations strictly after
+maker completion must span 15 seconds. Attempt 2 retains the four absolute edge, median, quality, and 2¢
+spread gates, waives only sample count and comparative advantage, and ends the sequence whether filled or
+unfilled. Every other sequence starts adaptive attempt 1 anew. Paper remains its independent managed-maker
+lane. Immediate and fallback takers now tolerate at most 1.0¢ of selected-side ask movement from issuance,
+while re-running the applicable gates on the fresh quote and reserving quantity plus fees at the worst
+permitted price. The cap never exceeds 97¢. Reporting separately labels pre-submit quote movement, accepted
+IOC no-fill, and rested maker no-fill without rewriting historical rows. `ENTRY_EXECUTION_POLICY_VERSION` is
+`maker-taker-adaptive-one-miss-slippage1c-v3`; design and audit requirements are in
+`docs/adaptive-entry-fallback-design.md`.
+
+**Deployment check, 2026-08-19T02:53Z:** the worker was stopped with active operator intent preserved,
+restarted on the new configuration, and startup reconciliation passed with 0¢ reserved, zero recovered
+fills, and zero managed remainders canceled. The first v2 live intent was one operational smoke sample only:
+ETH DOWN attempt 1 retained maker because current edge was 2.9pp, persistence median 3.4pp, and estimated
+taker advantage 0.4pp; it authoritatively completed unfilled. Its signal then reset rather than manufacturing
+a fallback from stale observations. This n=1 trace verifies wiring, not economics.
+
+**v3 deployment check, 2026-08-19T03:23Z:** the bounded-quote worker restarted with active operator intent
+preserved; startup reconciliation again passed with 0¢ reserved, zero recovered fills, and zero managed
+remainders canceled. No v3 live order had fired at the first post-start read, so only startup and build/test
+integrity—not order economics or the one-cent path—had runtime evidence at that point.
+
+**Execution-state display corrected, 2026-08-19.** The edge panel had hardcoded the retired three-snapshot
+denominator and displayed attempt ceilings as progress (`1/2 no fill`). The authenticated read model now
+publishes the active `productionSignalPersistence` snapshot count/span. The primary panel shows only
+execution-confirmed signals and current-window attempts; base-edge signals awaiting confirmation are hidden
+behind a secondary control. Labels state what happens next—fresh fallback evidence, checks pending,
+eligible awaiting execution, or sequence ended—while the two-attempt ceiling remains audit detail. The
+worker restarted on this read-model change at 2026-08-19T03:38Z; startup reconciliation passed with 0¢
+reserved, zero recovered fills, and zero managed remainders canceled.
+
+**Environment surface cleaned, 2026-08-19.** `.env.local` was reduced from 84 assignments to 52 without
+changing any retained value. Removed entries were blank/default-only research and Polymarket configuration,
+credentials for read-only account connectors belonging to planned/unimplemented providers, and five archive values equal to code
+defaults; funded authority, caps, risk gates, reconciliation, active strategy policy, projection, auth, and
+archive credentials remain explicit. `.env.example` now marks optional providers as commented examples and
+matches current 9/6/3 portfolio defaults plus the disabled net-edge ceiling. The linked Vercel project was
+reduced from 21 variables to the four the hosted app reads: canonical URL, auth password/secret, and its
+dedicated database URL. No deployment was triggered.
+
+The earlier v21 sentence "every accepted decision fills at the ask" remains false and withdrawn. A capped
+IOC can also finish unfilled when the quote moves beyond its approved ask.
 
 | v19 arm | live | paper |
 | --- | --- | --- |
@@ -198,13 +264,15 @@ Stated plainly: paying the spread **costs** ~7pp on trades the maker would have 
 selected out of. Capital deployed roughly doubles. **Arm C is the best arm measured, not a profitable one:
 still negative per dollar.**
 
-The two halves ship together because the persistence sentinel's evidence is ask-priced and its maker-touch
-instrumentation carries one observation. An ask-priced counterfactual only describes the desk once the desk
-takes the ask.
+The rationale for shipping the two halves together assumed the desk would take every ask. Current code does
+not implement that assumption. At the 2026-08-19T01:44:04Z read, 13 live v21 orders were labelled taker and
+only 4 filled; 5 were labelled maker and 2 filled. The sample is too small to judge economics, but enough to
+show that neither unconditional taking nor 100% fills occurred.
 
-**Four multipliers now stack** — v20's wider gate, 9/6/3 caps, the drain loop, and 100% fills — so order
-flow and time-in-market should both rise sharply. `npm run analyze:execution-gap` is the monitor:
-`ordered / executable` was 54% before any of it.
+**Three volume multipliers are confirmed** — v20's wider gate, 9/6/3 caps, and the drain loop. The claimed
+fourth multiplier, 100% fills, is withdrawn. `npm run analyze:execution-gap` remains the monitor after its
+persistence requirements are selected by stamped policy version; the old script still applied 3-over-30 to
+v21 and undercounted executable decisions.
 
 ### Portfolio caps raised to 9 / 6 / 3, 2026-08-18
 
@@ -279,16 +347,16 @@ committed once.
 No entry-rule change and no `BUY_POLICY_VERSION` bump: this is execution, which SPEC §12.3 permits to
 differ between tracks. The mirror invariant is untouched.
 
-**Live maker attempts raised 1 → 2** (`MONEY_NOODLE_MAX_LIVE_MAKER_ATTEMPTS`). One miss used to retire that
-contract and side for the entire settlement window, so a fresh qualifying signal minutes later could not be
-bought. **The evidence does not support this and it is recorded as an operator decision:** second attempts
-measured −11.6% under 60s after the miss (n=35), −63.0% at 60–180s (n=6) and −17.7% beyond 180s (n=9),
-against −2.0% for first attempts. The mechanism is that a maker miss means the price moved away from the
-bid — against the side wanted — so a retry buys after adverse information. It does remove a known
-paper/live divergence: paper already ran 2 attempts, so the mirror was comparing different execution.
+**Historical maker retry review.** Live attempts were raised 1 → 2 on 2026-08-18 despite negative evidence:
+second maker attempts measured −11.6% under 60s after the miss (n=35), −63.0% at 60–180s (n=6), and −17.7%
+beyond 180s (n=9), against −2.0% for first attempts. That operator decision is superseded for adaptive live
+execution: attempt 2 is no longer another maker order and the unsupported fixed 30-second delay is removed.
+The old result does not validate the new taker fallback—it measured maker retries—but it does reject citing
+30 seconds as an evidence-backed duration.
 
-51% of live orders go unfilled, so this is the larger of the two volume constraints; draining the queue
-addresses it by taking the next *different* contract rather than the same one at a chased price.
+51% of historical live maker orders went unfilled, so misses remain the larger volume constraint. Adaptive
+v2 addresses one exact sequence after fresh post-miss evidence; draining the ranked queue still addresses
+volume by taking the next different contract.
 
 ### v20 — admit substantially more entries, 2026-08-18, by operator decision
 
@@ -371,7 +439,7 @@ operator watching the app judges it — could this have been sold at a positive 
 
 Fill-optimistic throughout: entries are bought at the recorded ask. Three to five days, Kalshi only.
 
-### OVERDUE: `persistence-two-consecutive-v1` has 5x the sample it was locked for
+### CLOSED AS AN ENTRY CANDIDATE: `persistence-two-consecutive-v1` is production in v21
 
 The committed sentinel of SPEC §706 records, at decision time, every entry two qualifying observations over
 15s would have taken that production's three over 30s did not. At the 2026-08-18T20:33:05Z read it holds
@@ -380,7 +448,14 @@ per $1** at the ask, positive on all 5 days. The value is concentrated where pro
 all — **+23.5% ±13.0 over 224 windows** — while the half production reached a median 17s later is
 indistinguishable from noise.
 
-**It is not promotable and the first review has not run.** Three blockers, in order of force:
+v21 promoted it by operator decision on the pooled figure, with the version-scoping departure recorded in
+the manifest. At the 2026-08-19 read the current cohort held 28 intents and **0 incremental intents** because
+the candidate and production rule are now identical. The entry-policy experiment is closed. Its detached
+maker observer still runs, but `buildPersistenceCandidateReport` summarizes observed fills over incremental
+intents and consequently displays zero current observations; continuing that request load needs a newly
+stated measurement or retirement.
+
+The three blockers that existed before the operator promotion were:
 
 1. **~~The maker benchmark could not answer the fill question~~ — instrumented 2026-08-18.** The recorded
    benchmark is `bid-priced return × modelled fill probability`: it prices the fill as a random draw the
@@ -391,10 +466,11 @@ indistinguishable from noise.
    counts: 92 windows, +16.0% ±19.9 — below both the bar and significance.
 3. Promotion is a manual act recorded in an immutable ledger.
 
-### Observed maker fills on the persistence sentinel, shipped 2026-08-18
+### Observed maker fills on the persistence sentinel, shipped 2026-08-18; retired 2026-08-19
 
-Design in [docs/maker-post-observation-design.md](docs/maker-post-observation-design.md).
-`persistence-two-consecutive-v1` now records, per intent, whether the resting entry production would have
+Design and retirement decision in
+[docs/maker-post-observation-design.md](docs/maker-post-observation-design.md).
+`persistence-two-consecutive-v1` recorded, per intent, whether the resting entry production would have
 placed **actually would have filled**, simulated against observed trade prints.
 
 - **What was wrong.** `makerExpectedProfitPerContract` = bid-priced settlement return × modelled fill
@@ -403,14 +479,16 @@ placed **actually would have filled**, simulated against observed trade prints.
   cohort the modelled probability ran 43–70% with a mean of 50.8%, so the tile was the bid return times
   roughly one half. It was also labelled "Maker-touch benchmark", which it never was — touch is
   `touchProbability`, documented in `lib/maker-fill-model.ts` as *inverted* against real fill rates.
-- **What it does now.** One order-book snapshot at post time (depth is not historical), the reprice ladder
+- **What it did.** One order-book snapshot at post time (depth is not historical), the reprice ladder
   reconstructed from the **2-second contract path**, and one trade-print fetch after the 12-second managed
   horizon — two venue requests per intent. A post fills only when volume traded at or through its price
   exceeds the size displayed ahead of it (`lib/maker-depth-experiment.ts`), never on a touch. Both arms
   are scored: the ladder production actually walks, and a static post as a conservative floor.
-- **Where it runs.** Off the existing detached `persistenceCandidateCycle` branch, which the execution path
-  already fires and never awaits. Public unauthenticated endpoints, hard per-cycle request cap, one attempt
-  per intent, and every failure records `unobserved` rather than retrying.
+- **Retirement.** Approval at 2026-08-19T04:15Z found 76 v21 intents and zero incremental intents. Shutdown
+  waited for an open funded position to settle; the final 2026-08-19T04:35Z store had 80 v21 intents, all
+  already production-eligible at candidate time, and no unresolved intent. The runtime
+  `persistenceCandidateCycle` trigger and detached maker observer are removed. Existing evidence and report
+  code remain read-only.
 - **The recorded fields are untouched.** `makerExpectedProfitPerContract` and `makerFillProbability` stay
   exactly as written — the store is committed evidence — and are simply no longer reported as the maker
   benchmark. The report gains return **conditional on an observed fill**, plus the bid-priced return with
@@ -419,8 +497,12 @@ placed **actually would have filled**, simulated against observed trade prints.
   coverage, the bid had already moved on 87, so only 16 could be posted at the price production would have
   chosen. Those 16 score the static arm only and their fills are an **upper bound** — one 60-second print
   window against a 12-second horizon, with taker direction already discarded by that sampler.
-- **The live cohort starts at zero** and accrues from the next collector restart; depth cannot be
-  reconstructed for the 611 intents already recorded.
+- The live observer accumulated 12 v19 intents and 20 v20 intents before promotion. In the final store it
+  had attached observations to 49 of 80 v21 intents—17 simulated fills and 32 misses—but none were
+  incremental, so the active-policy observed-fill panel was empty by construction. This is not evidence
+  about a persistence alternative and collection has stopped.
+- The worker restarted at 2026-08-19T04:34Z. Startup reconciliation passed with 0¢ reserved, zero recovered
+  fills, and zero managed remainders canceled; active operator intent was preserved.
 
 ### Where the loss comes from — decomposed 2026-08-18
 
@@ -488,38 +570,32 @@ capital, which the 2,000c budget cannot do. It also does not replicate on v18, w
 tracks. The problem is not maker versus taker: **the maker fills the losers and misses the winners.** A
 selective rule — crossing only where the signal is worth 4¢ — is untested and is where this points.
 
-### OPEN: the entry gate charges a fee the desk does not pay
+### Entry fee semantics resolved without changing admission, 2026-08-19
 
-**Close when v18's freshness sentinel reports.** Plan and measurements in
-[docs/entry-gate-fee-design.md](docs/entry-gate-fee-design.md).
+The original plan and measurements are in [docs/entry-gate-fee-design.md](docs/entry-gate-fee-design.md).
+Its proposed one-constant maker flip assumed maker-only production; adaptive execution invalidated that
+premise because one admitted candidate may later rest or take.
 
-`venueFeeRate` deducts a Kalshi **taker** fee from every candidate's net edge, and production executes as
-a **maker**, which Kalshi charges nothing for — 497 live maker fills at a mean of 0.000c against 0.682c
-across 5 taker fills. At mid price that is 1.75pp, or 35% of the 5pp `MIN_NET_EDGE`.
+The behaviour-neutral resolution is explicit by layer:
 
-Done 2026-08-17, behaviour-neutral:
+- `ENTRY_ADMISSION_FEE_ROLE` remains `'taker'`. Shared `netEdge` means immediate-execution admission edge,
+  conservative for a later maker and correct for a later taker. It takes no execution mode and preserves
+  the mirror invariant.
+- `entryExecutionDecision` passes `'taker'` for current taker edge and `'maker'` for maker edge. Neither can
+  be changed accidentally by a future admission-policy decision.
+- Ask counterfactuals use the taker role and maker counterfactuals use the maker role. The dynamic
+  `buildMakerShadow` report no longer charges its hypothetical resting fill a phantom taker fee.
+- `venueFeeCents` and `venueFeeRate` still derive from the shared schedule. Charged whole cents retain the
+  adverse rounding and 1¢ taker floor; continuous expected-value rates do not import them.
+- `calendar-effects-v1` and the retired persistence store keep their stamped taker-role convention. Their
+  maker-labelled durable fields require a new collection version during the collector audit; existing rows
+  are not reinterpreted or silently blended.
 
-- The two fee models are consolidated. `lib/venue-fee-schedule.ts` holds the schedule and the
-  maker-is-free fact; `venueFeeCents` (charged whole cents) and `venueFeeRate` (marginal rate) both derive
-  from it. They stay separate accessors because deriving the rate from the cents function would import a
-  1c floor and ceiling rounding into a continuous expected-value test.
-- `venueFeeRate` takes a required role, so all nine call sites declare which schedule they mean. Every one
-  currently passes `ENTRY_FEE_ROLE`, which is `'taker'` — so nothing moved, and the whole correction is
-  one constant.
-- `lib/venue-fill.test.ts` pins the refactor against the pre-refactor formula over 99 prices × 8 sizes ×
-  2 venues. That grid caught a real regression: composing the fee as a fraction and scaling back to cents
-  reintroduced float dust (`0.07 × 0.5 × 0.5 × 400 = 7.000000000000001`) that turned a clean 7c fee into
-  8c until the §1 epsilon was applied.
-
-Not done, and deliberately: flipping `ENTRY_FEE_ROLE` to `'maker'`. Measured over 11,479 admitted rows in
-2,154 windows it moves **1.0% of volume** — 201 rows cross the floor and are admitted, 125 cross the
-`MAX_NET_EDGE` ceiling and are refused, and both marginal cohorts are individually noise. It is a
-correctness fix with no expected improvement in return, and it shifts `edgeStrength` ranking and the
-`netEdge − medianNetEdge` measure that v18's sentinel is currently evaluating. Disturbing a running
-evaluation for that is not worth it.
-
-When the sentinel reports: flip the constant, bump the policy version, add a manifest entry citing the
-design doc, and correct the analysis scripts in the same change — each carries its own copy of the rate.
+No candidate, persistence state, ranking, size, or funded execution changes. The worker restarted on the
+semantic split at 2026-08-19T05:28Z; startup reconciliation passed with 0¢ reserved, zero recovered fills,
+and zero managed remainders canceled. Flipping admission to maker remains a separate policy proposal
+requiring a fresh replay under current thresholds, a buy-policy version and manifest history. The earlier
+1% volume estimate was measured under obsolete thresholds and is not a current impact estimate.
 
 ### Buy policy v18: the edge-spike freshness gate, shipped 2026-08-17
 
@@ -610,7 +686,7 @@ This section previously read "a 15-second system cannot keep full-history parse/
 Started 2026-08-14:
 
 - Added `lib/forecast-storage.ts` and `scripts/verify-forecast-storage.ts`.
-- `npm run verify:forecast-storage` replays the legacy snapshot plus journal, builds a coexistence shard plan, and verifies row identity plus the full summary before writing anything.
+- `npm run verify:forecast-storage` began as the migration gate over the legacy snapshot and journal. On 2026-08-19 that path returned `ok: true` over 52,417 rows and 10 planned shards while the active index held 58,360 rows across 12 shards, exposing that it no longer verified production storage. It now detects the active layout and checks indexed shard/rollup hashes and counts, terminal/open separation, duplicate identities, journal replay, and the direct full-history summary against the stored-rollup-plus-current-open summary. The first corrected run passed over 58,756 current rows, 57,728 sealed rows, 1,028 current open rows, 12 shards, and 1,820 journal events. `--write` refuses an active layout because only `sealForecastStorage` under the forecast write lock may mutate it.
 - The gate compares the whole summary field by field, not eight counters: exact for anything countable, and a `1e-12 × max(1, |left|, |right|)` combined absolute/relative tolerance for float aggregates, because IEEE addition is not associative and a different row order legitimately moves the last digits. The absolute floor prevents last-bit noise near zero from becoming a false relative failure. Byte-identical output is not an achievable bar.
 - Passing the gate required giving every reported ordering and tie-sensitive selection a total order by `id`. Ties are the ordinary case here, so `timeline`, both streaks, the per-cycle representative row, `recent`, grouped sorts, and the missed-buy selections previously could depend on durable row order. The missed-buy gate now uses the compact persisted provenance reference directly and covers an asset/window split across shards, including a globally nearest snapshot that contributes no candidate.
 - A verified `--write` run over 49,703 live rows emitted `forecast-storage-v2`: 79 open rows, 49,624 terminal rows across 8 shards, and 6.6 MB of sufficient-statistic rollups standing in for roughly 190 MB of history. Both shard rows and rollups have indexed SHA-256 checksums, and the verification path now consumes the exact rollup objects that are written rather than rebuilding them invisibly from rows. The older 14 MB / 3,082-row open artifact was a symptom of event-loop starvation; resolution has caught up.
@@ -637,10 +713,11 @@ Two follow-ups remain, neither of which is residency:
 
 ### 2. Build the Long-Shot Round-Trip Policy
 
-Started 2026-08-14. A second production policy on `crypto-15m`, running beside the edge policy: buy a side
-whose executable Kalshi ask reaches 10¢ with at least ten minutes left on the clock, sell through a
-one-second poll submitting a reduce-only IOC at 90¢. Design, arithmetic, and the screening behind every
-parameter are in
+Started 2026-08-14. A second policy on `crypto-15m`, running beside the edge policy. The launch cohort
+bought a side whose executable ask reached 10¢ with at least ten minutes left and sold through a one-second
+reduce-only IOC poll at 90¢. **The active local cohort changed on 2026-08-18 to 12¢→97¢/600s, paper only.**
+That change was selected from a 50-cell retrospective fine-path sweep, so it starts a new forward collection
+cohort and is not evidence-backed promotion. Design and launch arithmetic are in
 [docs/long-shot-policy-design.md](/Users/raiphairow/code/money/docs/long-shot-policy-design.md);
 SPEC §12.10 and the 2026-08-14 decision-log entries carry the decisions.
 
@@ -692,7 +769,7 @@ Delivery order:
     mutation is queued, per the 2026-08-14 decision that upstream waits must not sit inside the queue they
     serve. A tick never queues behind itself, so a slow venue produces fewer polls rather than a backlog.
 
-Enabled and running as of 2026-08-15. Entry is a price-capped taker IOC at the mark — an explicit exception
+Paper-enabled and running as of 2026-08-15; the separate live flag is currently false. Entry is a price-capped taker IOC at the mark — an explicit exception
 to maker-only production execution, because the trigger is defined as the ask reaching the mark. Every
 account-wide protection still applies unchanged: kill switch, live arming, the reconciliation barrier, the
 drain, and the shared hourly filled-order ceiling.
@@ -700,16 +777,21 @@ drain, and the shared hourly filled-order ceiling.
 Funded at 30% of the Kalshi `crypto-15m` cap: 600¢, a 20¢ ticket, halting below 300¢. `npm run fund:long-shot`
 reports and re-applies it, refusing unless automation is paused with nothing reserved or open.
 
-Current state, read 2026-08-18: the paper lane is live and **the long-shot live lane is blocked by its own
+Current state, read 2026-08-19: the paper lane is running and **the long-shot live lane is blocked by its own
 per-strategy arming flag** — `liveEnabled` is false because `MONEY_NOODLE_LONG_SHOT_LIVE_ENABLED` is unset.
+At the capture-repair read, the 12¢→97¢ v1 cohort had 9 resolved paper attempts in 5 windows, −447¢ on
+447¢ with no mark exit. It is now historical: deterministic mandatory trailing advances the order policy to
+v2. Its v1 hold records are invalid for pairing; the hold-v2/order-policy-v2 60-window review cohort starts
+prospectively at zero and does not backfill those orders.
 It is *not* blocked by the desk controls, which are `state: active`, `mode: live`: the desk is armed for
 the edge policy. Distinguishing the two is the whole point of the separate flag, and conflating them is
 what placed three unintended live long-shot orders on 2026-08-15. No breaker is involved either way — the
 edge policy's loss gate is clear. Contract paths are accumulating across all seven assets.
 
-**Cohort as of 2026-08-17: 25 resolved paper attempts under `long-shot-round-trip-buy10-sell90-win600-v1`,
-of which 1 sold at the mark** — against the 60 `LONG_SHOT_REVIEW_ATTEMPTS` requires before a first review.
-Accumulating at roughly 12/day, so the bar is about three days out. The three `sold` rows in the earlier
+**Historical launch cohort as of 2026-08-17:** 25 resolved paper attempts under
+`long-shot-round-trip-buy10-sell90-win600-v1`, of which 1 sold at the mark, against the 60
+`LONG_SHOT_REVIEW_ATTEMPTS` required before a first review. That cohort was superseded before reaching its
+bar and must not be pooled with 12¢→97¢. The three `sold` rows in the earlier
 `buy40` cohort were strict-value exits, not round trips: `observeAndExecuteStandaloneExits` is now scoped
 to `EDGE_BINARY_BUY` precisely because it closed long-shot positions at 48–76¢ on 2026-08-15. Do not read
 them as the exit working.
@@ -766,22 +848,19 @@ Live findings so far, in the order they were measured:
   +0.834 ± 0.391) but its mean entry is **28.8¢** — a different strategy, not a filter on this one, and
   n=16 after thirty tests is a hypothesis rather than a result.
 
-Current stance: **stop tuning, keep collecting.** Nothing measured authorizes a parameter change. The live
-10¢→90¢ configuration sits in the best corner of the grid (0.77, with 95¢ at 0.82, n=48) and **no cell in
-the grid clears 1.00**. The direction the data leans is later exits, not earlier ones, and never-selling
-leads both — at t=1.76 on the best of many comparisons, a question rather than a result, but one the §3.3
-correction now makes more plausible rather than less.
+Evidence stance: **stop tuning; treat 12¢→97¢ as a fresh paper cohort.** Nothing measured authorized the
+parameter change. On the current 2-second retrospective sweep the selected cell held 149 entries, ratio
+0.83, sell-at-mark +9.0% ±46.3pp and hold +11.5% ±47.3pp; it was one of 50 screened configurations. Only
+forward records under its derived version may answer whether anything survives selection, and the current
+hold-sentinel capture gap must be closed first.
 
-**Revisit trigger.** Re-run `npm run analyze:long-shot-gaps` and `npm run analyze:long-shot-filters` when
-either arrives, and record the result here whichever way it falls:
-
-1. **60 resolved attempts at one policy version** (`LONG_SHOT_REVIEW_ATTEMPTS`), which is the first review
-   the design permits. About three days out at the current rate.
-2. **Dense path coverage above a few hundred windows.** Only 45 of 1,506 windows currently carry the 1s
-   sampling added 2026-08-16, which is why the fifteen-second blindness can only be bounded at 1.00–1.25×
-   and not pinned. This is a smaller gap than the withdrawn correction implied, so it is no longer
-   plausible that it lifts the best cell from 0.82 above 1.00 — it is worth closing to retire the caveat,
-   not because a result is expected to change.
+**Revisit triggers.** The dense-path trigger has arrived: on 2026-08-19
+`npm run analyze:long-shot-fine-marks` covered 562 settled fine windows at a mean 266 samples each. Finer
+sampling raised touch rates but did not produce a promotable mark; the only displayed ratio above one had
+an interval spanning zero and trailed hold. The remaining first-review trigger is **60 resolved attempts at
+one policy version** (`LONG_SHOT_REVIEW_ATTEMPTS`). The 12¢→97¢ v1 execution cohort had 9 attempts in 5 windows at the repair read. It is superseded by the
+mandatory-trailing v2 policy; invalid hold-v1 records are excluded, and `long-shot-hold-v2` starts a fresh
+prospective 60-window review cohort paired only with order-policy v2.
 
 **A proposed volatility-trading strategy was measured and does not work as described** (2026-08-18,
 [reports/maker-fill-adverse-selection-2026-08-18.md](/Users/raiphairow/code/money/reports/maker-fill-adverse-selection-2026-08-18.md),
@@ -799,21 +878,20 @@ the mechanism is queue position, and a fifteen-second sample cannot distinguish 
 sweep. Settling it needs depth recorded at the posted price over time, which the contract-path recorder
 does not carry although the venue exposes it. **Nothing here authorizes a market-making strategy.**
 
-**A bounded maker-fill experiment is running** (design §17, started 2026-08-18). It records order-book
-depth and executed trade prints for the live `crypto-15m` contracts every 60 seconds, so a resting order
-can be scored on whether volume actually traded **through** its price rather than on whether the quote
-merely touched it — the distinction `analyze:maker-fills` cannot make and the one that decides whether
-patient execution survives here. `npm run experiment:maker-depth`, bounded by 48 hours, a 45,000-request
-cap, and a stop on repeated venue refusals, whichever binds first. It is a standalone script and is
-deliberately **not** wired into `processCycle`: an instrument that is not on the execution path cannot
-delay, gate, size, price, or trade. Both endpoints are public and unauthenticated. `data/maker-depth-experiment.jsonl`,
-about 0.6 MB a day, retained 14 days as an instrument rather than a track record.
+**The bounded maker-fill experiment stopped and its persisted sample cannot answer the question**
+(2026-08-19 review in [reports/open-experiment-status-2026-08-19.md](reports/open-experiment-status-2026-08-19.md)).
+It collected 10,448 rows over 447 asset-contract windows and 64 settlement windows during 16.6 hours on
+2026-08-18. The standalone process is no longer running.
 
-The fill rule it enables lives in `lib/maker-depth-experiment.ts`: a post fills once traded volume at or
-through its price exceeds the size displayed ahead of it, with the size ahead **fixed at posting** so a
-cancellation cannot fill an order and only executions advance the queue. It still cannot see private FIFO
-rank or hidden size, so `displayedAhead` remains a stated proxy. **Nothing here authorizes a market-making
-strategy.**
+The intended fill rule in `lib/maker-depth-experiment.ts` is sound: a post fills only after traded volume at
+or through its price exceeds size displayed ahead at posting. The recorded schema is not sufficient to
+apply it. `fetchKalshiTradePrintsSince` returns `takerSide`, but `scripts/experiment-maker-depth.ts` discards
+that field and persists every print on both outcome scales. Only an opposite-outcome taker consumes a
+selected-side resting bid, so one print can be credited as queue progress on both sides. The resulting fill
+rate is an upper bound and post-fill drift is not decision-grade. Its package command and historical
+backfill command were removed on 2026-08-19, and both scripts now fail closed if invoked directly. Any new
+depth measurement needs an agreed prospective schema carrying taker direction; displayed queue would still
+remain a proxy for private FIFO rank. **Nothing here authorizes a market-making strategy.**
 
 **The swing-trading premise is measured and closed** (2026-08-18,
 [reports/swing-trading-2026-08-18.md](/Users/raiphairow/code/money/reports/swing-trading-2026-08-18.md),
@@ -887,7 +965,10 @@ Remaining work:
 - Correct for winner's curse from selecting the largest apparent edge across correlated assets.
 - Require stable held-out return across enough independent windows before any parameter deploy-and-record cycle.
 
-Current stance: baseline retained. No automatic evaluator result may change production, and no manual promotion should be recorded unless every evidence gate clears.
+Current stance: baseline retained. Latest run `walk-forward:875:fnv1a-27542176` (2026-08-18T22:00:08Z)
+returned +5.75% candidate versus +2.37% baseline mean window return over 438 test windows and beat baseline
+5/5 folds, but was positive only 3/5 with modal parameters in 3/5. No automatic evaluator result may change
+production, and no manual promotion should be recorded unless every evidence gate clears.
 
 ### 4. Decide the Profit-Reversal Exit Policy From Prospective Evidence
 
@@ -912,15 +993,18 @@ Remaining work:
 - Compare accepted filled orders with accepted no-fills by settlement window.
 - Measure independent-paper/live agreement and disagreements against the separately stored matched-live overlay; never substitute the selected live fill for the independent paper result.
 - Recalibrate maker fill probability only after enough prospective fills and no-fills exist under `paper-managed-maker-trade-queue-v2`.
-- Keep production `maker` execution unless maker/taker shadow results pass strict held-out gates. The review surface now clusters taker shadows by settlement window, compares them with the same intents' actual maker execution, and separates the active buy-policy cohort from historical policy mixtures; the prior unclustered +24.7% headline was not deployment-grade evidence.
-- **The concrete gate for flipping to `adaptive`, measured 2026-08-18: the shadow's taker-flagged orders must show a materially worse maker outcome than its maker-flagged ones. They do not.** Over 618 orders carrying an `entryExecutionDecision` (74 flagged taker, all executed as maker), the fill-selection gap is −11.2pp on taker-flagged against −13.1pp on maker-flagged, with identical fill rates (51% against 50%). The recommendation shows **no discriminating power on the thing that decides it** — the gap is slightly smaller where it says taker, which is the wrong way round. Re-grade when the flagged count roughly doubles; `MIN_TAKER_MAKER_SAMPLES=30` means the per-cohort recommendation is itself running on small samples. Until that reverses, flipping `adaptive` would be acting on a signal with no demonstrated skill.
-- A wholesale switch to taking is separately measured and **not supported**: see
-  [reports/take-the-ask-2026-08-18.md](reports/take-the-ask-2026-08-18.md). The maker discount is worth
-  +3.4pp live and +1.5pp paper, and taking everything changes the *rate* not at all — its apparent cash
-  gain comes from deploying about twice the capital, which the budget cannot do. The selective per-order
-  rule above is the only version of this question still open.
+- Execution identity is resolved as `adaptive` under `maker-taker-adaptive-one-miss-slippage1c-v3`. The
+  previous `taker` label, permissive local threshold overrides, and prose claim of unconditional taking are
+  superseded. Historical v21 rows remain stamped as they executed and must not be pooled with v2.
+- The pre-decision shadow had shown no discrimination: over 618 stamped orders on 2026-08-18, 74 were
+  taker-flagged but all executed maker; flagged and unflagged fill rates were 51% and 50%, and fill-selection
+  gaps were −11.2pp and −13.1pp. That evidence did not authorize adaptive execution; the 2026-08-19 change
+  is an explicit operator execution decision with its strict limits stated, not a claimed promotion.
+- A wholesale switch to taking remains only the counterfactual in
+  [reports/take-the-ask-2026-08-18.md](reports/take-the-ask-2026-08-18.md). It is not the deployed policy.
 
-Forbidden for now: depth-aware sizing, more retries, taker promotion, stale maker-to-taker fallback, or queue-aware live gates.
+Forbidden for now: depth-aware sizing, a third attempt, fallback after anything except an authoritative
+maker zero-fill, bypassing any of the four absolute fallback gates, or queue-aware live gates.
 
 ### 6. Verify First Organic Live Switch and Continue Exit Verification
 

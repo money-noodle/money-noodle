@@ -1,4 +1,4 @@
-import { venueFeeRate, ENTRY_FEE_ROLE } from './prediction-policy';
+import { venueFeeRate } from './prediction-policy';
 import type { ExecutionMode, PaperOrder } from './types';
 
 /**
@@ -82,7 +82,7 @@ const mean = (values: number[]) => values.length ? values.reduce((sum, value) =>
  */
 function returnAtPrice(order: PaperOrder, price: number): number | null {
   if (!(price > 0) || !(price < 1) || !(order.quantity > 0)) return null;
-  const feeRate = venueFeeRate(order.venue, price, ENTRY_FEE_ROLE);
+  const feeRate = venueFeeRate(order.venue, price, 'taker');
   const stakeCents = order.quantity * (price + feeRate) * 100;
   if (!(stakeCents > 0)) return null;
   // Payout is a property of the settled outcome, not of the entry price.
@@ -112,7 +112,7 @@ const askPriceFor = (order: PaperOrder): number => order.issuanceAskPrice
 function makerReturnFor(order: PaperOrder): number | null {
   const bid = order.bidPrice;
   if (!(bid > 0) || !(bid < 1) || !(order.quantity > 0)) return null;
-  const feeRate = venueFeeRate(order.venue, bid, ENTRY_FEE_ROLE);
+  const feeRate = venueFeeRate(order.venue, bid, 'maker');
   const makerStakeCents = order.quantity * (bid + feeRate) * 100;
   if (!(makerStakeCents > 0)) return null;
   // Payout is a property of the settled outcome, not of the entry price.

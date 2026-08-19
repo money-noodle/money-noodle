@@ -10,7 +10,7 @@ import type { PositionSide } from './types';
  *
  * Pure and I/O free. See docs/long-shot-policy-design.md §10.
  */
-export const HOLD_SENTINEL_VERSION = 'long-shot-hold-v1';
+export const HOLD_SENTINEL_VERSION = 'long-shot-hold-v2';
 
 /** Independent settlement windows required before the first manual review. Not a promotion criterion. */
 export const HOLD_SENTINEL_MINIMUM_REVIEW_WINDOWS = 60;

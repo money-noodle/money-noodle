@@ -116,7 +116,7 @@ Call sites and their correct role:
 | `applyExitObservation` | taker | live's reduce-only exit reports `liquidityRole: 'taker'` (`placeKalshiSell`, `lib/live-orders.ts`) |
 | `bestSwitch` | taker | same |
 | `buildOrder` minimum-size probe | taker | sizing headroom, matches the reserve |
-| `longShotCycle` entry | taker | its entry is an explicit price-capped taker IOC |
+| `runLongShot` entry | taker | its entry is an explicit price-capped taker IOC |
 | `longShotExitFeeCents` | taker | reduce-only IOC |
 
 Then paper mirrors live's release: settle the fill at the maker rate and return

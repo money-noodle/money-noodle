@@ -341,14 +341,15 @@ export async function placeKalshiBuy(input: {
 }
 
 /**
- * Opens selected-side exposure with a marketable IOC limit capped at the issuance-approved ask.
- * This is never an uncapped market order: a moved-away quote fails before submission, and IOC leaves
+ * Opens selected-side exposure with a marketable IOC limit capped at the caller's all-in reserved maximum.
+ * This is never an uncapped market order: a quote beyond that maximum fails before submission, and IOC leaves
  * no resting remainder. The caller must durably persist the client and venue IDs exactly as for maker.
  */
 export async function placeKalshiTakerBuy(input: {
   ticker: string; positionSide?: PositionSide; maximumPriceCents: number; count: number;
   clientOrderId: string; onAccepted?: (venueOrderId: string) => Promise<void>;
   onObservation?: (observation: EntryExecutionObservation) => Promise<void>;
+  authorizeQuote?: (quote: { bid: number; ask: number; spread: number }) => string | undefined;
 }): Promise<LiveFill> {
   if (!liveTradingEnabled()) throw new Error('Live trading is disabled.');
   const positionSide = input.positionSide ?? 'UP';
@@ -366,6 +367,8 @@ export async function placeKalshiTakerBuy(input: {
   const maximumDollars = input.maximumPriceCents / 100;
   const limit = floorToValidKalshiPrice(Math.min(maximumDollars, quote.ask + 1e-8), quote.ranges);
   if (limit + 1e-9 < quote.ask) throw new Error(`Taker not submitted: current ${positionSide} ask ${(quote.ask * 100).toFixed(1)}c exceeds approved ${(maximumDollars * 100).toFixed(1)}c cap.`);
+  const refusal = input.authorizeQuote?.({ bid: quote.bid, ask: quote.ask, spread: quote.ask - quote.bid });
+  if (refusal) throw new Error(`Taker not submitted: refreshed quote no longer clears execution policy. ${refusal}`);
   await emit({
     at: new Date().toISOString(), event: 'create_quote', selectedBid: quote.bid, selectedAsk: quote.ask,
     spread: quote.ask - quote.bid, limitPrice: limit,

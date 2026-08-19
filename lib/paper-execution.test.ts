@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_FILLABLE_ASK, estimatePaperFill, groupedRecentOrders, venueFeeCents } from './paper-execution';
+import { MAX_FILLABLE_ASK, applyTakerQuoteMovementReserve, estimatePaperFill, groupedRecentOrders, venueFeeCents } from './paper-execution';
 import type { PaperOrder } from './types';
-import { MAX_ENTRY_PRICE, MIN_ENTRY_PRICE, MIN_NET_EDGE, bestEntry, venueFeeRate, ENTRY_FEE_ROLE } from './prediction-policy';
+import { MAX_ENTRY_PRICE, MIN_ENTRY_PRICE, MIN_NET_EDGE, bestEntry, venueFeeRate, ENTRY_ADMISSION_FEE_ROLE } from './prediction-policy';
 
 const liveAttempt = (patch: Partial<PaperOrder> = {}): PaperOrder => ({
   id: 'live:XRP:close', logicalOrderId: 'live:XRP:close', attemptNumber: 1, executionMode: 'live',
@@ -50,6 +50,18 @@ describe('paper execution fills', () => {
     expect(estimatePaperFill(100, 0, 'polymarket')).toBeNull();
   });
 
+  it('sizes taker quantity and fees against the one-cent worst-case cap', () => {
+    const taker = liveAttempt({ askPrice: 0.28, issuanceAskPrice: 0.28, approvedMaximumPrice: 0.28 });
+    expect(applyTakerQuoteMovementReserve(taker, 100)).toBeUndefined();
+    const worstCase = estimatePaperFill(100, 0.29, 'kalshi')!;
+    expect(taker.approvedMaximumPrice).toBeCloseTo(0.29, 12);
+    expect(taker).toMatchObject({
+      quantity: worstCase.quantity, requestedQuantity: worstCase.quantity, stakeCents: worstCase.stakeCents,
+      feeCents: worstCase.feeCents, potentialPayoutCents: worstCase.potentialPayoutCents,
+    });
+    expect(taker.stakeCents).toBeLessThanOrEqual(100);
+  });
+
   it('groups maker retries by logical intent and marks a recovered fill', () => {
     const first = liveAttempt({ noFillReason: 'post_only_race' });
     const retry = liveAttempt({
@@ -64,10 +76,19 @@ describe('paper execution fills', () => {
     ]);
   });
 
-  it('infers historical rested and post-only no-fill classifications for presentation', () => {
+  it('infers historical no-submission, rested, and post-only classifications without rewriting them', () => {
     const crossed = liveAttempt({ reason: 'Post-only price crossed after three quote refreshes.' });
     const rested = liveAttempt({ id: 'live:BNB:close', logicalOrderId: 'live:BNB:close', symbol: 'BNB', venueOrderId: 'venue' });
-    expect(groupedRecentOrders([crossed, rested]).map((order) => order.noFillReason)).toEqual(['post_only_race', 'rested_no_fill']);
+    const moved = liveAttempt({
+      id: 'live:HYPE:close', logicalOrderId: 'live:HYPE:close', symbol: 'HYPE', noFillReason: 'ioc_no_fill',
+      reason: 'Taker not submitted: current UP ask 29.0c exceeds approved 28.0c cap.',
+    });
+    const acceptedIoc = liveAttempt({
+      id: 'live:ETH:close', logicalOrderId: 'live:ETH:close', symbol: 'ETH', venueOrderId: 'ioc',
+      liquidityRole: 'taker', noFillReason: undefined,
+    });
+    expect(groupedRecentOrders([crossed, rested, moved, acceptedIoc]).map((order) => order.noFillReason))
+      .toEqual(['post_only_race', 'rested_no_fill', 'pre_submit_quote_moved', 'ioc_no_fill']);
   });
 
   it('refuses fills at or above the $1 payout, which are a guaranteed loss', () => {
@@ -80,7 +101,7 @@ describe('paper execution fills', () => {
     // The price ceiling is permissive, so edge after fees is what actually binds: even a maximally
     // confident model cannot clear the bar near the top of the range.
     const mostConfident = 0.97;
-    const dearest = mostConfident - MIN_NET_EDGE - venueFeeRate('kalshi', 0.9, ENTRY_FEE_ROLE);
+    const dearest = mostConfident - MIN_NET_EDGE - venueFeeRate('kalshi', 0.9, ENTRY_ADMISSION_FEE_ROLE);
     // **Reversed at v20.** With the floor at -5pp the expected-value test no longer binds before the
     // price ceiling: the dearest price a 97% belief can clear is above MAX_ENTRY_PRICE, so the 97c
     // ceiling is now a live constraint rather than a backstop the EV gate reaches first.

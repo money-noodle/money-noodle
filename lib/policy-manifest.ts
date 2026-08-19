@@ -41,10 +41,10 @@ const history: PolicyManifestHistoryEntry[] = [
     version: 'buy-binary-edge-netminus5-nocap-quality50-owned55-price5to97-late30-persist2of15-v21',
     activatedAt: '2026-08-19T00:45:00.000Z',
     status: 'active',
-    summary: 'Promoted the two-snapshot persistence candidate on its committed sentinel, and switched entries from resting a maker order to taking the ask.',
+    summary: 'Promoted the two-snapshot persistence candidate and configured gated maker/taker execution; the intended unconditional taker switch was not implemented.',
     changes: [
       'REQUIRED_QUALIFYING_SNAPSHOTS 3 -> 2 and REQUIRED_OBSERVATION_SPAN_MS 30s -> 15s, promoting persistence-two-consecutive-v1',
-      'Entry execution style maker -> taker (MONEY_NOODLE_ENTRY_EXECUTION_MODE); every accepted decision fills at the ask',
+      'Configured MONEY_NOODLE_ENTRY_EXECUTION_MODE=taker; evaluateEntryExecutionPolicy still retains maker whenever any strict taker gate fails, so this is selective rather than take-every-ask execution',
       'No change to the edge bounds, side floor, quality floor, price band, warm-up or late cutoff that v20 set',
       'Known cost accepted: the version bump discards the accumulated adaptive-regime windows and re-warms',
     ],
@@ -74,9 +74,10 @@ const history: PolicyManifestHistoryEntry[] = [
     // the half the maker was adversely selected out of. Capital deployed roughly doubles. Arm C is the
     // best arm measured, not a profitable one — it is still negative per dollar.
     //
-    // The two halves ship together deliberately: the persistence sentinel's evidence is ask-priced and its
-    // maker-touch instrumentation carries one observation, so an ask-priced counterfactual only describes
-    // the desk once the desk takes the ask.
+    // The two halves were intended to ship together because the persistence evidence is ask-priced. The
+    // 2026-08-19 audit found that `taker` and `adaptive` execute the same gated recommendation, so the
+    // unconditional arm C described above was not actually deployed. History states the discrepancy rather
+    // than rewriting the counterfactual rationale as though it happened.
     evidence: [
       'data/persistence-candidate.json · 553 resolved incremental windows, +13.2% +/-8.4; never-eligible half +23.5% +/-13.0',
       'npm run analyze:take-the-ask · v19 arm C -3.7% live and -1.8% paper against -13.1% and -24.6% as traded',
@@ -323,10 +324,15 @@ export function activePolicyManifest(providers: TradingProviderDescriptor[], mod
         { label: 'Assets withheld', value: excluded.join(', ') || 'None' },
         { label: 'Applies to', value: 'Live and paper identically' },
       ]),
-      component('execution', 'Entry execution', ENTRY_EXECUTION_POLICY_VERSION, 'production', 'Maker-only live execution with separately measured taker shadows.', [
-        { label: 'Production mode', value: executionMode === 'maker' ? 'Managed post-only maker' : executionMode === 'adaptive' ? 'Adaptive: may act on the taker recommendation' : 'Taker, retaining every hard gate' },
+      component('execution', 'Entry execution', ENTRY_EXECUTION_POLICY_VERSION, 'production', executionMode === 'maker'
+        ? 'Maker-only live execution with separately measured taker shadows.'
+        : 'Adaptive live execution: strict attempt-1 selection, then one fresh capped taker fallback after an authoritative maker miss.', [
+        { label: 'Production mode', value: executionMode === 'maker' ? 'Managed post-only maker' : 'Adaptive maker/taker' },
+        { label: 'Attempt 1', value: executionMode === 'maker' ? 'Managed maker; taker recommendation is shadow-only' : 'Taker only when all six strict gates clear; otherwise managed maker' },
+        { label: 'Taker spread ceiling', value: '2¢; the separate 10¢ ceiling rejects the entry entirely' },
+        { label: 'Pre-submit ask movement', value: '≤1.0¢; fresh quote re-runs gates, all-in reserve uses worst price' },
+        { label: 'Attempt 2', value: executionMode === 'adaptive' ? 'After maker zero-fill: two new snapshots over 15s, four absolute gates, one capped IOC' : 'Existing bounded maker retry behavior' },
         { label: 'Live attempts per contract', value: `${maximumLiveMakerAttempts()}` },
-        { label: 'Taker', value: executionMode === 'maker' ? 'Observation-only recommendation; capped IOC primitive' : 'Executable when every strict gate clears' },
       ]),
       component('exit', 'Standalone exits', standaloneExitPolicyVersion(), 'production', 'Reduce-only value exits, with armed profit reversal recorded whether or not it may sell.', [
         { label: 'Strict value margin', value: `${STRICT_EXIT_MIN_GAIN_CENTS}¢` },

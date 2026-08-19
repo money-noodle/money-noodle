@@ -108,7 +108,7 @@ async function update(cycle: HoldSentinelCycle): Promise<void> {
   const sentinels = [...byId.values()]
     .sort((left, right) => Date.parse(right.closesAt) - Date.parse(left.closesAt) || left.id.localeCompare(right.id))
     .slice(0, MAX_SENTINELS);
-  await writeStore({ ...store, updatedAt: cycle.observedAt, sentinels });
+  await writeStore({ ...store, sentinelVersion: HOLD_SENTINEL_VERSION, updatedAt: cycle.observedAt, sentinels });
 }
 
 /** Serialized behind its own queue; evidence collection never delays a cycle that has money in it. */

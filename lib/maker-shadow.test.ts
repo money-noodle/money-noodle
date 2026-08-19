@@ -22,10 +22,10 @@ const order = (over: Partial<PaperOrder> = {}): PaperOrder => {
 };
 
 describe('maker-execution shadow', () => {
-  it('prices the same settled outcome at the bid, which beats the ask on a winner', () => {
+  it('prices the same settled outcome at the fee-free maker bid, which beats the taker ask', () => {
     const [row] = buildMakerShadow([order()], 'paper').rows;
-    expect(row.askReturn).toBeCloseTo(1.0, 2);          // 500c staked, 1000c returned
-    expect(row.makerReturn!).toBeGreaterThan(row.askReturn); // cheaper entry, same payout
+    expect(row.askReturn).toBeCloseTo(1.0, 2); // 500c actual ask stake, 1000c returned
+    expect(row.makerReturn).toBeCloseTo(1.5, 9); // 10 × 40c maker purchase, zero maker fee
   });
 
   it('discounts by the chance the resting order never traded', () => {

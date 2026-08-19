@@ -108,12 +108,12 @@ function MarketPanel({ provider, market, equityCents, blocked, onSaved }: {
       </div>
     </div>
 
-    {overAllocated && <p className="mt-2 flex items-center gap-1 text-[10px] text-red-400">
+    {overAllocated && <p className="mt-2 flex items-center gap-1 text-[10px] text-loss">
       <AlertTriangle className="size-3"/>Shares must sum to at most 100%.
     </p>}
-    {error && <p className="mt-2 text-[10px] text-red-400">{error}</p>}
+    {error && <p className="mt-2 text-[10px] text-loss">{error}</p>}
 
-    {changed && !blocked && !overAllocated && <p className="mt-2 flex items-start gap-1 text-[10px] leading-relaxed text-amber-300">
+    {changed && !blocked && !overAllocated && <p className="mt-2 flex items-start gap-1 text-[10px] leading-relaxed text-warn">
       <AlertTriangle className="mt-0.5 size-3 shrink-0"/>
       <span>Saving re-funds every strategy in this market: each one&apos;s equity restarts at the amount above,
         and any drawdown halt clears. Results from the previous funding period are kept and reported separately.</span>
@@ -167,14 +167,14 @@ export function AllocationDialog({ variant = 'badge' }: { variant?: 'button' | '
       </DialogHeader>
 
       {loading && <p className="flex items-center gap-2 py-6 text-[11px] text-muted-foreground"><Loader2 className="size-3 animate-spin"/>Loading…</p>}
-      {error && <p className="py-4 text-[11px] text-red-400">{error}</p>}
+      {error && <p className="py-4 text-[11px] text-loss">{error}</p>}
 
       {data && !loading && <div className="space-y-4">
         {/* Named blockers rather than a greyed-out button: each one needs a different action. */}
-        {blocked && <div className="rounded-lg border border-amber-300/30 bg-amber-300/[.04] p-3">
-          <p className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-300"><Lock className="size-3"/>Allocation is read-only right now</p>
+        {blocked && <div className="rounded-lg border border-warn/30 bg-warn/[.04] p-3">
+          <p className="flex items-center gap-1.5 text-[11px] font-semibold text-warn"><Lock className="size-3"/>Allocation is read-only right now</p>
           <ul className="mt-1.5 space-y-1">
-            {data.blockers.map((reason) => <li key={reason} className="text-[10px] leading-relaxed text-amber-300/90">· {reason}</li>)}
+            {data.blockers.map((reason) => <li key={reason} className="text-[10px] leading-relaxed text-warn/90">· {reason}</li>)}
           </ul>
         </div>}
 
@@ -198,7 +198,7 @@ export function AllocationDialog({ variant = 'badge' }: { variant?: 'button' | '
               </div>
               <div className="flex gap-1">
                 <Badge variant="outline" className={cn('text-[9px]', provider.paperCapable ? 'text-muted-foreground' : 'opacity-50')}>paper</Badge>
-                <Badge variant="outline" className={cn('text-[9px]', provider.liveCapable ? 'border-primary/25 text-primary' : 'opacity-50')}>live</Badge>
+                <Badge variant="outline" className={cn('text-[9px]', provider.liveCapable ? 'border-live/25 text-live' : 'opacity-50')}>live</Badge>
               </div>
             </div>
             <div className="mt-3 space-y-2">

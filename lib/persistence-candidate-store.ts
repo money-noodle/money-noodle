@@ -2,7 +2,6 @@ import 'server-only';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { venueFeeFraction } from './venue-fee-schedule';
-import { ENTRY_FEE_ROLE } from './prediction-policy';
 import type { MakerObservationSource, MakerObservedFillSummary, PersistenceCandidateIntent, PersistenceCandidateReport } from './types';
 
 export const TWO_SNAPSHOT_PERSISTENCE_CANDIDATE_VERSION = 'persistence-two-consecutive-v1';
@@ -188,14 +187,12 @@ async function resolveIntent(intent: PersistenceCandidateIntent): Promise<boolea
   intent.makerExpectedProfitPerContract = Number.isFinite(intent.makerFillProbability)
     ? makerReturn * intent.makerFillProbability!
     : undefined;
-  // Return at the price the simulated post actually paid, which is a rung of the ladder rather than the
-  // bid it started from. The fee role is `ENTRY_FEE_ROLE` like every other figure in this store, so the
-  // two are comparable; that role is known wrong and is tracked in docs/entry-gate-fee-design.md, not
-  // quietly corrected here where it would flatter this benchmark by about 1.5pp.
+  // Historical persistence rows stamped maker economics under the old taker-role convention. The lane is
+  // retired, so preserve that durable meaning rather than rewriting a completed cohort during resolution.
   if (intent.makerLadderFill === 'filled' && Number.isFinite(intent.makerLadderFillCents)) {
     const fillPrice = intent.makerLadderFillCents! / 100;
     if (fillPrice > 0 && fillPrice < 1) {
-      intent.makerRealizedProfitPerContract = (won ? 1 : 0) - fillPrice - venueFeeFraction('kalshi', fillPrice, ENTRY_FEE_ROLE);
+      intent.makerRealizedProfitPerContract = (won ? 1 : 0) - fillPrice - venueFeeFraction('kalshi', fillPrice, 'taker');
     }
   }
   return true;
@@ -237,7 +234,7 @@ export function applyMakerPostObservations(
       const fillPrice = intent.makerLadderFillCents! / 100;
       if (fillPrice > 0 && fillPrice < 1) {
         intent.makerRealizedProfitPerContract = (intent.outcome === intent.side ? 1 : 0)
-          - fillPrice - venueFeeFraction('kalshi', fillPrice, ENTRY_FEE_ROLE);
+          - fillPrice - venueFeeFraction('kalshi', fillPrice, 'taker');
       }
     }
     applied += 1;

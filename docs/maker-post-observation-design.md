@@ -53,8 +53,10 @@ A resting entry is **not a static post**.
   `MANAGED_MAKER_HORIZON_SECONDS`, one every 2 seconds, ratcheting the limit up a linear ramp from the bid
   toward the passive ceiling on checks 0–4. The price is monotonically non-decreasing. The 6th check is
   terminal-only.
-- Live retries once by default (`maximumLiveMakerAttempts`), paper twice, with a 30s cooldown and no retry
-  inside the final 120 seconds (`lib/maker-retry-policy.ts`).
+- At the time of this v1 observation design, live and paper could each retry maker with a 30s cooldown and
+  no retry inside the final 120 seconds (`lib/maker-retry-policy.ts`). **Superseded for adaptive live on
+  2026-08-19:** live attempt 2 is now the fresh post-miss capped taker fallback in
+  `docs/adaptive-entry-fallback-design.md`; paper retains its independent maker simulation behavior.
 
 Simulating a static post at the bid would understate fills, because production climbs toward the ask as its
 horizon expires. **The ladder is the primary arm.** The static post is recorded alongside it as a
@@ -211,3 +213,20 @@ immutable ledger, requiring committed sentinel evidence, the stated minimum of i
 windows, a clustered return clearing a stated threshold, and a written reason (AGENTS §7, SPEC §12.5).
 
 Review timing is the maintainer's call, taken daily against the accruing cohort.
+
+## 11. Retirement, 2026-08-19
+
+The maintainer approved retirement after v21 adopted the candidate's two-snapshot/15-second maturity rule.
+At 2026-08-19T04:15Z the active-policy store contained 76 candidate intents; all 76 were already production
+eligible at candidate time, so the prospective comparison had zero incremental intents. The valid
+`live-2s` observer had scored 46 of them (17 simulated fills and 29 misses), but those observations could
+no longer answer the candidate's stated production-versus-candidate question.
+
+The runtime trigger for `persistence-two-consecutive-v1` and its detached maker observer is therefore
+removed. Runtime shutdown waited for an open funded position to settle; the final store at
+2026-08-19T04:35Z contained 80 v21 intents, all production-eligible, with 49 valid `live-2s` observations
+(17 simulated fills and 32 misses) and no unresolved intent. Existing intents, observations, settlement
+resolution, report code, and append-only history stay readable and are not rewritten. The stopped standalone 60-second depth file remains labelled as permissive
+historical evidence because its schema discarded `takerSide`; its package command is removed so the invalid
+schema is not accidentally restarted. Any future persistence or depth collection requires a newly agreed,
+versioned prospective design rather than re-enabling this lane.

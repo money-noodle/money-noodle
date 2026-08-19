@@ -157,6 +157,11 @@ Worked examples for these rules: `reports/edge-policy-margin-review-2026-08-16.m
 6. **A null result is a result.** Write it up with equal care and say what would change the answer.
 7. **Name what a gate actually does.** Some entry gates are inert — removing them changes no admitted row. Do not
    describe those as risk controls.
+8. **Evaluate; do not advocate.** Separate findings, assumptions, unknowns, tradeoffs, and options. Help the
+   maintainer judge merit without turning incomplete evidence into a strong recommendation.
+9. **Explore before rejecting.** When one formulation fails, identify why and test materially different assumptions
+   or routes to the same goal. Favor deep, creative analysis over premature closure without relaxing safety; there is
+   always another way to explore.
 
 Analysis scripts are `scripts/analyze-*.mjs`, run via `npm run analyze:*`, and read durable data read-only — never
 writing to `data/`, never placing an order. Open each with a comment stating what it measures, the correction that
@@ -167,15 +172,18 @@ change is made and what the evidence authorizes. Never delete a superseded repor
 
 - **"I don't know" is often the required answer.** Say what you checked and what would settle it. Never offer a
   confident reconstruction.
-- **Quote before you assert.** Read every threshold, version, figure, or gate effect out of its source as you
-  write it — never from session memory, never from what such a system "usually" does.
+- **Read, recalculate, then assert.** Read facts from their source and, for every quantitative evaluation, reload
+  the durable inputs and rerun the calculation in the current session — never rely on memory, conversation, or an
+  old result as current. Surface the method, cohort, correction, inputs, exclusions, auditable intermediate totals,
+  and result.
+- **Data before judgment.** Evaluative terms such as *promising*, *weak*, *better*, *safer*, and *unlikely* require
+  freshly calculated support. Otherwise label them as hypotheses or open questions and name the resolving measurement.
 - **Cite the symbol, not the line** — function, constant, or type plus its file; `SPEC.md §N` and
   `reports/<name>.md` for prose. Line numbers belong only in messages to the user.
 - **Cite `STATUS.md` and `reports/` figures with their date, in the past tense.** For a current number, read the
   durable file or run the analysis script.
 - **Cite every claim**, to the bar the `evidence` array in `lib/policy-manifest.ts` enforces.
 - **Verify after drafting.** Reread and find the quote behind each claim; retract the rest or rewrite it as open.
-- **Show method, cohort, and correction before the number.**
 - **Report disagreements; do not smooth them.** The exact ledger and the whole-cent budget may legitimately
   differ, as may the live and paper books. Say which view you used.
 - **Restrict to evidence in this repo.** Take venue mechanics — fees, settlement, increments, rate limits — from
@@ -214,11 +222,19 @@ policy, budget, or order. The dashboard's probabilities must never become model-
 ## 9. Commands
 
 ```bash
-npm run dev          # dashboard + the background collector
+npm run build        # compile; run before starting or restarting the server
+npm run start        # how the server is run: the dashboard and the background collector
+npm run dev          # testing only — never the way the server is left running
 npm run typecheck    # tsc --noEmit
 npm test             # vitest run
-npm run build
 ```
+
+**Writing code never requires stopping the server.** Do not kill, stop, or restart a running server in order to
+edit, typecheck, or test — edit the source and leave it running. Restart only when the maintainer asks, or when
+a change has to take effect in the running process; then `npm run build`, then `npm run start`.
+
+**`npm run build` + `npm run start` is the server.** `npm run dev` is for testing a change interactively and is
+torn down when that test is done; it is never the process left serving.
 
 **Run `npm run typecheck` and `npm test` before reporting a change complete**, and report a failure with its
 output rather than a summary. §8's rule applies to whatever they say: a failing invariant test means the change

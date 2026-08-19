@@ -54,6 +54,14 @@ export interface SignalPersistenceState {
   observations: SignalObservation[];
 }
 
+/** Only observations strictly after an authoritative execution boundary may authorize fallback. */
+export function signalPersistenceAfter(
+  state: SignalPersistenceState | undefined, after: string,
+): SignalPersistenceState | undefined {
+  if (!state || !Number.isFinite(Date.parse(after))) return undefined;
+  return { ...state, observations: state.observations.filter((observation) => Date.parse(observation.at) > Date.parse(after)) };
+}
+
 export interface SignalEligibility {
   eligible: boolean;
   reason: string;

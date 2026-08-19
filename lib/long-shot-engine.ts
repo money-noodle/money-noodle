@@ -150,6 +150,7 @@ export function buildLongShotOrder(input: LongShotOrderInput): PaperOrder {
     feeCents: input.fill.feeCents,
     potentialPayoutCents: input.fill.potentialPayoutCents,
     entryGeneration: input.entryGeneration,
+    entryTargetCents: input.settings.entryMarkCents,
     exitTargetCents: input.exitMarkCents,
     strategyPolicyVersion: longShotPolicyVersion(input.settings),
     firstTouchAskCents: input.firstTouchAskCents,

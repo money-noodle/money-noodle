@@ -85,7 +85,7 @@ function Stat({ label, value, hint, tone }: { label: string; value: string; hint
   return <div className="rounded-lg border bg-background/40 p-2">
     <p className="text-[8px] uppercase text-muted-foreground">{label}</p>
     <p className={cn('font-mono text-[11px]',
-      tone === 'good' && 'text-primary', tone === 'bad' && 'text-red-400', tone === 'warn' && 'text-amber-300')}>{value}</p>
+      tone === 'good' && 'text-gain', tone === 'bad' && 'text-loss', tone === 'warn' && 'text-warn')}>{value}</p>
     {hint && <p className="mt-0.5 text-[8px] text-muted-foreground">{hint}</p>}
   </div>;
 }
@@ -93,14 +93,14 @@ function Stat({ label, value, hint, tone }: { label: string; value: string; hint
 function TrackPanel({ track, breakEven }: { track: Track; breakEven: number }) {
   const report = track.report;
   const overall = report.overall;
-  return <div className={cn('rounded-xl border p-4', track.halted && 'border-red-400/25 bg-red-400/[.03]')}>
+  return <div className={cn('rounded-xl border p-4', track.halted && 'border-loss/25 bg-loss/[.03]')}>
     <div className="flex flex-wrap items-center justify-between gap-2">
       <p className="text-[11px] font-semibold uppercase tracking-wide">{track.mode}</p>
       {track.halted
-        ? <Badge variant="outline" className="border-red-400/30 text-red-400">halted</Badge>
+        ? <Badge variant="outline" className="border-loss/30 text-loss">halted</Badge>
         : <Badge variant="outline" className="text-muted-foreground">ticket {cents(track.ticketCents)}</Badge>}
     </div>
-    {track.halted && track.haltReason && <p className="mt-2 text-[10px] leading-relaxed text-red-400/90">{track.haltReason}</p>}
+    {track.halted && track.haltReason && <p className="mt-2 text-[10px] leading-relaxed text-loss/90">{track.haltReason}</p>}
 
     <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
       <Stat label="Equity" value={cents(track.equityCents)} hint={`halts under ${cents(track.haltThresholdCents)}`}/>
@@ -174,7 +174,7 @@ function HoldComparison({ hold, executed }: { hold: LongShotResponse['hold']; ex
           {hold.roundTrip.windows} of {hold.reviewWindowsRequired} independent windows before first review ·
           a floor, since a trigger holds no position for the one-second poll to sample
         </p>
-      : <p className="mt-2 text-[9px] leading-relaxed text-amber-300/90">
+      : <p className="mt-2 text-[9px] leading-relaxed text-warn/90">
           No resolved trigger carries an observed peak bid, so the round trip cannot yet be distinguished
           from the hold. This is a gap in the evidence, not a result of zero — treat the comparison as
           unmeasured until peaks accumulate.
@@ -196,7 +196,7 @@ function HoldComparison({ hold, executed }: { hold: LongShotResponse['hold']; ex
         <Stat label="Cash effect" value={cents(arm.totalCents)}
           tone={arm.totalCents > 0 ? 'good' : arm.totalCents < 0 ? 'bad' : undefined}/>
       </div>
-      {(arm.unresolvedCounterfactual > 0 || arm.exitAttemptedUnsold > 0) && <p className="mt-1 text-[9px] text-amber-300/90">
+      {(arm.unresolvedCounterfactual > 0 || arm.exitAttemptedUnsold > 0) && <p className="mt-1 text-[9px] text-warn/90">
         Excluded: {arm.unresolvedCounterfactual > 0 && `${arm.unresolvedCounterfactual} awaiting settlement`}
         {arm.unresolvedCounterfactual > 0 && arm.exitAttemptedUnsold > 0 && ' · '}
         {arm.exitAttemptedUnsold > 0 && `${arm.exitAttemptedUnsold} with an unclosed venue exit`}
@@ -305,17 +305,17 @@ function BandsPanel({ report, onSaved }: { report: BandReport; onSaved: (next: L
                     <td className="py-1 text-right">{rate(measured.touchRate)}</td>
                     <td className="py-1 text-right text-muted-foreground">{rate(measured.breakEvenRate)}</td>
                     <td className={cn('py-1 text-right',
-                      measured.ratio !== null && measured.ratio >= 1 ? 'text-primary' : 'text-muted-foreground')}>
+                      measured.ratio !== null && measured.ratio >= 1 ? 'text-gain' : 'text-muted-foreground')}>
                       {measured.ratio === null ? '—' : measured.ratio.toFixed(2)}
                     </td>
                     <td className={cn('py-1 text-right whitespace-nowrap',
                       measured.meanReturn === null ? 'text-muted-foreground'
-                        : measured.meanReturn > 0 ? 'text-primary' : 'text-red-400')}>
+                        : measured.meanReturn > 0 ? 'text-gain' : 'text-loss')}>
                       {percent(measured.meanReturn)}
                       {measured.standardError !== null && <span className="text-muted-foreground">
                         {' ±'}{(measured.standardError * 100).toFixed(0)}
                       </span>}
-                      {measured.ungraded > 0 && <span className="text-amber-300/80" title={`${measured.ungraded} candidates await settlement`}>
+                      {measured.ungraded > 0 && <span className="text-warn/80" title={`${measured.ungraded} candidates await settlement`}>
                         {' '}·{measured.ungraded}
                       </span>}
                     </td>
@@ -326,7 +326,7 @@ function BandsPanel({ report, onSaved }: { report: BandReport; onSaved: (next: L
               <td className="py-1 pl-2 text-right">
                 <button type="button" title="Remove band" aria-label="Remove band"
                   onClick={() => { setDraft((bands) => bands.filter((_, position) => position !== index)); setDirty(true); }}
-                  className="text-muted-foreground hover:text-red-400"><Trash2 className="size-3"/></button>
+                  className="text-muted-foreground hover:text-loss"><Trash2 className="size-3"/></button>
               </td>
             </tr>;
           })}
@@ -348,11 +348,11 @@ function BandsPanel({ report, onSaved }: { report: BandReport; onSaved: (next: L
           dirty ? 'border-primary/40 text-primary hover:bg-primary/10' : 'text-muted-foreground', saving && 'opacity-60')}>
         {saving && <Loader2 className="size-3 animate-spin"/>}Save and measure
       </button>
-      {error && <span className="text-[10px] text-red-400">{error}</span>}
+      {error && <span className="text-[10px] text-loss">{error}</span>}
     </div>
 
     <p className="mt-3 text-[9px] leading-relaxed text-muted-foreground">
-      <span className="text-amber-300/90">{report.savedCount} configuration{report.savedCount === 1 ? '' : 's'} evaluated so far.</span>{' '}
+      <span className="text-warn/90">{report.savedCount} configuration{report.savedCount === 1 ? '' : 's'} evaluated so far.</span>{' '}
       That is the number of comparisons this screening has made, and the bar a band must clear rises with it —
       one ratio above 1.00 among many tried is not evidence. Touch rates are floors at the sampling cadence.
       Screening may filter an idea and may never promote one: nothing here changes what the desk trades.
@@ -378,7 +378,7 @@ function NearMoneyPanel({ report }: { report: NearMoneyReport }) {
     <td className="py-1 text-right">{arm.windows}</td>
     <td className="py-1 text-right">{arm.stopRate === null ? '—' : rate(arm.stopRate)}</td>
     <td className={cn('py-1 text-right whitespace-nowrap',
-      arm.meanReturn === null ? 'text-muted-foreground' : arm.meanReturn > 0 ? 'text-primary' : 'text-red-400')}>
+      arm.meanReturn === null ? 'text-muted-foreground' : arm.meanReturn > 0 ? 'text-gain' : 'text-loss')}>
       {percent(arm.meanReturn)}
       {arm.standardError !== null && <span className="text-muted-foreground"> ±{(arm.standardError * 100).toFixed(1)}</span>}
     </td>
@@ -415,7 +415,7 @@ function NearMoneyPanel({ report }: { report: NearMoneyReport }) {
       <table className="w-full min-w-[420px] font-mono text-[10px]"><thead>{head}</thead>
         <tbody>{report.prospective.map((arm, index) => row(arm, `p${index}`, false))}</tbody></table>
     </div>
-    <p className="mt-1 text-[9px] leading-relaxed text-primary/80">
+    <p className="mt-1 text-[9px] leading-relaxed text-data/80">
       This is the only arm that could ever promote anything: the rule was written down before these windows
       closed. It starts empty and fills at roughly the market&apos;s own rate.
     </p>
@@ -478,15 +478,15 @@ export function LongShotDialog({ variant = 'button' }: { variant?: 'button' | 'b
       </DialogHeader>
 
       {loading && <p className="flex items-center gap-2 py-6 text-[11px] text-muted-foreground"><Loader2 className="size-3 animate-spin"/>Loading…</p>}
-      {error && <p className="py-4 text-[11px] text-red-400">{error}</p>}
+      {error && <p className="py-4 text-[11px] text-loss">{error}</p>}
 
       {data && !loading && <div className="space-y-4">
         {/* Arming is stated first and separately per track: enabling the policy arms paper only. */}
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="outline" className={cn('gap-1', data.enabled ? 'border-primary/25 text-primary' : 'text-muted-foreground')}>
+          <Badge variant="outline" className={cn('gap-1', data.enabled ? 'border-data/25 text-data' : 'text-muted-foreground')}>
             {data.enabled ? <ShieldCheck className="size-3"/> : <ShieldAlert className="size-3"/>}paper {data.enabled ? 'armed' : 'off'}
           </Badge>
-          {data.liveEnabled !== undefined && <Badge variant="outline" className={cn('gap-1', data.liveEnabled ? 'border-amber-300/40 text-amber-300' : 'text-muted-foreground')}>
+          {data.liveEnabled !== undefined && <Badge variant="outline" className={cn('gap-1', data.liveEnabled ? 'border-warn/40 text-warn' : 'text-muted-foreground')}>
             {data.liveEnabled ? <ShieldAlert className="size-3"/> : <ShieldCheck className="size-3"/>}live {data.liveEnabled ? 'ARMED' : 'off'}
           </Badge>}
           <Badge variant="outline" className="font-mono text-[9px] text-muted-foreground">{data.policyVersion}</Badge>

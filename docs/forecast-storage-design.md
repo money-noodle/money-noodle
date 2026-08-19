@@ -228,8 +228,14 @@ calibration set is genuinely larger and needs its own field. It gates calibratio
 **Verification gate.** Before anything switches over, compute the summary both ways over the full
 retained history and assert field-by-field equality.
 
-This gate exists as `npm run verify:forecast-storage` (read-only; `--write` also emits the shards). It
-covers the eight counters in `ForecastStorageVerification`, plus row-count and id-bijection checks.
+This gate exists as `npm run verify:forecast-storage`. Before activation it verified the legacy migration
+plan, and `--write` emitted the first shards only while no active index existed. Once the sharded layout is
+active, the default command verifies what the running reader consumes: indexed shard and rollup hashes and
+counts, terminal/open separation, duplicate identity, journal replay over the indexed open file, and direct
+full-history summary against stored rollups plus current open rows. It refuses `--write` against an active
+layout because only `sealForecastStorage` under the forecast write lock may mutate it. The migration-plan
+path still covers `ForecastStorageVerification` plus row-count and id-bijection checks when no active index
+exists.
 
 **"Byte-identical" is not an achievable bar, and the gate must not be written to demand it.** Measured
 on the full 49,583-row history, comparing `summarizePerformance(original)` against

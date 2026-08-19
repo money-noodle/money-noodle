@@ -18,11 +18,33 @@ describe('adaptive maker/taker entry policy', () => {
     expect(decision.reason).toContain('Shadow only');
   });
 
-  it('allows adaptive execution only after every strict gate clears', () => {
+  it('allows adaptive attempt 1 only after every strict gate clears', () => {
     expect(evaluateEntryExecutionPolicy({ ...base, mode: 'adaptive' }).executedStyle).toBe('taker');
+    expect(evaluateEntryExecutionPolicy({ ...base, mode: 'adaptive', currentNetEdge: 0.149 }).executedStyle).toBe('maker');
+    expect(evaluateEntryExecutionPolicy({ ...base, mode: 'adaptive', medianNetEdge: 0.09 }).executedStyle).toBe('maker');
+    expect(evaluateEntryExecutionPolicy({ ...base, mode: 'adaptive', confidence: 0.64 }).executedStyle).toBe('maker');
     expect(evaluateEntryExecutionPolicy({ ...base, mode: 'adaptive', spread: 0.03 }).executedStyle).toBe('maker');
     expect(evaluateEntryExecutionPolicy({ ...base, mode: 'adaptive', makerEvidence: { ...base.makerEvidence, accepted: 29 } }).executedStyle).toBe('maker');
-    expect(evaluateEntryExecutionPolicy({ ...base, mode: 'adaptive', medianNetEdge: 0.09 }).executedStyle).toBe('maker');
+    expect(evaluateEntryExecutionPolicy({ ...base, mode: 'adaptive', minimumTakerAdvantage: 0.081 }).executedStyle).toBe('maker');
+  });
+
+  it('keeps the 2c spread ceiling fail-safe at its floating-point boundary', () => {
+    expect(evaluateEntryExecutionPolicy({ ...base, mode: 'adaptive', spread: 0.02 }).executedStyle).toBe('taker');
+    expect(evaluateEntryExecutionPolicy({ ...base, mode: 'adaptive', spread: 0.020_000_000_002 }).executedStyle).toBe('maker');
+  });
+
+  it('waives only comparative gates after an authoritative maker miss', () => {
+    const fallback = {
+      ...base, mode: 'adaptive' as const, makerMissFallback: true, fallbackFromOrderId: 'live:BTC:first',
+      makerEvidence: { ...base.makerEvidence, accepted: 0, fillRate: null },
+    };
+    const decision = evaluateEntryExecutionPolicy(fallback);
+    expect(decision).toMatchObject({ executedStyle: 'taker', makerMissFallback: true, fallbackFromOrderId: 'live:BTC:first' });
+    expect(decision.reason).toContain('comparative maker gates are waived');
+    expect(evaluateEntryExecutionPolicy({ ...fallback, currentNetEdge: 0.149 }).executedStyle).toBe('maker');
+    expect(evaluateEntryExecutionPolicy({ ...fallback, medianNetEdge: 0.099 }).executedStyle).toBe('maker');
+    expect(evaluateEntryExecutionPolicy({ ...fallback, confidence: 0.649 }).executedStyle).toBe('maker');
+    expect(evaluateEntryExecutionPolicy({ ...fallback, spread: 0.021 }).executedStyle).toBe('maker');
   });
 
   it('defaults invalid configuration to maker mode', () => {

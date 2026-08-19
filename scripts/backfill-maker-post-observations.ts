@@ -1,4 +1,7 @@
 /**
+ * RETIRED HISTORICAL MIGRATION — no package command invokes this file. Existing backfilled observations
+ * remain readable; the completed persistence sentinel and permissive source must not be mutated again.
+ *
  * One-day backfill of observed fills onto sentinel intents, from the 60-second depth experiment.
  *
  *   npm run backfill:maker-posts -- --dry-run
@@ -35,6 +38,11 @@ import { applySample, decodeSample, openPost, type MakerDepthSample } from '../l
 import { MAKER_POST_OBSERVATION_VERSION } from '../lib/maker-post-observation';
 import { recordMakerPostObservations, type MakerPostObservationRecord } from '../lib/persistence-candidate-store';
 import type { PersistenceCandidateIntent } from '../lib/types';
+
+function refuseRetiredRun(): void {
+  throw new Error('Retired: the completed persistence sentinel and permissive 60-second backfill are read-only.');
+}
+refuseRetiredRun();
 
 const DATA = path.resolve(process.cwd(), 'data');
 const SAMPLES = path.join(DATA, 'maker-depth-experiment.jsonl');

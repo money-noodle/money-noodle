@@ -41,21 +41,21 @@ function TrackPanel({ track, title, subtitle, equityLabel }: { track: TrackFigur
     fundingFirstOrderAt: track?.fundingFirstOrderAt, bankrollResets: track?.bankrollResets,
   });
   return <div className={cn('flex-1 rounded-lg border p-3',
-    running && isLive ? 'border-red-400/45 bg-red-400/[.06]' : running ? 'border-primary/30 bg-primary/[.04]' : 'border-border bg-background/40')}>
+    running && isLive ? 'border-live/45 bg-live/[.06]' : running ? 'border-primary/30 bg-primary/[.04]' : 'border-border bg-background/40')}>
     <div className="flex items-center justify-between gap-2">
       <div className="flex items-center gap-2">
         <div className={cn('grid size-6 place-items-center rounded-md',
-          isLive ? 'bg-red-400/15 text-red-300' : 'bg-primary/12 text-primary', !running && 'opacity-60')}>
+          isLive ? 'bg-live/15 text-live' : 'bg-primary/12 text-primary', !running && 'opacity-60')}>
           {isLive ? <ShieldAlert className="size-3.5"/> : <FlaskConical className="size-3.5"/>}
         </div>
         <div>
-          <p className={cn('text-[11px] font-semibold', isLive ? 'text-red-200' : 'text-foreground')}>{title}</p>
+          <p className={cn('text-[11px] font-semibold', isLive ? 'text-live' : 'text-foreground')}>{title}</p>
           <p className="text-[9px] text-muted-foreground">{subtitle}</p>
         </div>
       </div>
-      <Badge variant="outline" className={cn('gap-1 text-[9px]', running ? (isLive ? 'border-red-400/35 text-red-300' : 'border-primary/30 text-primary') : 'text-muted-foreground')}>
+      <Badge variant="outline" className={cn('gap-1 text-[9px]', running ? (isLive ? 'border-live/35 text-live' : 'border-primary/30 text-primary') : 'text-muted-foreground')}>
         {/* Class names are written out in full so Tailwind can statically extract them. */}
-        {running && <span className="relative flex size-1.5"><span className={cn('absolute inline-flex size-full animate-ping rounded-full opacity-60', isLive ? 'bg-red-400' : 'bg-primary')}/><span className={cn('relative inline-flex size-1.5 rounded-full', isLive ? 'bg-red-400' : 'bg-primary')}/></span>}
+        {running && <span className="relative flex size-1.5"><span className={cn('absolute inline-flex size-full animate-ping rounded-full opacity-60', isLive ? 'bg-live' : 'bg-primary')}/><span className={cn('relative inline-flex size-1.5 rounded-full', isLive ? 'bg-live' : 'bg-primary')}/></span>}
         {running ? 'trading' : 'idle'}
       </Badge>
     </div>
@@ -65,7 +65,7 @@ function TrackPanel({ track, title, subtitle, equityLabel }: { track: TrackFigur
         {/* The headline is the figure that reconciles with the equity beside it. Lifetime spans earlier
             fundings and ties to nothing, so it sits in the footer rather than competing here. */}
         <p className="text-[8px] uppercase tracking-wider text-muted-foreground">{epochScoped ? 'Budget P&L' : 'Realized P&L'}</p>
-        <p className={cn('font-mono text-xl leading-tight', pnl > 0 ? 'text-primary' : pnl < 0 ? 'text-red-400' : 'text-foreground')}>{dollars(pnl)}</p>
+        <p className={cn('font-mono text-xl leading-tight', pnl > 0 ? 'text-gain' : pnl < 0 ? 'text-loss' : 'text-foreground')}>{dollars(pnl)}</p>
       </div>
       <div className="text-right">
         <p className="text-[8px] uppercase tracking-wider text-muted-foreground">{equityLabel}</p>
@@ -84,16 +84,16 @@ function TrackPanel({ track, title, subtitle, equityLabel }: { track: TrackFigur
       <span>{track?.openOrders ?? 0} open</span><span>·</span>
       <span>{track?.settledOrders ?? 0} settled</span>
       {track?.wins !== undefined && <><span>·</span>
-        <span className={cn(track.wins > (track.losses ?? 0) && 'text-primary')}>{track.wins}W</span>
-        <span className={cn((track.losses ?? 0) > 0 && 'text-red-400')}>{track.losses ?? 0}L</span></>}
+        <span className={cn(track.wins > (track.losses ?? 0) && 'text-gain')}>{track.wins}W</span>
+        <span className={cn((track.losses ?? 0) > 0 && 'text-loss')}>{track.losses ?? 0}L</span></>}
       {epochScoped && lifetimePnl !== undefined && <><span>·</span>
         <span title={funded ? `Across every funding — unlike the headline, which covers only the current budget. ${funded}.` : 'Across every funding.'}>
-          lifetime <span className={cn(lifetimePnl > 0 ? 'text-primary' : lifetimePnl < 0 ? 'text-red-400' : '')}>{dollars(lifetimePnl)}</span>
+          lifetime <span className={cn(lifetimePnl > 0 ? 'text-gain' : lifetimePnl < 0 ? 'text-loss' : '')}>{dollars(lifetimePnl)}</span>
         </span></>}
     </div>
 
-    {track?.depleted && <p className="mt-2 flex items-start gap-1.5 text-[9px] leading-relaxed text-amber-200/90"><AlertTriangle className="mt-px size-3 shrink-0"/>Bankroll depleted — reset in Budget to resume.</p>}
-    {!track?.depleted && track?.blockedReason && <p className="mt-2 flex items-start gap-1.5 text-[9px] leading-relaxed text-amber-200/90"><AlertTriangle className="mt-px size-3 shrink-0"/>{track.blockedReason}</p>}
+    {track?.depleted && <p className="mt-2 flex items-start gap-1.5 text-[9px] leading-relaxed text-warn/90"><AlertTriangle className="mt-px size-3 shrink-0"/>Bankroll depleted — reset in Budget to resume.</p>}
+    {!track?.depleted && track?.blockedReason && <p className="mt-2 flex items-start gap-1.5 text-[9px] leading-relaxed text-warn/90"><AlertTriangle className="mt-px size-3 shrink-0"/>{track.blockedReason}</p>}
   </div>;
 }
 
@@ -110,11 +110,11 @@ function OpenOrderRow({ order }: { order: PaperOrder }) {
   return <div className="rounded-md border bg-background/45 px-3 py-2">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div className="flex items-center gap-1.5">
-        <Badge variant="outline" className={cn('h-4 px-1.5 font-mono text-[8px]', order.executionMode === 'live' ? 'border-red-400/30 text-red-300' : 'border-primary/25 text-primary')}>{order.executionMode}</Badge>
+        <Badge variant="outline" className={cn('h-4 px-1.5 font-mono text-[8px]', order.executionMode === 'live' ? 'border-live/30 text-live' : 'border-primary/25 text-primary')}>{order.executionMode}</Badge>
         <span className="text-[10px] font-semibold">{order.symbol} {order.side}</span>
         <span className="font-mono text-[8px] uppercase text-muted-foreground">{order.venue}</span>
       </div>
-      <Badge variant="outline" className={cn('h-4 px-1.5 font-mono text-[8px]', state.includes('pending') || state === 'uncertain' ? 'border-amber-300/30 text-amber-200' : 'text-muted-foreground')}>{state}</Badge>
+      <Badge variant="outline" className={cn('h-4 px-1.5 font-mono text-[8px]', state.includes('pending') || state === 'uncertain' ? 'border-warn/30 text-warn' : 'text-muted-foreground')}>{state}</Badge>
     </div>
     <div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[9px] sm:grid-cols-4">
       <span><span className="text-muted-foreground">qty </span>{order.quantity.toFixed(2)}</span>
@@ -122,12 +122,12 @@ function OpenOrderRow({ order }: { order: PaperOrder }) {
       <span><span className="text-muted-foreground">entry </span>{entryPriceCents.toFixed(1)}¢</span>
       <span><span className="text-muted-foreground">entry P({order.side}) </span>{(entryProbability * 100).toFixed(1)}%</span>
       <span className="col-span-2 sm:col-span-3"><span className="text-muted-foreground">closes </span>{new Date(order.closesAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
-      {order.latestNetProfitPercent !== undefined && <span className={cn(order.latestNetProfitPercent > 0 ? 'text-primary' : order.latestNetProfitPercent < 0 ? 'text-red-400' : '')}><span className="text-muted-foreground">executable </span>{order.latestNetProfitPercent >= 0 ? '+' : ''}{(order.latestNetProfitPercent * 100).toFixed(1)}%</span>}
+      {order.latestNetProfitPercent !== undefined && <span className={cn(order.latestNetProfitPercent > 0 ? 'text-gain' : order.latestNetProfitPercent < 0 ? 'text-loss' : '')}><span className="text-muted-foreground">executable </span>{order.latestNetProfitPercent >= 0 ? '+' : ''}{(order.latestNetProfitPercent * 100).toFixed(1)}%</span>}
     </div>
-    <div className="mt-1 grid grid-cols-2 gap-1 font-mono text-[8px] sm:grid-cols-3"><span><span className="text-muted-foreground">entry edge </span><span className={entryNetEdge >= 0.05 ? 'text-primary' : ''}>{entryNetEdge >= 0 ? '+' : ''}{(entryNetEdge * 100).toFixed(1)}pp</span></span><span><span className="text-muted-foreground">quality </span>{(order.confidence * 100).toFixed(1)}%</span><span><span className="text-muted-foreground">current P({order.side}) </span>{(ownedProbability * 100).toFixed(1)}%</span></div>
+    <div className="mt-1 grid grid-cols-2 gap-1 font-mono text-[8px] sm:grid-cols-3"><span><span className="text-muted-foreground">entry edge </span><span className={entryNetEdge >= 0.05 ? 'text-gain' : ''}>{entryNetEdge >= 0 ? '+' : ''}{(entryNetEdge * 100).toFixed(1)}pp</span></span><span><span className="text-muted-foreground">quality </span>{(order.confidence * 100).toFixed(1)}%</span><span><span className="text-muted-foreground">current P({order.side}) </span>{(ownedProbability * 100).toFixed(1)}%</span></div>
     <p className="mt-1 truncate font-mono text-[8px] text-muted-foreground" title={order.contractId}>{order.contractId}</p>
     {order.entryExecutionDecision && <p className="mt-1 text-[8px] text-muted-foreground">Execution: <span className="uppercase text-foreground">{order.entryExecutionDecision.executedStyle}</span>{order.entryExecutionDecision.recommendedStyle !== order.entryExecutionDecision.executedStyle ? ` · shadow recommends ${order.entryExecutionDecision.recommendedStyle}` : ''}</p>}
-    {order.profitLockArmedAt && <p className="mt-1 text-[8px] text-amber-200">75% profit lock armed · high water {order.peakNetProfitPercent === undefined ? '—' : `+${(order.peakNetProfitPercent * 100).toFixed(1)}%`}</p>}
+    {order.profitLockArmedAt && <p className="mt-1 text-[8px] text-warn">75% profit lock armed · high water {order.peakNetProfitPercent === undefined ? '—' : `+${(order.peakNetProfitPercent * 100).toFixed(1)}%`}</p>}
     <OrderDecisionDetails order={order}/>
   </div>;
 }
@@ -148,7 +148,7 @@ function OpenOrdersPanel({ live, paper }: { live?: ExecutionSummary; paper?: Exe
     </summary>
     <div className="space-y-3 border-t bg-background/20 p-3">
       {!total && <p className="py-2 text-center text-[9px] text-muted-foreground">No open positions or unresolved order intents.</p>}
-      {!!liveOrders.length && <div><p className="mb-1.5 text-[8px] font-semibold uppercase tracking-wider text-red-300">Live · real money</p><div className="grid gap-2 lg:grid-cols-2">{liveOrders.map((order) => <OpenOrderRow key={order.id} order={order}/>)}</div></div>}
+      {!!liveOrders.length && <div><p className="mb-1.5 text-[8px] font-semibold uppercase tracking-wider text-live">Live · real money</p><div className="grid gap-2 lg:grid-cols-2">{liveOrders.map((order) => <OpenOrderRow key={order.id} order={order}/>)}</div></div>}
       {!!paperOrders.length && <div><p className="mb-1.5 text-[8px] font-semibold uppercase tracking-wider text-primary">Paper · simulated shadow</p><div className="grid gap-2 lg:grid-cols-2">{paperOrders.map((order) => <OpenOrderRow key={order.id} order={order}/>)}</div></div>}
     </div>
   </details>;
@@ -194,7 +194,7 @@ export function AutomationStatus() {
         <span className="text-xs font-semibold">{active ? regimeCooling ? 'Automation active — new entries cooling off' : 'Automation active' : recovering ? 'Automation safety-suspended — auto-resume armed' : control.state === 'depleted' ? 'Automation stopped — budget depleted' : control.state === 'unconfigured' ? 'Automation not configured' : 'Automation paused'}</span>
         <span className="text-[10px] text-muted-foreground">{armed.length ? armed.join(' + ') : 'no armed venue'} · every {DATA_FRESHNESS.dashboardPollMs / 1000}s{!active && data.executionDrain ? ` · ${data.executionDrain.restartSafe ? 'restart safe' : data.executionDrain.phase}` : ''}</span>
       </div>
-      <div className="flex items-center gap-2"><TradeHistoryDialog/><span className={cn('font-mono text-[9px] uppercase tracking-wider', liveRunning ? 'text-red-300' : 'text-muted-foreground')}>
+      <div className="flex items-center gap-2"><TradeHistoryDialog/><span className={cn('font-mono text-[9px] uppercase tracking-wider', liveRunning ? 'text-live' : 'text-muted-foreground')}>
         {liveRunning ? 'real money at risk' : 'no real money at risk'}
       </span></div>
     </div>
@@ -203,8 +203,8 @@ export function AutomationStatus() {
       <TrackPanel track={data.paper} title="Paper" subtitle="Simulated shadow · always on" equityLabel="Shadow bankroll"/>
     </div>
     <OpenOrdersPanel live={data.live} paper={data.paper}/>
-    {regimeGate && regimeGate.phase !== 'disabled' && <div className={cn('flex items-start gap-2 border-t px-4 py-2.5 text-[9px]', regimeCooling ? 'bg-amber-300/[.04] text-amber-200' : regimeGate.phase === 'warming' ? 'text-muted-foreground' : 'text-primary')}><ShieldAlert className="mt-px size-3 shrink-0"/><span><strong className="uppercase">Adaptive regime gate {regimeGate.phase}</strong> · {regimeGate.reason}{regimeGate.weightedMeanEdge === null ? '' : ` · recent edge ${(regimeGate.weightedMeanEdge * 100).toFixed(1)}pp`}{regimeGate.negativeReturnConfidence === null ? '' : ` · negative confidence ${(regimeGate.negativeReturnConfidence * 100).toFixed(1)}%`} · {regimeGate.resolvedWindows}/{regimeGate.configured.minimumPolicyWindows} policy windows{regimeGate.pendingWindows ? ` · ${regimeGate.pendingWindows} pending` : ''}</span></div>}
-    {data.reconciliation && <div className={cn('flex items-start gap-2 border-t px-4 py-2.5 text-[9px]', data.reconciliation.phase === 'ready' ? 'text-primary' : 'text-amber-200')}><ShieldAlert className="mt-px size-3 shrink-0"/><span><strong className="uppercase">Kalshi reconciliation {data.reconciliation.phase}</strong> · {data.reconciliation.reason}{data.reconciliation.nextScheduledAt ? ` · next periodic ${new Date(data.reconciliation.nextScheduledAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}{data.reconciliation.consecutivePeriodicFailures ? ` · ${data.reconciliation.consecutivePeriodicFailures} periodic failure` : ''}</span></div>}
+    {regimeGate && regimeGate.phase !== 'disabled' && <div className={cn('flex items-start gap-2 border-t px-4 py-2.5 text-[9px]', regimeCooling ? 'bg-warn/[.04] text-warn' : regimeGate.phase === 'warming' ? 'text-muted-foreground' : 'text-data')}><ShieldAlert className="mt-px size-3 shrink-0"/><span><strong className="uppercase">Adaptive regime gate {regimeGate.phase}</strong> · {regimeGate.reason}{regimeGate.weightedMeanEdge === null ? '' : ` · recent edge ${(regimeGate.weightedMeanEdge * 100).toFixed(1)}pp`}{regimeGate.negativeReturnConfidence === null ? '' : ` · negative confidence ${(regimeGate.negativeReturnConfidence * 100).toFixed(1)}%`} · {regimeGate.resolvedWindows}/{regimeGate.configured.minimumPolicyWindows} policy windows{regimeGate.pendingWindows ? ` · ${regimeGate.pendingWindows} pending` : ''}</span></div>}
+    {data.reconciliation && <div className={cn('flex items-start gap-2 border-t px-4 py-2.5 text-[9px]', data.reconciliation.phase === 'ready' ? 'text-data' : 'text-warn')}><ShieldAlert className="mt-px size-3 shrink-0"/><span><strong className="uppercase">Kalshi reconciliation {data.reconciliation.phase}</strong> · {data.reconciliation.reason}{data.reconciliation.nextScheduledAt ? ` · next periodic ${new Date(data.reconciliation.nextScheduledAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}{data.reconciliation.consecutivePeriodicFailures ? ` · ${data.reconciliation.consecutivePeriodicFailures} periodic failure` : ''}</span></div>}
   </section>;
 }
 
@@ -220,7 +220,7 @@ function PublicOpenOrderRow({ record }: { record: PublicPaperExecutionRecord }) 
         <span className="text-[10px] font-semibold">{record.symbol} {record.side}</span>
         <span className="font-mono text-[8px] uppercase text-muted-foreground">{record.venue}</span>
       </div>
-      <Badge variant="outline" className={cn('h-4 px-1.5 font-mono text-[8px]', record.status === 'pending_reservation' || record.status === 'uncertain' ? 'border-amber-300/30 text-amber-200' : 'text-muted-foreground')}>{record.status === 'pending_reservation' ? 'entry pending' : record.status}</Badge>
+      <Badge variant="outline" className={cn('h-4 px-1.5 font-mono text-[8px]', record.status === 'pending_reservation' || record.status === 'uncertain' ? 'border-warn/30 text-warn' : 'text-muted-foreground')}>{record.status === 'pending_reservation' ? 'entry pending' : record.status}</Badge>
     </div>
     <div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[9px] sm:grid-cols-4">
       <span><span className="text-muted-foreground">qty </span>{record.quantity.toFixed(2)}</span>

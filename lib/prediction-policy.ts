@@ -83,30 +83,21 @@ export const MIN_CALIBRATION_SAMPLE = 100;
 /**
  * Fee as a fraction of the $1 settlement payout, from the shared schedule.
  *
- * `role` is required so every caller states which schedule it means, because the gate currently means
- * the wrong one. See `ENTRY_FEE_ROLE` below.
+ * `role` is required so every caller states which schedule it means. The shared gate deliberately uses
+ * immediate taker economics; adaptive execution computes its own maker/taker values later.
  */
 export function venueFeeRate(venue: 'polymarket' | 'kalshi', price: number, role: LiquidityRole): number {
   return venueFeeFraction(venue, price, role);
 }
 
 /**
- * **Known wrong, deliberately unchanged, tracked in docs/entry-gate-fee-design.md.**
+ * Shared admission uses the cost of immediate executable entry, before adaptive execution chooses how to
+ * place the order. It is conservative when the later path rests as maker and correct when it takes.
  *
- * The gate deducts a taker fee from every candidate's net edge, and production executes as a maker,
- * which Kalshi charges nothing for. At mid price that is 1.75pp — 35% of the 5pp `MIN_NET_EDGE`.
- *
- * It is not corrected here because correcting it changes what the desk trades. Measured over 11,479
- * admitted rows in 2,154 windows it moves 1.0% of volume: 201 rows cross the floor and are admitted,
- * 125 cross the `MAX_NET_EDGE` ceiling and are refused, and both marginal cohorts are individually
- * noise. It also shifts `edgeStrength` ranking and the `netEdge - medianNetEdge` measure that buy policy
- * v18's freshness sentinel is currently evaluating.
- *
- * **Close this when that sentinel reports.** Flipping this constant to `'maker'` is the whole change,
- * and it needs a policy version bump and a manifest entry stating it as a correctness fix with a
- * measured 1.0% volume effect, not an expected improvement in return.
+ * This is deliberately not an execution-role switch: making it depend on paper/live style would create a
+ * circular rule and violate the mirror invariant. See docs/entry-gate-fee-design.md §10.
  */
-export const ENTRY_FEE_ROLE: LiquidityRole = 'taker';
+export const ENTRY_ADMISSION_FEE_ROLE: LiquidityRole = 'taker';
 
 export function directionalLikelihood(prediction: Pick<Prediction, 'modelProbabilityUp'>): number {
   return Math.max(prediction.modelProbabilityUp, 1 - prediction.modelProbabilityUp);
@@ -136,7 +127,7 @@ export function venueEntryOptions(prediction: EntryCandidate): VenueEntryOption[
   const options: VenueEntryOption[] = [];
   const consider = (venue: 'polymarket' | 'kalshi', side: PositionSide, price: number | undefined) => {
     if (price === undefined || !(price > 0) || price >= 1) return;
-    const feeRate = venueFeeRate(venue, price, ENTRY_FEE_ROLE);
+    const feeRate = venueFeeRate(venue, price, ENTRY_ADMISSION_FEE_ROLE);
     const probability = sideProbability(prediction, side);
     options.push({ venue, side, price, feeRate, probability, netEdge: probability - price - feeRate });
   };

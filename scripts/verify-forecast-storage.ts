@@ -1,10 +1,16 @@
+import { createHash } from 'node:crypto';
 import { readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { buildSummaryRollup, summarizeFromRollups, type ForecastSummaryRollup } from '../lib/forecast-rollup';
 import {
+  FORECAST_STORAGE_VERSION,
   buildForecastStoragePlan,
+  compareSummaries,
   verifyForecastStoragePlan,
   writeForecastStoragePlan,
+  type ForecastStorageIndex,
 } from '../lib/forecast-storage';
+import { summarizePerformance } from '../lib/performance';
 import type { TrackedForecast } from '../lib/types';
 
 type ForecastJournalEvent =
@@ -50,48 +56,110 @@ function replay(snapshot: TrackedForecast[], events: ForecastJournalEvent[]): Tr
   return [...records.values()];
 }
 
-async function main() {
-  const write = process.argv.includes('--write');
+const sha256 = (content: string) => createHash('sha256').update(content).digest('hex');
+const terminal = (forecast: TrackedForecast) => forecast.status === 'resolved' || forecast.status === 'invalid';
+
+/**
+ * Verifies the layout the running reader actually consumes: indexed sealed rows and rollups, plus the
+ * open file with the current journal replayed on top. This is deliberately read-only. Only the collector's
+ * forecast write lock may seal an active layout; a standalone verifier must never race it.
+ */
+async function verifyActive(index: ForecastStorageIndex, journal: ForecastJournalEvent[]) {
+  const errors: string[] = [];
+  const sealed: TrackedForecast[] = [];
+  const rollups: ForecastSummaryRollup[] = [];
+  let rollupBytes = 0;
+
+  for (const entry of index.shards) {
+    const rowFile = path.join(SHARD_DIR, entry.file);
+    const rollupFile = path.join(SHARD_DIR, entry.rollupFile);
+    let rowRaw = '', rollupRaw = '';
+    try { rowRaw = await readFile(rowFile, 'utf8'); }
+    catch (error) { errors.push(`Shard ${entry.shardId} could not be read: ${String(error)}`); continue; }
+    try { rollupRaw = await readFile(rollupFile, 'utf8'); }
+    catch (error) { errors.push(`Rollup ${entry.shardId} could not be read: ${String(error)}`); continue; }
+    if (sha256(rowRaw) !== entry.sha256) errors.push(`Shard ${entry.shardId} checksum did not match the index.`);
+    if (sha256(rollupRaw) !== entry.rollupSha256) errors.push(`Rollup ${entry.shardId} checksum did not match the index.`);
+    const rows = JSON.parse(rowRaw) as TrackedForecast[];
+    const rollup = JSON.parse(rollupRaw) as ForecastSummaryRollup;
+    if (rows.length !== entry.rowCount) errors.push(`Shard ${entry.shardId} held ${rows.length} rows; index says ${entry.rowCount}.`);
+    if (rows.some((row) => !terminal(row))) errors.push(`Shard ${entry.shardId} contains a non-terminal row.`);
+    if (rollup.shardId !== entry.shardId) errors.push(`Rollup ${entry.shardId} identifies itself as ${rollup.shardId}.`);
+    sealed.push(...rows);
+    rollups.push(rollup);
+    rollupBytes += Buffer.byteLength(rollupRaw);
+  }
+
+  const sealedOpen = await readJsonFile<TrackedForecast[]>(path.join(SHARD_DIR, 'open.json'), []);
+  if (sealed.length !== index.terminalRows) errors.push(`Indexed terminal rows ${index.terminalRows}; shard files held ${sealed.length}.`);
+  if (sealedOpen.length !== index.openRows) errors.push(`Indexed open rows ${index.openRows}; open file held ${sealedOpen.length}.`);
+  if (sealed.length + sealedOpen.length !== index.totalRows) errors.push(`Indexed total rows ${index.totalRows}; artifacts held ${sealed.length + sealedOpen.length}.`);
+
+  const sealedIds = new Set<string>();
+  for (const row of sealed) {
+    if (sealedIds.has(row.id)) errors.push(`Duplicate sealed forecast id ${row.id}.`);
+    sealedIds.add(row.id);
+  }
+  const currentOpen = replay(sealedOpen, journal);
+  const openIds = new Set<string>();
+  for (const row of currentOpen) {
+    if (openIds.has(row.id)) errors.push(`Duplicate open forecast id ${row.id}.`);
+    openIds.add(row.id);
+  }
+  const full = [...sealed.filter((row) => !openIds.has(row.id)), ...currentOpen];
+  const direct = summarizePerformance(full);
+  const fromStoredRollups = summarizeFromRollups([...rollups, buildSummaryRollup('open', currentOpen)]);
+  errors.push(...compareSummaries(direct, fromStoredRollups).map((difference) => `active rollup ${difference}`));
+
+  return {
+    mode: 'active-sharded-layout', ok: errors.length === 0, errors,
+    indexGeneratedAt: index.generatedAt, indexedRowsAtLastSeal: index.totalRows,
+    sealedRows: sealed.length, openRowsAtLastSeal: sealedOpen.length,
+    journalEvents: journal.length, currentOpenRows: currentOpen.length, currentTotalRows: full.length,
+    shards: index.shards.length, rollupBytes, firstShard: index.shards[0], lastShard: index.shards.at(-1),
+    summary: {
+      issued: direct.issued, pending: direct.pending, resolved: direct.resolved, invalid: direct.invalid,
+      cycles: direct.cycles, resolvedCycles: direct.resolvedCycles,
+      resolvedWindows: direct.resolvedWindows, calibrationWindows: direct.calibrationWindows,
+    },
+    wrote: false, journalCleared: false, shardDir: SHARD_DIR,
+  };
+}
+
+async function verifyLegacy(journal: ForecastJournalEvent[], write: boolean) {
   const snapshot = await readJsonFile<TrackedForecast[]>(HISTORY_FILE, []);
-  const journal = await readJournal();
   const forecasts = replay(snapshot, journal);
   const plan = buildForecastStoragePlan(forecasts);
   const verification = verifyForecastStoragePlan(forecasts, plan);
   const result = {
-    ok: verification.ok,
-    errors: verification.errors,
-    snapshotRows: snapshot.length,
-    journalEvents: journal.length,
-    totalRows: plan.index.totalRows,
-    openRows: plan.index.openRows,
-    terminalRows: plan.index.terminalRows,
+    mode: 'legacy-migration-plan', ok: verification.ok, errors: verification.errors,
+    snapshotRows: snapshot.length, journalEvents: journal.length,
+    totalRows: plan.index.totalRows, openRows: plan.index.openRows, terminalRows: plan.index.terminalRows,
     shards: plan.index.shards.length,
     rollupBytes: plan.shards.reduce((sum, shard) => sum + Buffer.byteLength(`${JSON.stringify(shard.rollup)}\n`), 0),
-    firstShard: plan.index.shards[0],
-    lastShard: plan.index.shards.at(-1),
-    summary: verification.summary,
-    wrote: false,
-    journalCleared: false,
-    shardDir: SHARD_DIR,
+    firstShard: plan.index.shards[0], lastShard: plan.index.shards.at(-1), summary: verification.summary,
+    wrote: false, journalCleared: false, shardDir: SHARD_DIR,
   };
-  if (!verification.ok) {
-    console.log(JSON.stringify(result, null, 2));
-    process.exitCode = 1;
-    return;
-  }
-  if (write) {
+  if (verification.ok && write) {
     await writeForecastStoragePlan(SHARD_DIR, plan);
-    // Clearing the journal is part of sealing, not an afterthought. The plan was built from the snapshot
-    // plus this journal, so every one of those events is now inside a shard or the open set. Leaving them
-    // would make the next read replay sealed rows back into the open set and double-count every lifetime
-    // figure. Truncated last, so a crash between the two replays idempotent events over a sealed layout.
     const temporary = `${JOURNAL_FILE}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
     await writeFile(temporary, '');
     await rename(temporary, JOURNAL_FILE);
     result.wrote = true;
     result.journalCleared = true;
   }
+  return result;
+}
+
+async function main() {
+  const write = process.argv.includes('--write');
+  const journal = await readJournal();
+  const index = await readJsonFile<ForecastStorageIndex | null>(path.join(SHARD_DIR, 'index.json'), null);
+  const active = index?.version === FORECAST_STORAGE_VERSION;
+  if (active && write) throw new Error('Refusing --write against an active sharded layout; only sealForecastStorage under the forecast write lock may write it.');
+  const result = active ? await verifyActive(index, journal) : await verifyLegacy(journal, write);
   console.log(JSON.stringify(result, null, 2));
+  if (!result.ok) process.exitCode = 1;
 }
 
 main().catch((error) => {

@@ -123,14 +123,14 @@ export function ResearchDialog() {
   const enabled = providers.filter((provider) => provider.enabled);
   const current = providers.find((provider) => provider.current);
   return <Dialog onOpenChange={(open) => { if (open) void loadProviders(); }}>
-    <DialogTrigger asChild><Button variant="ghost" size="sm"><BookOpen/><span className="hidden min-[501px]:inline">Research</span>{enabled.length > 0 && <span className="size-1.5 rounded-full bg-primary"/>}</Button></DialogTrigger>
+    <DialogTrigger asChild><Button variant="ghost" size="sm"><BookOpen/><span className="hidden min-[501px]:inline">Research</span>{enabled.length > 0 && <span className="size-1.5 rounded-full bg-data"/>}</Button></DialogTrigger>
     <DialogContent className="max-w-3xl p-0">
       <DialogHeader className="border-b p-5 pr-12">
         <div className="flex items-start justify-between gap-4"><div><DialogTitle className="flex items-center gap-2"><BrainCircuit className="size-4 text-primary"/> Research chat</DialogTitle><DialogDescription className="mt-1">Continue a grounded conversation about the latest Money Noodle snapshot.</DialogDescription></div>{messages.length > 0 && <Button variant="ghost" size="sm" onClick={clearChat} disabled={loading}><Trash2/>Clear chat</Button>}</div>
       </DialogHeader>
       <div className="max-h-[82vh] overflow-y-auto p-5">
         <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border bg-background/40 p-3">
-          <Badge variant="outline">{configured.length} configured</Badge><Badge variant="outline" className={enabled.length ? 'border-primary/20 text-primary' : ''}>{enabled.length} enabled</Badge>
+          <Badge variant="outline">{configured.length} configured</Badge><Badge variant="outline" className={enabled.length ? 'border-data/20 text-data' : ''}>{enabled.length} enabled</Badge>
           <span className="text-[10px] text-muted-foreground">Current: <strong className="text-foreground">{current ? `${current.name} · ${current.model}` : 'none'}</strong></span>
         </div>
 
@@ -146,7 +146,7 @@ export function ResearchDialog() {
             </div>)}{loading && <div className="flex gap-2.5"><div className="grid size-7 shrink-0 place-items-center rounded-full bg-primary/10 text-primary"><Bot className="size-3.5"/></div><div className="rounded-xl border bg-card px-3.5 py-3 text-[10px] text-muted-foreground"><span className="flex items-center gap-2"><Loader2 className="size-3.5 animate-spin text-primary"/>Researching fresh data · {elapsedSeconds}s{providerId === 'auto' ? ' · fallback enabled' : ''}</span></div></div>}<div ref={chatEndRef}/></div>}
         </div>
 
-        {error && <div className="mt-3 rounded-lg border border-red-400/20 bg-red-400/5 p-3 text-xs text-red-300">{error}</div>}
+        {error && <div className="mt-3 rounded-lg border border-loss/20 bg-loss/5 p-3 text-xs text-loss">{error}</div>}
         <div className="mt-3 rounded-xl border bg-background p-3">
           <textarea value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void ask(); } }} maxLength={4000} placeholder={messages.length ? 'Ask a follow-up…' : 'Ask about an asset, buy signal, catalyst, or conflicting factor…'} className="min-h-20 w-full resize-none bg-transparent text-sm leading-relaxed outline-none placeholder:text-muted-foreground"/>
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t pt-2">
@@ -158,13 +158,13 @@ export function ResearchDialog() {
 
         <details className="mt-5 rounded-xl border" open={!configured.length}>
           <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-xs font-medium [&::-webkit-details-marker]:hidden"><span className="flex items-center gap-2"><Settings2 className="size-3.5"/>Manage providers</span><span className="text-[9px] font-normal text-muted-foreground">Direct keys and Pi auth remain server-side</span></summary>
-          <div className="space-y-2 border-t p-3">{providers.map((provider) => <div key={provider.id} className={cn('rounded-lg border p-3', provider.enabled && 'border-primary/20 bg-primary/[.025]', !provider.configured && 'opacity-60')}>
-            <div className="flex flex-wrap items-center justify-between gap-2"><div className="flex items-center gap-2"><span className="text-xs font-semibold">{provider.name}</span><Badge variant="outline" className={provider.configured ? 'border-primary/20 text-primary' : 'text-muted-foreground'}>{provider.configured ? 'configured' : 'not configured'}</Badge>{provider.source === 'pi' && <Badge variant="outline" className="border-sky-400/20 text-sky-300">Pi auth</Badge>}{provider.current && <Badge className="gap-1 border-primary/20 bg-primary/10 text-primary"><Check/>current</Badge>}</div><div className="flex gap-1.5"><Button variant="outline" size="sm" disabled={!provider.configured || !provider.enabled || provider.current || savingId === provider.id} onClick={() => void updateProvider(provider, { current: true })}>Use current</Button><Button variant={provider.enabled ? 'secondary' : 'outline'} size="sm" disabled={!provider.configured || savingId === provider.id} onClick={() => void updateProvider(provider, { enabled: !provider.enabled })}>{savingId === provider.id ? <Loader2 className="animate-spin"/> : <Power/>}{provider.enabled ? 'Disable' : 'Enable'}</Button></div></div>
+          <div className="space-y-2 border-t p-3">{providers.map((provider) => <div key={provider.id} className={cn('rounded-lg border p-3', provider.enabled && 'border-data/20 bg-data/[.025]', !provider.configured && 'opacity-60')}>
+            <div className="flex flex-wrap items-center justify-between gap-2"><div className="flex items-center gap-2"><span className="text-xs font-semibold">{provider.name}</span><Badge variant="outline" className={provider.configured ? 'border-data/20 text-data' : 'text-muted-foreground'}>{provider.configured ? 'configured' : 'not configured'}</Badge>{provider.source === 'pi' && <Badge variant="outline" className="border-data/20 text-data">Pi auth</Badge>}{provider.current && <Badge className="gap-1 border-data/20 bg-data/10 text-data"><Check/>current</Badge>}</div><div className="flex gap-1.5"><Button variant="outline" size="sm" disabled={!provider.configured || !provider.enabled || provider.current || savingId === provider.id} onClick={() => void updateProvider(provider, { current: true })}>Use current</Button><Button variant={provider.enabled ? 'secondary' : 'outline'} size="sm" disabled={!provider.configured || savingId === provider.id} onClick={() => void updateProvider(provider, { enabled: !provider.enabled })}>{savingId === provider.id ? <Loader2 className="animate-spin"/> : <Power/>}{provider.enabled ? 'Disable' : 'Enable'}</Button></div></div>
             <div className="mt-2 flex items-center gap-2"><input value={provider.model} disabled={!provider.configured} onChange={(event) => setProviders((items) => items.map((item) => item.id === provider.id ? { ...item, model: event.target.value } : item))} className="h-9 min-w-0 flex-1 rounded-md border bg-background px-2.5 font-mono text-[10px] outline-none disabled:cursor-not-allowed"/><Button variant="ghost" size="sm" title="Save model" disabled={!provider.configured || !provider.model.trim()} onClick={() => void updateProvider(provider, { model: provider.model })}><Save/>Save model</Button></div>
             {!provider.configured && <p className="mt-1.5 text-[9px] text-muted-foreground">Add this direct provider’s key or local endpoint to <code className="font-mono">.env.local</code>, then restart the server.</p>}
           </div>)}</div>
         </details>
-        {!configured.length && <div className="mt-4 rounded-lg border border-amber-400/15 bg-amber-400/5 p-3 text-[11px] leading-relaxed text-amber-100/75">Configure a direct provider in <code className="font-mono">.env.local</code> or authenticate a compatible provider in Pi.</div>}
+        {!configured.length && <div className="mt-4 rounded-lg border border-warn/15 bg-warn/5 p-3 text-[11px] leading-relaxed text-warn/75">Configure a direct provider in <code className="font-mono">.env.local</code> or authenticate a compatible provider in Pi.</div>}
       </div>
     </DialogContent>
   </Dialog>;

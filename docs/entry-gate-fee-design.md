@@ -142,3 +142,27 @@ read.
 5. If §7 option 1 proceeds: a policy version bump, a manifest `history` entry with this document as its
    evidence link, and an explicit statement that the change is a correctness fix with a measured 1.0%
    volume effect — not an expected improvement in return.
+
+## 10. Adaptive resolution, 2026-08-19
+
+The premise behind option 1 no longer holds: live execution is adaptive and may legitimately choose either
+maker or taker after the shared rule admits a candidate. One global role cannot describe admission,
+execution, and counterfactual reporting without making at least two of them wrong.
+
+The maintainer chose a behaviour-neutral semantic split:
+
+- Shared `netEdge` remains taker-priced and is renamed conceptually to **immediate-execution admission
+  edge**. `ENTRY_FEE_ROLE` becomes `ENTRY_ADMISSION_FEE_ROLE`; this is conservative for a later maker and
+  correct for a later taker. It remains execution-mode independent and preserves the mirror invariant.
+- Adaptive selection never reads the admission-role constant. Its taker edge passes `'taker'` explicitly;
+  its maker edge passes `'maker'` explicitly.
+- Ask counterfactuals use `'taker'`; maker counterfactuals use `'maker'`. The dynamic maker-shadow report
+  is corrected accordingly.
+- Durable calendar and retired persistence rows are not reinterpreted. Their maker-fee fields were stamped
+  under the old taker-role convention; correcting future collection requires a new collection version
+  during the collector audit.
+- Admission is not flipped to maker. The 1% impact in this document was measured under obsolete thresholds,
+  and changing admission now would require a fresh replay, buy-policy version, manifest history, and manual
+  decision.
+
+This split changes no admitted candidate, persistence result, ranking, order size, or funded execution.

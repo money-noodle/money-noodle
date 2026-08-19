@@ -21,8 +21,9 @@
  *   - "Admitted" is reconstructed from recorded quotes, so it includes decisions the desk could not have
  *     taken for reasons this script cannot see — an unfunded window, a stale snapshot, a venue outage.
  *     The conversion rate is therefore a floor, and its *trend* is the readable part.
- *   - Persistence is not modelled; a decision admitted seconds before its window closed was never
- *     executable. The execution window (warm-up and late cutoff) is applied.
+ *   - Persistence is reconstructed from forecast-history samples, which are slower than the dashboard
+ *     observations production persists against. The persistent count is therefore a floor. Requirements
+ *     are selected by the row's stamped buy-policy version; an unknown version is excluded and reported.
  *   - Settlement is not needed here: this is about conversion, not profit.
  *   - Read-only. Places no order and writes nothing.
  */
@@ -34,34 +35,48 @@ const DATA = path.resolve(process.cwd(), 'data');
 const HOURS = Number(process.argv[2] ?? 24);
 const CYCLE_SECONDS = 900;
 const WARMUP = 90;
-/** v20 shortened the late cutoff to 30s; before 2026-08-18T23:30Z it was 120s. */
-const cutoffFor = (atMs) => (atMs >= Date.parse('2026-08-18T23:30:00Z') ? 30 : 120);
 const feeRate = (price) => 0.07 * price * (1 - price);
-const floorFor = (atMs) => (atMs >= Date.parse('2026-08-18T23:30:00Z') ? -0.05 : 0.05);
-const ceilingFor = (atMs) => (atMs >= Date.parse('2026-08-18T23:30:00Z') ? 1 : 0.35);
+
+/**
+ * Production requirements by immutable policy identity, never inferred from a deployment timestamp.
+ * A new policy fails closed in this monitor until its requirements are stated here.
+ */
+const POLICY_REQUIREMENTS = new Map([
+  ['buy-binary-edge-net5to35-quality50-owned55-price5to97-v17', { floor: 0.05, ceiling: 0.35, lateCutoff: 120, snapshots: 3, spanMs: 30_000 }],
+  ['buy-binary-edge-net5to35-quality50-owned55-price5to97-fresh2pp-v18', { floor: 0.05, ceiling: 0.35, lateCutoff: 120, snapshots: 3, spanMs: 30_000 }],
+  ['buy-binary-edge-net5to35-quality50-owned55-price5to97-v19', { floor: 0.05, ceiling: 0.35, lateCutoff: 120, snapshots: 3, spanMs: 30_000 }],
+  ['buy-binary-edge-netminus5-nocap-quality50-owned55-price5to97-late30-v20', { floor: -0.05, ceiling: 1, lateCutoff: 30, snapshots: 3, spanMs: 30_000 }],
+  ['buy-binary-edge-netminus5-nocap-quality50-owned55-price5to97-late30-persist2of15-v21', { floor: -0.05, ceiling: 1, lateCutoff: 30, snapshots: 2, spanMs: 15_000 }],
+]);
 
 const since = Date.now() - HOURS * 3_600_000;
 const admitted = new Map();
+const unknownPolicies = new Set();
 for (const row of await readForecastHistory(DATA)) {
   const quotes = row.actionableVenuePrices?.filter((q) => q.venue === 'kalshi');
   if (!quotes?.length) continue;
   const issued = Date.parse(row.issuedAt);
   if (!Number.isFinite(issued) || issued < since) continue;
+  const requirements = POLICY_REQUIREMENTS.get(row.policyVersion);
+  if (!requirements) { unknownPolicies.add(row.policyVersion ?? 'missing'); continue; }
   const elapsed = CYCLE_SECONDS - (row.secondsRemaining ?? 0);
   if (elapsed < WARMUP) continue;
-  if ((row.secondsRemaining ?? 0) < cutoffFor(issued)) continue;
+  if ((row.secondsRemaining ?? 0) < requirements.lateCutoff) continue;
   for (const { side, price } of quotes) {
     if (!(price > 0) || price >= 1) continue;
     const probability = side === 'UP' ? row.probabilityUp : 1 - row.probabilityUp;
     const netEdge = probability - price - feeRate(price);
     if (price < 0.05 || price > 0.97) continue;
     if (probability < 0.55 || (row.confidence ?? 0) < 0.5) continue;
-    if (netEdge < floorFor(issued) || netEdge >= ceilingFor(issued)) continue;
-    const key = `${row.symbol}|${row.closesAt}|${side}`;
+    if (netEdge < requirements.floor || netEdge >= requirements.ceiling) continue;
+    const key = `${row.policyVersion}|${row.symbol}|${row.closesAt}|${side}`;
     const prior = admitted.get(key);
-    // Every qualifying instant, not just the first: persistence needs three of them spanning 30s, and a
-    // decision that qualified once and vanished was never executable at all.
-    const entry = prior ?? { issued, symbol: row.symbol, closesAt: row.closesAt, side, netEdge, instants: [] };
+    // Every qualifying instant, not just the first: a decision that qualified once and vanished was
+    // never executable at all. Requirements are carried on the decision so policy eras cannot blend.
+    const entry = prior ?? {
+      issued, policyVersion: row.policyVersion, symbol: row.symbol, closesAt: row.closesAt, side, netEdge,
+      snapshots: requirements.snapshots, spanMs: requirements.spanMs, instants: [],
+    };
     entry.instants.push(issued);
     if (issued < entry.issued) { entry.issued = issued; entry.netEdge = netEdge; }
     admitted.set(key, entry);
@@ -73,22 +88,21 @@ const orders = (ledger.orders ?? []).filter((o) => o.strategyId !== 'long-shot-r
 const orderKeys = new Map();
 for (const o of orders) {
   if (Date.parse(o.createdAt) < since) continue;
-  const key = `${o.executionMode}|${o.symbol}|${o.closesAt}|${o.side}`;
+  const policyVersion = o.entryDecision?.policyVersion;
+  if (!POLICY_REQUIREMENTS.has(policyVersion)) continue;
+  const key = `${o.executionMode}|${policyVersion}|${o.symbol}|${o.closesAt}|${o.side}`;
   const prior = orderKeys.get(key);
   if (!prior || (o.filledCount ?? 0) > (prior.filledCount ?? 0)) orderKeys.set(key, o);
 }
 
 /**
- * Whether this decision could ever have been executed: three qualifying observations spanning at least
- * 30 seconds (`REQUIRED_QUALIFYING_SNAPSHOTS`, `REQUIRED_OBSERVATION_SPAN_MS`). Without this the funnel
- * counts transient spikes as missed buys. A 30.9pp ETH DOWN on 2026-08-18 was exactly that.
- *
- * The forecast history samples more slowly than the dashboard the desk actually persists against, so this
- * is stricter than production and the `persistent` count is a floor.
+ * Whether this decision could ever have been executed under the persistence requirements stamped by its
+ * policy version. Without this the funnel counts transient spikes as missed buys. Forecast history samples
+ * more slowly than the dashboard observations production uses, so this remains a strict lower bound.
  */
 const persisted = (decision) => {
   const t = [...decision.instants].sort((a, b) => a - b);
-  return t.length >= 3 && t.at(-1) - t[0] >= 30_000;
+  return t.length >= decision.snapshots && t.at(-1) - t[0] >= decision.spanMs;
 };
 
 const hourOf = (ms) => new Date(ms).toISOString().slice(0, 13);
@@ -98,15 +112,16 @@ for (const [key, decision] of admitted) {
   const b = buckets.get(h) ?? { admitted: 0, persistent: 0, ordered: 0, filled: 0 };
   b.admitted += 1;
   if (persisted(decision)) b.persistent += 1;
-  const order = orderKeys.get(`live|${decision.symbol}|${decision.closesAt}|${decision.side}`);
+  const order = orderKeys.get(`live|${decision.policyVersion}|${decision.symbol}|${decision.closesAt}|${decision.side}`);
   if (order) { b.ordered += 1; if ((order.filledCount ?? 0) > 0) b.filled += 1; }
   buckets.set(h, b);
   void key;
 }
 
 console.log(`admitted -> ordered -> filled, live track, last ${HOURS}h`);
-console.log('"persistent" = could have been executed: 3+ qualifying observations spanning 30s. The gap between');
-console.log('admitted and persistent is transient spikes that were never buyable, not misses.');
+console.log('"persistent" uses each row’s stamped policy requirements (v17-v20: 3 over 30s; v21: 2 over 15s).');
+console.log('The gap between admitted and persistent is transient signals that were never buyable, not misses.');
+if (unknownPolicies.size) console.log(`excluded unknown policy versions: ${[...unknownPolicies].sort().join(', ')}`);
 console.log(`${'hour (UTC)'.padEnd(15)} ${'admitted'.padStart(9)} ${'persist'.padStart(8)} ${'ordered'.padStart(8)} ${'filled'.padStart(7)} ${'ord/persist'.padStart(12)}`);
 let totals = { admitted: 0, persistent: 0, ordered: 0, filled: 0 };
 for (const [h, b] of [...buckets].sort()) {
@@ -120,7 +135,8 @@ console.log(`${'TOTAL'.padEnd(15)} ${String(totals.admitted).padStart(9)} ${Stri
 console.log(`\nof ${totals.admitted} admitted, ${totals.persistent} could have been executed; the desk ordered ${totals.ordered} and filled ${totals.filled}.`);
 
 // The decisions the desk never ordered, which is the population Rai is asking about.
-const missed = [...admitted.values()].filter((d) => persisted(d) && !orderKeys.has(`live|${d.symbol}|${d.closesAt}|${d.side}`));
+const missed = [...admitted.values()].filter((d) => persisted(d)
+  && !orderKeys.has(`live|${d.policyVersion}|${d.symbol}|${d.closesAt}|${d.side}`));
 console.log(`\nexecutable but never ordered: ${missed.length}`);
 const byWindow = new Map();
 for (const d of missed) byWindow.set(d.closesAt, (byWindow.get(d.closesAt) ?? 0) + 1);

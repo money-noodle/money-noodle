@@ -1,28 +1,23 @@
 import 'server-only';
 import {
-  evaluateLongShotEntry, longShotPolicyVersion, longShotSettings, longShotSizing,
+  longShotPolicyVersion, longShotSettings, longShotSizing,
   type LongShotSettings, type LongShotSizing,
 } from './long-shot-policy';
 import { HOLD_SENTINEL_VERSION, type HoldSentinel } from './hold-sentinel';
 import { holdSentinelId } from './hold-sentinel-store';
 import { LONG_SHOT_ROUND_TRIP } from './strategy-registry';
 import { orderStrategyId } from './execution-report';
-import { estimatePaperFill, venueFeeCents } from './venue-fill';
+import { venueFeeCents } from './venue-fill';
 import type { DashboardData, ExecutionMode, PaperOrder, PositionSide, Prediction } from './types';
 
 /**
- * Per-cycle evaluation of the long-shot round-trip policy.
+ * Observation and reporting helpers for the long-shot round-trip policy.
  *
- * **This module currently collects evidence and places no orders.** Every trigger it finds is recorded as
- * a hold sentinel with `executed: false`, which starts the ~4-candidates-a-day clock running immediately
- * while the order-placement path is written and reviewed separately. Collection has the longest lead time
- * of anything in this policy — 60 attempts is two to three weeks — so it is deliberately not blocked on
- * the part that spends money.
+ * Trigger capture is owned by the one-second paper decision path. The detached pass here only recovers
+ * version-stamped decisions, observes later peak bids, and resolves settlements; it cannot manufacture a
+ * trigger from the slower dashboard cadence.
  */
 export { longShotPolicyVersion } from './long-shot-policy';
-
-/** Reason recorded on every sentinel until the execution path exists, so the gap is explicit in the data. */
-const COLLECTION_ONLY = 'Collection only: the long-shot execution path is not wired in yet.';
 
 /** The allocation this policy launches with, per docs/long-shot-policy-design.md §15. */
 export const LONG_SHOT_DEFAULT_ALLOCATION_PERCENT = 30;
@@ -86,9 +81,6 @@ export interface LongShotCycle {
   skipped: string[];
 }
 
-const sideAsk = (prediction: Prediction, side: PositionSide): number | undefined =>
-  side === 'UP' ? prediction.kalshi?.askUp : prediction.kalshi?.askDown;
-
 /**
  * This cycle's owned-side bid for every sentinel still awaiting settlement.
  *
@@ -137,100 +129,48 @@ export function sentinelPeakBids(
 }
 
 /**
- * Entries already made on this asset and window by this strategy, counting every generation whether open
- * or closed. Re-entry is capped for churn and fee reasons, not risk (§9).
+ * Reconstructs only a prospectively stamped paper decision. Historical orders have no stamp and are
+ * deliberately refused, so fixing capture cannot backfill a selected fills-only cohort.
  */
-function entriesThisAssetWindow(orders: PaperOrder[], symbol: string, closesAt: string): number {
-  return orders.filter((order) => orderStrategyId(order) === LONG_SHOT_ROUND_TRIP
-    && order.symbol === symbol && order.closesAt === closesAt && !order.id.includes(':exit:')).length;
-}
-
-const isOpen = (order: PaperOrder) => order.status === 'open' || order.status === 'pending_reservation' || order.status === 'uncertain';
-
-function openLongShots(orders: PaperOrder[]): PaperOrder[] {
-  return orders.filter((order) => orderStrategyId(order) === LONG_SHOT_ROUND_TRIP && isOpen(order));
-}
-
-/**
- * Evaluates every live Kalshi contract for a long-shot trigger and returns the sentinels to commit.
- *
- * Sentinels are built for triggers that pass the entry rule, including ones the executing lane could not
- * take. That is the point of committing at trigger time: derived from fills the sample would inherit every
- * selection bias of execution and would answer a different question (§10).
- */
-export function longShotCycle(
-  dashboard: DashboardData,
-  orders: PaperOrder[],
-  sizing: LongShotSizing,
-  settings: LongShotSettings,
-  nowMs = Date.now(),
-): LongShotCycle {
-  const observedAt = new Date(nowMs).toISOString();
-  const sentinels: HoldSentinel[] = [];
-  const skipped: string[] = [];
-  const open = openLongShots(orders);
-
-  for (const prediction of dashboard.predictions ?? []) {
-    const quote = prediction.kalshi;
-    if (!quote?.live || !quote.ticker) continue;
-    const closeMs = Date.parse(quote.closesAt);
-    if (!Number.isFinite(closeMs)) continue;
-    const secondsRemaining = (closeMs - nowMs) / 1000;
-
-    for (const side of ['UP', 'DOWN'] as const) {
-      const ask = sideAsk(prediction, side);
-      if (!(typeof ask === 'number' && ask > 0)) continue;
-
-      const openSameAssetWindow = open.filter((order) => order.symbol === prediction.symbol && order.closesAt === quote.closesAt).length;
-      const openSameSettlementWindow = open.filter((order) => order.closesAt === quote.closesAt).length;
-      const generation = entriesThisAssetWindow(orders, prediction.symbol, quote.closesAt) + 1;
-
-      const decision = evaluateLongShotEntry({
-        symbol: prediction.symbol, side, askPrice: ask, secondsRemaining,
-        openSameAssetWindow, openSameSettlementWindow,
-        entriesThisAssetWindow: generation - 1,
-        // Nothing has traded, so nothing has been lost today. The real figure arrives with execution.
-        dailyNetLossCents: 0,
-      }, sizing, settings);
-
-      if (!decision.qualifies) {
-        // Only log a near miss: every window has dozens of sides nowhere near the mark and logging them
-        // all would bury the ones worth reading.
-        if (ask * CENTS <= settings.entryMarkCents * 2) skipped.push(`${prediction.symbol} ${side}: ${decision.reason}`);
-        continue;
-      }
-
-      const fill = estimatePaperFill(sizing.ticketCents, ask, 'kalshi');
-      if (!fill) {
-        skipped.push(`${prediction.symbol} ${side}: ${sizing.ticketCents}¢ cannot buy the venue minimum at ${(ask * CENTS).toFixed(0)}¢.`);
-        continue;
-      }
-
-      sentinels.push({
-        id: holdSentinelId({ symbol: prediction.symbol, side, closesAt: quote.closesAt, entryGeneration: generation }),
-        sentinelVersion: HOLD_SENTINEL_VERSION,
-        policyVersion: longShotPolicyVersion(settings),
-        observedAt,
-        symbol: prediction.symbol,
-        side,
-        closesAt: quote.closesAt,
-        contractId: quote.ticker,
-        entryAskCents: ask * CENTS,
-        oppositeAskCents: (side === 'UP' ? quote.askDown : quote.askUp) * CENTS,
-        secondsRemaining,
-        entryMarkCents: settings.entryMarkCents,
-        exitMarkCents: settings.exitMarkCents,
-        quantity: fill.quantity,
-        stakeCents: fill.stakeCents,
-        estimatedFeeCents: fill.feeCents,
-        entryGeneration: generation,
-        executed: false,
-        skipReason: COLLECTION_ONLY,
-      });
-    }
-  }
-
-  return { observedAt, sentinels, outcomes: {}, peakBids: {}, skipped };
+export function holdSentinelFromStampedPaperOrder(
+  order: PaperOrder,
+  execution: { executed: boolean; skipReason?: string } = { executed: true },
+): HoldSentinel | null {
+  if (order.executionMode !== 'paper' || orderStrategyId(order) !== LONG_SHOT_ROUND_TRIP
+    || order.id.includes(':exit:') || order.holdSentinelVersion !== HOLD_SENTINEL_VERSION) return null;
+  const observedAt = order.createdAt;
+  const entryAskCents = (order.issuanceAskPrice ?? order.askPrice) * CENTS;
+  const oppositeAskCents = (1 - (order.issuanceBidPrice ?? order.bidPrice)) * CENTS;
+  const secondsRemaining = (Date.parse(order.closesAt) - Date.parse(observedAt)) / 1000;
+  const entryGeneration = order.entryGeneration ?? 1;
+  const values = [entryAskCents, oppositeAskCents, secondsRemaining, order.entryTargetCents,
+    order.exitTargetCents, order.quantity, order.stakeCents, order.feeCents, entryGeneration];
+  if (!order.strategyPolicyVersion || !values.every((value) => Number.isFinite(value))
+    || !(entryAskCents > 0 && entryAskCents < CENTS) || !(oppositeAskCents > 0 && oppositeAskCents < CENTS)
+    || !(order.quantity > 0) || !(order.stakeCents > 0) || order.feeCents < 0
+    || !Number.isSafeInteger(entryGeneration) || !(entryGeneration >= 1)
+    || !order.entryTargetCents || !order.exitTargetCents) return null;
+  return {
+    id: holdSentinelId({ symbol: order.symbol, side: order.side, closesAt: order.closesAt, entryGeneration }),
+    sentinelVersion: HOLD_SENTINEL_VERSION,
+    policyVersion: order.strategyPolicyVersion,
+    observedAt,
+    symbol: order.symbol,
+    side: order.side,
+    closesAt: order.closesAt,
+    contractId: order.contractId,
+    entryAskCents,
+    oppositeAskCents,
+    secondsRemaining,
+    entryMarkCents: order.entryTargetCents,
+    exitMarkCents: order.exitTargetCents,
+    quantity: order.quantity,
+    stakeCents: order.stakeCents,
+    estimatedFeeCents: order.feeCents,
+    entryGeneration,
+    executed: execution.executed,
+    ...(execution.executed || !execution.skipReason ? {} : { skipReason: execution.skipReason }),
+  };
 }
 
 /**
@@ -284,33 +224,27 @@ export function longShotSizingFor(orders: PaperOrder[], startingCents: number, s
 }
 
 /**
- * One collection pass: find triggers, commit sentinels, resolve settled windows.
- *
- * Runs detached from the trading cycle and never throws into it. `startingCents` is the long-shot
- * allocation; while nothing trades it only scales the recorded stake, and return per $1 staked is
- * scale-invariant apart from fee rounding, so an unfunded policy still collects usable evidence.
+ * Detached reconciliation pass. Trigger creation belongs exclusively to the one-second paper decision
+ * path; this pass can only recover prospectively version-stamped orders, observe later peaks, and settle.
  */
 export async function collectLongShotEvidence(input: {
   dashboard: DashboardData;
   orders: PaperOrder[];
-  startingCents: number;
   existingSentinels: HoldSentinel[];
   nowMs?: number;
 }): Promise<LongShotCycle> {
-  const settings = longShotSettings();
   const nowMs = input.nowMs ?? Date.now();
-  const sizing = longShotSizingFor(input.orders, input.startingCents, settings);
-  // Collection continues even when the policy is switched off or halted: the evidence is what decides
-  // whether to switch it on, so gating collection on being enabled would be circular. Sizing is still
-  // reported honestly, and a halted policy records a zero ticket.
-  const cycle = longShotCycle(input.dashboard, input.orders, sizing.halted ? { ...sizing, halted: false } : sizing, settings, nowMs);
+  const observedAt = new Date(nowMs).toISOString();
   const outcomes = await resolveSentinelOutcomes(input.existingSentinels, nowMs);
   return {
-    sentinels: cycle.sentinels,
+    sentinels: input.orders.flatMap((order) => {
+      const sentinel = holdSentinelFromStampedPaperOrder(order);
+      return sentinel ? [sentinel] : [];
+    }),
     outcomes,
     // Every sentinel already on file is re-observed each cycle; the store keeps the running maximum.
-    peakBids: sentinelPeakBids(input.dashboard, input.existingSentinels, cycle.observedAt),
-    observedAt: cycle.observedAt,
-    skipped: cycle.skipped,
+    peakBids: sentinelPeakBids(input.dashboard, input.existingSentinels, observedAt),
+    observedAt,
+    skipped: [],
   };
 }

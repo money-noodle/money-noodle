@@ -11,7 +11,6 @@ import { fetchKalshiManagedMakerQuote, fetchKalshiQuote, fetchKalshiTradePrintsS
 import { observeKalshiOrderBook } from './kalshi-depth';
 import { simulateManagedPaperMaker, type PaperMakerSimulationResult } from './paper-maker-simulation';
 import { isFreshCalculationTimestamp } from './freshness';
-import { observationBucket } from './observation-window';
 import { selectedSideDepth } from './order-book-depth';
 import { selectedManagedMakerQuote } from './managed-maker';
 import { orderMarketId, orderProviderId, orderStrategyId } from './execution-report';
@@ -20,7 +19,8 @@ import { recordContractPaths, recordDenseContractQuote } from './contract-path-s
 import { CONTRACT_PATH_FINE_BUCKET_MS } from './contract-path';
 import { backfillLongShotCandidates, resolveLongShotSettlements } from './long-shot-candidate-store';
 import { getHoldSentinels, updateHoldSentinelStore } from './hold-sentinel-store';
-import { collectLongShotEvidence, longShotTrackStartingCents } from './long-shot-execution';
+import { HOLD_SENTINEL_VERSION } from './hold-sentinel';
+import { collectLongShotEvidence, holdSentinelFromStampedPaperOrder, longShotTrackStartingCents } from './long-shot-execution';
 import { evaluateLongShotEntry, longShotSettings, type LongShotSettings } from './long-shot-policy';
 import { LONG_SHOT_ROUND_TRIP } from './strategy-registry';
 import {
@@ -67,23 +67,22 @@ import { getProviderBudgets, providerBudget } from './provider-budget-store';
 import { isStatelessDeployment } from './runtime-environment';
 import { postgresPaperProjectionSyncEnabled, readPublicPaperBudgetFromPostgres, syncPublicPaperBudgetToPostgres } from './postgres-paper-projection';
 import { fetchKalshiReconciliationSnapshot } from './kalshi-reconciliation';
-import { entryAttemptsForLogicalOrder, makerAttemptId, makerRetryDecision, maximumLiveMakerAttempts, maximumPaperMakerAttempts } from './maker-retry-policy';
+import { adaptiveTakerFallbackDecision, entryAttemptsForLogicalOrder, makerAttemptId, makerRetryDecision, maximumLiveMakerAttempts, maximumPaperMakerAttempts, type MakerRetryDecision } from './maker-retry-policy';
 import { evaluateLiveRisk } from './live-risk-policy';
 import { liveBlockers, liveTradingEnabled, maxLiveOrdersPerHour, maxLiveStakeCents, placeKalshiBuy, placeKalshiSell, placeKalshiTakerBuy } from './live-orders';
 import { countFilledLiveVenueOrders } from './order-rate-limit';
 import { selectPortfolio, cryptoExposureGroup, DEFAULT_PORTFOLIO_CONSTRAINTS, parseMaximumOpenPositions, type PortfolioConstraints } from './portfolio-policy';
-import { bestEntry, bestVenueEntry, BUY_POLICY_VERSION, edgeStrength, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, qualifiesAsBuyEdge, qualifiesVenueBuyEdge, sideProbability, venueFeeRate, ENTRY_FEE_ROLE } from './prediction-policy';
+import { bestEntry, bestVenueEntry, BUY_POLICY_VERSION, edgeStrength, MAX_ENTRY_PRICE, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, qualifiesAsBuyEdge, qualifiesVenueBuyEdge, sideProbability, venueFeeRate } from './prediction-policy';
 import { getKalshiReconciliationStatus, serializedReconciliation, setKalshiReconciliationStatus, type KalshiReconciliationStatus } from './reconciliation-state';
 import { getRegimeGateStatus, updateRegimeGate, type RegimeGateStatus, type RegimeSentinelCandidate } from './regime-gate-store';
-import { TWO_SNAPSHOT_PERSISTENCE_CANDIDATE_VERSION, updatePersistenceCandidateStore, type PersistenceCandidateCycle } from './persistence-candidate-store';
-import { observeMakerPosts } from './maker-post-observer';
-import { advanceSignalPersistence, evaluateSignalPersistence, evaluateSignalPersistenceIgnoringSpike, evaluateSignalPersistenceWithRequirements, type SignalEligibility, type SignalPersistenceState } from './signal-persistence';
+import { advanceSignalPersistence, evaluateSignalPersistence, evaluateSignalPersistenceIgnoringSpike, productionSignalPersistence, signalPersistenceAfter, type SignalEligibility, type SignalPersistenceState } from './signal-persistence';
 import { edgeSpikeGateEnabled, maximumEdgeSpike, spikeAdmits } from './edge-spike-policy';
 import { EDGE_SPIKE_SENTINEL_VERSION, edgeSpikeSentinelId, type EdgeSpikeSentinel } from './edge-spike-sentinel';
 import { updateEdgeSpikeSentinels } from './edge-spike-sentinel-store';
 import { REQUIRED_SWITCH_SNAPSHOTS, REQUIRED_SWITCH_SPAN_MS, advanceSwitchPersistence, switchCooldownRemainingMs, switchEvidenceReady, switchEvidenceSpanMs, type SwitchPersistenceState } from './switch-hysteresis';
 import { evaluateSwitchProbabilityGate, switchPolicySettings, valueSwitch } from './switch-policy';
 import { autoResumeTradingAfterReconciliation, getTradingControl, pauseTrading, reconcileTradingBudget, recordTradingReconciliationFailure, releaseTradingBudget, reserveTradingBudget, settleTradingBudget, stopTradingForLiveRisk, suspendTrading } from './trading-control';
+import { takerQuoteCap } from './taker-quote-policy';
 import type { DashboardData, ExecutionMode, ExecutionSignalReadiness, ExecutionSummary, MarketFunding, MarketId, PaperOrder, PortfolioDecisionView, PositionSide, Prediction, ProviderBudgetConfiguration, PublicPaperBudget, PublicPaperExecutionRecord, StrategyId, TradingControlData, TradingProviderId } from './types';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
@@ -259,62 +258,36 @@ function executionEligibility(prediction: Prediction, side: PositionSide, ledger
   return evaluateSignalPersistence(ledger.signalPersistence[persistenceKey(prediction, side)], nowMs, MIN_NET_EDGE, MIN_ESTIMATE_QUALITY);
 }
 
+interface LiveAttemptState {
+  attempts: PaperOrder[];
+  retry: MakerRetryDecision;
+  eligibility: SignalEligibility;
+  makerMissFallback: boolean;
+  fallbackFromOrderId?: string;
+}
+
 /**
- * Builds a prospective two-snapshot policy observation without consulting automation, cash, or current
- * positions. Those are operational constraints rather than properties of the signal being compared.
- * Every ordinary prediction, quote, timing, asset, and classified-regime gate remains unchanged.
+ * One source of truth for every live selection/readiness/submission call site. In adaptive mode attempt 2
+ * has no timer: two production-policy observations strictly after confirmed maker completion provide the
+ * fresh authority. Other modes retain the existing bounded maker-retry behavior.
  */
-async function persistenceCandidateCycle(dashboard: DashboardData, ledger: Ledger, regimeAllowsEntries: boolean): Promise<PersistenceCandidateCycle> {
-  const nowMs = Date.now();
-  const observedAt = dashboard.generatedAt;
-  const intents: PersistenceCandidateCycle['intents'] = [];
-  const productionEligibleIds: string[] = [];
-
-  for (const prediction of dashboard.predictions) {
-    const side = selectedSide(prediction);
-    if (!regimeAllowsEntries || !side || !prediction.market.live || !prediction.kalshi?.live || !assetAdmitted(prediction.symbol)) continue;
-    if (!qualifiesAsBuyEdge(prediction) || !qualifiesVenueBuyEdge(prediction, 'kalshi', side)) continue;
-    const regime = (await cycleRegimeFor(prediction.symbol, prediction.market.closesAt))?.regime;
-    if (!regimeAdmits(regime)) continue;
-    const quote = venueQuote(prediction, 'kalshi', side);
-    const entry = bestVenueEntry(prediction, 'kalshi', side);
-    if (!quote || !entry || !(quote.bid > 0) || quote.bid > quote.ask || quote.ask - quote.bid > MAX_SPREAD) continue;
-
-    const state = ledger.signalPersistence[persistenceKey(prediction, side)];
-    // Carries production's freshness ceiling deliberately: this candidate exists to measure snapshot
-    // count and span, so it must differ from production in that one variable and nothing else.
-    const candidate = evaluateSignalPersistenceWithRequirements(state, nowMs, MIN_NET_EDGE, MIN_ESTIMATE_QUALITY, {
-      requiredSnapshots: 2, requiredSpanMs: 15_000, maximumEdgeSpike: maximumEdgeSpike(),
-      spikeGateEnabled: edgeSpikeGateEnabled(),
-    });
-    const production = executionEligibility(prediction, side, ledger, nowMs);
-    const id = `${TWO_SNAPSHOT_PERSISTENCE_CANDIDATE_VERSION}:${BUY_POLICY_VERSION}:${prediction.symbol}:${side}:${prediction.kalshi.closesAt}`;
-    if (production.eligible) productionEligibleIds.push(id);
-    if (!candidate.eligible || !isFreshCalculationTimestamp(observedAt, nowMs)) continue;
-    const observations = state?.observations.slice(-2) ?? [];
-    const spanMs = observations.length < 2 ? 0
-      : observationBucket(Date.parse(observations.at(-1)!.at)) - observationBucket(Date.parse(observations[0].at));
-    const touch = prediction.makerFillEstimates?.[side] ?? prediction.makerFillEstimate ?? null;
-    const cohort = makerCohortEvidence(ledger.orders, quote.ask, quote.ask - quote.bid);
-    const makerEstimate = estimateMakerFill({
-      touch, cohortLabel: cohort.label, cohortAttempts: cohort.accepted, cohortFills: cohort.fills,
-    });
-    intents.push({
-      id, candidateVersion: TWO_SNAPSHOT_PERSISTENCE_CANDIDATE_VERSION,
-      productionPolicyVersion: BUY_POLICY_VERSION,
-      symbol: prediction.symbol, contractId: prediction.kalshi.ticker, side,
-      closesAt: prediction.kalshi.closesAt, createdAt: observedAt, calculationAt: observedAt,
-      selectedSideProbability: sideProbability(prediction, side), confidence: prediction.confidence,
-      askPrice: quote.ask, bidPrice: quote.bid, spread: quote.ask - quote.bid,
-      estimatedAskFeeRate: entry.feeRate, estimatedMakerFeeRate: venueFeeRate('kalshi', quote.bid, ENTRY_FEE_ROLE),
-      predictedNetEdge: entry.netEdge, qualifyingSnapshots: candidate.qualifyingSnapshots,
-      observationSpanMs: spanMs, productionEligibleAtCandidate: production.eligible,
-      ...(production.eligible ? { productionEligibleAt: observedAt, productionDelayMs: 0 } : {}),
-      makerFillProbability: makerEstimate?.probability ?? null,
-      makerFillModel: makerEstimate?.model,
-    });
-  }
-  return { productionPolicyVersion: BUY_POLICY_VERSION, observedAt, intents, productionEligibleIds };
+function liveAttemptState(
+  prediction: Prediction, side: PositionSide, ledger: Ledger, nowMs = Date.now(),
+): LiveAttemptState {
+  const attempts = liveAttempts(ledger, prediction, side);
+  const adaptive = entryExecutionSettings().mode === 'adaptive';
+  const retry = adaptive
+    ? adaptiveTakerFallbackDecision(attempts, nowMs, prediction.market.closesAt, maximumLiveMakerAttempts())
+    : makerRetryDecision(attempts, nowMs, prediction.market.closesAt, maximumLiveMakerAttempts());
+  const fallback = adaptive && retry.allowed && retry.attemptNumber === 2 && Boolean(retry.retryOfOrderId);
+  const parent = fallback ? attempts.find((attempt) => attempt.id === retry.retryOfOrderId) : undefined;
+  const state = fallback
+    ? signalPersistenceAfter(ledger.signalPersistence[persistenceKey(prediction, side)], parent?.makerCompletedAt ?? '')
+    : ledger.signalPersistence[persistenceKey(prediction, side)];
+  return {
+    attempts, retry, makerMissFallback: fallback, fallbackFromOrderId: fallback ? parent?.id : undefined,
+    eligibility: evaluateSignalPersistence(state, nowMs, MIN_NET_EDGE, MIN_ESTIMATE_QUALITY),
+  };
 }
 
 /**
@@ -435,8 +408,8 @@ function calendarEvaluationCycle(dashboard: DashboardData, ledger: Ledger): Cale
       probabilityUp: prediction.modelProbabilityUp, confidence: prediction.confidence,
       askUp: prediction.kalshi.askUp, bidUp: prediction.kalshi.bidUp,
       askDown: prediction.kalshi.askDown, bidDown: prediction.kalshi.bidDown,
-      estimatedFeeUp: venueFeeRate('kalshi', prediction.kalshi.askUp, ENTRY_FEE_ROLE),
-      estimatedFeeDown: venueFeeRate('kalshi', prediction.kalshi.askDown, ENTRY_FEE_ROLE),
+      estimatedFeeUp: venueFeeRate('kalshi', prediction.kalshi.askUp, 'taker'),
+      estimatedFeeDown: venueFeeRate('kalshi', prediction.kalshi.askDown, 'taker'),
       qualified: qualifiesAsBuyEdge(prediction), selectedSide: side,
       predictedNetEdge: entry?.netEdge, cycleRegime: prediction.cycleRegime?.regime,
       factors: prediction.factors.map(({ id, score, contribution, available }) => ({ id, score, contribution, available })),
@@ -470,7 +443,9 @@ function calendarEvaluationCycle(dashboard: DashboardData, ledger: Ledger): Cale
       symbol: prediction.symbol, contractId: prediction.kalshi!.ticker, side,
       createdAt: dashboard.generatedAt, selectedSideProbability: sideProbability(prediction, side),
       confidence: prediction.confidence, askPrice: quote.ask, bidPrice: quote.bid,
-      estimatedFeeRate: entry.feeRate, estimatedMakerFeeRate: venueFeeRate('kalshi', quote.bid, ENTRY_FEE_ROLE),
+      // `calendar-effects-v1` stamped this maker-labelled field with taker economics. Preserve that durable
+      // convention until the collector audit versions the schema; changing it in place would blend meanings.
+      estimatedFeeRate: entry.feeRate, estimatedMakerFeeRate: venueFeeRate('kalshi', quote.bid, 'taker'),
       predictedNetEdge: entry.netEdge,
       makerFillProbability: makerEstimate?.probability ?? null, makerFillModel: makerEstimate?.model,
     };
@@ -478,20 +453,45 @@ function calendarEvaluationCycle(dashboard: DashboardData, ledger: Ledger): Cale
   return { productionPolicyVersion: BUY_POLICY_VERSION, observedAt: dashboard.generatedAt, forecasts, windows: [...windows.values()] };
 }
 
-function entryExecutionDecision(prediction: Prediction, side: PositionSide, order: PaperOrder, ledger: Ledger): EntryExecutionDecision {
+function entryExecutionDecision(
+  prediction: Prediction, side: PositionSide, order: PaperOrder, ledger: Ledger,
+  attempt: Pick<LiveAttemptState, 'eligibility' | 'makerMissFallback' | 'fallbackFromOrderId'>,
+  refreshedQuote?: { bid: number; ask: number; spread: number },
+): EntryExecutionDecision {
   const settings = entryExecutionSettings();
-  const entry = bestVenueEntry(prediction, 'kalshi', side);
-  const eligibility = executionEligibility(prediction, side, ledger);
-  const evidence = makerCohortEvidence(ledger.orders, order.askPrice, order.spread);
+  const eligibility = attempt.eligibility;
+  const ask = refreshedQuote?.ask ?? order.askPrice;
+  const bid = refreshedQuote?.bid ?? order.bidPrice;
+  const spread = refreshedQuote?.spread ?? order.spread;
+  const probability = entrySideProbability(prediction.modelProbabilityUp, side);
+  const evidence = makerCohortEvidence(ledger.orders, ask, spread);
   return evaluateEntryExecutionPolicy({
     ...settings,
-    currentNetEdge: entry?.netEdge ?? Number.NEGATIVE_INFINITY,
+    currentNetEdge: probability - ask - venueFeeRate('kalshi', ask, 'taker'),
     medianNetEdge: eligibility.medianNetEdge ?? Number.NEGATIVE_INFINITY,
     confidence: prediction.confidence,
-    spread: order.spread,
-    makerNetEdge: entrySideProbability(prediction.modelProbabilityUp, side) - order.bidPrice,
-    makerEvidence: evidence,
+    spread,
+    makerNetEdge: probability - bid - venueFeeRate('kalshi', bid, 'maker'),
+    makerEvidence: evidence, makerMissFallback: attempt.makerMissFallback,
+    fallbackFromOrderId: attempt.fallbackFromOrderId,
   });
+}
+
+export function applyTakerQuoteMovementReserve(order: PaperOrder, stakeLimitCents: number): string | undefined {
+  if (order.venue !== 'kalshi') return 'Taker quote movement is implemented only for Kalshi.';
+  const cap = takerQuoteCap(order.issuanceAskPrice ?? order.askPrice);
+  if (!cap) return 'Issuance ask cannot produce a valid one-cent taker cap.';
+  const fill = estimatePaperFill(stakeLimitCents, cap.maximumPrice, order.venue);
+  if (!fill) return `${stakeLimitCents}c all-in cap cannot reserve the minimum quantity at the relaxed taker maximum.`;
+  // Reserve and size at the worst price that may be submitted. The signed path uses the lower refreshed
+  // ask when available and the ledger returns every unused whole cent after the authoritative fill.
+  order.approvedMaximumPrice = cap.maximumPrice;
+  order.quantity = fill.quantity;
+  order.requestedQuantity = fill.quantity;
+  order.stakeCents = fill.stakeCents;
+  order.feeCents = fill.feeCents;
+  order.potentialPayoutCents = fill.potentialPayoutCents;
+  return undefined;
 }
 
 function contractId(prediction: Prediction, venue: 'polymarket' | 'kalshi'): string {
@@ -632,8 +632,8 @@ function updatePortfolioDecisions(dashboard: DashboardData, status: TradingContr
       next[key] = { state: 'blocked', reason: `Post-exit re-entry cooldown has ${Math.ceil(cooldownMs / 1000)}s remaining; fresh persistence is also required.`, updatedAt: now };
       continue;
     }
-    const attempts = liveAttempts(ledger, prediction, side);
-    const retry = makerRetryDecision(attempts, Date.now(), prediction.market.closesAt, maximumLiveMakerAttempts());
+    const attempt = liveAttemptState(prediction, side, ledger);
+    const { attempts, retry } = attempt;
     if (attempts.length && !retry.allowed) {
       const active = attempts.find((order) => order.status === 'open' || order.status === 'pending_reservation' || order.status === 'uncertain');
       next[key] = active
@@ -646,15 +646,27 @@ function updatePortfolioDecisions(dashboard: DashboardData, status: TradingContr
       next[key] = { state: 'blocked', reason: `Standalone ${side} signal qualifies, but the Kalshi-specific ${side} quote does not clear the live net-edge and price gates.`, updatedAt: now };
       continue;
     }
-    const maturity = executionEligibility(prediction, side, ledger);
+    const maturity = attempt.eligibility;
     if (!maturity.eligible) {
-      next[key] = { state: 'qualified', reason: `Standalone expected-value policy passes; execution evidence is still collecting. ${maturity.reason}`, updatedAt: now };
+      next[key] = { state: 'qualified', reason: `${attempt.makerMissFallback ? 'Maker miss confirmed; fresh post-miss evidence is collecting.' : 'Standalone expected-value policy passes; execution evidence is still collecting.'} ${maturity.reason}`, updatedAt: now };
       continue;
     }
     const candidate = buildOrder(prediction, side, status, ledger, dashboard.generatedAt, dashboard.modelVersion, 'live', Math.min(status.proposedStakeCents, maxLiveStakeCents()), 'kalshi');
     if ('reason' in candidate) {
       next[key] = { state: 'blocked', reason: candidate.reason, updatedAt: now };
       continue;
+    }
+    const decision = entryExecutionDecision(prediction, side, candidate.order, ledger, attempt);
+    if (attempt.makerMissFallback && decision.executedStyle !== 'taker') {
+      next[key] = { state: 'qualified', reason: decision.reason, updatedAt: now };
+      continue;
+    }
+    if (decision.executedStyle === 'taker') {
+      const reserveFailure = applyTakerQuoteMovementReserve(candidate.order, Math.min(status.proposedStakeCents, maxLiveStakeCents()));
+      if (reserveFailure) {
+        next[key] = { state: 'blocked', reason: reserveFailure, updatedAt: now };
+        continue;
+      }
     }
     built.set(key, candidate.order);
   }
@@ -664,7 +676,7 @@ function updatePortfolioDecisions(dashboard: DashboardData, status: TradingContr
   })), exposures, portfolioConstraints());
   for (const item of selection) next[item.id] = {
     state: item.selected ? 'portfolio-selected' : 'blocked',
-    reason: `${item.reason}${(retryNumbers.get(item.id) ?? 1) > 1 ? ` Bounded maker retry attempt ${retryNumbers.get(item.id)}/${maximumLiveMakerAttempts()}; all current gates were revalidated.` : ''}`,
+    reason: `${item.reason}${(retryNumbers.get(item.id) ?? 1) > 1 ? ' Fresh post-miss evidence and absolute taker gates authorize the one capped fallback attempt.' : ''}`,
     expectedProfitCents: item.expectedProfitCents, adjustedExpectedContributionCents: item.adjustedExpectedContributionCents,
     rank: item.rank ?? undefined, updatedAt: now,
   };
@@ -989,7 +1001,10 @@ export function attachMatchedLiveFillShadow(orders: PaperOrder[], liveOrder: Pap
   return true;
 }
 
-async function executePreparedLiveBuy(order: PaperOrder, status: TradingControlData, ledger: Ledger): Promise<void> {
+async function executePreparedLiveBuy(
+  order: PaperOrder, status: TradingControlData, ledger: Ledger,
+  authorizeTakerQuote?: (quote: { bid: number; ask: number; spread: number }) => string | undefined,
+): Promise<void> {
   const executionStyle = order.entryExecutionDecision?.executedStyle ?? 'maker';
   beginLiveTransaction(`Managing live ${order.symbol} ${executionStyle} entry.`);
   try {
@@ -1018,6 +1033,7 @@ async function executePreparedLiveBuy(order: PaperOrder, status: TradingControlD
       ? await placeKalshiTakerBuy({
         ticker: order.contractId, positionSide: order.side, maximumPriceCents: approvedMaximumPrice * 100,
         count: order.quantity, clientOrderId: order.clientOrderId ?? order.id, onAccepted, onObservation,
+        authorizeQuote: authorizeTakerQuote,
       })
       : await placeKalshiBuy({
         ticker: order.contractId, positionSide: order.side, priceCents: approvedMaximumPrice * 100,
@@ -1059,7 +1075,7 @@ async function executePreparedLiveBuy(order: PaperOrder, status: TradingControlD
     const definitivePostOnlyCross = message.toLowerCase().includes('post only cross');
     const definitiveTakerSkip = message.startsWith('Taker not submitted:');
     order.status = definitivePostOnlyCross || definitiveTakerSkip ? 'unfilled' : 'rejected';
-    order.noFillReason = definitivePostOnlyCross ? 'post_only_race' : definitiveTakerSkip ? 'ioc_no_fill' : undefined;
+    order.noFillReason = definitivePostOnlyCross ? 'post_only_race' : definitiveTakerSkip ? 'pre_submit_quote_moved' : undefined;
     order.reason = definitivePostOnlyCross
       ? 'Post-only acknowledgement race remained after three refreshed submissions with progressive tick backoff; Kalshi rejected it before placement and no money was spent.'
       : message;
@@ -1517,7 +1533,7 @@ async function runLive(dashboard: DashboardData, status: TradingControlData, led
   const qualified = regimeAllowed.filter((item) => {
     const side = selectedSide(item)!;
     if (reentryCooldownRemainingMs(ledger, item, 'live', side) > 0) return false;
-    return makerRetryDecision(liveAttempts(ledger, item, side), Date.now(), item.market.closesAt, maximumLiveMakerAttempts()).allowed;
+    return liveAttemptState(item, side, ledger).retry.allowed;
   });
   const selected = qualified.filter((item) => {
     const side = selectedSide(item)!;
@@ -1526,7 +1542,7 @@ async function runLive(dashboard: DashboardData, status: TradingControlData, led
     const aSide = selectedSide(a)!, bSide = selectedSide(b)!;
     return (ledger.portfolioDecisions[persistenceKey(a, aSide)]?.rank ?? 99) - (ledger.portfolioDecisions[persistenceKey(b, bSide)]?.rank ?? 99);
   });
-  const eligibleSelected = selected.filter((item) => executionEligibility(item, selectedSide(item)!, ledger).eligible);
+  const eligibleSelected = selected.filter((item) => liveAttemptState(item, selectedSide(item)!, ledger).eligibility.eligible);
   const prediction = eligibleSelected[0];
   if (!prediction) {
     const warming = qualified[0];
@@ -1535,7 +1551,7 @@ async function runLive(dashboard: DashboardData, status: TradingControlData, led
       const decision = ledger.portfolioDecisions[persistenceKey(warming, side)];
       return skip(`${warming.symbol} ${side}: ${decision?.reason ?? `qualified but not execution-ready — ${executionEligibility(warming, side, ledger).reason}`}`);
     }
-    const blocked = allQualified.map((item) => ({ item, side: selectedSide(item)!, retry: makerRetryDecision(liveAttempts(ledger, item, selectedSide(item)!), Date.now(), item.market.closesAt, maximumLiveMakerAttempts()) })).filter(({ retry }) => !retry.allowed);
+    const blocked = allQualified.map((item) => ({ item, side: selectedSide(item)!, retry: liveAttemptState(item, selectedSide(item)!, ledger).retry })).filter(({ retry }) => !retry.allowed);
     if (blocked.length) return skip(blocked.map(({ item, retry }) => `${item.symbol}: ${retry.reason}`).join(' '));
     return skip('No new positive-edge binary buy qualifies right now.');
   }
@@ -1575,14 +1591,29 @@ async function runLive(dashboard: DashboardData, status: TradingControlData, led
     // fee-reserve path put real money outside the operator's allocation.
     if (built.order.stakeCents > liveFunding.spendableCents) { if (!placed) return skip(liveFunding.reason); continue; }
     const logicalId = orderId(candidate, 'live', side, ledger);
-    const retry = makerRetryDecision(liveAttempts(ledger, candidate, side), Date.now(), candidate.market.closesAt, maximumLiveMakerAttempts());
-    if (!retry.allowed) { if (!placed) return skip(`${candidate.symbol}: ${retry.reason}`); continue; }
+    const attempt = liveAttemptState(candidate, side, ledger);
+    const { retry } = attempt;
+    if (!retry.allowed || !attempt.eligibility.eligible) {
+      if (!placed) return skip(`${candidate.symbol}: ${!retry.allowed ? retry.reason : attempt.eligibility.reason}`);
+      continue;
+    }
     built.order.logicalOrderId = logicalId;
     built.order.attemptNumber = retry.attemptNumber;
     built.order.retryOfOrderId = retry.retryOfOrderId;
     built.order.id = makerAttemptId(logicalId, retry.attemptNumber);
     built.order.clientOrderId = built.order.id;
-    built.order.entryExecutionDecision = entryExecutionDecision(candidate, side, built.order, ledger);
+    built.order.entryExecutionDecision = entryExecutionDecision(candidate, side, built.order, ledger, attempt);
+    // Attempt 2 is taker-or-wait, never another maker chase. Absolute gates can continue collecting until
+    // they clear or the final retry cutoff expires, without consuming the durable second-attempt id.
+    if (attempt.makerMissFallback && built.order.entryExecutionDecision.executedStyle !== 'taker') {
+      if (!placed) return skip(`${candidate.symbol}: ${built.order.entryExecutionDecision.reason}`);
+      continue;
+    }
+    if (built.order.entryExecutionDecision.executedStyle === 'taker') {
+      const reserveFailure = applyTakerQuoteMovementReserve(built.order, liveStakeCeiling);
+      if (reserveFailure) { if (!placed) return skip(`${candidate.symbol}: ${reserveFailure}`); continue; }
+      if (built.order.stakeCents > liveFunding.spendableCents) { if (!placed) return skip(liveFunding.reason); continue; }
+    }
     // Record the path label that admitted this live candidate so later cohorts can be audited.
     built.order.entryCycleRegime = (await cycleRegimeFor(candidate.symbol, candidate.market.closesAt))?.regime;
     // The authorization ceiling, captured before a fill can revise `stakeCents` down. Reconciliation
@@ -1590,8 +1621,15 @@ async function runLive(dashboard: DashboardData, status: TradingControlData, led
     built.order.reservedStakeCents = built.order.stakeCents;
     built.order.shadowTakerAllInCents = built.order.stakeCents;
     built.order.shadowTakerQuantity = built.order.quantity;
+    const authorizeTakerQuote = built.order.entryExecutionDecision.executedStyle === 'taker'
+      ? (quote: { bid: number; ask: number; spread: number }): string | undefined => {
+        if (MAX_ENTRY_PRICE + 1e-9 < quote.ask) return `Refreshed ask ${(quote.ask * 100).toFixed(1)}c exceeds the ${MAX_ENTRY_PRICE * 100}c entry ceiling.`;
+        const refreshed = entryExecutionDecision(candidate, side, built.order, ledger, attempt, quote);
+        return refreshed.executedStyle === 'taker' ? undefined : refreshed.reason;
+      }
+      : undefined;
     ledger.lastLiveSkip = undefined;
-    await executePreparedLiveBuy(built.order, status, ledger);
+    await executePreparedLiveBuy(built.order, status, ledger, authorizeTakerQuote);
     placed += 1;
   }
   return placed > 0;
@@ -1610,16 +1648,6 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
   void Promise.resolve()
     .then(() => updateCalendarEvaluationStore(calendarEvaluationCycle(dashboard, ledger)))
     .catch((error) => console.error('Calendar evaluation collection failed:', error));
-  void persistenceCandidateCycle(dashboard, ledger, regimeGate.allowsEntries)
-    .then(async (cycle) => {
-      await updatePersistenceCandidateStore(cycle);
-      // Whether those entries would have filled, simulated against observed prints. Chained after the
-      // store write so decision-time evidence is durable before any observation request is made, and
-      // still inside the detached branch so no venue call reaches the execution path.
-      // See docs/maker-post-observation-design.md §5.
-      await observeMakerPosts(cycle.intents);
-    })
-    .catch((error) => console.error('Two-snapshot persistence candidate collection failed:', error));
   void recordContractPaths(dashboard.predictions ?? [])
     // Candidate summaries are derived from the paths just recorded, then ungraded windows are asked of the
     // venue. Both are observation only, both are detached, and neither may delay a cycle with money in it.
@@ -1629,19 +1657,11 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
   void updateEdgeSpikeSentinels(edgeSpikeSentinelCycle(dashboard, ledger))
     .catch((error) => console.error('Edge spike sentinel collection failed:', error));
   const status = await getTradingControl();
-  // Long-shot collection only: this records triggers and outcomes and places no order. It runs detached
-  // and unconditionally, because the evidence is what decides whether to enable the policy, so gating
-  // collection on it being enabled would be circular. See lib/long-shot-execution.ts.
+  // Long-shot evidence reconciliation only: trigger records come from the authoritative paper entry
+  // decision inside `runLongShot`. This detached pass recovers stamped decisions, observes peaks, and settles them.
   void getHoldSentinels()
     .then((existingSentinels) => collectLongShotEvidence({
       dashboard, orders: ledger.orders, existingSentinels,
-      // Evidence is sized from the paper bankroll: a live-sized ticket makes Kalshi's 1c minimum fee a
-      // double-digit tax on every recorded trade, which distorts the return being measured.
-      startingCents: longShotTrackStartingCents({
-        mode: 'paper',
-        marketCapCents: status.control.startingBudgetCents,
-        paperBankrollCents: ledger.paperBudget.startingCents,
-      }),
     }))
     .then((cycle) => updateHoldSentinelStore(cycle))
     .catch((error) => console.error('Long-shot evidence collection failed:', error));
@@ -1661,11 +1681,9 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
   const liveManagement = runLive(dashboard, status, ledger, regimeGate, budgets);
   const [paperChanged, liveChanged] = await Promise.all([paperManagement, liveManagement]);
   changed = paperChanged || liveChanged || changed;
-  // Exits before entries, so a position that reached its mark this tick frees its slot for a re-entry in
-  // the same cycle rather than waiting fifteen seconds. Both run inside the serialized engine queue.
+  // The regular cycle owns exits only. Entries belong exclusively to `longShotEntryTick`, which refreshes
+  // the exact quote and requires trailing confirmation before either track reaches `runLongShot`.
   changed = await runLongShotExits(dashboardBid(dashboard), ledger) || changed;
-  changed = await runLongShot(dashboard, status, ledger, 'paper') || changed;
-  changed = await runLongShot(dashboard, status, ledger, 'live') || changed;
   if (changed || ledger.lastLiveSkip?.reason !== previousSkip) await writeLedger(ledger);
 }
 
@@ -1742,9 +1760,7 @@ async function runLongShot(
       if (!decision.qualifies) continue;
 
       const fill = estimatePaperFill(funding.sizing.ticketCents, ask, 'kalshi');
-      // The strategy's own headroom binds before any shared cash does; the shared budget is charged only
-      // for live, where the cash is real.
-      if (!fill || fill.stakeCents > funding.headroomCents) continue;
+      if (!fill) continue;
 
       const trail = trailing.get(`${quote.ticker}:${side}`);
       const order = buildLongShotOrder({
@@ -1754,6 +1770,21 @@ async function runLongShot(
         budgetEpochId: status.control.epochId, paperBankrollId: ledger.paperBudget.fundingId, fill,
         firstTouchAskCents: trail?.firstTouchAskCents, trailingLooks: trail?.looks,
       });
+      if (mode === 'paper') order.holdSentinelVersion = HOLD_SENTINEL_VERSION;
+      const decisionSentinel = mode === 'paper' ? holdSentinelFromStampedPaperOrder(order) : null;
+      // The strategy's own headroom binds before any shared cash does; the shared budget is charged only
+      // for live, where the cash is real. Unlike a policy disqualification, this operational refusal stays
+      // in the trigger-time hold sample.
+      if (fill.stakeCents > funding.headroomCents) {
+        if (decisionSentinel) {
+          const skippedSentinel = { ...decisionSentinel, executed: false,
+            skipReason: `Long-shot paper headroom ${funding.headroomCents}¢ is below the ${fill.stakeCents}¢ all-in ticket.` };
+          await updateHoldSentinelStore({
+            observedAt: skippedSentinel.observedAt, sentinels: [skippedSentinel], outcomes: {}, peakBids: {},
+          });
+        }
+        continue;
+      }
       if (trail) {
         order.reason = `Trailed ${trail.looks} look(s) from ${trail.firstTouchAskCents.toFixed(1)}¢; bought at ${(ask * 100).toFixed(1)}¢ for ${trailingGainCents(trail, ask * 100).toFixed(2)}¢.`;
         // Cleared on the buy so a re-entry in the same window trails afresh rather than inheriting a
@@ -1772,6 +1803,14 @@ async function runLongShot(
         } satisfies Partial<PaperOrder>);
         ledger.orders.push(order);
         changed = true;
+        // Durable order first. If the evidence write fails, the detached reconciler rebuilds only this
+        // prospectively version-stamped decision on its next pass; historical fills have no such stamp.
+        await writeLedger(ledger);
+        if (decisionSentinel) {
+          await updateHoldSentinelStore({
+            observedAt: decisionSentinel.observedAt, sentinels: [decisionSentinel], outcomes: {}, peakBids: {},
+          });
+        }
         continue;
       }
 
@@ -2350,9 +2389,14 @@ export function resetPaperBudget(bankrollCents: number): Promise<ExecutionSummar
 interface LedgerFigures { startingCents: number; availableCents: number; reservedCents: number; proposedStakeCents: number }
 
 function inferredNoFillReason(order: PaperOrder): PaperOrder['noFillReason'] {
-  if (order.noFillReason) return order.noFillReason;
   const reason = order.reason?.toLowerCase() ?? '';
+  // Historical taker skips were durably labelled `ioc_no_fill` even though no IOC reached the venue.
+  // Correct the bounded read model from the immutable reason; never rewrite the execution ledger.
+  if (order.status === 'unfilled' && reason.startsWith('taker not submitted:')) return 'pre_submit_quote_moved';
+  if (order.noFillReason) return order.noFillReason;
   if (order.status === 'unfilled' && reason.includes('post-only') && (reason.includes('cross') || reason.includes('acknowledgement race'))) return 'post_only_race';
+  if (order.status === 'unfilled' && order.venueOrderId
+    && (order.entryExecutionDecision?.executedStyle === 'taker' || order.liquidityRole === 'taker')) return 'ioc_no_fill';
   if (order.status === 'unfilled' && order.venueOrderId) return 'rested_no_fill';
   return undefined;
 }
@@ -2562,6 +2606,7 @@ export async function getPublicPaperBudget(): Promise<PublicPaperBudget> {
 export async function getExecutionSummaries(control: { state: string; mode: string; startingBudgetCents: number; workingEquityCents: number; availableBudgetCents: number; reservedBudgetCents: number; proposedStakeCents: number; perTradeCents: number; epochId?: string; epochStartedAt?: string }): Promise<{ paper: ExecutionSummary; live: ExecutionSummary; executionSignals: ExecutionSignalReadiness[]; liveAvailable: boolean; liveBlockers: string[]; maximumLiveMakerAttempts: number; portfolioConstraints: Pick<PortfolioConstraints, 'maximumPositions' | 'maximumSameWindow' | 'maximumSameGroupPerWindow'>; regimeGate: RegimeGateStatus }> {
   const [ledger, regimeGate] = await Promise.all([readLedger(), getRegimeGateStatus()]);
   const now = Date.now();
+  const persistenceRequirements = productionSignalPersistence();
   const openPaper = ledger.orders.filter((order) => order.executionMode === 'paper' && (order.status === 'open' || order.status === 'pending_reservation')).reduce((sum, order) => sum + order.stakeCents, 0);
   const paperAvailable = ledger.paperBudget.availableCents;
   // Paper has separate cash but uses the same explicit all-in purchase size for comparable shadow fills.
@@ -2586,7 +2631,7 @@ export async function getExecutionSummaries(control: { state: string; mode: stri
     executionSignals: Object.values(ledger.signalPersistence)
       .filter((state) => Date.parse(state.closesAt) > now)
       .map((state) => {
-        const result = evaluateSignalPersistence(state, now, MIN_NET_EDGE, MIN_ESTIMATE_QUALITY);
+        let result = evaluateSignalPersistence(state, now, MIN_NET_EDGE, MIN_ESTIMATE_QUALITY);
         const windowOrders = ledger.orders.filter((order) => order.executionMode === 'live' && order.symbol === state.symbol
           && order.side === state.side && order.closesAt === state.closesAt && !order.id.includes(':exit:'))
           .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
@@ -2595,16 +2640,35 @@ export async function getExecutionSummaries(control: { state: string; mode: stri
         const logicalId = currentOrders.at(-1)?.logicalOrderId;
         const attempts = logicalId ? entryAttemptsForLogicalOrder(ledger.orders, logicalId) : [];
         const liveOrder = attempts.at(-1);
-        const retry = makerRetryDecision(attempts, now, state.closesAt, maximumLiveMakerAttempts());
+        const adaptive = entryExecutionSettings().mode === 'adaptive';
+        const retry = adaptive
+          ? adaptiveTakerFallbackDecision(attempts, now, state.closesAt, maximumLiveMakerAttempts())
+          : makerRetryDecision(attempts, now, state.closesAt, maximumLiveMakerAttempts());
+        const portfolio = ledger.portfolioDecisions[`${state.symbol}:${state.side}:${state.closesAt}`];
+        const fallbackOpen = adaptive && retry.allowed && retry.attemptNumber === 2 && Boolean(liveOrder?.makerCompletedAt);
+        if (fallbackOpen) {
+          result = evaluateSignalPersistence(signalPersistenceAfter(state, liveOrder!.makerCompletedAt!), now, MIN_NET_EDGE, MIN_ESTIMATE_QUALITY);
+        }
+        const fallbackState = liveOrder?.status === 'unfilled'
+          ? fallbackOpen
+            ? !result.eligible ? 'collecting' as const
+              : portfolio?.state === 'portfolio-selected' ? 'ready' as const : 'checks_pending' as const
+            : 'ended' as const
+          : undefined;
         return {
           symbol: state.symbol, side: state.side, closesAt: state.closesAt, eligible: result.eligible,
-          reason: result.reason, qualifyingSnapshots: result.qualifyingSnapshots, medianNetEdge: result.medianNetEdge,
-          portfolio: ledger.portfolioDecisions[`${state.symbol}:${state.side}:${state.closesAt}`],
+          reason: result.reason, qualifyingSnapshots: result.qualifyingSnapshots,
+          requiredSnapshots: persistenceRequirements.requiredSnapshots,
+          requiredSpanMs: persistenceRequirements.requiredSpanMs,
+          medianNetEdge: result.medianNetEdge, portfolio,
           liveAttempt: liveOrder ? {
             status: liveOrder.status, createdAt: liveOrder.createdAt, filledCount: liveOrder.filledCount,
             quantity: liveOrder.quantity, reason: liveOrder.reason, noFillReason: inferredNoFillReason(liveOrder),
             attemptNumber: liveOrder.attemptNumber ?? attempts.length, maximumAttempts: maximumLiveMakerAttempts(),
-            retryEligible: retry.allowed && attempts.length > 0,
+            retryEligible: fallbackState === 'ready', executedStyle: liveOrder.entryExecutionDecision?.executedStyle,
+            fallbackState,
+            fallbackQualifyingSnapshots: fallbackOpen ? result.qualifyingSnapshots : undefined,
+            fallbackRequiredSnapshots: fallbackOpen ? persistenceRequirements.requiredSnapshots : undefined,
           } : undefined,
         };
       }),

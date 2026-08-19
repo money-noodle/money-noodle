@@ -52,7 +52,7 @@ const DATA = path.resolve(process.cwd(), 'data');
 const SHARDS = path.join(DATA, 'forecast-history-shards');
 const CYCLE_SECONDS = 900;
 
-/** Kalshi taker rate per $1 of payout, matching `venueFeeFraction` and the gate's `ENTRY_FEE_ROLE`. */
+/** Kalshi taker rate per $1 of payout, matching the gate's immediate-execution admission semantics. */
 const feeRate = (price) => 0.07 * price * (1 - price);
 /** `exitUncertainty` in lib/paper-execution.ts. */
 const uncertainty = (confidence) => Math.max(0.03, Math.min(0.15, (1 - confidence) * 0.25));

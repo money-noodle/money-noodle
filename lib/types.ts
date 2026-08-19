@@ -1487,13 +1487,13 @@ export interface PaperOrder {
   venueOrderId?: string;
   filledCount?: number;
   liquidityRole?: 'maker' | 'taker';
-  noFillReason?: 'post_only_race' | 'rested_no_fill' | 'ioc_no_fill';
+  noFillReason?: 'post_only_race' | 'rested_no_fill' | 'pre_submit_quote_moved' | 'ioc_no_fill';
   /** Present on grouped API views; the durable ledger still retains every individual attempt. */
   attemptHistory?: Array<{
     id: string;
     attemptNumber: number;
     status: PaperOrderStatus;
-    noFillReason?: 'post_only_race' | 'rested_no_fill' | 'ioc_no_fill';
+    noFillReason?: 'post_only_race' | 'rested_no_fill' | 'pre_submit_quote_moved' | 'ioc_no_fill';
     filledCount?: number;
     createdAt: string;
   }>;
@@ -1514,7 +1514,7 @@ export interface PaperOrder {
   makerFillEstimate?: MakerFillEstimate;
   /** Paper maker simulation: the order rests until this instant, then goes unfilled. */
   restingUntil?: string;
-  /** When a maker attempt became terminal; retry cooldown starts after cancellation, not submission. */
+  /** When maker became terminal; adaptive freshness starts here, while maker-only retry cooldown also uses it. */
   makerCompletedAt?: string;
   settlementAverageEstimate?: SettlementAverageEstimate;
   /** Legacy entry price retained for compatibility. New orders keep this as the issuance ask. */
@@ -1555,6 +1555,9 @@ export interface PaperOrder {
     makerCohort: string;
     makerSamples: number;
     makerFillRate: number | null;
+    /** Attempt 2 follows one authoritative maker zero-fill for this exact logical entry sequence. */
+    makerMissFallback?: boolean;
+    fallbackFromOrderId?: string;
   };
   shadowTakerAllInCents?: number;
   shadowTakerQuantity?: number;
@@ -1611,6 +1614,13 @@ export interface PaperOrder {
    * mistaken for the one this order actually traded under.
    */
   exitTargetCents?: number;
+  /** Long-shot entry mark committed at decision time, paired with `exitTargetCents`. */
+  entryTargetCents?: number;
+  /**
+   * Prospective hold-sentinel generation committed with this paper decision. Absent historical orders are
+   * never reconstructed, so repairing the observer cannot backfill a selected fills-only cohort.
+   */
+  holdSentinelVersion?: string;
   /**
    * Policy version this order was placed under, derived from the settings that define a cohort. Read by
    * the report so a parameter change starts a fresh cohort instead of blending two rule sets.
@@ -1677,6 +1687,8 @@ export interface ExecutionSignalReadiness {
   eligible: boolean;
   reason: string;
   qualifyingSnapshots: number;
+  requiredSnapshots: number;
+  requiredSpanMs: number;
   medianNetEdge: number | null;
   portfolio?: PortfolioDecisionView;
   /** Latest live entry lifecycle for this exact asset and contract window. */
@@ -1686,10 +1698,14 @@ export interface ExecutionSignalReadiness {
     filledCount?: number;
     quantity: number;
     reason?: string;
-    noFillReason?: 'post_only_race' | 'rested_no_fill' | 'ioc_no_fill';
+    noFillReason?: 'post_only_race' | 'rested_no_fill' | 'pre_submit_quote_moved' | 'ioc_no_fill';
     attemptNumber?: number;
     maximumAttempts?: number;
     retryEligible?: boolean;
+    executedStyle?: 'maker' | 'taker';
+    fallbackState?: 'collecting' | 'checks_pending' | 'ready' | 'ended';
+    fallbackQualifyingSnapshots?: number;
+    fallbackRequiredSnapshots?: number;
   };
 }
 
@@ -1808,7 +1824,7 @@ export interface PublicPaperExecutionRecord {
   feeCents: number;
   pnlCents?: number;
   outcome?: PositionSide;
-  noFillReason?: 'post_only_race' | 'rested_no_fill' | 'ioc_no_fill';
+  noFillReason?: 'post_only_race' | 'rested_no_fill' | 'pre_submit_quote_moved' | 'ioc_no_fill';
   liquidityRole?: 'maker' | 'taker';
 }
 

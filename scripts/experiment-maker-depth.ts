@@ -1,4 +1,7 @@
 /**
+ * RETIRED HISTORICAL INSTRUMENT — no package command invokes this file. Its v1 wire schema discarded
+ * `takerSide`, so its rows are a permissive upper bound and must not be resumed or treated as decision-grade.
+ *
  * Bounded maker-fill experiment: records order-book depth and executed trade prints for the live
  * `crypto-15m` contracts, so a resting order can be scored on whether volume actually traded through its
  * price rather than on whether the quote merely touched it.
@@ -33,6 +36,11 @@ import { fetchKalshiTradePrintsSince } from '../lib/kalshi-market-data';
 import { selectedSideDepth } from '../lib/order-book-depth';
 import { encodeSample, type MakerDepthSample } from '../lib/maker-depth-experiment';
 import type { PositionSide } from '../lib/types';
+
+function refuseRetiredRun(): void {
+  throw new Error('Retired: maker-depth-experiment-v1 discarded takerSide and must not collect new rows.');
+}
+refuseRetiredRun();
 
 const DATA = path.resolve(process.cwd(), 'data');
 const OUTPUT = path.join(DATA, 'maker-depth-experiment.jsonl');

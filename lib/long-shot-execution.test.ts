@@ -3,9 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 
 import {
-  LONG_SHOT_DEFAULT_ALLOCATION_PERCENT, longShotAllocationCents, longShotCycle, longShotSizingFor,
-  longShotTrackStartingCents,
-  sentinelPeakBids,
+  LONG_SHOT_DEFAULT_ALLOCATION_PERCENT, collectLongShotEvidence, holdSentinelFromStampedPaperOrder,
+  longShotAllocationCents, longShotSizingFor, longShotTrackStartingCents, sentinelPeakBids,
 } from './long-shot-execution';
 import { HOLD_SENTINEL_VERSION, type HoldSentinel } from './hold-sentinel';
 import { longShotSettings, longShotSizing } from './long-shot-policy';
@@ -40,59 +39,42 @@ const order = (patch: Partial<PaperOrder> = {}): PaperOrder => ({
   ...patch,
 });
 
-describe('long-shot cycle evaluation', () => {
-  it('commits a sentinel for a side at the mark and ignores the rest of the book', () => {
-    const cycle = longShotCycle(dashboard(prediction('BTC', 0.10, 0.91), prediction('ETH', 0.55, 0.46)), [], sizing, settings, nowMs);
-    expect(cycle.sentinels).toHaveLength(1);
-    expect(cycle.sentinels[0]).toMatchObject({
-      symbol: 'BTC', side: 'UP', entryAskCents: 10, exitMarkCents: 90,
-      quantity: 1.8, stakeCents: 20, entryGeneration: 1, executed: false,
+describe('long-shot trigger capture', () => {
+  const stampedOrder = (patch: Partial<PaperOrder> = {}) => order({
+    executionMode: 'paper', strategyPolicyVersion: 'long-shot-round-trip-buy10-sell90-win600-v1',
+    holdSentinelVersion: HOLD_SENTINEL_VERSION, entryTargetCents: 10, exitTargetCents: 90,
+    issuanceAskPrice: 0.1, issuanceBidPrice: 0.09, entryGeneration: 1,
+    calculationAt: new Date(nowMs).toISOString(), ...patch,
+  });
+
+  it('builds the sentinel from the prospectively stamped paper decision', () => {
+    expect(holdSentinelFromStampedPaperOrder(stampedOrder())).toMatchObject({
+      id: 'BTC:UP:2026-08-15T00:15:00Z:1', sentinelVersion: HOLD_SENTINEL_VERSION,
+      policyVersion: 'long-shot-round-trip-buy10-sell90-win600-v1', executed: true,
+      entryAskCents: 10, oppositeAskCents: 91, entryMarkCents: 10, exitMarkCents: 90,
+      quantity: 1.8, stakeCents: 20, estimatedFeeCents: 2, entryGeneration: 1,
     });
   });
 
-  it('records the trigger as unexecuted while nothing is wired to trade it', () => {
-    // Explicit in the data rather than implied by absence, so the collection-only period is separable
-    // from a later period where the executing lane declined for its own reasons.
-    const cycle = longShotCycle(dashboard(prediction('BTC', 0.10, 0.91)), [], sizing, settings, nowMs);
-    expect(cycle.sentinels[0].executed).toBe(false);
-    expect(cycle.sentinels[0].skipReason).toContain('not wired in yet');
+  it('refuses historical and live orders rather than backfilling a selected cohort', () => {
+    expect(holdSentinelFromStampedPaperOrder(stampedOrder({ holdSentinelVersion: undefined }))).toBeNull();
+    expect(holdSentinelFromStampedPaperOrder(stampedOrder({ executionMode: 'live' }))).toBeNull();
   });
 
-  it('gives the sentinel a stable id so re-observing cannot manufacture a second sample', () => {
-    const first = longShotCycle(dashboard(prediction('BTC', 0.10, 0.91)), [], sizing, settings, nowMs);
-    const later = longShotCycle(dashboard(prediction('BTC', 0.09, 0.92)), [], sizing, settings, nowMs + 15_000);
-    expect(later.sentinels[0].id).toBe(first.sentinels[0].id);
+  it('records an operationally blocked decision with its exact reason', () => {
+    const result = holdSentinelFromStampedPaperOrder(stampedOrder({ entryGeneration: 2 }), {
+      executed: false, skipReason: 'Paper headroom is below the all-in ticket.',
+    });
+    expect(result).toMatchObject({ entryGeneration: 2, executed: false, skipReason: 'Paper headroom is below the all-in ticket.' });
   });
 
-  it('honours the open-position and re-entry rules against the shared ledger', () => {
-    // One open long shot on this asset and window blocks another: averaging down is the one shape that
-    // compounds a single window's loss.
-    const blocked = longShotCycle(dashboard(prediction('BTC', 0.10, 0.91)), [order()], sizing, settings, nowMs);
-    expect(blocked.sentinels).toHaveLength(0);
-    expect(blocked.skipped.join(' ')).toContain('already open on BTC');
-
-    // A closed prior generation permits a re-entry and increments the generation.
-    const reentry = longShotCycle(dashboard(prediction('BTC', 0.10, 0.91)), [order({ status: 'sold' })], sizing, settings, nowMs);
-    expect(reentry.sentinels[0].entryGeneration).toBe(2);
-  });
-
-  it('ignores the edge policy\'s orders when counting its own exposure', () => {
-    const edgeOrder = order({ id: 'edge-1', strategyId: 'edge-binary-buy' });
-    const cycle = longShotCycle(dashboard(prediction('BTC', 0.10, 0.91)), [edgeOrder], sizing, settings, nowMs);
+  it('reconciles only stamped decisions and never creates triggers from the slower dashboard', async () => {
+    const cycle = await collectLongShotEvidence({
+      dashboard: dashboard(prediction('ETH', 0.1, 0.91)),
+      orders: [order(), stampedOrder()], existingSentinels: [], nowMs,
+    });
     expect(cycle.sentinels).toHaveLength(1);
-    expect(cycle.sentinels[0].entryGeneration).toBe(1);
-  });
-
-  it('refuses a contract that is not live or not quoted', () => {
-    const dead = prediction('BTC', 0.10, 0.91);
-    (dead.kalshi as { live: boolean }).live = false;
-    expect(longShotCycle(dashboard(dead), [], sizing, settings, nowMs).sentinels).toHaveLength(0);
-    expect(longShotCycle(dashboard(prediction('BTC', 0, 0.91)), [], sizing, settings, nowMs).sentinels).toHaveLength(0);
-  });
-
-  it('refuses an entry too late in the cycle', () => {
-    const late = Date.parse('2026-08-15T00:10:00Z');
-    expect(longShotCycle(dashboard(prediction('BTC', 0.10, 0.91)), [], sizing, settings, late).sentinels).toHaveLength(0);
+    expect(cycle.sentinels[0].symbol).toBe('BTC');
   });
 });
 

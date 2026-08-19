@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { entryAttemptsForLogicalOrder, makerAttemptId, makerRetryDecision, maximumLiveMakerAttempts, maximumPaperMakerAttempts } from './maker-retry-policy';
+import { ENTRY_EXECUTION_POLICY_VERSION } from './entry-execution-policy';
+import { adaptiveTakerFallbackDecision, entryAttemptsForLogicalOrder, makerAttemptId, makerRetryDecision, maximumLiveMakerAttempts, maximumPaperMakerAttempts } from './maker-retry-policy';
 import type { PaperOrder } from './types';
 
 const logical = 'live:BTC:2026-01-01T00:15:00Z';
@@ -15,6 +16,39 @@ const order = (patch: Partial<PaperOrder> = {}): PaperOrder => ({
 afterEach(() => {
   delete process.env.MONEY_NOODLE_MAX_LIVE_MAKER_ATTEMPTS;
   delete process.env.MONEY_NOODLE_MAX_PAPER_MAKER_ATTEMPTS;
+});
+
+describe('adaptive taker fallback', () => {
+  const makerMiss = (patch: Partial<PaperOrder> = {}) => order({
+    makerCompletedAt: '2026-01-01T00:01:20Z',
+    entryExecutionDecision: {
+      policyVersion: ENTRY_EXECUTION_POLICY_VERSION, configuredMode: 'adaptive', executedStyle: 'maker', recommendedStyle: 'maker',
+      reason: 'maker', takerNetEdge: 0.18, medianNetEdge: 0.14, makerNetEdge: 0.2,
+      makerExpectedCapturedEdge: 0.1, takerAdvantage: 0.08, makerCohort: 'x', makerSamples: 40,
+      makerFillRate: 0.5,
+    },
+    ...patch,
+  });
+
+  it('opens attempt 2 without a fixed cooldown only after an authoritative maker zero-fill', () => {
+    expect(adaptiveTakerFallbackDecision([makerMiss()], Date.parse('2026-01-01T00:01:20Z'), close))
+      .toMatchObject({ allowed: true, attemptNumber: 2, retryOfOrderId: logical });
+    expect(adaptiveTakerFallbackDecision([order()], Date.parse('2026-01-01T00:02:00Z'), close).allowed).toBe(false);
+    expect(adaptiveTakerFallbackDecision([makerMiss({
+      entryExecutionDecision: { ...makerMiss().entryExecutionDecision!, policyVersion: 'retired-v1' },
+    })], Date.parse('2026-01-01T00:02:00Z'), close).allowed).toBe(false);
+    expect(adaptiveTakerFallbackDecision([makerMiss({
+      entryExecutionDecision: { ...makerMiss().entryExecutionDecision!, executedStyle: 'taker' },
+    })], Date.parse('2026-01-01T00:02:00Z'), close).allowed).toBe(false);
+  });
+
+  it('never follows a partial fill, uncertainty, completed fallback, or final-two-minute signal', () => {
+    expect(adaptiveTakerFallbackDecision([makerMiss()], Date.parse('2026-01-01T00:13:30Z'), close).reason).toContain('final 120s');
+    expect(adaptiveTakerFallbackDecision([makerMiss({ status: 'open', filledCount: 0.1 })], Date.parse('2026-01-01T00:02:00Z'), close).allowed).toBe(false);
+    expect(adaptiveTakerFallbackDecision([makerMiss({ status: 'uncertain' })], Date.parse('2026-01-01T00:02:00Z'), close).allowed).toBe(false);
+    const fallback = makerMiss({ id: `${logical}:retry:2`, attemptNumber: 2, createdAt: '2026-01-01T00:02:00Z' });
+    expect(adaptiveTakerFallbackDecision([makerMiss(), fallback], Date.parse('2026-01-01T00:03:00Z'), close).allowed).toBe(false);
+  });
 });
 
 describe('bounded maker retry policy', () => {
