@@ -32,14 +32,16 @@ Code is authoritative for what the system *does*; `SPEC.md` for what it is *mean
 **Design before code.** For anything structural — a new policy, store, lane, or schema — agree the design in
 prose with the maintainer, then write the doc, then the code.
 
-**Venues, markets, and strategies are registry data.** Never enumerate them in this file, a comment, or a commit
-message; read the versioned registry (`TRADING_PROVIDER_REGISTRY_VERSION`). Capability is a provider's
-`implementation` level intersected **per market** by `productionMarketCapability`, per lane (research, paper,
-live) — one market's capability never unlocks another's, and configuration alone never makes an unimplemented
-adapter live. New providers and markets **fail closed**. Name a venue only for venue-specific behavior — fee
-models, signing, tick ladders, adapters; elsewhere refer to as "the live venue" or "the specified venue" etc...
+**Venues, markets, and strategies are registry data.** Do not copy registry enumerations here or into generic
+comments; read the versioned registry (`TRADING_PROVIDER_REGISTRY_VERSION`). A provider's `implementation` is
+intersected per market and lane with `productionMarketCapability`: one market never unlocks another, and config
+cannot make an unimplemented adapter live. New providers and markets **fail closed**. Name a venue only for
+venue-specific mechanics; otherwise use role-based language.
 
-## 0. The shape of the code
+## 0. Shared orchestration and the default-strategy path
+
+Start at `lib/strategy-registry.ts` for every registered strategy. This table maps shared orchestration and the
+default strategy's forecast and entry path; strategy-specific engines and policies live outside that path.
 
 | Stage | Entry point |
 | --- | --- |
@@ -57,13 +59,14 @@ Sizes and thresholds are not in this table on purpose — read them from the sym
 
 ## 1. Money arithmetic
 
-**Durable money is integer cents. Do not add `big.js`, `decimal.js`, or `bignumber.js`.**
+**Budget-control money is durable integer cents; durable reporting fields may be fractional. Do not add
+arbitrary-precision number libraries.**
 
 | Layer | Representation | Rule |
 | --- | --- | --- |
-| **Wire** (venue I/O) | fixed-decimal **strings** at the venue's precision | `toFixed` at that precision (order-body builders, `lib/live-orders.ts`). Never send a raw float; validate inbound immediately. |
-| **Exact** (in flight) | float cents, deliberately fractional | Fills and fees are legitimately sub-cent. Never round one into an integer here. |
-| **Ledger** (durable, budget) | integer cents | Quantize once at the boundary, with a direction and an epsilon. Budgets, loss stops, and caps see only integers. |
+| **Wire** | fixed-decimal strings at venue precision | Format with `toFixed` only in order-body builders; validate inbound immediately. |
+| **Exact** | float cents in flight and reporting | Preserve legitimate sub-cent fills and fees until a whole-cent control boundary. |
+| **Budget control** | durable integer cents | Quantize once, with a direction and epsilon; budget counters see only integers. |
 
 Guards are sized to current venues' wire precision; **a finer-precision venue means re-deriving them.**
 
@@ -71,25 +74,27 @@ Guards are sized to current venues' wire precision; **a finer-precision venue me
 
 - **Round against us**: costs up, proceeds down — `Math.ceil(cost - 1e-9)`, `Math.floor(proceeds + 1e-9)`
   (`reconcileExecutionLedger`, `lib/execution-reconciliation.ts`). Never `Math.round` a cost or a fee.
-- Fees round **up** with a 1¢ floor (`venueFeeCents`, `lib/venue-fill.ts`); quantity rounds **down** until
-  `price × count + fees` fits the all-in cap.
+- Nonzero modeled fees round **up** with a 1¢ floor (`venueFeeCents`, `lib/venue-fill.ts`); quantity rounds
+  **down** until `price × count + fees` fits the all-in cap.
 - **Never `toFixed()` for arithmetic** — formatting only: wire, error messages, display.
-- **Quantize once**, at the ledger boundary, per order; then sum integers. Aggregates never add floats.
-- **Never `===` a computed money or price value.** Tolerances: `1e-12` for probability and edge gates
-  (`evaluateEntryExecutionPolicy`), `1e-9` for prices and cents (`lib/live-orders.ts`), `1e-6` for book levels
-  (`quantityAt`, `lib/order-book-depth.ts`). **Every tolerance fails safe**: `if (limit + 1e-9 < quote.ask)
-  throw`. One that eases a gate is a bug.
+- **Quantize once**, at the whole-cent control boundary, per order; then sum integers. Budget aggregates never
+  add floats.
+- **Never `===` a computed money or price value.** Use only the named tolerances: `1e-12` for probability and edge
+  gates (`evaluateEntryExecutionPolicy`), `1e-9` for prices and cents (`lib/live-orders.ts`), and `1e-6` for book
+  levels (`quantityAt`, `lib/order-book-depth.ts`). Within epsilon is equal; beyond it fails closed. Never widen or
+  misapply one.
 - **Reach a tick by index**: `start + floor((target - start) / step) * step`, then round onto the ladder
   (`lib/managed-maker.ts`). Never `price += step`.
 
 ### Validation and standing rules
 
-- **Validate at ingest.** `Number.isFinite` every parsed venue number before it reaches a ledger; throw on
-  malformed fill terms. Check the lattice: `Math.abs(count * 100 - Math.round(count * 100)) > 1e-8`. Keep the
-  `Number.isSafeInteger` assertions on the order paths, and **do not reach for `BigInt`**.
+- **Validate at ingest.** Reject non-finite venue numbers and malformed fill terms. Check the lattice with
+  `Math.abs(count * 100 - Math.round(count * 100)) > 1e-8`; retain order-path `Number.isSafeInteger` assertions
+  and **do not use `BigInt`**.
 - **The per-trade cap is all-in**, fees included; reserve fees when sizing.
-- **Fee models live only in `venueFeeCents`** (`lib/venue-fill.ts`). Extend it, never fork it. A fee can depend
-  on price, not just on stake.
+- **Fee schedules live only in `venueFeeFraction`** (`lib/venue-fee-schedule.ts`). Charged whole-cent fill fees
+  live in `venueFeeCents` (`lib/venue-fill.ts`), which applies adverse rounding and the fee floor. Extend the
+  schedule; never duplicate it. A fee can depend on price, not just on stake.
 - **Do not mix the two P&L views.** `actualPnlCents` / `payoutCents` are exact and reporting-only; budgets use
   whole-cent `pnlCents`. When the ledgers seem to disagree, suspect the view.
 - **Never assume quantity granularity** — read `quantityStep` in `estimatePaperFill`. Widening the venue union
@@ -110,7 +115,8 @@ Guards are sized to current venues' wire precision; **a finer-precision venue me
 - `data/` and `.cache/` are worker-local durable state, not artifacts. Never commit them, hand-edit a ledger, or
   delete a journal to "reset". Move corrupt files to `data/*.corrupt-*`.
 - **Writes are atomic**: `${target}.${pid}.${rand}.tmp`, then `rename` (`lib/cache.ts`).
-- **Journals (`*.journal.jsonl`) are append-only**, compacted by age or size. Never rewrite history.
+- Normal writes to **journals (`*.journal.jsonl`) are append-only**. Only the journal's owning compactor may
+  rewrite or truncate it; never manually rewrite history.
 - **Never load a sealed shard to answer a summary question** — `forecast-history` keeps per-shard rollups.
 - **Server-only modules import `'server-only'`** (vitest alias in tests, `JITI_ALIAS` in scripts). Never import a
   store from a client component to dodge the boundary.
@@ -157,57 +163,39 @@ Worked examples for these rules: `reports/edge-policy-margin-review-2026-08-16.m
 6. **A null result is a result.** Write it up with equal care and say what would change the answer.
 7. **Name what a gate actually does.** Some entry gates are inert — removing them changes no admitted row. Do not
    describe those as risk controls.
-8. **Evaluate; do not advocate.** Separate findings, assumptions, unknowns, tradeoffs, and options. Help the
-   maintainer judge merit without turning incomplete evidence into a strong recommendation.
-9. **Explore before rejecting.** When one formulation fails, identify why and test materially different assumptions
-   or routes to the same goal. Favor deep, creative analysis over premature closure without relaxing safety; there is
-   always another way to explore.
+8. **Evaluate; do not advocate.** Separate findings, assumptions, unknowns, tradeoffs, and options. Before
+   concluding, test materially different formulations without relaxing safety.
 
-Analysis scripts are `scripts/analyze-*.mjs`, run via `npm run analyze:*`, and read durable data read-only — never
-writing to `data/`, never placing an order. Open each with a comment stating what it measures, the correction that
-decides the answer, and its biases. Write findings to `reports/<topic>-<YYYY-MM-DD>.md`, stating whether a policy
-change is made and what the evidence authorizes. Never delete a superseded report.
+Analysis scripts (`scripts/analyze-*.mjs`, `npm run analyze:*`) read durable data without writing `data/` or placing
+orders. Their opening comment states the measure, deciding correction, and biases. Write findings to
+`reports/<topic>-<YYYY-MM-DD>.md`, including whether policy changes and what the evidence authorizes. Never delete
+a superseded report.
 
 ## 6. Claims, citations, and uncertainty
 
-- **"I don't know" is often the required answer.** Say what you checked and what would settle it. Never offer a
-  confident reconstruction.
-- **Read, recalculate, then assert.** Read facts from their source and, for every quantitative evaluation, reload
-  the durable inputs and rerun the calculation in the current session — never rely on memory, conversation, or an
-  old result as current. Surface the method, cohort, correction, inputs, exclusions, auditable intermediate totals,
-  and result.
-- **Data before judgment.** Evaluative terms such as *promising*, *weak*, *better*, *safer*, and *unlikely* require
-  freshly calculated support. Otherwise label them as hypotheses or open questions and name the resolving measurement.
-- **Cite the symbol, not the line** — function, constant, or type plus its file; `SPEC.md §N` and
-  `reports/<name>.md` for prose. Line numbers belong only in messages to the user.
-- **Cite `STATUS.md` and `reports/` figures with their date, in the past tense.** For a current number, read the
-  durable file or run the analysis script.
-- **Cite every claim**, to the bar the `evidence` array in `lib/policy-manifest.ts` enforces.
-- **Verify after drafting.** Reread and find the quote behind each claim; retract the rest or rewrite it as open.
-- **Report disagreements; do not smooth them.** The exact ledger and the whole-cent budget may legitimately
-  differ, as may the live and paper books. Say which view you used.
-- **Restrict to evidence in this repo.** Take venue mechanics — fees, settlement, increments, rate limits — from
-  code, docs, or a live API response. Label load-bearing outside knowledge inline.
-- **Instability is a hallucination signal.** If a different route or framing gives a materially different answer,
-  report that; do not pick the better-looking one.
+- **Recalculate before asserting.** Reload durable inputs for every quantitative evaluation and rerun it in the
+  current session. Report method, cohort, correction, inputs, exclusions, auditable totals, and result.
+- **Label uncertainty and judgment.** Say what you checked and what would settle an open question. Evaluative terms
+  need current support; otherwise identify them as hypotheses.
+- **Cite auditable claims.** Ground current behavior, policy, results, and venue mechanics in repo evidence or a
+  live API response. Cite symbols and files, `SPEC.md §N`, or reports—not source lines—and label load-bearing
+  outside knowledge. Date `STATUS.md` and report figures in the past tense; recalculate current numbers.
+- **Expose disagreement.** Verify the source behind each claim. Report exact-versus-whole-cent, live-versus-paper,
+  and materially different route results instead of smoothing or cherry-picking them.
 
-**The app's own research surface.** `lib/llm.ts` is imported only by `app/api/research/route.ts` and
-`app/api/providers/route.ts`: research is **advisory and terminal**, and no LLM output may reach a forecast,
-policy, budget, or order. The dashboard's probabilities must never become model-generated text. Any edit to the
-`callProvider` prompt keeps every constraint it already encodes, and temperature stays 0.2.
+**The app's research surface is advisory and terminal.** Only the research and provider routes import `lib/llm.ts`;
+its output must never reach a forecast, policy, budget, or order, and dashboard probabilities never become generated
+text. Preserve `callProvider` prompt constraints unless the maintainer agrees otherwise; temperature stays 0.2.
 
 ## 7. Changing the policy
 
-- **Bump the version and add the matching `history` entry** in `lib/policy-manifest.ts` — full version, what it
-  changed, and an `evidence` link. `lib/policy-manifest.test.ts` fails until it exists.
-- **Hold the mirror invariant** (SPEC §12.3): the entry decision is identical for live and paper. The rule layer
-  takes no execution-mode parameter, and `lib/mirror-invariant.test.ts` asserts arity so a `mode` argument fails
-  loudly. Tracks differ **only** in execution and capital — fill model, budget and sizing, rate limits, risk
-  stops, reconciliation.
+- **Bump the version and add matching `history`** in `lib/policy-manifest.ts`: full version, change, and evidence
+  link. `lib/policy-manifest.test.ts` enforces this.
+- **Hold the mirror invariant** (SPEC §12.3): live and paper entry decisions are identical. The rule layer takes no
+  execution mode; `lib/mirror-invariant.test.ts` asserts arity. Tracks differ **only** in execution and capital:
+  fills, budget and sizing, rate limits, risk stops, and reconciliation.
 - **Walk-forward evaluation never changes production automatically.** Promotion is a manual act recorded in an
   immutable ledger.
-- **New venues, providers, markets, and strategies fail closed**, per lane and per market, intersected with what
-  the adapter implements.
 
 ## 8. Tests
 
@@ -229,19 +217,14 @@ npm run typecheck    # tsc --noEmit
 npm test             # vitest run
 ```
 
-**Writing code never requires stopping the server.** Do not kill, stop, or restart a running server in order to
-edit, typecheck, or test — edit the source and leave it running. Restart only when the maintainer asks, or when
-a change has to take effect in the running process; then `npm run build`, then `npm run start`.
+Do not stop or restart the server to edit, typecheck, or test. Restart only when the maintainer asks or a change
+must take effect in the running process; build first, then start. Never leave `npm run dev` serving.
 
-**`npm run build` + `npm run start` is the server.** `npm run dev` is for testing a change interactively and is
-torn down when that test is done; it is never the process left serving.
+**Run `npm run typecheck` and `npm test` before reporting a change complete.** On failure, report the command and
+relevant exact output, not only a summary. A failing invariant test remains wrong until proven otherwise under §8.
 
-**Run `npm run typecheck` and `npm test` before reporting a change complete**, and report a failure with its
-output rather than a summary. §8's rule applies to whatever they say: a failing invariant test means the change
-is wrong until proven otherwise.
-
-Read `package.json` for `analyze:*` and `verify:*`; each script's opening comment states what it measures and its
-biases. Deploys are **manual**: `npx vercel --prod`. Pushing to `main` deploys nothing.
+Read `package.json` for `analyze:*` and `verify:*`. Deploys are **manual** (`npx vercel --prod`); pushing `main`
+deploys nothing.
 
 ## 10. Writing it down
 
