@@ -669,6 +669,7 @@ Interpretation: the newer exact ledger snapshot is slightly negative lifetime an
   - [001_public_paper_projection.sql](/Users/raiphairow/code/money/db/migrations/001_public_paper_projection.sql)
   - [002_public_paper_performance.sql](/Users/raiphairow/code/money/db/migrations/002_public_paper_performance.sql)
 - Hosted/stateless reads can serve replicated public paper budget and performance without live credentials or execution authority.
+- Hosted/stateless market calculations now use the same seven-second pre-expiry lead as the persistent server prefetch: the browser requests again eight seconds after the prior request completes, while the hard 15-second display and execution expiry remains unchanged. Stateful execution and collector cadence remain unchanged.
 - Provider registry covers Polymarket, Kalshi, Crypto.com, ForecastEx, and Robinhood with per-market research/paper/live capability boundaries. New providers fail closed.
 - Provider permissions are authoritative and separate for research, paper, and live. Budget venue fields are compatibility projections only.
 - Per-provider budgets and per-market percentage allocations are implemented; market/global exposure caps remain global so budget splitting cannot multiply correlated exposure.

@@ -433,8 +433,7 @@ export function publicDashboardData(dashboard: DashboardData): PublicDashboardDa
  * this early means a fresh result exists at the boundary instead of arriving after it — so the lead
  * must exceed a normal build, including one feed spending its full timeout.
  */
-const PREFETCH_LEAD_MS = 7_000;
-const REFRESH_AFTER_MS = DATA_FRESHNESS.dashboardPollMs - PREFETCH_LEAD_MS;
+const REFRESH_AFTER_MS = DATA_FRESHNESS.calculationRefreshMs;
 /** Hard floor between builds, so no future scheduling change can turn this into a hot loop. */
 const MIN_REBUILD_SPACING_MS = 5_000;
 

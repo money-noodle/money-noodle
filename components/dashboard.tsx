@@ -428,8 +428,10 @@ function LoadingState() {
 /**
  * `deskAvailable` is not `authenticated`. A signed-in reader on a stateless host has every right to the
  * desk panel and no worker to serve it, so the two must be asked separately or the panel disappears.
+ * Statelessness is separate again: it starts browser refresh before the hard calculation expiry because
+ * that host has no reliable in-process prefetch timer.
  */
-export function Dashboard({ initialData, authenticated, deskAvailable }: { initialData: DashboardViewData | null; authenticated: boolean; deskAvailable: boolean }) {
+export function Dashboard({ initialData, authenticated, deskAvailable, stateless }: { initialData: DashboardViewData | null; authenticated: boolean; deskAvailable: boolean; stateless: boolean }) {
   const [data, setData] = useState(initialData);
   const [error, setError] = useState('');
   const [isPending, startTransition] = useTransition();
@@ -446,16 +448,26 @@ export function Dashboard({ initialData, authenticated, deskAvailable }: { initi
   }, [data]);
 
   useEffect(() => {
-    const timer = window.setInterval(async () => {
+    let cancelled = false;
+    let timer: number | undefined;
+    const intervalMs = stateless ? DATA_FRESHNESS.calculationRefreshMs : DATA_FRESHNESS.dashboardPollMs;
+    async function load() {
       try {
         const response = await fetch('/api/dashboard');
         if (!response.ok) return;
         const body = await response.json() as DashboardViewData;
-        setData((current) => !current || Date.parse(body.generatedAt) >= Date.parse(current.generatedAt) ? body : current);
+        if (!cancelled) setData((current) => !current || Date.parse(body.generatedAt) >= Date.parse(current.generatedAt) ? body : current);
       } catch { /* Keep the previous verified snapshot on a transient polling failure. */ }
-    }, DATA_FRESHNESS.dashboardPollMs);
-    return () => window.clearInterval(timer);
-  }, []);
+      finally {
+        // Schedule from completion rather than a fixed phase. On a stateless host the request itself
+        // builds the replacement, so an interval measured from request start can fire just before the
+        // server cache threshold, reuse the old calculation, and then miss the 15-second expiry.
+        if (!cancelled) timer = window.setTimeout(() => void load(), intervalMs);
+      }
+    }
+    timer = window.setTimeout(() => void load(), intervalMs);
+    return () => { cancelled = true; if (timer !== undefined) window.clearTimeout(timer); };
+  }, [stateless]);
 
   const predictions = useMemo(() => data?.predictions.filter((item) => `${item.symbol} ${item.name}`.toLowerCase().includes(query.toLowerCase())) ?? [], [data, query]);
 

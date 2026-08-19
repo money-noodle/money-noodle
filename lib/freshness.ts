@@ -1,6 +1,11 @@
+const CALCULATION_WINDOW_MS = 15_000;
+const CALCULATION_PREFETCH_LEAD_MS = 7_000;
+
 export const DATA_FRESHNESS = {
-  dashboardPollMs: 15_000,
-  observationBucketMs: 15_000,
+  dashboardPollMs: CALCULATION_WINDOW_MS,
+  observationBucketMs: CALCULATION_WINDOW_MS,
+  calculationPrefetchLeadMs: CALCULATION_PREFETCH_LEAD_MS,
+  calculationRefreshMs: CALCULATION_WINDOW_MS - CALCULATION_PREFETCH_LEAD_MS,
   polymarketCacheMs: 12_000,
   kalshiCacheMs: 12_000,
   contractReferenceCacheMs: 10_000,
