@@ -34,6 +34,105 @@ Snapshot from local durable files at 2026-08-19T01:44:04Z. Full method, cohorts,
 - Latest walk-forward run: `walk-forward:875:fnv1a-27542176`, generated 2026-08-18T22:00:08Z. Candidate mean window return was 5.75% against baseline 2.37% over 438 test windows; it beat baseline 5/5 folds but was positive only 3/5 with modal parameters in 3/5. Decision: `baseline_retained`.
 - The current Next development server occupied about 3.7 GB RSS. RSS is not retained heap and dev mode carries compiler/cache overhead, but this materially disagrees with the prior 70 MB post-sharding RSS measurement and needs a like-for-like profile.
 
+### Eleven ideas screened; sizing is the one worth effort, 2026-08-19
+
+Full measurement in [reports/edge-buy-opportunities-2026-08-19.md](reports/edge-buy-opportunities-2026-08-19.md).
+Method is the admitted population — first qualifying calculation per `(symbol, closesAt, side)`, at the
+recorded ask, held to settlement, window-clustered, under the live v21 bounds. The harness returns
+**+20.8% ±5.2 over 671 windows** against `analyze:loss-decomposition`'s +20.9% for v19, which is the
+control. About **thirty-three comparisons** were evaluated; **no policy, gate, execution, sizing, or
+calibration change is authorized by any of it.**
+
+- **Sizing is the largest measured lever and changes no admission.** Identical 3,078 decisions, only the
+  weight: flat +18.6% per $1, capped 0.3×–3× edge-proportional **+28.9%**, better on **9 of 9 days**, with
+  the ten highest-edge rows contributing **4.0%** of the profit. Below a 35pp edge it is +19.9% against
+  +14.8%. The desk already ranks by `expectedProfitCents` ≈ `edge / cost` and then commits the same dollar
+  to every winner. **The blocker is not evidence, it is that global exposure caps are position counts**,
+  which stop being dollar caps the moment the ticket varies. Proposal, no code:
+  [docs/edge-proportional-sizing-design.md](docs/edge-proportional-sizing-design.md).
+- **The edge spike separates realized money out-of-sample, and the committed sentinel says it is not a
+  forecast effect.** On v19+ orders — chosen after the threshold was set — live fresh +0.2% against spiked
+  −22.2%, paper −6.7% against −16.9%; both tracks agree that **spike ≥ 5pp** is the bad cohort (live
+  −37.7% on 3,558¢, paper −51.6% on 3,223¢). But 296 graded `edge-spike-sentinel-v1` records, at the ask
+  and held, give **+1.9pp, t = 0.12** at 2pp. Fill rates barely differ by spike (43–59%) while the maker
+  discount is **larger** on spiked orders, 5.30¢ against 4.55¢ — a better price with a worse outcome.
+  Reading: the spike belongs in the **execution** layer, not the entry gate. Re-arming the gate is not
+  supported and is not proposed.
+- **`volatilityRatio` is clean on the gate and does not survive the ledger.** Admitted: +19.4% at
+  VR 0.00–0.20 falling monotonically to **+1.4%** above 0.72, holding inside every edge band. Realized,
+  from the field already stamped on 605 of 995 v17+ orders: the **middle** band 0.38–0.72 is the worst on
+  both tracks (−27.3% live, −26.7% paper) and refusing VR ≥ 0.72 recovers nothing. **Fourth reversal of
+  this shape** — clean on admitted rows, absent on filled ones.
+- **The 0.55 calibration weight is too much shrinkage, and correcting it loses money.** Fitting the
+  log-odds weight on 54,576 replayable rows gives β̂ = 0.738 pooled, 0.69–0.77 leave-one-day-out on
+  **11 of 11 days**, day-clustered 0.62 ± 0.10. But re-running admission at β = 0.74 admits 3,523
+  decisions at +18.2% against 3,078 at +20.8%, and β = 1.0 gives +15.5%. `settlementAverageEstimate`
+  unmodified gives +16.1%. **The 0.55 weight is not calibration, it is selectivity.** Null result.
+  Recorded beside it: β varies with time remaining (0.63 at T < 60 s, 0.78 at 120–240 s), which is the
+  `effectiveSeconds = T − 30` approximation and the absent oracle-basis variance floor, not noise.
+- **Smaller readings.** Late entries pay (+44.2% at 30–60 s, +59.5% at 60–120 s, against +18.4% at
+  420–900 s). Contradicting the venue's direction wins 51.5% but returns +23.0%, while agreeing wins
+  71.2% and returns +16.3% — the "win rate is the wrong statistic" lesson again. Price 0.80–0.90 is dead
+  (−0.0%, n=47). Confidence is **not monotone** in return, so `edgeStrength` has no support as a ranking
+  key. Asset exclusion still disagrees between tracks and stays unsupported.
+
+**Shipped with it: `entry-decision-v2`.** `entryDecision` now records `edgeSpike` and the numeric
+`cycleRegime` features, both already computed at decision time and previously discarded at the order
+boundary — which is why §3 above could be checked against realized money and §4's trend-efficiency
+result could not. Reporting-only; `lib/entry-decision-observation.test.ts` asserts no pricing, sizing,
+gating, or execution module reads them, that features are cloned rather than aliased, and that v1 rows
+keep the fields **absent** rather than defaulted. No behaviour changes and `BUY_POLICY_VERSION` is
+untouched.
+
+### Maker/exit depth follow-up: reporting fixed; sentinel design proposed, 2026-08-19
+
+The outcome-conditioned maker review found active v3 losers filled materially more often than winners, while
+the nine then-current v21 live strict-value exits all sold eventual winners. Full dated evidence and its
+small-cohort caveats are in
+[reports/maker-adverse-selection-and-exit-depth-2026-08-19.md](reports/maker-adverse-selection-and-exit-depth-2026-08-19.md).
+The maintainer chose to keep live running unchanged. No entry, execution, sizing, or exit policy changed.
+
+`buildMakerFillReport` now excludes rows stamped `executedStyle: taker` before venue submission assigns a
+`liquidityRole`; those refusals no longer inflate maker submissions or depress maker acceptance. Accepted
+maker fills and returns were unaffected. A regression test covers the pre-submission refusal and preserves
+its actual-taker attribution.
+
+The approved prospective evaluation-only design is implemented in
+[docs/positive-edge-execution-exit-sentinel-design.md](docs/positive-edge-execution-exit-sentinel-design.md).
+It precommits two restrictive maker candidates and four exit candidates, keeps their append-only stores and
+track-separated evidence separate, requires complete first-to-fire cohorts, and cannot place or influence
+an order. Maker records begin only after durable issued intents; exit records begin at the first prospective
+filled-position observation and continue from fresh public data after production sells. Reports are exposed
+only by the authenticated stateful performance route. Existing orders are never backfilled. Collection has
+not started in the currently running process; its prospective timestamp is created on the first cycle after
+a built restart/deploy.
+
+### Contract selection: the ranking is not the leak, 2026-08-19
+
+`scripts/analyze-contract-selection.mjs` defined "outranks" as `netEdge × confidence` — `edgeStrength`,
+which orders the live drain loop. Production selects on `expectedProfitCents`, which at a fixed stake is
+`edge / cost`. The script now scores production's key, reports the old one beside it, and excludes the
+**opposite side of the same asset** in the same window, which is contaminated by construction because
+exactly one of the two sides settles in the money.
+
+Measured directly, within the 599 settlement windows holding ≥2 admitted decisions, top-1 by each of
+eight keys against the window mean of +18.2%: **`edge / cost` is the best at +42.4% ±13.4**, ahead of
+netEdge (+37.3%), edge × confidence (+36.9%), lowest price (+35.8%), confidence (+32.0%), and least
+seconds remaining (+29.2%). **Production's ranking is the best key tried, so the −21.8pp contract-selection
+leak is not a ranking-function defect.**
+
+**The correction does not dissolve the leak, which is the honest result.** The RANKING gap moves −19.2pp
+→ −20.2pp and TIMING −23.0pp → −21.9pp; the two keys nearly agree and the contaminated rows were 33 of
+748. What is unexplained is the **shape**: every alternative bucket beats the chosen contract —
+better-ranked +29.3%, worse-ranked ≈ +8%, later-arriving +20.5%, against the chosen at −1.4%. A bad
+ranking would still leave the chosen contract above what it ranked below. Being ordered is itself the
+selector.
+
+**Named open question:** the chosen contract is the only one required to pass signal persistence, the
+regime gate, the re-entry cooldown, and maker-retry state; the alternatives are scored having passed
+none of them. If that is the explanation, this is not "contract selection" and the loss-decomposition
+line needs renaming.
+
 ### Edge policy v17, reviewed 2026-08-17
 
 Three days of `buy-binary-edge-net5to35-quality50-owned55-price5to97-v17` are now reportable, and the

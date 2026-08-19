@@ -71,6 +71,27 @@ describe('maker first-passage validation report', () => {
     });
   });
 
+  it('excludes taker execution decisions from maker submissions before a liquidity role exists', () => {
+    const takerDecision: NonNullable<PaperOrder['entryExecutionDecision']> = {
+      policyVersion: 'maker-taker-adaptive-one-miss-slippage1c-v3', configuredMode: 'adaptive',
+      executedStyle: 'taker', recommendedStyle: 'taker', reason: 'strict gates passed', takerNetEdge: 0.08,
+      medianNetEdge: 0.06, makerNetEdge: 0.09, makerExpectedCapturedEdge: 0.04, takerAdvantage: 0.04,
+      makerCohort: '50¢+ · 1-2¢', makerSamples: 40, makerFillRate: 0.5,
+    };
+    const maker = order(0.5, 0, { liquidityRole: 'maker' });
+    const refusedBeforeSubmission = order(0.5, 0, {
+      venueOrderId: undefined, liquidityRole: undefined, noFillReason: 'pre_submit_quote_moved',
+      reason: 'Taker not submitted: fresh ask exceeded the approved cap.', entryExecutionDecision: takerDecision,
+    });
+    const acceptedTaker = order(0.5, 0.2, {
+      liquidityRole: 'taker', entryExecutionDecision: takerDecision,
+    });
+
+    const report = buildMakerFillReport([maker, refusedBeforeSubmission, acceptedTaker]);
+    expect(report).toMatchObject({ submittedAttempts: 1, acceptedAttempts: 1, restedNoFillAttempts: 1 });
+    expect(report.adaptiveExecution).toMatchObject({ actualTakerOrders: 2, actualTakerFills: 1 });
+  });
+
   it('reports shadow taker recommendations without blending them into actual taker fills', () => {
     const shadow = order(0.5, 0, {
       symbol: 'BNB', entryDecision: { policyVersion: BUY_POLICY_VERSION } as EntryDecisionSnapshot,

@@ -17,6 +17,8 @@ import { getExecutionOrders, getPaperBankrollFunding } from '@/lib/paper-executi
 import { getWalkForwardEvaluationHistory } from '@/lib/model-evaluation-store';
 import { getPersistenceCandidateReport } from '@/lib/persistence-candidate-store';
 import { BUY_POLICY_VERSION } from '@/lib/prediction-policy';
+import { getMakerRestrictionSentinelReport } from '@/lib/maker-restriction-sentinel-store';
+import { getExitPolicySentinelReport } from '@/lib/exit-policy-sentinel-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -35,7 +37,9 @@ export async function GET(request: Request) {
       getContractProvenanceRegistry(), getTradingControl(), getPersistenceCandidateReport(BUY_POLICY_VERSION),
       getCalendarEvaluationReport(BUY_POLICY_VERSION),
     ]);
-    const paperFunding = await getPaperBankrollFunding();
+    const [paperFunding, makerRestrictionSentinel, exitPolicySentinel] = await Promise.all([
+      getPaperBankrollFunding(), getMakerRestrictionSentinelReport(orders), getExitPolicySentinelReport(orders),
+    ]);
     // Whether the lifetime figures above were computed from complete shard statistics.
     const forecastStorage = await getForecastStorageHealth();
     const modelEvaluations = await getWalkForwardEvaluationHistory(summary.calibrationWindows);
@@ -79,6 +83,9 @@ export async function GET(request: Request) {
       forecastStorage,
       contractComparability: buildContractComparabilityReport(forecasts, cyclePathRecords, provenance.records),
       makerFillReport: buildMakerFillReport(orders, forecasts),
+      // Prospective evaluation only. Both reports are track-separated and have no production mutation path.
+      makerRestrictionSentinel,
+      exitPolicySentinel,
       persistenceCandidate,
       calendarEvaluation,
       modelEvaluations,

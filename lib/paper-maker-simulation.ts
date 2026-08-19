@@ -3,6 +3,9 @@ import { selectedSideDepth } from './order-book-depth';
 import type { EntryExecutionObservation, PositionSide } from './types';
 import type { KalshiTradePrint } from './kalshi-market-data';
 
+/** Durable identity stamped on paper edge-policy orders using this managed queue simulation. */
+export const PAPER_MANAGED_MAKER_EXECUTION_VERSION = 'paper-managed-maker-trade-queue-v2';
+
 export interface PaperMakerQueueState {
   side: PositionSide;
   requestedCount: number;

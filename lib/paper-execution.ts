@@ -9,7 +9,7 @@ import { POST_EXIT_REENTRY_COOLDOWN_MS, evaluateExitPolicy } from './exit-policy
 import { estimateMakerFill } from './maker-fill-model';
 import { fetchKalshiManagedMakerQuote, fetchKalshiQuote, fetchKalshiTradePrintsSince } from './kalshi-market-data';
 import { observeKalshiOrderBook } from './kalshi-depth';
-import { simulateManagedPaperMaker, type PaperMakerSimulationResult } from './paper-maker-simulation';
+import { PAPER_MANAGED_MAKER_EXECUTION_VERSION, simulateManagedPaperMaker, type PaperMakerSimulationResult } from './paper-maker-simulation';
 import { isFreshCalculationTimestamp } from './freshness';
 import { selectedSideDepth } from './order-book-depth';
 import { selectedManagedMakerQuote } from './managed-maker';
@@ -79,11 +79,15 @@ import { advanceSignalPersistence, evaluateSignalPersistence, evaluateSignalPers
 import { edgeSpikeGateEnabled, maximumEdgeSpike, spikeAdmits } from './edge-spike-policy';
 import { EDGE_SPIKE_SENTINEL_VERSION, edgeSpikeSentinelId, type EdgeSpikeSentinel } from './edge-spike-sentinel';
 import { updateEdgeSpikeSentinels } from './edge-spike-sentinel-store';
+import { maintainMakerRestrictionSentinels, recordMakerRestrictionOrder } from './maker-restriction-sentinel-store';
+import {
+  getExitPolicyContinuationOrderIds, maintainExitPolicySentinels, recordExitPolicySentinelObservation,
+} from './exit-policy-sentinel-store';
 import { REQUIRED_SWITCH_SNAPSHOTS, REQUIRED_SWITCH_SPAN_MS, advanceSwitchPersistence, switchCooldownRemainingMs, switchEvidenceReady, switchEvidenceSpanMs, type SwitchPersistenceState } from './switch-hysteresis';
 import { evaluateSwitchProbabilityGate, switchPolicySettings, valueSwitch } from './switch-policy';
 import { autoResumeTradingAfterReconciliation, getTradingControl, pauseTrading, reconcileTradingBudget, recordTradingReconciliationFailure, releaseTradingBudget, reserveTradingBudget, settleTradingBudget, stopTradingForLiveRisk, suspendTrading } from './trading-control';
 import { takerQuoteCap } from './taker-quote-policy';
-import type { DashboardData, ExecutionMode, ExecutionSignalReadiness, ExecutionSummary, MarketFunding, MarketId, PaperOrder, PortfolioDecisionView, PositionSide, Prediction, ProviderBudgetConfiguration, PublicPaperBudget, PublicPaperExecutionRecord, StrategyId, TradingControlData, TradingProviderId } from './types';
+import type { DashboardData, ExecutionMode, ExecutionSignalReadiness, ExecutionSummary, MarketFunding, MarketId, PaperOrder, PortfolioDecisionView, PositionLifecycleObservation, PositionSide, Prediction, ProviderBudgetConfiguration, PublicPaperBudget, PublicPaperExecutionRecord, StrategyId, TradingControlData, TradingProviderId } from './types';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const LEDGER_FILE = path.join(DATA_DIR, 'paper-orders.json');
@@ -568,11 +572,11 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
     createdAt: new Date().toISOString(), calculationAt, closesAt: selected.quote.closesAt,
     modelProbabilityUp: prediction.modelProbabilityUp, confidence: prediction.confidence,
     entryDecision: {
-      version: 'entry-decision-v1',
+      version: 'entry-decision-v2',
       providerId: selected.venue,
       providerVariantId: status.tradingProviders?.find((provider) => provider.id === selected.venue)?.selectedVariantId,
       forecastModelVersion: modelVersion,
-      executionPolicyVersion: mode === 'live' ? ENTRY_EXECUTION_POLICY_VERSION : 'paper-managed-maker-trade-queue-v2',
+      executionPolicyVersion: mode === 'live' ? ENTRY_EXECUTION_POLICY_VERSION : PAPER_MANAGED_MAKER_EXECUTION_VERSION,
       policyVersion: BUY_POLICY_VERSION, calculationAt, side,
       probabilityUp: prediction.modelProbabilityUp, probabilityDown: 1 - prediction.modelProbabilityUp,
       selectedSideProbability: sideProbability(prediction, side), confidence: prediction.confidence,
@@ -581,7 +585,12 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
       feeRate: selected.entry.feeRate, netEdge: selected.entry.netEdge, spread: selected.spread,
       secondsRemaining: Math.max(0, (Date.parse(selected.quote.closesAt) - Date.parse(calculationAt)) / 1000),
       qualifyingSnapshots: eligibility.qualifyingSnapshots, medianNetEdge: eligibility.medianNetEdge,
+      // Recorded, never read by this path. `edgeSpike` is already computed for the (currently disarmed)
+      // ceiling, and the numeric regime features are already computed for the regime label; both were
+      // discarded at the order boundary, which is why no analysis could score them against realized money.
+      edgeSpike: eligibility.edgeSpike,
       basis: prediction.basis ? { ...prediction.basis } : undefined,
+      cycleRegime: prediction.cycleRegime ? { ...prediction.cycleRegime } : undefined,
       calibrationReplay: prediction.calibrationReplay ? {
         ...prediction.calibrationReplay,
         basisInput: prediction.calibrationReplay.basisInput ? { ...prediction.calibrationReplay.basisInput } : undefined,
@@ -1010,6 +1019,10 @@ async function executePreparedLiveBuy(
   try {
   ledger.orders.push(order);
   await writeLedger(ledger);
+  // The authoritative intent is durable before this detached observation starts. It never delays reserve,
+  // quote, placement, or cancellation and production never reads its result.
+  void recordMakerRestrictionOrder(order)
+    .catch((error) => console.error('Maker restriction sentinel decision write failed:', error));
   try {
     await reserveTradingBudget(order.stakeCents, order.venue, order.id);
   } catch (error) {
@@ -1101,15 +1114,63 @@ function exitUncertainty(confidence: number): number {
   return Math.max(0.03, Math.min(0.15, (1 - confidence) * 0.25));
 }
 
-function applyExitObservation(order: PaperOrder, prediction: Prediction, observedAt: string): ReturnType<typeof evaluateExitPolicy> {
+interface ExitObservationTerms {
+  quote: { bid: number; ask: number; closesAt: string };
+  exitFeeCents: number;
+  exactCostCents: number;
+  ownedSideProbability: number;
+}
+
+function exitObservationTerms(order: PaperOrder, prediction: Prediction): ExitObservationTerms | null {
   const quote = venueQuote(prediction, order.venue, order.side);
-  if (!quote || quote.bid <= 0 || quote.bid >= 1) return null;
-  const exitFee = venueFeeCents(order.venue, quote.bid * 100, order.quantity, 'taker');
+  if (!quote || quote.bid <= 0 || quote.bid >= 1 || quote.ask <= 0 || quote.ask > 1 || quote.bid > quote.ask) return null;
+  const exitFeeCents = venueFeeCents(order.venue, quote.bid * 100, order.quantity, 'taker');
+  const exactCostCents = order.actualStakeCents ?? order.stakeCents;
+  const ownedSideProbability = sideProbability(prediction, order.side);
+  if (![exitFeeCents, exactCostCents, ownedSideProbability].every(Number.isFinite)
+    || exitFeeCents < 0 || exactCostCents <= 0) return null;
+  return { quote, exitFeeCents, exactCostCents, ownedSideProbability };
+}
+
+function lifecycleObservation(
+  order: PaperOrder, prediction: Prediction, observedAt: string, terms: ExitObservationTerms,
+  netLiquidationCents: number,
+): PositionLifecycleObservation {
+  const depth = order.venue === 'kalshi'
+    ? selectedSideDepth(observeKalshiOrderBook(order.contractId), order.side, terms.quote.bid, terms.quote.ask) : {};
+  return {
+    at: observedAt, selectedBid: terms.quote.bid, selectedAsk: terms.quote.ask,
+    spread: terms.quote.ask - terms.quote.bid,
+    bestBidDepth: depth.bestBidDepth, bestAskDepth: depth.bestAskDepth, depthImbalance: depth.depthImbalance,
+    netLiquidationCents, exitFeeCents: terms.exitFeeCents,
+    exactCostCents: terms.exactCostCents,
+    unrealizedPnlCents: netLiquidationCents - terms.exactCostCents,
+    unrealizedReturn: (netLiquidationCents - terms.exactCostCents) / terms.exactCostCents,
+    ownedSideProbability: terms.ownedSideProbability, confidence: prediction.confidence,
+    basisPercent: prediction.basis?.basisPercent, cycleRegime: prediction.cycleRegime?.regime,
+    secondsRemaining: Math.max(0, (Date.parse(order.closesAt) - Date.parse(observedAt)) / 1_000),
+  };
+}
+
+/** Public-data-only continuation used after production has sold; it cannot reach an order function. */
+function continuationExitObservation(
+  order: PaperOrder, prediction: Prediction, observedAt: string,
+): PositionLifecycleObservation | null {
+  const terms = exitObservationTerms(order, prediction);
+  if (!terms) return null;
+  const netLiquidationCents = order.quantity * 100 * terms.quote.bid - terms.exitFeeCents;
+  if (!Number.isFinite(netLiquidationCents)) return null;
+  return lifecycleObservation(order, prediction, observedAt, terms, netLiquidationCents);
+}
+
+function applyExitObservation(order: PaperOrder, prediction: Prediction, observedAt: string): ReturnType<typeof evaluateExitPolicy> {
+  const terms = exitObservationTerms(order, prediction);
+  if (!terms) return null;
   const decision = evaluateExitPolicy({
     observedAt, side: order.side, quantity: order.quantity,
-    exactCostCents: order.actualStakeCents ?? order.stakeCents,
-    executableBid: quote.bid, exitFeeCents: exitFee,
-    ownedSideProbability: sideProbability(prediction, order.side),
+    exactCostCents: terms.exactCostCents,
+    executableBid: terms.quote.bid, exitFeeCents: terms.exitFeeCents,
+    ownedSideProbability: terms.ownedSideProbability,
     uncertainty: exitUncertainty(prediction.confidence),
     profitLockArmedAt: order.profitLockArmedAt,
     peakNetLiquidationCents: order.peakNetLiquidationCents,
@@ -1125,23 +1186,13 @@ function applyExitObservation(order: PaperOrder, prediction: Prediction, observe
   order.peakObservedAt = decision.peakObservedAt;
   order.latestNetLiquidationCents = decision.netLiquidationCents;
   order.latestNetProfitPercent = decision.netProfitPercent;
-  const ownedSideProbability = sideProbability(prediction, order.side);
-  order.latestOwnedSideProbability = ownedSideProbability;
+  order.latestOwnedSideProbability = terms.ownedSideProbability;
   order.latestExitObservationAt = observedAt;
-  const depth = order.venue === 'kalshi'
-    ? selectedSideDepth(observeKalshiOrderBook(order.contractId), order.side, quote.bid, quote.ask) : {};
-  const exactCostCents = order.actualStakeCents ?? order.stakeCents;
   if (!order.positionObservations?.some((observation) => observation.at === observedAt)) {
-    order.positionObservations = [...(order.positionObservations ?? []), {
-      at: observedAt, selectedBid: quote.bid, selectedAsk: quote.ask, spread: quote.ask - quote.bid,
-      bestBidDepth: depth.bestBidDepth, bestAskDepth: depth.bestAskDepth, depthImbalance: depth.depthImbalance,
-      netLiquidationCents: decision.netLiquidationCents, exitFeeCents: decision.exitFeeCents,
-      exactCostCents, unrealizedPnlCents: decision.netLiquidationCents - exactCostCents,
-      unrealizedReturn: exactCostCents > 0 ? (decision.netLiquidationCents - exactCostCents) / exactCostCents : 0,
-      ownedSideProbability, confidence: prediction.confidence,
-      basisPercent: prediction.basis?.basisPercent, cycleRegime: prediction.cycleRegime?.regime,
-      secondsRemaining: Math.max(0, (Date.parse(order.closesAt) - Date.parse(observedAt)) / 1_000),
-    }];
+    const observation = lifecycleObservation(order, prediction, observedAt, terms, decision.netLiquidationCents);
+    order.positionObservations = [...(order.positionObservations ?? []), observation];
+    void recordExitPolicySentinelObservation(order, observation)
+      .catch((error) => console.error('Exit policy sentinel observation write failed:', error));
   }
   return decision;
 }
@@ -1656,6 +1707,29 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
     .catch((error) => console.error('Contract path collection failed:', error));
   void updateEdgeSpikeSentinels(edgeSpikeSentinelCycle(dashboard, ledger))
     .catch((error) => console.error('Edge spike sentinel collection failed:', error));
+  void maintainMakerRestrictionSentinels(dashboard.generatedAt)
+    .catch((error) => console.error('Maker restriction sentinel maintenance failed:', error));
+  // Continue candidate exit paths after production sells. This reads the already-fresh public dashboard,
+  // records no stale substitute, and is detached from every signed order and ledger mutation.
+  void maintainExitPolicySentinels({ observedAt: dashboard.generatedAt, orders: ledger.orders })
+    .then(() => getExitPolicyContinuationOrderIds(dashboard.generatedAt))
+    .then((orderIds) => {
+      if (!orderIds.length || !isFreshCalculationTimestamp(dashboard.generatedAt)) return;
+      const continuationObservations = orderIds.flatMap((orderId) => {
+        const order = ledger.orders.find((item) => item.id === orderId);
+        if (!order) return [];
+        const prediction = dashboard.predictions.find((item) => item.symbol === order.symbol
+          && (order.venue === 'kalshi' ? item.kalshi?.closesAt === order.closesAt : item.market.closesAt === order.closesAt));
+        if (!prediction) return [];
+        const observation = continuationExitObservation(order, prediction, dashboard.generatedAt);
+        return observation ? [{ orderId, observation }] : [];
+      });
+      if (!continuationObservations.length) return;
+      return maintainExitPolicySentinels({
+        observedAt: dashboard.generatedAt, orders: ledger.orders, continuationObservations,
+      });
+    })
+    .catch((error) => console.error('Exit policy sentinel maintenance failed:', error));
   const status = await getTradingControl();
   // Long-shot evidence reconciliation only: trigger records come from the authoritative paper entry
   // decision inside `runLongShot`. This detached pass recovers stamped decisions, observes peaks, and settles them.
@@ -1676,7 +1750,11 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
   // Persist paper intent and its reservation before either manager starts. Paper then polls exact public
   // evidence concurrently with live's signed order lifecycle, so a twelve-second live order can no
   // longer starve a twelve-second paper order of every intermediate observation.
-  if (startedPaperOrders.length) await writeLedger(ledger);
+  if (startedPaperOrders.length) {
+    await writeLedger(ledger);
+    for (const order of startedPaperOrders) void recordMakerRestrictionOrder(order)
+      .catch((error) => console.error('Paper maker restriction sentinel decision write failed:', error));
+  }
   const paperManagement = managePaperMakerOrders(startedPaperOrders, ledger);
   const liveManagement = runLive(dashboard, status, ledger, regimeGate, budgets);
   const [paperChanged, liveChanged] = await Promise.all([paperManagement, liveManagement]);

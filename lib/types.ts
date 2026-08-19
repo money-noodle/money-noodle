@@ -1373,9 +1373,16 @@ export interface TradingVenueReadiness {
 export type PaperOrderStatus = 'pending_reservation' | 'uncertain' | 'open' | 'sold' | 'won' | 'lost' | 'invalid' | 'unfilled' | 'rejected';
 export type ExecutionMode = 'paper' | 'live';
 
-/** Immutable issuance-time evidence explaining why an order cleared the binary edge-buy gates. */
+/**
+ * Immutable issuance-time evidence explaining why an order cleared the binary edge-buy gates.
+ *
+ * `entry-decision-v2` adds `edgeSpike` and the numeric `cycleRegime` features. Both were already
+ * computed at decision time and thrown away; v1 rows simply lack them and must never be reinterpreted
+ * as "the feature was absent". Every added field is reporting-only — nothing that prices, sizes, gates,
+ * or trades may read them (`lib/entry-decision-observation.test.ts` asserts it).
+ */
 export interface EntryDecisionSnapshot {
-  version: 'entry-decision-v1';
+  version: 'entry-decision-v1' | 'entry-decision-v2';
   providerId?: TradingProviderId;
   providerVariantId?: string;
   forecastModelVersion?: string;
@@ -1396,7 +1403,15 @@ export interface EntryDecisionSnapshot {
   secondsRemaining: number;
   qualifyingSnapshots: number;
   medianNetEdge: number | null;
+  /**
+   * v2+. Firing edge minus its persistence median, as `edgeSpike` computes it. Recorded whether or not
+   * the ceiling is armed, because the disarmed gate is exactly the state in which the measurement is the
+   * only thing that could ever justify re-arming it. `null` means there was no median to compare against.
+   */
+  edgeSpike?: number | null;
   basis?: ContractBasis;
+  /** v2+. Observation-only path state at issuance; the coarse label alone is on `PaperOrder`. */
+  cycleRegime?: CycleRegimeFeatures;
   calibrationReplay?: CalibrationReplaySnapshot;
   settlementAverageEstimate?: SettlementAverageEstimate;
   factors: Factor[];

@@ -109,6 +109,7 @@ export function buildMakerFillReport(orders: PaperOrder[], forecasts: TrackedFor
     ?? forecastOutcomes.get(makerOutcomeKey(order.symbol, order.closesAt));
   const makerEntries = orders.filter((order) => order.executionMode === 'live' && order.venue === 'kalshi'
     && !order.id.includes(':exit:') && order.liquidityRole !== 'taker'
+    && order.entryExecutionDecision?.executedStyle !== 'taker'
     && (Boolean(order.makerFillEstimate) || order.liquidityRole === 'maker' || inferredPostOnlyRace(order)
       || (order.status === 'unfilled' && Boolean(order.venueOrderId)))
     && order.status !== 'pending_reservation' && order.status !== 'uncertain');

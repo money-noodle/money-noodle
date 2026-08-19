@@ -14,6 +14,20 @@
  * Only the second is a switching problem, and only the third is a position-limit problem. The first is
  * free to fix — it needs no extra capital, no extra churn, and no change to what is admitted.
  *
+ * **Corrected 2026-08-19: the ranking key was wrong.** This script defined "outranks" as
+ * `netEdge x confidence` — `edgeStrength` in lib/prediction-policy.ts, which orders the live drain loop.
+ * Production does not select on that. `selectPortfolio` ranks by `expectedProfitCents`
+ * (`potentialPayoutCents x p - stakeCents`, lib/paper-execution.ts), which for a fixed stake is
+ * `edge / cost` — return on capital, not edge. The two orderings disagree across price levels, exactly
+ * the axis this leak lives on, so every "better-ranked alternative" figure before this date named
+ * contracts production would not have preferred. Both keys are reported now; `edge / cost` is the one
+ * that describes the desk.
+ *
+ * **Also corrected: the opposite side of the same asset is reported separately.** It was pooled into the
+ * alternatives, and it is contaminated by construction — when the model flips inside a window both sides
+ * are admitted at some point and exactly one settles in the money, so the pool contains a guaranteed
+ * winner the desk could never have identified in advance.
+ *
  * **The correction that decides the answer.** Everything is scored **at the ask, held to settlement**, for
  * chosen and passed-over alike. Realized returns cannot be used: the chosen contract is the only one that
  * was ever filled, so comparing its realized result against a counterfactual would fold fill selection —
@@ -77,6 +91,9 @@ for (const w of windows.values()) {
       admissions.push({
         key: `${w.key}|${side}`, symbol: w.symbol, closesAt: w.closesAt, side,
         admittedAt: row.issuedAt, netEdge: option.netEdge, confidence: row.c, cost,
+        // Production's portfolio rank for a fixed stake. `edgeStrength` is kept beside it only so the
+        // 2026-08-19 correction stays auditable against the figures it replaces.
+        roc: option.netEdge / cost, edgeStrength: option.netEdge * row.c,
         ret: (w.outcome === side ? 1 : 0) / cost - 1,
         policyVersion: row.policyVersion,
       });
@@ -106,6 +123,7 @@ for (const [eraLabel, eraTest] of [['v17 onward', (v) => /-(v1[6-9]|fresh2pp-v18
   console.log(`\n================ ${eraLabel}, ${mode} — ${mine.length} orders ================`);
 
   const chosen = [], sooner = [], later = [], soonerBetter = [], laterBetter = [];
+  const soonerBetterOldKey = [], oppositeSide = [];
   const blocked = { sameAsset: [], sameGroup: [], windowFull: [], takeable: [] };
   // How long a takeable better candidate had been admitted when the desk chose something else. Under 30s
   // it had not yet earned persistence (3 snapshots spanning 30s) and was not executable — the benign case.
@@ -121,7 +139,11 @@ for (const [eraLabel, eraTest] of [['v17 onward', (v) => /-(v1[6-9]|fresh2pp-v18
     if (!self) continue;
     windowsSeen += 1;
     chosen.push(self.ret);
-    const others = pool.filter((a) => a.key !== mineKey);
+    // The opposite side of the same asset in the same window is never a real alternative: exactly one of
+    // the two settles in the money, so scoring it as a passed-over candidate credits the desk with a
+    // choice it could not have made. Reported on its own line rather than pooled.
+    const others = pool.filter((a) => a.key !== mineKey && a.symbol !== order.symbol);
+    for (const a of pool) if (a.key !== mineKey && a.symbol === order.symbol) oppositeSide.push(a.ret);
     if (others.length) hadAlternative += 1;
     // Concurrent live positions at the moment of this order, from the ledger itself.
     const openThen = mine.filter((o) => o !== order && Date.parse(o.createdAt) <= orderedAt
@@ -132,9 +154,12 @@ for (const [eraLabel, eraTest] of [['v17 onward', (v) => /-(v1[6-9]|fresh2pp-v18
     const heldSameWindow = mine.filter((o) => o !== order && o.closesAt === order.closesAt
       && Date.parse(o.createdAt) <= orderedAt);
     for (const other of others) {
-      const outranks = other.netEdge * other.confidence > self.netEdge * self.confidence;
+      // Production's key. `edgeStrength` is scored beside it purely to show what the old reading measured.
+      const outranks = other.roc > self.roc;
+      const outranksOldKey = other.edgeStrength > self.edgeStrength;
       if (other.admittedAt <= orderedAt) {
         sooner.push(other.ret);
+        if (outranksOldKey) soonerBetterOldKey.push(other.ret);
         if (outranks) {
           soonerBetter.push(other.ret);
           // Would a constraint have refused it, given what the desk already held in this window?
@@ -150,13 +175,16 @@ for (const [eraLabel, eraTest] of [['v17 onward', (v) => /-(v1[6-9]|fresh2pp-v18
         later.push(other.ret);
         if (outranks) laterBetter.push(other.ret);
       }
+
     }
   }
 
   console.log(`orders matched to an admitted decision: ${windowsSeen}; with at least one alternative: ${hadAlternative}; at 3 open positions: ${atCapacity}\n`);
   show('the contract the desk chose', stat(chosen));
+  show('  opposite side, same asset [excluded]', stat(oppositeSide));
   show('  alternatives already admitted then', stat(sooner));
-  show('    ... that also outranked it', stat(soonerBetter));
+  show('    ... outranked it on edge/cost', stat(soonerBetter));
+  show('    ... outranked it on edge x conf', stat(soonerBetterOldKey));
   console.log('  of those better-ranked and already available, why they were not taken:');
   show('      refused: same asset this window', stat(blocked.sameAsset));
   show('      refused: correlation group limit', stat(blocked.sameGroup));
@@ -176,6 +204,10 @@ for (const [eraLabel, eraTest] of [['v17 onward', (v) => /-(v1[6-9]|fresh2pp-v18
   if (c && l) console.log(`  TIMING gap   (chosen − later-arriving):     ${((c.mean - l.mean) >= 0 ? '+' : '')}${(100 * (c.mean - l.mean)).toFixed(1)}pp`);
 }
 
+console.log('\nThe opposite-side line is excluded from every figure below it: one of the two sides of a');
+console.log('contract settles in the money by construction, so pooling it manufactures a passed-over winner.');
+console.log('"Outranked it" now uses edge/cost, which is what selectPortfolio ranks on; the edge x confidence');
+console.log('line beside it is the key this script used before 2026-08-19 and is shown only for comparison.');
 console.log('\nA negative RANKING gap means a better contract was already on the board and the desk took the');
 console.log('worse one: that is fixed by changing the ranking, not by more slots or easier switching.');
 console.log('A negative TIMING gap means the better contract arrived after the desk had committed: that is');
