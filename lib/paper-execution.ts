@@ -72,6 +72,8 @@ import { evaluateLiveRisk } from './live-risk-policy';
 import { liveBlockers, liveTradingEnabled, maxLiveOrdersPerHour, maxLiveStakeCents, placeKalshiBuy, placeKalshiSell, placeKalshiTakerBuy } from './live-orders';
 import { countFilledLiveVenueOrders } from './order-rate-limit';
 import { selectPortfolio, cryptoExposureGroup, DEFAULT_PORTFOLIO_CONSTRAINTS, parseMaximumOpenPositions, type PortfolioConstraints } from './portfolio-policy';
+import { PORTFOLIO_CHOICE_SET_VERSION, type PortfolioChoiceSetRecord } from './portfolio-choice-set';
+import { maintainPortfolioChoiceSets, recordPortfolioChoiceSet } from './portfolio-choice-set-store';
 import { bestEntry, bestVenueEntry, BUY_POLICY_VERSION, edgeStrength, MAX_ENTRY_PRICE, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, qualifiesAsBuyEdge, qualifiesVenueBuyEdge, sideProbability, venueFeeRate } from './prediction-policy';
 import { getKalshiReconciliationStatus, serializedReconciliation, setKalshiReconciliationStatus, type KalshiReconciliationStatus } from './reconciliation-state';
 import { getRegimeGateStatus, updateRegimeGate, type RegimeGateStatus, type RegimeSentinelCandidate } from './regime-gate-store';
@@ -623,13 +625,27 @@ const orderProbability = (order: Pick<PaperOrder, 'side' | 'modelProbabilityUp'>
 const entryFillPrice = (order: PaperOrder) => order.authoritativeFillPrice ?? order.initialSubmittedPrice ?? order.askPrice;
 const expectedProfitCents = (order: PaperOrder) => order.potentialPayoutCents * orderProbability(order) - order.stakeCents;
 
-function updatePortfolioDecisions(dashboard: DashboardData, status: TradingControlData, ledger: Ledger): boolean {
+interface PortfolioSelectionAudit {
+  constraints: PortfolioConstraints;
+  candidates: Array<{
+    id: string; prediction: Prediction; decision: PortfolioDecisionView; builtOrder?: PaperOrder;
+    cooldownRemainingMs: number; attempt?: LiveAttemptState;
+    persistence?: SignalPersistenceState;
+  }>;
+}
+
+function updatePortfolioDecisions(
+  dashboard: DashboardData, status: TradingControlData, ledger: Ledger,
+): { changed: boolean; audit: PortfolioSelectionAudit } {
   const now = new Date().toISOString();
   const next: Record<string, PortfolioDecisionView> = {};
   const built = new Map<string, PaperOrder>();
   const retryNumbers = new Map<string, number>();
-  const exposures = ledger.orders.filter((order) => order.executionMode === 'live' && (order.status === 'open' || order.status === 'pending_reservation' || order.status === 'uncertain'))
-    .map((order) => ({ symbol: order.symbol, closesAt: order.closesAt }));
+  const cooldowns = new Map<string, number>();
+  const attemptsByKey = new Map<string, LiveAttemptState>();
+  const activeOrders = ledger.orders.filter((order) => order.executionMode === 'live'
+    && (order.status === 'open' || order.status === 'pending_reservation' || order.status === 'uncertain'));
+  const exposures = activeOrders.map((order) => ({ symbol: order.symbol, closesAt: order.closesAt }));
 
   for (const prediction of dashboard.predictions.filter((item) => item.market.live && qualifiesAsBuyEdge(item))) {
     const entry = bestEntry(prediction);
@@ -637,11 +653,13 @@ function updatePortfolioDecisions(dashboard: DashboardData, status: TradingContr
     const side = entry.side;
     const key = persistenceKey(prediction, side);
     const cooldownMs = reentryCooldownRemainingMs(ledger, prediction, 'live', side);
+    cooldowns.set(key, cooldownMs);
     if (cooldownMs > 0) {
       next[key] = { state: 'blocked', reason: `Post-exit re-entry cooldown has ${Math.ceil(cooldownMs / 1000)}s remaining; fresh persistence is also required.`, updatedAt: now };
       continue;
     }
     const attempt = liveAttemptState(prediction, side, ledger);
+    attemptsByKey.set(key, attempt);
     const { attempts, retry } = attempt;
     if (attempts.length && !retry.allowed) {
       const active = attempts.find((order) => order.status === 'open' || order.status === 'pending_reservation' || order.status === 'uncertain');
@@ -680,9 +698,10 @@ function updatePortfolioDecisions(dashboard: DashboardData, status: TradingContr
     built.set(key, candidate.order);
   }
 
+  const constraints = portfolioConstraints();
   const selection = selectPortfolio([...built.entries()].map(([id, order]) => ({
     id, symbol: order.symbol, closesAt: order.closesAt, expectedProfitCents: expectedProfitCents(order),
-  })), exposures, portfolioConstraints());
+  })), exposures, constraints);
   for (const item of selection) next[item.id] = {
     state: item.selected ? 'portfolio-selected' : 'blocked',
     reason: `${item.reason}${(retryNumbers.get(item.id) ?? 1) > 1 ? ' Fresh post-miss evidence and absolute taker gates authorize the one capped fallback attempt.' : ''}`,
@@ -691,7 +710,27 @@ function updatePortfolioDecisions(dashboard: DashboardData, status: TradingContr
   };
   const changed = JSON.stringify(ledger.portfolioDecisions) !== JSON.stringify(next);
   ledger.portfolioDecisions = next;
-  return changed;
+  const predictionsByKey = new Map(dashboard.predictions.flatMap((prediction) => {
+    const side = selectedSide(prediction);
+    return side ? [[persistenceKey(prediction, side), prediction] as const] : [];
+  }));
+  return {
+    changed,
+    audit: {
+      constraints,
+      candidates: Object.entries(next).flatMap(([id, decision]) => {
+        const prediction = predictionsByKey.get(id);
+        if (!prediction) return [];
+        const side = selectedSide(prediction)!;
+        const persistence = ledger.signalPersistence[persistenceKey(prediction, side)];
+        return [{
+          id, prediction, decision: { ...decision }, builtOrder: built.get(id) ? { ...built.get(id)! } : undefined,
+          cooldownRemainingMs: cooldowns.get(id) ?? 0, attempt: attemptsByKey.get(id),
+          persistence: persistence ? { ...persistence, observations: persistence.observations.map((observation) => ({ ...observation })) } : undefined,
+        }];
+      }),
+    },
+  };
 }
 
 async function resolveOutcome(order: PaperOrder): Promise<'UP' | 'DOWN' | 'INVALID' | null> {
@@ -1013,16 +1052,19 @@ export function attachMatchedLiveFillShadow(orders: PaperOrder[], liveOrder: Pap
 async function executePreparedLiveBuy(
   order: PaperOrder, status: TradingControlData, ledger: Ledger,
   authorizeTakerQuote?: (quote: { bid: number; ask: number; spread: number }) => string | undefined,
+  choiceSet?: PortfolioChoiceSetRecord,
 ): Promise<void> {
   const executionStyle = order.entryExecutionDecision?.executedStyle ?? 'maker';
   beginLiveTransaction(`Managing live ${order.symbol} ${executionStyle} entry.`);
   try {
   ledger.orders.push(order);
   await writeLedger(ledger);
-  // The authoritative intent is durable before this detached observation starts. It never delays reserve,
-  // quote, placement, or cancellation and production never reads its result.
+  // The authoritative intent is durable before either detached observation starts. Neither can delay
+  // reserve, quote, placement, or cancellation, and production never reads their result.
   void recordMakerRestrictionOrder(order)
     .catch((error) => console.error('Maker restriction sentinel decision write failed:', error));
+  if (choiceSet) void recordPortfolioChoiceSet(choiceSet)
+    .catch((error) => console.error('Portfolio choice-set decision write failed:', error));
   try {
     await reserveTradingBudget(order.stakeCents, order.venue, order.id);
   } catch (error) {
@@ -1530,7 +1572,107 @@ export function portfolioAdmitsAdditional(ledger: Pick<Ledger, 'orders'>, predic
   return sameGroup < constraints.maximumSameGroupPerWindow;
 }
 
-async function runLive(dashboard: DashboardData, status: TradingControlData, ledger: Ledger, regimeGate: RegimeGateStatus, budgets: ProviderBudgetConfiguration): Promise<boolean> {
+function buildPortfolioChoiceSetRecord(input: {
+  order: PaperOrder; candidateId: string; audit: PortfolioSelectionAudit; dashboard: DashboardData;
+  status: TradingControlData; regimeGate: RegimeGateStatus; regimeByCandidate: Map<string, string | undefined>;
+  regimeAllowedIds: Set<string>; initiallySelectedIds: Set<string>; executionReadyIds: Set<string>;
+  priorDrainActions: Array<{ candidateId: string; action: 'issued' | 'skipped'; reason: string }>;
+  currentExposures: PaperOrder[];
+  drainSequence: number; maximumLiveStake: number; providerSpendableCents: number; effectiveStakeCeilingCents: number;
+}): PortfolioChoiceSetRecord {
+  const prior = new Map(input.priorDrainActions.map((action) => [action.candidateId, action]));
+  return {
+    id: `${PORTFOLIO_CHOICE_SET_VERSION}:${input.order.id}`,
+    version: PORTFOLIO_CHOICE_SET_VERSION,
+    recordedAt: input.order.createdAt,
+    calculationAt: input.dashboard.generatedAt,
+    drainSequence: input.drainSequence,
+    strategyId: EDGE_BINARY_BUY,
+    executionMode: 'live',
+    marketId: orderMarketId(input.order),
+    providerId: orderProviderId(input.order),
+    providerVariantId: input.order.providerVariantId,
+    forecastModelVersion: input.dashboard.modelVersion,
+    buyPolicyVersion: BUY_POLICY_VERSION,
+    executionPolicyVersion: input.order.entryDecision?.executionPolicyVersion,
+    issuedOrderId: input.order.id,
+    issuedLogicalOrderId: input.order.logicalOrderId ?? input.order.id,
+    issuedCandidateId: input.candidateId,
+    issuedEntryDecision: { ...input.order.entryDecision!, factors: input.order.entryDecision!.factors.map((factor) => ({ ...factor })) },
+    issuedReservedStakeCents: input.order.reservedStakeCents ?? input.order.stakeCents,
+    proposedStakeCents: input.status.proposedStakeCents,
+    maximumLiveStakeCents: input.maximumLiveStake,
+    providerSpendableCents: input.providerSpendableCents,
+    effectiveStakeCeilingCents: input.effectiveStakeCeilingCents,
+    adaptiveRegimeGate: {
+      phase: input.regimeGate.phase, allowsEntries: input.regimeGate.allowsEntries,
+      policyVersion: input.regimeGate.policyVersion, reason: input.regimeGate.reason,
+    },
+    classifiedRegimeRequired: classifiedRegimeRequired(),
+    liveControl: { revision: input.status.control.revision, state: input.status.control.state, mode: input.status.control.mode },
+    liveOperationalReady: true,
+    constraints: { ...input.audit.constraints },
+    exposures: input.currentExposures.map((exposure) => ({
+      orderId: exposure.id, strategyId: orderStrategyId(exposure), symbol: exposure.symbol,
+      side: exposure.side, closesAt: exposure.closesAt, status: exposure.status,
+    })),
+    priorDrainActions: input.priorDrainActions.map((action) => ({ ...action })),
+    candidates: input.audit.candidates.map((candidate) => {
+      const side = selectedSide(candidate.prediction)!;
+      const built = candidate.id === input.candidateId ? input.order : candidate.builtOrder;
+      const entry = bestVenueEntry(candidate.prediction, 'kalshi', side);
+      const quote = venueQuote(candidate.prediction, 'kalshi', side);
+      const priorAction = prior.get(candidate.id);
+      const initiallySelected = input.initiallySelectedIds.has(candidate.id);
+      const executionReady = input.executionReadyIds.has(candidate.id);
+      const drainDisposition = candidate.id === input.candidateId ? 'issued'
+        : priorAction?.action === 'issued' ? 'issued-earlier'
+        : priorAction?.action === 'skipped' ? 'skipped-earlier'
+        : executionReady ? 'pending'
+        : initiallySelected ? 'not-ready'
+        : 'not-selected';
+      return {
+        id: candidate.id, symbol: candidate.prediction.symbol,
+        contractId: built?.contractId ?? candidate.prediction.kalshi?.ticker,
+        side, closesAt: built?.closesAt ?? candidate.prediction.kalshi?.closesAt ?? candidate.prediction.market.closesAt,
+        selectedSideProbability: sideProbability(candidate.prediction, side), confidence: candidate.prediction.confidence,
+        actionableAsk: built?.entryDecision?.actionableAsk ?? quote?.ask,
+        actionableBid: built?.entryDecision?.actionableBid ?? quote?.bid,
+        feeRate: built?.entryDecision?.feeRate ?? entry?.feeRate,
+        netEdge: built?.entryDecision?.netEdge ?? entry?.netEdge,
+        spread: built?.entryDecision?.spread ?? (quote ? quote.ask - quote.bid : undefined),
+        persistenceObservations: candidate.persistence?.observations.map((observation) => ({ ...observation })),
+        eligibility: candidate.attempt ? {
+          eligible: candidate.attempt.eligibility.eligible, reason: candidate.attempt.eligibility.reason,
+          qualifyingSnapshots: candidate.attempt.eligibility.qualifyingSnapshots,
+          medianNetEdge: candidate.attempt.eligibility.medianNetEdge, edgeSpike: candidate.attempt.eligibility.edgeSpike,
+        } : undefined,
+        retry: candidate.attempt ? {
+          allowed: candidate.attempt.retry.allowed, attemptNumber: candidate.attempt.retry.attemptNumber,
+          reason: candidate.attempt.retry.reason, retryOfOrderId: candidate.attempt.retry.retryOfOrderId,
+        } : undefined,
+        cooldownRemainingMs: candidate.cooldownRemainingMs,
+        assetAdmitted: assetAdmitted(candidate.prediction.symbol),
+        cycleRegime: input.regimeByCandidate.get(candidate.id),
+        regimeAdmitted: regimeAdmits(input.regimeByCandidate.get(candidate.id)),
+        liveFiltersAdmitted: input.regimeAllowedIds.has(candidate.id),
+        portfolioState: candidate.decision.state, portfolioReason: candidate.decision.reason,
+        quantity: built?.quantity, stakeCents: built?.stakeCents, feeCents: built?.feeCents,
+        potentialPayoutCents: built?.potentialPayoutCents,
+        expectedProfitCents: candidate.decision.expectedProfitCents,
+        adjustedExpectedContributionCents: candidate.decision.adjustedExpectedContributionCents,
+        rank: candidate.decision.rank,
+        initiallySelected, executionReady, drainDisposition,
+        drainReason: priorAction?.reason,
+      };
+    }),
+  };
+}
+
+async function runLive(
+  dashboard: DashboardData, status: TradingControlData, ledger: Ledger, regimeGate: RegimeGateStatus,
+  budgets: ProviderBudgetConfiguration, portfolioAudit: PortfolioSelectionAudit,
+): Promise<boolean> {
   const skip = (reason: string) => { ledger.lastLiveSkip = { reason, at: new Date().toISOString() }; return false; };
   if (!liveTradingEnabled()) return skip('Live trading is off in the environment.');
   if (!status.tradingProviders?.find((provider) => provider.id === 'kalshi')?.liveEnabled) return skip('Kalshi is disabled for live automated trading in the provider registry.');
@@ -1594,6 +1736,13 @@ async function runLive(dashboard: DashboardData, status: TradingControlData, led
     return (ledger.portfolioDecisions[persistenceKey(a, aSide)]?.rank ?? 99) - (ledger.portfolioDecisions[persistenceKey(b, bSide)]?.rank ?? 99);
   });
   const eligibleSelected = selected.filter((item) => liveAttemptState(item, selectedSide(item)!, ledger).eligibility.eligible);
+  const regimeByChoiceId = new Map(allQualified.map((item) => {
+    const side = selectedSide(item)!;
+    return [persistenceKey(item, side), regimeByCandidate.get(item.symbol)] as const;
+  }));
+  const regimeAllowedIds = new Set(regimeAllowed.map((item) => persistenceKey(item, selectedSide(item)!)));
+  const initiallySelectedIds = new Set(selected.map((item) => persistenceKey(item, selectedSide(item)!)));
+  const executionReadyIds = new Set(eligibleSelected.map((item) => persistenceKey(item, selectedSide(item)!)));
   const prediction = eligibleSelected[0];
   if (!prediction) {
     const warming = qualified[0];
@@ -1621,7 +1770,9 @@ async function runLive(dashboard: DashboardData, status: TradingControlData, led
    * earlier placements just created must each be recomputed before the next order is built.
    */
   let placed = 0;
+  const priorDrainActions: Array<{ candidateId: string; action: 'issued' | 'skipped'; reason: string }> = [];
   for (const candidate of eligibleSelected) {
+    const choiceId = persistenceKey(candidate, selectedSide(candidate)!);
     const openNow = openLiveEntries(ledger).length;
     if (openNow >= portfolioConstraints().maximumPositions) break;
     // Re-read per placement: the earlier orders in this same loop consumed slots and hourly budget.
@@ -1629,23 +1780,37 @@ async function runLive(dashboard: DashboardData, status: TradingControlData, led
     const side = selectedSide(candidate)!;
     // Exposure created earlier in this cycle is invisible to `portfolioDecisions`, which was computed
     // before any of it existed. Without this the loop could place three correlated bets in one window.
-    if (!portfolioAdmitsAdditional(ledger, candidate)) continue;
+    if (!portfolioAdmitsAdditional(ledger, candidate)) {
+      priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason: 'Per-placement account exposure guard refused this initially selected candidate after earlier drain activity.' });
+      continue;
+    }
     // Allocation bounds the stake before the order is built, so a pair with partial headroom sizes down
     // rather than being rejected after the fact.
     const liveFunding = marketFundingFor(budgets, 'live', 'kalshi', DEFAULT_MARKET_ID, ledger,
       status.workingEquityCents, status.control.availableBudgetCents);
-    const liveStakeCeiling = Math.min(status.proposedStakeCents, maxLiveStakeCents(), liveFunding.spendableCents);
+    const maximumLiveStake = maxLiveStakeCents();
+    const liveStakeCeiling = Math.min(status.proposedStakeCents, maximumLiveStake, liveFunding.spendableCents);
     if (liveStakeCeiling <= 0) { if (!placed) return skip(liveFunding.reason); break; }
     const built = buildOrder(candidate, side, status, ledger, dashboard.generatedAt, dashboard.modelVersion, 'live', liveStakeCeiling, 'kalshi');
-    if ('reason' in built) { if (!placed) return skip(`${candidate.symbol} ${side}: ${built.reason}`); continue; }
+    if ('reason' in built) {
+      priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason: built.reason });
+      if (!placed) return skip(`${candidate.symbol} ${side}: ${built.reason}`);
+      continue;
+    }
     // Defence in depth: sizing already respected the ceiling, so a stake above it means a rounding or
     // fee-reserve path put real money outside the operator's allocation.
-    if (built.order.stakeCents > liveFunding.spendableCents) { if (!placed) return skip(liveFunding.reason); continue; }
+    if (built.order.stakeCents > liveFunding.spendableCents) {
+      priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason: liveFunding.reason });
+      if (!placed) return skip(liveFunding.reason);
+      continue;
+    }
     const logicalId = orderId(candidate, 'live', side, ledger);
     const attempt = liveAttemptState(candidate, side, ledger);
     const { retry } = attempt;
     if (!retry.allowed || !attempt.eligibility.eligible) {
-      if (!placed) return skip(`${candidate.symbol}: ${!retry.allowed ? retry.reason : attempt.eligibility.reason}`);
+      const reason = !retry.allowed ? retry.reason : attempt.eligibility.reason;
+      priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason });
+      if (!placed) return skip(`${candidate.symbol}: ${reason}`);
       continue;
     }
     built.order.logicalOrderId = logicalId;
@@ -1657,13 +1822,22 @@ async function runLive(dashboard: DashboardData, status: TradingControlData, led
     // Attempt 2 is taker-or-wait, never another maker chase. Absolute gates can continue collecting until
     // they clear or the final retry cutoff expires, without consuming the durable second-attempt id.
     if (attempt.makerMissFallback && built.order.entryExecutionDecision.executedStyle !== 'taker') {
+      priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason: built.order.entryExecutionDecision.reason });
       if (!placed) return skip(`${candidate.symbol}: ${built.order.entryExecutionDecision.reason}`);
       continue;
     }
     if (built.order.entryExecutionDecision.executedStyle === 'taker') {
       const reserveFailure = applyTakerQuoteMovementReserve(built.order, liveStakeCeiling);
-      if (reserveFailure) { if (!placed) return skip(`${candidate.symbol}: ${reserveFailure}`); continue; }
-      if (built.order.stakeCents > liveFunding.spendableCents) { if (!placed) return skip(liveFunding.reason); continue; }
+      if (reserveFailure) {
+        priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason: reserveFailure });
+        if (!placed) return skip(`${candidate.symbol}: ${reserveFailure}`);
+        continue;
+      }
+      if (built.order.stakeCents > liveFunding.spendableCents) {
+        priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason: liveFunding.reason });
+        if (!placed) return skip(liveFunding.reason);
+        continue;
+      }
     }
     // Record the path label that admitted this live candidate so later cohorts can be audited.
     built.order.entryCycleRegime = (await cycleRegimeFor(candidate.symbol, candidate.market.closesAt))?.regime;
@@ -1679,8 +1853,22 @@ async function runLive(dashboard: DashboardData, status: TradingControlData, led
         return refreshed.executedStyle === 'taker' ? undefined : refreshed.reason;
       }
       : undefined;
+    let choiceSet: PortfolioChoiceSetRecord | undefined;
+    try {
+      choiceSet = buildPortfolioChoiceSetRecord({
+        order: built.order, candidateId: choiceId, audit: portfolioAudit, dashboard, status, regimeGate,
+        regimeByCandidate: regimeByChoiceId, regimeAllowedIds, initiallySelectedIds, executionReadyIds,
+        priorDrainActions, currentExposures: openLiveEntries(ledger).map((exposure) => ({ ...exposure })),
+        drainSequence: placed + 1, maximumLiveStake,
+        providerSpendableCents: liveFunding.spendableCents, effectiveStakeCeilingCents: liveStakeCeiling,
+      });
+    } catch (error) {
+      // Evaluation instrumentation may fail absent and log; it may never refuse or delay a funded order.
+      console.error('Portfolio choice-set snapshot construction failed:', error);
+    }
     ledger.lastLiveSkip = undefined;
-    await executePreparedLiveBuy(built.order, status, ledger, authorizeTakerQuote);
+    await executePreparedLiveBuy(built.order, status, ledger, authorizeTakerQuote, choiceSet);
+    priorDrainActions.push({ candidateId: choiceId, action: 'issued', reason: `Issued as drain sequence ${placed + 1}.` });
     placed += 1;
   }
   return placed > 0;
@@ -1709,6 +1897,8 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
     .catch((error) => console.error('Edge spike sentinel collection failed:', error));
   void maintainMakerRestrictionSentinels(dashboard.generatedAt)
     .catch((error) => console.error('Maker restriction sentinel maintenance failed:', error));
+  void maintainPortfolioChoiceSets(dashboard.generatedAt)
+    .catch((error) => console.error('Portfolio choice-set maintenance failed:', error));
   // Continue candidate exit paths after production sells. This reads the already-fresh public dashboard,
   // records no stale substitute, and is detached from every signed order and ledger mutation.
   void maintainExitPolicySentinels({ observedAt: dashboard.generatedAt, orders: ledger.orders })
@@ -1740,7 +1930,8 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
     .then((cycle) => updateHoldSentinelStore(cycle))
     .catch((error) => console.error('Long-shot evidence collection failed:', error));
   changed = await observeAndExecuteStandaloneExits(dashboard, status, ledger) || changed;
-  changed = updatePortfolioDecisions(dashboard, status, ledger) || changed;
+  const portfolioUpdate = updatePortfolioDecisions(dashboard, status, ledger);
+  changed = portfolioUpdate.changed || changed;
   const previousSkip = ledger.lastLiveSkip?.reason;
   // Read once per cycle: a ceiling that changed mid-cycle would size one order against the old value.
   const budgets = await getProviderBudgets({ revision: status.control.revision });
@@ -1756,7 +1947,7 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
       .catch((error) => console.error('Paper maker restriction sentinel decision write failed:', error));
   }
   const paperManagement = managePaperMakerOrders(startedPaperOrders, ledger);
-  const liveManagement = runLive(dashboard, status, ledger, regimeGate, budgets);
+  const liveManagement = runLive(dashboard, status, ledger, regimeGate, budgets, portfolioUpdate.audit);
   const [paperChanged, liveChanged] = await Promise.all([paperManagement, liveManagement]);
   changed = paperChanged || liveChanged || changed;
   // The regular cycle owns exits only. Entries belong exclusively to `longShotEntryTick`, which refreshes

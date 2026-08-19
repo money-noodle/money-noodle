@@ -130,6 +130,21 @@ reconstructed because failed dashboard observations and `portfolioDecisions` wer
 a future ranking claim requires prospective committed choice sets. Full correction:
 [reports/edge-buy-opportunities-2026-08-19.md](reports/edge-buy-opportunities-2026-08-19.md) §8.
 
+### Prospective portfolio choice sets: implemented, collection not started
+
+`portfolio-choice-set-v1` replaces favourable historical reconstruction with one immutable record after
+each durable positive-edge live intent. It stamps the production candidate set, persistence/retry/cooldown
+state, classified regime, effective runtime caps, account-wide exposures, production sizing/rank, drain
+skips, and issued order, then resolves every exact Kalshi contract. The pre-registered report scores every
+record, clusters on settlement window, opens diagnostics at 30 resolved windows, and requires 60 overall
+plus 20 differing-choice windows before any differing-choice claim. No result can reach execution or
+promote a policy. Design: [docs/portfolio-choice-set-journal-design.md](docs/portfolio-choice-set-journal-design.md).
+Run `npm run analyze:portfolio-choice-sets`.
+
+The current read is **0 records / 0 windows** because the running process has not initialized the new store.
+No historical order is backfilled. Collection begins only after a build and restart/deploy; none was done
+for this change.
+
 ### Edge policy v17, reviewed 2026-08-17
 
 Three days of `buy-binary-edge-net5to35-quality50-owned55-price5to97-v17` are now reportable, and the
