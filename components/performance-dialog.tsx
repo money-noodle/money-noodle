@@ -439,7 +439,9 @@ export function PerformanceDialog({ publicView = false }: { publicView?: boolean
           <TabsContent value="trades">
             <p className="mb-3 text-[10px] leading-relaxed text-muted-foreground">{publicView ? 'Executed simulated trades only, taken from the paper order ledger. These include modelled fill prices and venue fees, so they answer what the shadow bankroll did — not how good the forecast looked.' : 'Executed trades only, taken from the order ledger, with paper and live kept completely separate. These include real fill prices and venue fees, so they answer what the money did — not how good the forecast looked.'}</p>
             <div className="space-y-3">
-              {data.liveRecord && <div><TradeRecordCard record={data.liveRecord}/><ProviderRecordRows records={data.liveProviderRecords ?? []} label="Live"/></div>}
+              {/* The public endpoint already omits live data, but the render boundary enforces the same
+                  rule independently so a stale or widened response can never add a live card. */}
+              {!publicView && data.liveRecord && <div><TradeRecordCard record={data.liveRecord}/><ProviderRecordRows records={data.liveProviderRecords ?? []} label="Live"/></div>}
               <FundingHistory live={publicView ? [] : data.liveEpochs ?? []} paper={data.paperEpochs ?? []}/>
               {data.paperRecord && <div><TradeRecordCard record={data.paperRecord}/><ProviderRecordRows records={data.paperProviderRecords ?? []} label="Paper"/></div>}
             </div>
