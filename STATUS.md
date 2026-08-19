@@ -65,7 +65,11 @@ settlement-pending position, zero venue-managed positions, zero recovered fills,
 orders. The authenticated manifest published v5, the read model published the three-episode ceiling, and the
 operator explicitly resumed live mode with no blockers and 1,905¢ available. No v5 live or paper order had
 fired at the first post-resume read, so this verifies build, policy identity, restart, and reconciliation—not
-episode-2 routing or economics.
+episode-2 routing or economics. Hosted verification caught that the stateless deployment's absent execution-
+mode setting described the safe maker-only default and published one episode despite the v5 identity. The
+production Vercel environment now carries `MONEY_NOODLE_ENTRY_EXECUTION_MODE=adaptive` as a fifth,
+display-only setting; the final canonical read published adaptive mode and three episodes. Stateless runtime
+intersection still grants no collection, ledger writes, reconciliation, or order authority.
 
 ### High-edge execution, direction observation, and reduce-only sizing deployed live, 2026-08-19
 
@@ -449,8 +453,10 @@ credentials for read-only account connectors belonging to planned/unimplemented 
 defaults; funded authority, caps, risk gates, reconciliation, active strategy policy, projection, auth, and
 archive credentials remain explicit. `.env.example` now marks optional providers as commented examples and
 matches current 9/6/3 portfolio defaults plus the disabled net-edge ceiling. The linked Vercel project was
-reduced from 21 variables to the four the hosted app reads: canonical URL, auth password/secret, and its
-dedicated database URL. No deployment was triggered.
+reduced from 21 variables to the four the hosted app read at that point: canonical URL, auth password/secret,
+and its dedicated database URL. No deployment was triggered then. The later v5 deployment added a fifth,
+non-authority execution-mode value so the public manifest describes the funded desk's adaptive policy rather
+than the code's safe maker-only default.
 
 The earlier v21 sentence "every accepted decision fills at the ask" remains false and withdrawn. A capped
 IOC can also finish unfilled when the quote moves beyond its approved ask.
