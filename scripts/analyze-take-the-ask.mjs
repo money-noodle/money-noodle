@@ -40,12 +40,16 @@
  *   - Read-only; places no order and writes nothing. Nothing here promotes anything (AGENTS §5.5).
  */
 import { readFile } from 'node:fs/promises';
+import { readForecastHistory } from './lib/forecast-history.mjs';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 
 const DATA = path.resolve(process.cwd(), 'data');
 const SHARDS = path.join(DATA, 'forecast-history-shards');
-const COHORTS = ['-v17', 'fresh2pp-v18'];
+// v19 disarmed the spike gate; v20 widened the edge bounds and the late cutoff. Both are policies the
+// desk has actually run, so both have to be priced here — carrying only the retired eras is how a
+// current fill problem goes unmeasured.
+const COHORTS = ['-v17', 'fresh2pp-v18', '-v19', 'late30-v20'];
 
 /** Kalshi charges nothing on a resting fill and `0.07 * p * (1 - p)` on a taking one. */
 const takerFeeCents = (venue, priceCents, quantity) => venue === 'polymarket'
@@ -84,9 +88,10 @@ const outcomes = new Map();
 const absorb = (list) => {
   for (const row of list) if (row.status === 'resolved' && row.outcome) outcomes.set(`${row.symbol}|${row.closesAt}`, row.outcome);
 };
-const index = JSON.parse(await readFile(path.join(SHARDS, 'index.json'), 'utf8'));
-for (const shard of index.shards) absorb(JSON.parse(await readFile(path.join(SHARDS, shard.file), 'utf8')));
-if (existsSync(path.join(SHARDS, 'open.json'))) absorb(JSON.parse(await readFile(path.join(SHARDS, 'open.json'), 'utf8')));
+// Shards + open shard + journal patches. Reading shards alone reported zero decisions for v19 and v20
+// while the desk was trading them: `open.json` is rewritten only on compaction and resolution arrives as
+// a journal patch.
+absorb(await readForecastHistory(DATA));
 
 const allOrders = JSON.parse(await readFile(path.join(DATA, 'paper-orders.json'), 'utf8')).orders
   .filter((o) => !o.id.includes(':exit:') && o.strategyId !== 'long-shot-round-trip');

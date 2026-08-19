@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-import { cryptoExposureGroup, DEFAULT_PORTFOLIO_CONSTRAINTS, selectPortfolio } from './portfolio-policy';
+import { cryptoExposureGroup, DEFAULT_MAX_OPEN_POSITIONS, DEFAULT_PORTFOLIO_CONSTRAINTS, selectPortfolio } from './portfolio-policy';
 import type { PortfolioCandidate, PortfolioExposure } from './portfolio-policy';
 
 /**
@@ -17,11 +17,13 @@ describe('exposure caps stay global across providers', () => {
   });
 
   it('counts existing exposure regardless of which provider holds it', () => {
-    // BTC and ETH are both `majors`, so one existing majors position uses that group's whole allowance.
-    const existing: PortfolioExposure[] = [{ symbol: 'BTC', closesAt: window }];
-    const selection = selectPortfolio([candidate('eth-kalshi', 'ETH')], existing, DEFAULT_PORTFOLIO_CONSTRAINTS);
+    // The group allowance is shared, not granted per venue. Filled to whatever the cap currently is, so
+    // this keeps testing the sharing rather than a particular number.
+    const filled = ['SOL', 'BNB', 'HYPE'].slice(0, DEFAULT_PORTFOLIO_CONSTRAINTS.maximumSameGroupPerWindow);
+    const existing: PortfolioExposure[] = filled.map((symbol) => ({ symbol, closesAt: window }));
+    const selection = selectPortfolio([candidate('sol-other-venue', 'SOL')], existing, DEFAULT_PORTFOLIO_CONSTRAINTS);
     expect(selection[0].selected).toBe(false);
-    expect(selection[0].reason).toMatch(/group|correlat/i);
+    expect(selection[0].reason).toMatch(/group|correlat|already has exposure/i);
   });
 
   it('does not expose a provider dimension that a cap could be keyed by', () => {
@@ -42,13 +44,16 @@ describe('exposure caps stay global across providers', () => {
   });
 
   it('enforces the global position cap across windows, not per venue', () => {
-    const existing: PortfolioExposure[] = [
-      { symbol: 'BTC', closesAt: '2026-08-13T00:15:00Z' },
-      { symbol: 'SOL', closesAt: '2026-08-13T00:30:00Z' },
-      { symbol: 'XRP', closesAt: '2026-08-13T00:45:00Z' },
-    ];
-    const selection = selectPortfolio([candidate('d', 'DOGE')], existing, DEFAULT_PORTFOLIO_CONSTRAINTS);
+    // One position per window, filling the global cap exactly. Derived from the constant so raising the
+    // cap cannot silently turn this into a test that passes for the wrong reason.
+    const assets = ['BTC', 'ETH', 'SOL', 'BNB', 'HYPE', 'XRP', 'DOGE', 'BTC', 'ETH', 'SOL'];
+    const existing: PortfolioExposure[] = Array.from({ length: DEFAULT_MAX_OPEN_POSITIONS }, (_, index) => ({
+      symbol: assets[index], closesAt: new Date(Date.parse('2026-08-13T00:15:00Z') + index * 900_000).toISOString(),
+    }));
+    expect(existing).toHaveLength(DEFAULT_MAX_OPEN_POSITIONS);
+    const selection = selectPortfolio([candidate('d', 'DOGE', '2026-08-14T00:00:00Z')], existing, DEFAULT_PORTFOLIO_CONSTRAINTS);
     expect(selection[0].selected).toBe(false);
+    expect(selection[0].reason).toContain('already has');
   });
 
   it('groups by asset rather than venue, so the same asset on two providers shares one allowance', () => {

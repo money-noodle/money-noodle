@@ -76,7 +76,7 @@ export const MIN_SELECTED_SIDE_PROBABILITY = 0.55;
  */
 export const MIN_ENTRY_PRICE = 0.05;
 export const MAX_ENTRY_PRICE = 0.97;
-export const BUY_POLICY_VERSION = 'buy-binary-edge-netminus5-nocap-quality50-owned55-price5to97-late30-v20';
+export const BUY_POLICY_VERSION = 'buy-binary-edge-netminus5-nocap-quality50-owned55-price5to97-late30-persist2of15-v21';
 /** Minimum unique resolved 15-minute settlement timestamps, never updates or per-asset cycles. */
 export const MIN_CALIBRATION_SAMPLE = 100;
 

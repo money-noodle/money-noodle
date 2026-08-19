@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_CONFIGURABLE_OPEN_POSITIONS, parseMaximumOpenPositions, selectPortfolio, type PortfolioCandidate } from './portfolio-policy';
+import { DEFAULT_PORTFOLIO_CONSTRAINTS, DEFAULT_MAX_OPEN_POSITIONS, MAX_CONFIGURABLE_OPEN_POSITIONS, parseMaximumOpenPositions, selectPortfolio, type PortfolioCandidate } from './portfolio-policy';
 
 const close = '2026-01-01T00:15:00Z';
 const candidate = (symbol: string, expectedProfitCents: number, closesAt = close): PortfolioCandidate => ({ id: `${symbol}:${closesAt}`, symbol, closesAt, expectedProfitCents });
 
 describe('constrained portfolio selection', () => {
   it('parses a configurable global position limit with conservative validation and a hard ceiling', () => {
-    expect(parseMaximumOpenPositions(undefined)).toBe(3);
+    expect(parseMaximumOpenPositions(undefined)).toBe(DEFAULT_MAX_OPEN_POSITIONS);
     expect(parseMaximumOpenPositions('5')).toBe(5);
-    expect(parseMaximumOpenPositions('0')).toBe(3);
-    expect(parseMaximumOpenPositions('2.5')).toBe(3);
-    expect(parseMaximumOpenPositions('invalid')).toBe(3);
+    expect(parseMaximumOpenPositions('0')).toBe(DEFAULT_MAX_OPEN_POSITIONS);
+    expect(parseMaximumOpenPositions('2.5')).toBe(DEFAULT_MAX_OPEN_POSITIONS);
+    expect(parseMaximumOpenPositions('invalid')).toBe(DEFAULT_MAX_OPEN_POSITIONS);
     expect(parseMaximumOpenPositions('100')).toBe(MAX_CONFIGURABLE_OPEN_POSITIONS);
   });
 
@@ -20,17 +20,27 @@ describe('constrained portfolio selection', () => {
     expect(result.find((item) => item.symbol === 'BTC')).toMatchObject({ selected: true, rank: 2 });
   });
 
+  // Both limits are stated explicitly rather than inherited from the defaults: these pin the mechanism,
+  // and the production numbers move with policy (2/1 until 2026-08-18, 6/3 after).
   it('enforces the same-window limit across highly correlated crypto assets', () => {
-    const result = selectPortfolio([candidate('BTC', 8), candidate('SOL', 7), candidate('DOGE', 6)], []);
+    const tight = { maximumPositions: 9, maximumSameWindow: 2, maximumSameGroupPerWindow: 3, correlationPenaltyCents: 1, sameGroupPenaltyCents: 1 };
+    const result = selectPortfolio([candidate('BTC', 8), candidate('SOL', 7), candidate('DOGE', 6)], [], tight);
     expect(result.filter((item) => item.selected)).toHaveLength(2);
     expect(result.find((item) => item.symbol === 'DOGE')?.reason).toContain('same-window exposure limit');
   });
 
   it('prevents concentration in one exposure group within a settlement window', () => {
-    const result = selectPortfolio([candidate('SOL', 8), candidate('BNB', 7), candidate('BTC', 5)], []);
+    const tight = { maximumPositions: 9, maximumSameWindow: 6, maximumSameGroupPerWindow: 1, correlationPenaltyCents: 1, sameGroupPenaltyCents: 1 };
+    const result = selectPortfolio([candidate('SOL', 8), candidate('BNB', 7), candidate('BTC', 5)], [], tight);
     expect(result.find((item) => item.symbol === 'SOL')?.selected).toBe(true);
     expect(result.find((item) => item.symbol === 'BNB')?.reason).toContain('layer1-beta group limit');
     expect(result.find((item) => item.symbol === 'BTC')?.selected).toBe(true);
+  });
+
+  it('carries the production caps the desk actually runs', () => {
+    expect(DEFAULT_MAX_OPEN_POSITIONS).toBe(9);
+    expect(DEFAULT_PORTFOLIO_CONSTRAINTS.maximumSameWindow).toBe(6);
+    expect(DEFAULT_PORTFOLIO_CONSTRAINTS.maximumSameGroupPerWindow).toBe(3);
   });
 
   it('accounts for existing exposure and can reject a marginal positive standalone trade', () => {

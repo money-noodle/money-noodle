@@ -38,9 +38,57 @@ const component = (
  */
 const history: PolicyManifestHistoryEntry[] = [
   {
+    version: 'buy-binary-edge-netminus5-nocap-quality50-owned55-price5to97-late30-persist2of15-v21',
+    activatedAt: '2026-08-19T00:45:00.000Z',
+    status: 'active',
+    summary: 'Promoted the two-snapshot persistence candidate on its committed sentinel, and switched entries from resting a maker order to taking the ask.',
+    changes: [
+      'REQUIRED_QUALIFYING_SNAPSHOTS 3 -> 2 and REQUIRED_OBSERVATION_SPAN_MS 30s -> 15s, promoting persistence-two-consecutive-v1',
+      'Entry execution style maker -> taker (MONEY_NOODLE_ENTRY_EXECUTION_MODE); every accepted decision fills at the ask',
+      'No change to the edge bounds, side floor, quality floor, price band, warm-up or late cutoff that v20 set',
+      'Known cost accepted: the version bump discards the accumulated adaptive-regime windows and re-warms',
+    ],
+    // **The persistence half is the first entry change this desk has made on prospectively committed
+    // evidence rather than a retroactive screen**, which is the bar SPEC 12.5 sets and which the withdrawn
+    // v14 DOWN suspension failed. `persistence-two-consecutive-v1` holds 553 resolved incremental
+    // settlement windows at +13.2% +/-8.4 per $1 at the ask, and the value is concentrated in the 227
+    // production never took at all (+23.5% +/-13.0) rather than in the half it reached a median 17 seconds
+    // later (+6.5% +/-11.1, indistinguishable from noise). Under the version-scoping rule only the v19
+    // cohort formally counted — 92 windows, +16.0% +/-19.9 — and this is promoted on the pooled figure,
+    // which is a departure recorded here rather than buried.
+    //
+    // What it fixes is larger than the entry rule. A single non-qualifying snapshot resets the streak to
+    // zero, so at the collector's ~17s cadence one blip cost ~51 seconds of re-earning: measured over 12
+    // hours, 115 of 205 admitted decisions never persisted at all.
+    //
+    // **The taker half reverses reports/take-the-ask-2026-08-18.md, and the reason is a changed
+    // constraint rather than changed data.** That report priced arm C — take the ask on every decision —
+    // and set it aside because it "assumes capacity the hourly order ceiling and budget would not have
+    // given". The same evening raised positions 3 -> 9, same-window 2 -> 6, per-group 1 -> 3, and made
+    // runLive drain its ranked queue instead of placing one order per cycle, so that capacity now exists.
+    // Priced under v19: arm C returned -3.7% +/-13.4 live and -1.8% +/-13.5 paper against -13.1% and
+    // -24.6% for what the desk actually did.
+    //
+    // Stated plainly: paying the spread *costs* about 7pp on the trades the maker would have filled
+    // anyway (arm B -14.3% against arm A2 -7.6%). Taking wins only by converting the other half, which is
+    // the half the maker was adversely selected out of. Capital deployed roughly doubles. Arm C is the
+    // best arm measured, not a profitable one — it is still negative per dollar.
+    //
+    // The two halves ship together deliberately: the persistence sentinel's evidence is ask-priced and its
+    // maker-touch instrumentation carries one observation, so an ask-priced counterfactual only describes
+    // the desk once the desk takes the ask.
+    evidence: [
+      'data/persistence-candidate.json · 553 resolved incremental windows, +13.2% +/-8.4; never-eligible half +23.5% +/-13.0',
+      'npm run analyze:take-the-ask · v19 arm C -3.7% live and -1.8% paper against -13.1% and -24.6% as traded',
+      'npm run analyze:execution-gap · 115 of 205 admitted decisions never persisted over 12 hours',
+      'SPEC.md 12.5 · promotion requires committed sentinel evidence and is a manual act',
+    ],
+  },
+  {
     version: 'buy-binary-edge-netminus5-nocap-quality50-owned55-price5to97-late30-v20',
     activatedAt: '2026-08-18T23:30:00.000Z',
-    status: 'active',
+    deactivatedAt: '2026-08-19T00:45:00.000Z',
+    status: 'superseded',
     summary: 'Admitted substantially more entries: the net-edge floor to −5pp, the ceiling off, and the late cutoff from 120s to 30s. An operator decision to trade volume the measurement says is profitable, accepting an execution risk the measurement does not cover.',
     changes: [
       'MIN_NET_EDGE 5pp → −5pp; the 402 decisions this admits returned +17.5% ±6.5 held to settlement',

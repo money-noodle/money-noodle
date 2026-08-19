@@ -25,7 +25,22 @@ export interface PortfolioConstraints {
   sameGroupPenaltyCents: number;
 }
 
-export const DEFAULT_MAX_OPEN_POSITIONS = 3;
+/**
+ * Concurrent positions the desk may hold.
+ *
+ * **Raised 3 -> 9 on 2026-08-18.** The cap was refusing 39% of the decisions the desk could actually have
+ * executed: 1,633 executable decisions across 632 settlement windows, of which the 2-per-window and
+ * 1-per-group limits admitted only 992. Candidates do not all present at once, so a three-slot desk fills
+ * with the first arrivals rather than the best of the window — measured, it held no live position 75% of
+ * the time yet still passed over decisions in the 15-31pp band that returns +44% per $1.
+ *
+ * Stacking has been the better cohort for this strategy, which is why this is a raise rather than a
+ * tightening: multi-position windows returned +2.3% live against -5.7% for single-position windows, and
+ * positions sharing a correlation group returned +19.3%. That is the opposite of the long-shot policy,
+ * where stacked windows lost together 7 times in 9 — long-shot buys sides that got cheap *because* the
+ * underlying moved, so its stacked positions are one directional bet repeated.
+ */
+export const DEFAULT_MAX_OPEN_POSITIONS = 9;
 export const MAX_CONFIGURABLE_OPEN_POSITIONS = 10;
 
 export function parseMaximumOpenPositions(value: string | undefined): number {
@@ -37,8 +52,12 @@ export function parseMaximumOpenPositions(value: string | undefined): number {
 
 export const DEFAULT_PORTFOLIO_CONSTRAINTS: PortfolioConstraints = {
   maximumPositions: DEFAULT_MAX_OPEN_POSITIONS,
-  maximumSameWindow: 2,
-  maximumSameGroupPerWindow: 1,
+  // Raised 2 -> 6 and 1 -> 3 with the position cap. The per-group limit is the lever: 1 -> 2 captures
+  // +31% of executable decisions and 1 -> 3 captures +57%. Per-window capture saturates at 6 — nine
+  // slots per window would catch nine more decisions out of 1,633 — so the total cap, not the per-window
+  // one, is what leaves headroom across overlapping settlement times.
+  maximumSameWindow: 6,
+  maximumSameGroupPerWindow: 3,
   correlationPenaltyCents: 1,
   sameGroupPenaltyCents: 1,
 };

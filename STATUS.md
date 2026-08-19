@@ -160,6 +160,136 @@ This configuration is also the **only cell above break-even** in the retroactive
 (10¢/90¢ ratio 1.12, 10¢/70¢ 1.03; every other entry band 0.68–0.85). Two routes agree it is marginally
 positive; neither has the sample to establish it. Nothing is authorized: keep collecting.
 
+### v21 — promote the persistence candidate, and take the ask, 2026-08-19
+
+`buy-binary-edge-netminus5-nocap-quality50-owned55-price5to97-late30-persist2of15-v21`. Two changes,
+shipped together on purpose.
+
+**Persistence 3-over-30s to 2-over-15s.** The **first entry change made on prospectively committed
+evidence** rather than a retroactive screen — the bar SPEC 12.5 sets and the one the withdrawn v14 DOWN
+suspension failed. `persistence-two-consecutive-v1` holds **553 resolved incremental settlement windows at
++13.2% +/-8.4** per $1 at the ask, with the value concentrated in the **227 production never took at all
+(+23.5% +/-13.0)** rather than the half it reached a median 17 seconds later (+6.5% +/-11.1, noise).
+
+Recorded as a departure: under 706's version-scoping only the v19 cohort formally counted — 92 windows,
++16.0% +/-19.9 — and this promotes on the pooled figure.
+
+What it fixes is bigger than the entry rule. A single non-qualifying snapshot resets the streak to zero, so
+at the collector's ~17s cadence one blip cost ~51 seconds of re-earning. Measured over 12 hours,
+**115 of 205 admitted decisions never persisted at all.**
+
+**Entry execution maker to taker.** `MONEY_NOODLE_ENTRY_EXECUTION_MODE=taker`. Every accepted decision now
+fills at the ask instead of resting a post-only limit that missed 51% of the time.
+
+| v19 arm | live | paper |
+| --- | --- | --- |
+| A as traded | -13.1% +/-17.8 | -24.6% +/-13.7 |
+| A2 same fills, held | -7.6% +/-19.3 | -21.8% +/-16.3 |
+| B take ask, filled only | -14.3% +/-18.0 | -32.9% +/-13.9 |
+| **C take ask, every decision** | **-3.7% +/-13.4** | **-1.8% +/-13.5** |
+
+**This reverses [take-the-ask-2026-08-18.md](reports/take-the-ask-2026-08-18.md), and the reason is a
+changed constraint, not changed data.** That report set arm C aside because it "assumes capacity the
+hourly order ceiling and budget would not have given". The same evening raised positions 3 to 9,
+same-window 2 to 6, per-group 1 to 3, and made `runLive` drain its ranked queue. That capacity now exists.
+
+Stated plainly: paying the spread **costs** ~7pp on trades the maker would have filled anyway (arm B
+-14.3% against A2 -7.6%). Taking wins only by converting the other half — the half the maker was adversely
+selected out of. Capital deployed roughly doubles. **Arm C is the best arm measured, not a profitable one:
+still negative per dollar.**
+
+The two halves ship together because the persistence sentinel's evidence is ask-priced and its maker-touch
+instrumentation carries one observation. An ask-priced counterfactual only describes the desk once the desk
+takes the ask.
+
+**Four multipliers now stack** — v20's wider gate, 9/6/3 caps, the drain loop, and 100% fills — so order
+flow and time-in-market should both rise sharply. `npm run analyze:execution-gap` is the monitor:
+`ordered / executable` was 54% before any of it.
+
+### Portfolio caps raised to 9 / 6 / 3, 2026-08-18
+
+`DEFAULT_MAX_OPEN_POSITIONS` 3 → **9**, `maximumSameWindow` 2 → **6**, `maximumSameGroupPerWindow`
+1 → **3** (`lib/portfolio-policy.ts`).
+
+**The caps, not the gate, were refusing the volume.** Across 632 settlement windows there were 1,633
+decisions the desk could actually have executed — admitted *and* persisting three snapshots over 30s — and
+the 2-per-window / 1-per-group limits admitted only 992 of them. Candidates do not all present at once, so
+a three-slot desk fills with the first arrivals rather than the best of the window: it held no live
+position 75% of the time and still passed over executable decisions at 15–31pp, the band that returns
++44% per $1.
+
+| per window | per group | capturable | vs today |
+| --- | --- | --- | --- |
+| 2 | 1 | 992 | baseline |
+| 3 | 2 | 1,297 | +31% |
+| **6** | **3** | **1,560** | **+57%** |
+| 9 | 3 | 1,569 | +58% |
+
+Per-window capture saturates at 6 — nine slots per window would catch nine more decisions out of 1,633 —
+so the total cap of 9 is what buys headroom across overlapping settlement times, not the per-window one.
+
+**Stacking has been the better cohort for this strategy**, which is why this is a raise:
+
+| | single-position windows | multi-position windows | sharing a correlation group |
+| --- | --- | --- | --- |
+| live | −5.7% on 207 | **+2.3% on 352** | **+19.3% on 80** |
+| paper | −22.6% on 126 | +0.6% on 82 | **+22.9% on 19** |
+
+Of 155 multi-position live windows, 61 were mixed, 73 all-lost, 21 all-won — outcomes are correlated but
+not lockstep. **This is the opposite of the long-shot policy**, where stacked windows lost together 7 times
+in 9; long-shot buys sides that got cheap *because* the underlying moved, so its stacked positions are one
+directional bet repeated. The evidence does not transfer between the two strategies and should not be
+quoted across them.
+
+**Caveats.** The stacking cohorts are selection-biased: the desk only holds 2+ when it found 2+ good
+candidates, which may itself mark favourable conditions. Same-group cohorts are n=80 live, n=19 paper.
+Exposure rises from roughly 21% to 64% of the edge policy's allocation when fully committed — 9 positions
+at $1 per trade against $14 — so this is the number that bites if the correlated-outcome result is bias.
+
+Tests moved with it: `portfolio-policy.test.ts` and `global-exposure-caps.test.ts` now state their limits
+explicitly or derive fixtures from the constants, so they pin the mechanism rather than a policy number.
+
+### Live execution drains its queue instead of placing one order per cycle, 2026-08-18
+
+**The binding constraint on concurrency was never the position cap or the entry gate — it was the loop.**
+`runLive` took `selected.find(...)`: one order per cycle, by construction, while `runPaper` had always
+looped its whole portfolio selection.
+
+Measured over the whole ledger before the change: live held **no position 75% of the time** (one 15%, two
+8%, three 1%), and reached its three-position cap on **3 of 348** orders, while the gate admitted a median
+of three simultaneous decisions. v20's extra admissions could not express themselves — candidates queued
+behind a one-per-cycle door and their windows closed underneath them. It also explains the contract
+selection leak: the better-ranked alternatives the desk "passed over" had been admitted a median of 95
+seconds and were still waiting their turn.
+
+`runLive` now drains the ranked selection up to `maximumOpenPositions()`. **Every ceiling is re-read per
+placement**, which is the whole safety argument: a cycle can now commit real money three times where it
+committed once.
+
+- hourly filled-order limit, re-counted before each placement
+- funding headroom and the live stake ceiling, re-read as each order consumes them
+- `makerRetryDecision` and execution eligibility, per candidate
+- **exposure created earlier in the same cycle** — `portfolioAdmitsAdditional`, pinned by
+  `lib/live-concurrency.test.ts`. `portfolioDecisions` is computed before anything is placed, so orders 2
+  and 3 could not otherwise see orders 1 and 2. Correlation limits were never load-bearing on live while it
+  placed one order per cycle; now they are the only thing stopping three copies of one bet in a window.
+  The long-shot policy demonstrated that failure the same evening — three DOWN positions on three assets in
+  one window, all lost together — because it has no correlation limit at all.
+
+No entry-rule change and no `BUY_POLICY_VERSION` bump: this is execution, which SPEC §12.3 permits to
+differ between tracks. The mirror invariant is untouched.
+
+**Live maker attempts raised 1 → 2** (`MONEY_NOODLE_MAX_LIVE_MAKER_ATTEMPTS`). One miss used to retire that
+contract and side for the entire settlement window, so a fresh qualifying signal minutes later could not be
+bought. **The evidence does not support this and it is recorded as an operator decision:** second attempts
+measured −11.6% under 60s after the miss (n=35), −63.0% at 60–180s (n=6) and −17.7% beyond 180s (n=9),
+against −2.0% for first attempts. The mechanism is that a maker miss means the price moved away from the
+bid — against the side wanted — so a retry buys after adverse information. It does remove a known
+paper/live divergence: paper already ran 2 attempts, so the mirror was comparing different execution.
+
+51% of live orders go unfilled, so this is the larger of the two volume constraints; draining the queue
+addresses it by taking the next *different* contract rather than the same one at a chased price.
+
 ### v20 — admit substantially more entries, 2026-08-18, by operator decision
 
 `buy-binary-edge-netminus5-nocap-quality50-owned55-price5to97-late30-v20`, manifest entry in

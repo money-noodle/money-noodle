@@ -71,7 +71,7 @@ import { entryAttemptsForLogicalOrder, makerAttemptId, makerRetryDecision, maxim
 import { evaluateLiveRisk } from './live-risk-policy';
 import { liveBlockers, liveTradingEnabled, maxLiveOrdersPerHour, maxLiveStakeCents, placeKalshiBuy, placeKalshiSell, placeKalshiTakerBuy } from './live-orders';
 import { countFilledLiveVenueOrders } from './order-rate-limit';
-import { selectPortfolio, DEFAULT_PORTFOLIO_CONSTRAINTS, parseMaximumOpenPositions, type PortfolioConstraints } from './portfolio-policy';
+import { selectPortfolio, cryptoExposureGroup, DEFAULT_PORTFOLIO_CONSTRAINTS, parseMaximumOpenPositions, type PortfolioConstraints } from './portfolio-policy';
 import { bestEntry, bestVenueEntry, BUY_POLICY_VERSION, edgeStrength, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, qualifiesAsBuyEdge, qualifiesVenueBuyEdge, sideProbability, venueFeeRate, ENTRY_FEE_ROLE } from './prediction-policy';
 import { getKalshiReconciliationStatus, serializedReconciliation, setKalshiReconciliationStatus, type KalshiReconciliationStatus } from './reconciliation-state';
 import { getRegimeGateStatus, updateRegimeGate, type RegimeGateStatus, type RegimeSentinelCandidate } from './regime-gate-store';
@@ -1436,6 +1436,33 @@ async function executeSwitch(plan: SwitchPlan, status: TradingControlData, ledge
 }
 
 /** Live trading is gated by automation state, live mode, the environment switch, and rate limits. */
+/** Live entries holding a slot. Recomputed on demand: each placement in the drain loop adds one. */
+function openLiveEntries(ledger: Pick<Ledger, 'orders'>): PaperOrder[] {
+  return ledger.orders.filter((order) => order.executionMode === 'live'
+    && (order.status === 'open' || order.status === 'pending_reservation' || order.status === 'uncertain'));
+}
+
+/**
+ * Whether one more live entry may join the exposure already committed.
+ *
+ * `portfolioDecisions` is computed before the cycle places anything, so when the drain loop considers its
+ * second and third order it cannot see the first two. Correlation limits were never load-bearing on live
+ * while it placed one order per cycle; the moment it places three they are the only thing preventing
+ * three copies of the same bet in one settlement window. The long-shot policy demonstrated exactly that
+ * failure on 2026-08-18 — three DOWN positions on three assets in one window, all lost together —
+ * because it has no correlation limit at all.
+ */
+export function portfolioAdmitsAdditional(ledger: Pick<Ledger, 'orders'>, prediction: Pick<Prediction, 'symbol' | 'market'>): boolean {
+  const constraints = portfolioConstraints();
+  const sameWindow = openLiveEntries(ledger).filter((order) => order.closesAt === prediction.market.closesAt);
+  // Opposite-side exposure on an asset already held is a reduce-only switch, never an additive hedge.
+  if (sameWindow.some((order) => order.symbol === prediction.symbol)) return false;
+  if (sameWindow.length >= constraints.maximumSameWindow) return false;
+  const group = cryptoExposureGroup(prediction.symbol);
+  const sameGroup = sameWindow.filter((order) => cryptoExposureGroup(order.symbol) === group).length;
+  return sameGroup < constraints.maximumSameGroupPerWindow;
+}
+
 async function runLive(dashboard: DashboardData, status: TradingControlData, ledger: Ledger, regimeGate: RegimeGateStatus, budgets: ProviderBudgetConfiguration): Promise<boolean> {
   const skip = (reason: string) => { ledger.lastLiveSkip = { reason, at: new Date().toISOString() }; return false; };
   if (!liveTradingEnabled()) return skip('Live trading is off in the environment.');
@@ -1499,7 +1526,8 @@ async function runLive(dashboard: DashboardData, status: TradingControlData, led
     const aSide = selectedSide(a)!, bSide = selectedSide(b)!;
     return (ledger.portfolioDecisions[persistenceKey(a, aSide)]?.rank ?? 99) - (ledger.portfolioDecisions[persistenceKey(b, bSide)]?.rank ?? 99);
   });
-  const prediction = selected.find((item) => executionEligibility(item, selectedSide(item)!, ledger).eligible);
+  const eligibleSelected = selected.filter((item) => executionEligibility(item, selectedSide(item)!, ledger).eligible);
+  const prediction = eligibleSelected[0];
   if (!prediction) {
     const warming = qualified[0];
     if (warming) {
@@ -1511,37 +1539,62 @@ async function runLive(dashboard: DashboardData, status: TradingControlData, led
     if (blocked.length) return skip(blocked.map(({ item, retry }) => `${item.symbol}: ${retry.reason}`).join(' '));
     return skip('No new positive-edge binary buy qualifies right now.');
   }
-  const side = selectedSide(prediction)!;
-  // Allocation bounds the stake before the order is built, so a pair with partial headroom sizes down
-  // rather than being rejected after the fact.
-  const liveFunding = marketFundingFor(budgets, 'live', 'kalshi', DEFAULT_MARKET_ID, ledger,
-    status.workingEquityCents, status.control.availableBudgetCents);
-  const liveStakeCeiling = Math.min(status.proposedStakeCents, maxLiveStakeCents(), liveFunding.spendableCents);
-  if (liveStakeCeiling <= 0) return skip(liveFunding.reason);
-  const built = buildOrder(prediction, side, status, ledger, dashboard.generatedAt, dashboard.modelVersion, 'live', liveStakeCeiling, 'kalshi');
-  if ('reason' in built) return skip(`${prediction.symbol} ${side}: ${built.reason}`);
-  // Defence in depth: sizing already respected the ceiling, so a stake above it means a rounding or
-  // fee-reserve path put real money outside the operator's allocation.
-  if (built.order.stakeCents > liveFunding.spendableCents) return skip(liveFunding.reason);
-  const logicalId = orderId(prediction, 'live', side, ledger);
-  const retry = makerRetryDecision(liveAttempts(ledger, prediction, side), Date.now(), prediction.market.closesAt, maximumLiveMakerAttempts());
-  if (!retry.allowed) return skip(`${prediction.symbol}: ${retry.reason}`);
-  built.order.logicalOrderId = logicalId;
-  built.order.attemptNumber = retry.attemptNumber;
-  built.order.retryOfOrderId = retry.retryOfOrderId;
-  built.order.id = makerAttemptId(logicalId, retry.attemptNumber);
-  built.order.clientOrderId = built.order.id;
-  built.order.entryExecutionDecision = entryExecutionDecision(prediction, side, built.order, ledger);
-  // Record the path label that admitted this live candidate so later cohorts can be audited.
-  built.order.entryCycleRegime = (await cycleRegimeFor(prediction.symbol, prediction.market.closesAt))?.regime;
-  // The authorization ceiling, captured before a fill can revise `stakeCents` down. Reconciliation
-  // compares recovered venue cost against this; the shadow fields below are reporting only.
-  built.order.reservedStakeCents = built.order.stakeCents;
-  built.order.shadowTakerAllInCents = built.order.stakeCents;
-  built.order.shadowTakerQuantity = built.order.quantity;
-  ledger.lastLiveSkip = undefined;
-  await executePreparedLiveBuy(built.order, status, ledger);
-  return true;
+  /**
+   * Drain the ranked selection rather than taking only its head.
+   *
+   * Live placed exactly one order per cycle until 2026-08-18, which made the execution loop — not the
+   * position cap and not the entry gate — the binding constraint on concurrency. Measured over the whole
+   * ledger the desk held **no** live position 75% of the time and reached its three-position cap on 3 of
+   * 348 orders, while the gate admitted a median of three simultaneous decisions. Candidates queued
+   * behind a one-per-cycle door and their windows closed underneath them.
+   *
+   * Every ceiling is re-read **per placement** rather than once per cycle. That is the whole safety
+   * argument for this loop: a cycle can now commit real money three times in the space one order used to
+   * occupy, so the hourly rate limit, the funding headroom, the retry decision and the exposure the
+   * earlier placements just created must each be recomputed before the next order is built.
+   */
+  let placed = 0;
+  for (const candidate of eligibleSelected) {
+    const openNow = openLiveEntries(ledger).length;
+    if (openNow >= portfolioConstraints().maximumPositions) break;
+    // Re-read per placement: the earlier orders in this same loop consumed slots and hourly budget.
+    if (countFilledLiveVenueOrders(ledger.orders, Date.now() - 3_600_000) >= maxLiveOrdersPerHour()) break;
+    const side = selectedSide(candidate)!;
+    // Exposure created earlier in this cycle is invisible to `portfolioDecisions`, which was computed
+    // before any of it existed. Without this the loop could place three correlated bets in one window.
+    if (!portfolioAdmitsAdditional(ledger, candidate)) continue;
+    // Allocation bounds the stake before the order is built, so a pair with partial headroom sizes down
+    // rather than being rejected after the fact.
+    const liveFunding = marketFundingFor(budgets, 'live', 'kalshi', DEFAULT_MARKET_ID, ledger,
+      status.workingEquityCents, status.control.availableBudgetCents);
+    const liveStakeCeiling = Math.min(status.proposedStakeCents, maxLiveStakeCents(), liveFunding.spendableCents);
+    if (liveStakeCeiling <= 0) { if (!placed) return skip(liveFunding.reason); break; }
+    const built = buildOrder(candidate, side, status, ledger, dashboard.generatedAt, dashboard.modelVersion, 'live', liveStakeCeiling, 'kalshi');
+    if ('reason' in built) { if (!placed) return skip(`${candidate.symbol} ${side}: ${built.reason}`); continue; }
+    // Defence in depth: sizing already respected the ceiling, so a stake above it means a rounding or
+    // fee-reserve path put real money outside the operator's allocation.
+    if (built.order.stakeCents > liveFunding.spendableCents) { if (!placed) return skip(liveFunding.reason); continue; }
+    const logicalId = orderId(candidate, 'live', side, ledger);
+    const retry = makerRetryDecision(liveAttempts(ledger, candidate, side), Date.now(), candidate.market.closesAt, maximumLiveMakerAttempts());
+    if (!retry.allowed) { if (!placed) return skip(`${candidate.symbol}: ${retry.reason}`); continue; }
+    built.order.logicalOrderId = logicalId;
+    built.order.attemptNumber = retry.attemptNumber;
+    built.order.retryOfOrderId = retry.retryOfOrderId;
+    built.order.id = makerAttemptId(logicalId, retry.attemptNumber);
+    built.order.clientOrderId = built.order.id;
+    built.order.entryExecutionDecision = entryExecutionDecision(candidate, side, built.order, ledger);
+    // Record the path label that admitted this live candidate so later cohorts can be audited.
+    built.order.entryCycleRegime = (await cycleRegimeFor(candidate.symbol, candidate.market.closesAt))?.regime;
+    // The authorization ceiling, captured before a fill can revise `stakeCents` down. Reconciliation
+    // compares recovered venue cost against this; the shadow fields below are reporting only.
+    built.order.reservedStakeCents = built.order.stakeCents;
+    built.order.shadowTakerAllInCents = built.order.stakeCents;
+    built.order.shadowTakerQuantity = built.order.quantity;
+    ledger.lastLiveSkip = undefined;
+    await executePreparedLiveBuy(built.order, status, ledger);
+    placed += 1;
+  }
+  return placed > 0;
 }
 
 async function processCycle(dashboard: DashboardData): Promise<void> {

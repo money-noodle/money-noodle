@@ -34,6 +34,7 @@
     "analyze:loss-decomposition": "node --max-old-space-size=6144 scripts/analyze-loss-decomposition.mjs",
     "analyze:take-the-ask": "node --max-old-space-size=6144 scripts/analyze-take-the-ask.mjs",
     "analyze:entry-realization": "node --max-old-space-size=6144 scripts/analyze-entry-realization.mjs",
+    "analyze:execution-gap": "node --max-old-space-size=8192 --expose-gc scripts/analyze-execution-gap.mjs",
     "analyze:contract-selection": "node --max-old-space-size=8192 --expose-gc scripts/analyze-contract-selection.mjs",
     "analyze:long-shot-fine-marks": "node --max-old-space-size=8192 --expose-gc scripts/analyze-long-shot-fine-marks.mjs",
     "analyze:long-shot-roundtrip": "node --max-old-space-size=8192 --expose-gc scripts/analyze-long-shot-roundtrip.mjs",

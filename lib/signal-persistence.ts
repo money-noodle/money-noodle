@@ -17,8 +17,27 @@ export const EXECUTION_WARMUP_MS = 90_000;
  * have sold it. Exit availability in that band was 64% against 82% for the population as a whole.
  */
 export const EXECUTION_LATE_CUTOFF_MS = 30_000;
-export const REQUIRED_QUALIFYING_SNAPSHOTS = 3;
-export const REQUIRED_OBSERVATION_SPAN_MS = 30_000;
+/**
+ * Qualifying snapshots an entry must survive, and the span they must cover.
+ *
+ * **Relaxed from 3-over-30s to 2-over-15s at v21**, promoting the committed candidate
+ * `persistence-two-consecutive-v1` (SPEC §12.5). This is the one entry change in the desk's history made
+ * on prospectively committed evidence rather than a retroactive screen: 553 resolved incremental
+ * settlement windows returning **+13.2% ±8.4** per $1 at the ask, with the value concentrated in the 227
+ * production never took at all (**+23.5% ±13.0**) rather than in the half it reached a median 17 seconds
+ * later.
+ *
+ * What this fixes is larger than the entry rule. A single non-qualifying snapshot resets the streak to
+ * zero (`advanceSignalPersistence`), so at the collector's ~17s cadence one blip cost roughly 51 seconds
+ * of re-earning. Measured over 12 hours, **115 of 205 admitted decisions never persisted at all** — 56%
+ * of what the gate admits evaporated before it could be bought.
+ *
+ * **The evidence is ask-priced and does not test fills.** The sentinel's maker-touch instrumentation
+ * carries one observation. v21 ships alongside the switch to taking the ask, which is what makes an
+ * ask-priced counterfactual describe what the desk actually does.
+ */
+export const REQUIRED_QUALIFYING_SNAPSHOTS = 2;
+export const REQUIRED_OBSERVATION_SPAN_MS = 15_000;
 export const MAX_PERSISTENCE_SNAPSHOTS = 4;
 export const MAX_EXECUTION_SNAPSHOT_AGE_MS = 30_000;
 

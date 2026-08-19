@@ -63,7 +63,8 @@ describe('execution signal persistence', () => {
     expect(down.observations).toHaveLength(1);
   });
 
-  it('requires three observations to span at least thirty seconds', () => {
+  it('refuses observations too close together to span the required window', () => {
+    // Five seconds apart, so the last two share a 15-second bucket and span zero however many there are.
     let state: SignalPersistenceState | undefined;
     for (const seconds of [90, 95, 100]) state = advance(state, seconds);
     const result = evaluateSignalPersistence(state, Date.parse(time(100)), 0.05, 0.5);
@@ -71,13 +72,21 @@ describe('execution signal persistence', () => {
     expect(result.reason).toContain('span');
   });
 
-  it('can score a two-snapshot candidate without changing production requirements', () => {
+  it('lets a candidate lane state requirements production does not use', () => {
+    // v21 promoted the two-snapshot candidate, so production is now 2-over-15s. The property under test
+    // is that a lane can declare its own bar rather than inherit production's, so the stricter
+    // three-over-thirty rule stands in as the candidate here.
     let state: SignalPersistenceState | undefined;
     for (const seconds of [90, 105]) state = advance(state, seconds);
+    expect(evaluateSignalPersistence(state, Date.parse(time(105)), 0.05, 0.5).eligible).toBe(true);
     expect(evaluateSignalPersistenceWithRequirements(state, Date.parse(time(105)), 0.05, 0.5, {
-      requiredSnapshots: 2, requiredSpanMs: 15_000, maximumEdgeSpike: MAX_EDGE_SPIKE, spikeGateEnabled: true,
-    }).eligible).toBe(true);
-    expect(evaluateSignalPersistence(state, Date.parse(time(105)), 0.05, 0.5).eligible).toBe(false);
+      requiredSnapshots: 3, requiredSpanMs: 30_000, maximumEdgeSpike: MAX_EDGE_SPIKE, spikeGateEnabled: true,
+    }).eligible).toBe(false);
+  });
+
+  it('carries the production persistence rule v21 promoted', () => {
+    expect(REQUIRED_QUALIFYING_SNAPSHOTS).toBe(2);
+    expect(REQUIRED_OBSERVATION_SPAN_MS).toBe(15_000);
   });
 
   it('refuses an edge that has just spiked above its own persistence median', () => {
