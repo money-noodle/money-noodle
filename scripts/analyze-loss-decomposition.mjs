@@ -13,7 +13,7 @@
  *
  *     1 every admitted row, bought at the ask, held to settlement   <- what the gate is worth
  *     2   ... restricted to windows the desk was active for          delta = WINDOW SELECTION
- *     3   ... restricted to the contracts it actually ordered        delta = CONTRACT SELECTION
+ *     3   ... restricted to the contracts it actually ordered        delta = ORDERED-COHORT SELECTION
  *     4   ... restricted to the orders that filled                   delta = FILL SELECTION
  *     5   ... repriced at the maker fill instead of the ask          delta = PRICE (the discount earned)
  *     6   ... with the exits it actually took                        delta = EXIT RULE
@@ -37,6 +37,9 @@
  * BIASES
  *   - Stage 6 is the only stage containing exits; 1-5 are held to settlement. The exit delta therefore
  *     carries every difference between holding and the desk's actual exit behaviour, including switches.
+ *   - Stage 3 is a cohort narrowing, not a decision-time ranking comparison. The 2026-08-19 state replay
+ *     found chosen minus production-preferred at -0.9pp +/-2.7pp (95%) over 232 v17-v19 windows; call
+ *     this ordered-cohort selection and do not infer a ranking defect from it.
  *   - Stages 1-3 are admitted rows from the forecast history; 4-6 are orders. A row and an order are
  *     matched on (symbol, window, side), so a decision the desk made outside an admitted row is invisible.
  *   - **Admitted rows are deduplicated to one per (symbol, window, side)**, keeping the first qualifying
@@ -182,7 +185,7 @@ for (const cohort of COHORTS) {
     }
     console.log('\n  conditional vs standalone (the gap between them is the double-counting):');
     if (s2.mean !== null && s3.mean !== null && passedOver.mean !== null) {
-      console.log(`    contract selection   conditional ${pct(s3.mean - s2.mean)}`
+      console.log(`    ordered-cohort sel.  conditional ${pct(s3.mean - s2.mean)}`
         + `   standalone (ordered − passed over) ${pct(s3.mean - passedOver.mean)}`
         + `   [passed over: ${passedOver.windows} windows]`);
     }

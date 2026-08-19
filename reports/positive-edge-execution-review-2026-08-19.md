@@ -42,12 +42,13 @@ Not before execution, on the evidence currently available.
 
 The candidate gate clears two standard errors, although 25 windows is still a young policy cohort. The
 ordered subset is noisy rather than demonstrably worse than the gate. The large sign change arrives only
-after fill selection. This does **not** refute the older contract-selection leak. A same-session correction
-to `analyze:contract-selection` removed opposite-side contamination and ranked alternatives on production's
-actual edge/cost key rather than edge × confidence. V17-onward chosen contracts returned −1.4% against
-+18.9% for already-admitted alternatives (−20.2pp); v19 was −6.3% against +27.4% (−33.8pp). Of 141
-better-ranked, constraint-compatible alternatives, 24 had not yet earned 30-second persistence. It says
-only that v21 has not yet reproduced that leak with enough independent windows to call it current.
+after fill selection. **Later same-day correction:** the older contract-selection leak is withdrawn.
+The initial correction still compared issued orders with alternatives that had not passed the same
+decision-time state. The final replay applies persistence, regime, cooldown/retry, active exposure,
+production sizing, and historical caps: 331 of 339 positive-control snapshots choose the same contract;
+chosen minus replay-preferred is **−0.9pp ±2.7pp (95%) over 232 v17-v19 windows**. The remaining gap is
+between the admitted and ordered cohorts, not a measured ranking defect. See
+`reports/edge-buy-opportunities-2026-08-19.md` §8.
 
 Actual v21 money also disagrees by track:
 
@@ -161,8 +162,8 @@ comparisons—expected under a null. Stop-loss, time-based, and profit-reversal 
    losing and strongly adversely selected.
 2. **Are we buying the wrong ones?** The v21 gate and ordered-at-ask cohort are positive; the filled cohort
    is negative. The current evidence points first to *which orders fill*, not to a demonstrated bad gate or
-   a stable asset/direction cohort. Older eras did have a repeatable contract-selection leak, so ranking
-   remains an open secondary mechanism.
+   a stable asset/direction cohort. The later decision-state replay withdrew the older
+   contract-selection claim; ranking is not a measured secondary mechanism.
 3. **Is early exit still helping?** Lifetime paper says yes; lifetime live is now uncertain. Current v21
    live says no, strongly but over only seven windows. The former claim cannot be carried forward as though
    it were established for v21.

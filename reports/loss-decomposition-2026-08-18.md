@@ -1,5 +1,12 @@
 # Where the edge policy's money goes, 2026-08-18 — the fill-selection headline was double-counted
 
+> **Correction, 2026-08-19:** stage 3 is an **ordered-cohort selection** gap, not a decision-time ranking
+> comparison. The corrected state replay applies persistence, regime, cooldown/retry, active exposure,
+> production sizing, and historical caps; chosen minus replay-preferred is **−0.9pp ±2.7pp (95%) over 232
+> v17-v19 windows**, with the same choice in 331 of 339 positive-control snapshots. Findings 2 and the
+> "two leaks" conclusion below are superseded as ranking claims; the stage values remain the historical
+> admitted-to-ordered decomposition. See `reports/edge-buy-opportunities-2026-08-19.md` §8.
+
 **No policy change is authorized by this.** It decomposes the gap between what the gate is worth and what
 the desk realizes into one conditional chain, so each decision's cost is measured with the others held
 fixed and the parts sum to the whole.

@@ -107,31 +107,28 @@ only by the authenticated stateful performance route. Existing orders are never 
 not started in the currently running process; its prospective timestamp is created on the first cycle after
 a built restart/deploy.
 
-### Contract selection: the ranking is not the leak, 2026-08-19
+### Contract selection: the named leak was a comparator artefact, corrected 2026-08-19
 
-`scripts/analyze-contract-selection.mjs` defined "outranks" as `netEdge × confidence` — `edgeStrength`,
-which orders the live drain loop. Production selects on `expectedProfitCents`, which at a fixed stake is
-`edge / cost`. The script now scores production's key, reports the old one beside it, and excludes the
-**opposite side of the same asset** in the same window, which is contaminated by construction because
-exactly one of the two sides settles in the money.
+The first correction to `scripts/analyze-contract-selection.mjs` fixed its ranking key and removed
+opposite-side contamination, but still compared an issued order with every contract that had qualified at
+some earlier or later point. Those alternatives had not passed the decision-time persistence, classified
+regime, re-entry cooldown, retry, active-exposure, or sizing checks. Its **−20.2pp** ranking gap is withdrawn.
 
-Measured directly, within the 599 settlement windows holding ≥2 admitted decisions, top-1 by each of
-eight keys against the window mean of +18.2%: **`edge / cost` is the best at +42.4% ±13.4**, ahead of
-netEdge (+37.3%), edge × confidence (+36.9%), lowest price (+35.8%), confidence (+32.0%), and least
-seconds remaining (+29.2%). **Production's ranking is the best key tried, so the −21.8pp contract-selection
-leak is not a ranking-function defect.**
+The script now starts at each issued v17-v19 live order snapshot, reconstructs those checks, sizes with
+production `estimatePaperFill`, ranks with production `selectPortfolio` under the historical 3/2/1 caps,
+and clusters paired chosen-versus-replay-preferred differences on settlement window. Read at
+**2026-08-19T16:12:53Z**: 346/354 order snapshots replayed; 339 passed the positive control that the
+reconstructed portfolio admitted the order production demonstrably placed. On those 339 snapshots over
+**232 independent windows**, replay chose the same contract **331 times**. Chosen returned −5.5%, replay
+−4.6%; paired difference **−0.9pp ±2.7pp (95%)**. V19 alone was −2.1pp ±4.1pp over 44 windows. The eight
+different-choice snapshots read −38.9pp ±88.8pp and are too sparse to carry a claim.
 
-**The correction does not dissolve the leak, which is the honest result.** The RANKING gap moves −19.2pp
-→ −20.2pp and TIMING −23.0pp → −21.9pp; the two keys nearly agree and the contaminated rows were 33 of
-748. What is unexplained is the **shape**: every alternative bucket beats the chosen contract —
-better-ranked +29.3%, worse-ranked ≈ +8%, later-arriving +20.5%, against the chosen at −1.4%. A bad
-ranking would still leave the chosen contract above what it ranked below. Being ordered is itself the
-selector.
-
-**Named open question:** the chosen contract is the only one required to pass signal persistence, the
-regime gate, the re-entry cooldown, and maker-retry state; the alternatives are scored having passed
-none of them. If that is the explanation, this is not "contract selection" and the loss-decomposition
-line needs renaming.
+**Current conclusion:** no measured ranking defect. The older loss-decomposition stage remains a real gap
+between all admitted rows and the ordered cohort, but it is not a decision-time choice comparison and must
+be called **ordered-cohort selection**, not contract selection. Historical alternatives remain partly
+reconstructed because failed dashboard observations and `portfolioDecisions` were not durably journaled;
+a future ranking claim requires prospective committed choice sets. Full correction:
+[reports/edge-buy-opportunities-2026-08-19.md](reports/edge-buy-opportunities-2026-08-19.md) §8.
 
 ### Edge policy v17, reviewed 2026-08-17
 
@@ -473,9 +470,12 @@ Combined: **686 additional decisions at +32.4% ±10.5 per window, +20.2% stake-w
 carrying 73% of the profit, with the per-window and stake-weighted views agreeing to within a point, and
 the best ten decisions are only 11% of the total — it is neither a weighting artefact nor tail-driven.
 
-**Why this is additive rather than substitutional.** The earlier objection was that capacity binds, so
-loosening would only reallocate. `npm run analyze:contract-selection` refutes it: the desk sat at its
-3-position cap on **0 of 67** v19 orders and 3 of 348 since v17. The slots are empty.
+**Why this was judged additive rather than substitutional at the time.** The original
+`analyze:contract-selection` reported the desk at its 3-position cap on 0 of 67 v19 orders and 3 of 348
+since v17. The 2026-08-19 decision-state correction withdraws that script as authority for historical
+capacity because it had treated created orders as exposure without replaying terminal state. The policy
+change remains historical; its capacity rationale now requires the same authoritative exposure replay as
+any future claim.
 
 **What the evidence does not cover, recorded plainly:**
 
@@ -502,18 +502,17 @@ sealed shards and `open.json` only, `open.json` is rewritten just on compaction 
 and resolution arrives as a journal patch. It reported **zero rows for v19** while the desk traded it.
 Fixed with a shared journal-aware loader, `scripts/lib/forecast-history.mjs`; v17 and v18 are unchanged.
 
-| era, live | gate | realized | contract selection | fill selection | exits |
+| era, live | gate | realized | ordered-cohort selection | fill selection | exits |
 | --- | --- | --- | --- | --- | --- |
 | v17 | +14.4% | −2.9% | −15.7 | −19.4 | +14.6 |
 | v18 | +13.5% | −11.8% | −26.0 | −16.2 | +18.0 |
 | **v19** | **+20.9%** | −9.7% | **−21.8** | **−8.4** | **−2.9** |
 
-The gate is at its best reading yet. Fill selection more than halved. **Contract selection is now the
-dominant leak** — which contract the desk picks inside a window it is right to be trading — and the exits
-have stopped paying. `npm run analyze:contract-selection` splits it: against alternatives already admitted
-at the moment of choice, the chosen contract is −29.7pp (v19); of the better-ranked alternatives that no
-constraint refused, 23 returned **+78.6% ±37.3** while the chosen returned −4.7%, and they had been
-admitted a median of 95 seconds — long past the 30-second persistence span. Cause not yet established.
+The gate was at its best reading yet and fill selection more than halved. The −21.8pp stage is the gap
+between the admitted and ordered cohorts; it does **not** identify a ranking decision. The corrected
+snapshot replay later found chosen minus production-preferred at −0.9pp ±2.7pp (95%) over 232 v17-v19
+windows, so the earlier `analyze:contract-selection` explanation and its passed-over alternative figures
+are withdrawn. What makes the ordered cohort differ remains unidentified.
 
 ### Missed entries — the selection gates are not what keeps volume out, 2026-08-18
 
@@ -619,16 +618,17 @@ between what the gate is worth and what the desk realizes. **It changes the diag
 | with the exits it took = realized | −2.9% | **+14.6%** |
 
 - **Window selection costs nothing** (−0.1pp). The earlier "+16.2pp for passed-over contracts" was
-  contract selection, not window selection.
-- **Contract selection is a real and previously unseparated leak**: −15.7pp live, −11.8pp paper.
+  ordered-cohort selection, not window selection or a demonstrated ranking effect.
+- **Ordered-cohort selection is a real narrowing**: −15.7pp live, −11.8pp paper. The 2026-08-19
+  decision-state replay showed it is not evidence of a ranking defect.
 - **Fill selection is half its reputation**: −19.4pp conditional against −44.5pp standalone. Every prior
-  reading of this policy used the inflated figure, which double-counts contract selection.
+  reading of this policy used the inflated figure, which double-counts ordered-cohort selection.
 - **The maker discount helps** (+3.4pp), confirming that switching to taking would forfeit it.
 - **The exit rule is the desk's strongest component** (+14.6pp live, +17.8pp paper). Execution is not
   uniformly the problem — one part of it is carrying the rest.
 
-Two leaks of comparable size remain, both inside windows the desk was right to trade. A fix aimed only at
-fills addresses at most half.
+One identified leak remains—fill selection—and one unexplained admitted-to-ordered cohort gap. A ranking
+change does not address the latter on current evidence.
 
 ### Fill selection, stress-tested 2026-08-18 — real, stable, and conflated with window selection
 

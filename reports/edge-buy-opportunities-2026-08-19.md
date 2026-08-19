@@ -8,8 +8,9 @@
 > collector, so a re-run will not reproduce these counts exactly.
 >
 > Two things were changed in the repo alongside this report and are described in §7 and §8:
-> `entry-decision-v2` now records the edge spike and the numeric cycle-regime features, and
-> `scripts/analyze-contract-selection.mjs` had its ranking key corrected.
+> `entry-decision-v2` now records the edge spike and the numeric cycle-regime features. The first
+> `scripts/analyze-contract-selection.mjs` ranking-key correction was itself superseded by the full
+> decision-state correction in §8.
 
 ## Method
 
@@ -256,54 +257,48 @@ sentinel hit when `peakOwnedSideBidCents` was read as "did not touch" on 26 reco
 No behaviour changes: no candidate, persistence state, ranking, size, or execution decision reads a new
 field, and `BUY_POLICY_VERSION` is untouched.
 
-## 8. Corrected with this report: the contract-selection ranking key
+## 8. Corrected after this report: the named contract-selection leak was a comparator artefact
 
-`scripts/analyze-contract-selection.mjs` defined "outranks" as `netEdge × confidence` — `edgeStrength`,
-which orders the live drain loop. Production does not select on that: `selectPortfolio` ranks by
-`expectedProfitCents`, which at a fixed stake is `edge / cost`. Two further changes: the **opposite side
-of the same asset** in the same window is now reported separately rather than pooled, because exactly
-one of the two sides settles in the money and pooling it manufactures a passed-over winner the desk
-could never have identified.
+The first correction shipped with this report fixed the ranking key and removed same-asset opposite-side
+contamination, but it did **not** fix the choice set. It still compared an issued order with every contract
+that had qualified at some earlier or later point in the settlement window. Those alternatives had not
+necessarily passed decision-time persistence, classified regime, re-entry cooldown, retry state, active
+exposure, or production sizing. The reported **−20.2pp RANKING gap and −21.9pp TIMING gap are withdrawn.**
 
-Measured directly on the admitted population, within the 599 settlement windows holding ≥ 2 decisions
-(mean 5.0), top-1 by each key against the window mean of +18.2%:
+`npm run analyze:contract-selection` now begins at each issued v17-v19 live order snapshot and:
 
-| ranking key | top-1 return | delta |
-| --- | --- | --- |
-| **edge / cost — production's portfolio rank** | **+42.4% ±13.4** | **+24.2pp** |
-| netEdge | +37.3% ±13.2 | +19.1pp |
-| edge × confidence — the drain-order pre-sort | +36.9% ±13.2 | +18.7pp |
-| lowest price | +35.8% ±13.6 | +17.7pp |
-| confidence | +32.0% ±11.9 | +13.8pp |
-| least seconds remaining | +29.2% ±11.8 | +11.0pp |
-| lowest volatilityRatio | +18.4% ±7.0 | +0.2pp |
-| most seconds remaining | +13.2% ±7.8 | −5.0pp |
+1. uses the exact order snapshot for the chosen contract;
+2. reconstructs issuance-near alternatives under the stamped policy's 3-over-30 persistence and v18 spike
+   ceiling, classified regime, XRP exclusion, 60-second re-entry cooldown, and one-attempt live state;
+3. reconstructs authoritative active reservations/positions at that instant;
+4. sizes every candidate through production `estimatePaperFill` at the snapshot's all-in ceiling;
+5. ranks through production `selectPortfolio` under the historical 3/2/1 caps; and
+6. compares paired choices, averaging repeated snapshots inside their settlement window before estimating
+   uncertainty.
 
-**Production's ranking is the best of the eight keys tried.** The −21.8pp contract-selection leak is
-not a ranking-function defect.
+Read at **2026-08-19T16:12:53Z**, from 63,506 forecasts and 2,676 order rows. Outcomes are venue-specific
+Kalshi resolutions; approximately comparable Polymarket outcomes are never substituted:
 
-**And the correction does not dissolve the leak**, which is the honest result rather than the hoped-for
-one. Before and after, v17-onward live:
+| cohort | snapshots passing positive control | independent windows | same choice | chosen | replay preferred | paired difference (95%) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| **v17-v19** | **339** | **232** | **331** | −5.5% | −4.6% | **−0.9pp ±2.7pp** |
+| v17 | 197 | 136 | 192 | −1.6% | −1.3% | −0.3pp ±4.3pp |
+| v18 | 73 | 52 | 71 | −18.4% | −16.9% | −1.4pp ±2.8pp |
+| v19 | 69 | 44 | 68 | −2.2% | −0.1% | −2.1pp ±4.1pp |
 
-| | before | after |
-| --- | --- | --- |
-| the contract the desk chose | −1.4% ±10.8 | −1.4% ±10.8 |
-| opposite side, same asset | pooled in | +16.8% (n=33), now excluded |
-| alternatives already admitted | +17.8% (n=748) | +18.9% (n=735) |
-| … that outranked it | +30.9% on edge×conf | +29.3% on edge/cost |
-| RANKING gap | −19.2pp | **−20.2pp** |
-| TIMING gap | −23.0pp | **−21.9pp** |
+The positive control is load-bearing: production demonstrably placed the chosen order, so a reconstructed
+portfolio that refuses it cannot estimate a ranking effect. The script replayed 346 of 354 snapshots; 339
+passed that control. In those, production and replay selected the same contract **97.6%** of the time. The
+eight different-choice snapshots show a noisy −38.9pp ±88.8pp difference and carry no conclusion.
 
-The two keys nearly agree, and the contaminated rows were 33 of 748. What remains unexplained is the
-shape rather than the size: **every** alternative bucket beats the chosen contract — better-ranked
-+29.3%, worse-ranked ≈ +8%, later-arriving +20.5%, against the chosen at −1.4%. A ranking gap cannot
-produce that, because a bad ranking would still put the chosen contract *above* the ones it ranked
-below. Being ordered is itself the selector.
+**Finding:** there is no measured ranking defect. The old loss-decomposition stage remains a real narrowing
+from all admitted rows to the ordered cohort, but it is not a decision-time choice comparison. Its correct
+name is **ordered-cohort selection**, and what causes that cohort difference remains unknown.
 
-The remaining candidate, now the named open question: the chosen contract is the only one required to
-pass **signal persistence, the regime gate, the re-entry cooldown, and maker-retry state**. The
-alternatives are scored having passed none of them. If that is the explanation, the leak is not
-"contract selection" at all and the loss-decomposition line should be renamed.
+This is still not an exact historical replay: forecast history omits some failed observations and
+`portfolioDecisions` is overwritten rather than journaled. That is why later policies fail closed here—their
+runtime cap overrides were not stamped—and why any future ranking claim needs a prospectively committed
+choice set. The correction authorizes no production change.
 
 ## 9. What this authorizes
 

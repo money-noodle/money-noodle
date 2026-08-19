@@ -87,12 +87,13 @@ Three materially different hypotheses remain:
    rate and must beat a zero-return no-fill, not merely improve filled ROI.
 2. **Selective taker remedy:** cross only when absolute edge remains after fresh quote, spread, fee, and
    slippage. V3 is instrumented for this but has zero fills.
-3. **Selection remedy:** rank a different contract before execution. The corrected historical analysis,
-   excluding opposite-side contamination and using production's edge/cost rank, puts the v17-onward
-   chosen-minus-already-available gap at −20.2pp and v19 at −33.8pp. Current v21 ordered-at-ask return is
-   positive and noisy, so that historical leak is not yet a current-policy result.
+3. **Selection remedy — withdrawn as a measured leak later the same day.** The first correction still
+   compared orders with alternatives that had not passed the same decision-time state. Replaying
+   persistence, regime, cooldown/retry, active exposure, production sizing, and historical caps leaves
+   chosen minus replay-preferred at −0.9pp ±2.7pp (95%) over 232 v17-v19 windows, with the same choice in
+   331 of 339 positive-control snapshots. Ranking is not a measured remedy.
 
-The evidence currently supports collecting all three arms, not choosing one. A prospective comparison must
+The evidence supports collecting the two execution arms, not choosing one. Any future portfolio comparison must
 score every eligible position, assign the first action that would fire, include no-deployment as zero cash,
 and cluster by settlement window.
 
