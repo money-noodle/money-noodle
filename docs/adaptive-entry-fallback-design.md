@@ -2,7 +2,9 @@
 
 > **Superseded on 2026-08-19 by**
 > [`high-edge-execution-reduced-sizing-design.md`](high-edge-execution-reduced-sizing-design.md). Historical
-> v3 orders retain these semantics; v4 permits one attempt and no fallback.
+> v3 orders retain these semantics; v4 permitted one attempt and no fallback. V5 still forbids taker
+> fallback but permits freshly requalified maker episodes under
+> [`requalifying-entry-episodes-design.md`](requalifying-entry-episodes-design.md).
 >
 > Design agreed with the maintainer on 2026-08-19 before implementation. This changes funded execution,
 > not the buy rule. The mirror invariant remains intact: live and paper still make the same entry decision;

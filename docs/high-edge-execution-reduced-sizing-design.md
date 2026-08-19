@@ -4,6 +4,10 @@
 > [`reports/execution-direction-sizing-review-2026-08-19.md`](../reports/execution-direction-sizing-review-2026-08-19.md).
 > This is an explicit operator decision on retrospective evidence. It changes execution and capital, not
 > the shared buy rule. The buy-policy version and mirror invariant remain unchanged.
+>
+> **Superseded sequencing, 2026-08-19:** v5 retains the route and sizing below but replaces the whole-window
+> one-attempt rule with up to three freshly requalifying maker episodes. See
+> [`requalifying-entry-episodes-design.md`](requalifying-entry-episodes-design.md).
 
 ## 1. Decision
 

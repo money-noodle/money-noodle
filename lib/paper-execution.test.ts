@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { MAX_FILLABLE_ASK, applyTakerQuoteMovementReserve, estimatePaperFill, groupedRecentOrders, venueFeeCents } from './paper-execution';
+import { MAX_FILLABLE_ASK, applyTakerQuoteMovementReserve, estimatePaperFill, evaluateEntryEpisodePersistence, groupedRecentOrders, venueFeeCents } from './paper-execution';
 import type { PaperOrder } from './types';
+import type { SignalPersistenceState } from './signal-persistence';
 import { MAX_ENTRY_PRICE, MIN_ENTRY_PRICE, MIN_NET_EDGE, bestEntry, venueFeeRate, ENTRY_ADMISSION_FEE_ROLE } from './prediction-policy';
 
 const liveAttempt = (patch: Partial<PaperOrder> = {}): PaperOrder => ({
@@ -49,6 +50,24 @@ describe('paper execution fills', () => {
     expect(estimatePaperFill(9, 0.28, 'kalshi')).toMatchObject({ quantity: 0.28, stakeCents: 9 });
     expect(estimatePaperFill(1, 0.50, 'kalshi')).toBeNull();
     expect(estimatePaperFill(100, 0, 'polymarket')).toBeNull();
+  });
+
+  it('resets episode qualification at maker completion without requiring a nonqualifying gap', () => {
+    const state: SignalPersistenceState = {
+      symbol: 'BTC', side: 'UP', closesAt: '2026-01-01T00:15:00Z',
+      observations: [
+        { at: '2026-01-01T00:01:45Z', netEdge: 0.08, quality: 0.7 },
+        { at: '2026-01-01T00:02:00Z', netEdge: 0.08, quality: 0.7 },
+        { at: '2026-01-01T00:02:15Z', netEdge: 0.08, quality: 0.7 },
+        { at: '2026-01-01T00:02:30Z', netEdge: 0.08, quality: 0.7 },
+      ],
+    };
+    expect(evaluateEntryEpisodePersistence({ ...state, observations: state.observations.slice(0, 2) }, Date.parse('2026-01-01T00:02:00Z'), '2026-01-01T00:02:00Z'))
+      .toMatchObject({ eligible: false, qualifyingSnapshots: 0 });
+    expect(evaluateEntryEpisodePersistence({ ...state, observations: state.observations.slice(0, 3) }, Date.parse('2026-01-01T00:02:15Z'), '2026-01-01T00:02:00Z'))
+      .toMatchObject({ eligible: false, qualifyingSnapshots: 1 });
+    expect(evaluateEntryEpisodePersistence(state, Date.parse('2026-01-01T00:02:30Z'), '2026-01-01T00:02:00Z'))
+      .toMatchObject({ eligible: true, qualifyingSnapshots: 2 });
   });
 
   it('stamps reduce-only sizing before fill estimation and reuses its cap for taker reserve', () => {

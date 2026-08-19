@@ -1492,10 +1492,13 @@ export interface PaperOrder {
   entryCycleRegime?: CycleRegimeLabel;
   providerId?: TradingProviderId;
   providerVariantId?: string;
-  /** Stable asset/window intent shared by bounded maker attempts. */
+  /** Stable asset/window intent shared by bounded entry episodes and historical maker retries. */
   logicalOrderId?: string;
   attemptNumber?: number;
   retryOfOrderId?: string;
+  /** V5 episode identity; absent on historical one-window sequences and retry generations. */
+  entryEpisode?: number;
+  requalifiedAfterOrderId?: string;
   /** Deterministic id submitted to the venue; retained even when the HTTP response is lost. */
   clientOrderId?: string;
   /** Venue order identifier, persisted as soon as Kalshi acknowledges an order. */
@@ -1598,9 +1601,9 @@ export interface PaperOrder {
     makerCohort: string;
     makerSamples: number;
     makerFillRate: number | null;
-    /** v4 route identity; absent on historical execution decisions. */
+    /** v4+ route identity; absent on historical execution decisions. */
     route?: 'ordinary-maker' | 'high-edge-taker';
-    /** Historical v3 fallback metadata; v4 never opens attempt 2. */
+    /** Historical v3 fallback metadata; v4+ never opens taker fallback authority. */
     makerMissFallback?: boolean;
     fallbackFromOrderId?: string;
   };
@@ -1748,9 +1751,9 @@ export interface ExecutionSignalReadiness {
     maximumAttempts?: number;
     retryEligible?: boolean;
     executedStyle?: 'maker' | 'taker';
-    fallbackState?: 'collecting' | 'checks_pending' | 'ready' | 'ended';
-    fallbackQualifyingSnapshots?: number;
-    fallbackRequiredSnapshots?: number;
+    requalificationState?: 'collecting' | 'checks_pending' | 'ready' | 'ended';
+    requalifyingSnapshots?: number;
+    requalifyingRequiredSnapshots?: number;
   };
 }
 
@@ -1999,7 +2002,7 @@ export interface TradingControlData {
   executionSignals?: ExecutionSignalReadiness[];
   liveAvailable: boolean;
   liveBlockers: string[];
-  maximumLiveMakerAttempts?: number;
+  maximumLiveEntryEpisodes?: number;
   portfolioConstraints?: { maximumPositions: number; maximumSameWindow: number; maximumSameGroupPerWindow: number };
   liveRisk: LiveRiskStatus;
   /** Adaptive soft entry gate; it never withdraws operator intent or blocks reduce-only exits. */

@@ -32,7 +32,7 @@ describe('execution signal persistence', () => {
     expect(result.medianNetEdge).toBeCloseTo(0.08);
   });
 
-  it('builds fallback evidence only from observations after maker completion', () => {
+  it('requalifies a continuous signal only from observations after maker completion', () => {
     let state: SignalPersistenceState | undefined;
     for (const seconds of [90, 105, 120, 135]) state = advance(state, seconds);
     const fresh = signalPersistenceAfter(state, time(105));

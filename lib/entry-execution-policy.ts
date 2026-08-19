@@ -1,9 +1,9 @@
 import { DEFAULT_STRATEGY_ID, normalizeStrategyId } from './strategy-registry';
 import type { PaperOrder, PositionSide, StrategyId } from './types';
 
-export const ENTRY_EXECUTION_POLICY_VERSION = 'maker-high30-one-attempt-fresh1c-v4';
+export const ENTRY_EXECUTION_POLICY_VERSION = 'maker-high30-requalify3-fresh1c-v5';
 export const HIGH_EDGE_TAKER_THRESHOLD = 0.30;
-export const ADAPTIVE_ENTRY_ATTEMPTS = 1;
+export const MAX_ENTRY_EPISODES_PER_WINDOW = 3;
 export type EntryExecutionMode = 'maker' | 'adaptive' | 'taker';
 export type EntryExecutionStyle = 'maker' | 'taker';
 
@@ -25,7 +25,7 @@ export interface EntryExecutionPolicyInput {
   minimumMedianNetEdge: number;
   minimumConfidence: number;
   maximumSpread: number;
-  /** Historical compatibility only. V4 permits one attempt and refuses fallback authority. */
+  /** Historical compatibility only. V5 never grants taker fallback authority. */
   makerMissFallback?: boolean;
   fallbackFromOrderId?: string;
 }
@@ -52,7 +52,7 @@ export interface EntryExecutionDecision {
 const priceBand = (price: number): string => price < 0.10 ? '<10c' : price < 0.25 ? '10-25c' : price < 0.50 ? '25-50c' : '50c+';
 const spreadBand = (spread: number): string => spread < 0.01 ? '<1c' : spread <= 0.02 ? '1-2c' : '2c+';
 
-/** Uses only prior accepted maker attempts in a comparable price/spread cohort. Reporting-only in v4. */
+/** Uses only prior accepted maker attempts in a comparable price/spread cohort. Reporting-only in v5. */
 export function makerCohortEvidence(orders: PaperOrder[], price: number, spread: number, strategyId: StrategyId = DEFAULT_STRATEGY_ID): MakerCohortEvidence {
   const label = `${priceBand(price)} · ${spreadBand(spread)}`;
   const comparable = orders.filter((order) => order.executionMode === 'live' && order.venue === 'kalshi'
@@ -65,8 +65,8 @@ export function makerCohortEvidence(orders: PaperOrder[], price: number, spread:
 }
 
 /**
- * V4 spends the spread only on a 30pp edge that survives the exact signed-path refresh. Lower-edge
- * decisions remain maker and receive one attempt. The old fill-rate comparison is retained for audit but
+ * V5 spends the spread only on a 30pp edge that survives the exact signed-path refresh. Lower-edge
+ * decisions remain maker and receive one attempt per qualified episode. The old fill-rate comparison is retained for audit but
  * cannot gate execution because it treats outcome-selected maker fills as random capture.
  */
 export function evaluateEntryExecutionPolicy(input: EntryExecutionPolicyInput): EntryExecutionDecision {
@@ -78,7 +78,7 @@ export function evaluateEntryExecutionPolicy(input: EntryExecutionPolicyInput): 
   if (input.medianNetEdge + 1e-12 < input.minimumMedianNetEdge) failures.push(`median edge ${(input.medianNetEdge * 100).toFixed(1)}pp < ${(input.minimumMedianNetEdge * 100).toFixed(1)}pp`);
   if (input.confidence + 1e-12 < input.minimumConfidence) failures.push(`quality ${(input.confidence * 100).toFixed(1)}% < ${(input.minimumConfidence * 100).toFixed(1)}%`);
   if (input.spread > input.maximumSpread + 1e-12) failures.push(`spread ${(input.spread * 100).toFixed(1)}c > ${(input.maximumSpread * 100).toFixed(1)}c`);
-  if (input.makerMissFallback) failures.push('v4 permits one entry attempt; maker misses do not open fallback authority');
+  if (input.makerMissFallback) failures.push('v5 does not permit taker fallback authority');
   const recommendedStyle: EntryExecutionStyle = failures.length ? 'maker' : 'taker';
   const executedStyle: EntryExecutionStyle = input.mode === 'maker' ? 'maker' : recommendedStyle;
   const route = recommendedStyle === 'taker' ? 'high-edge-taker' : 'ordinary-maker';

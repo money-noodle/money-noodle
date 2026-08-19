@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { ENTRY_EXECUTION_POLICY_VERSION } from './entry-execution-policy';
-import { adaptiveTakerFallbackDecision, entryAttemptsForLogicalOrder, makerAttemptId, makerRetryDecision, maximumLiveMakerAttempts } from './maker-retry-policy';
+import { adaptiveEntryEpisodeDecision, entryAttemptsForLogicalOrder, entryEpisodeId, makerAttemptId, makerRetryDecision, maximumLiveMakerAttempts } from './maker-retry-policy';
+import { PAPER_MANAGED_MAKER_EXECUTION_VERSION } from './paper-maker-simulation';
 import type { PaperOrder } from './types';
 
 const logical = 'live:BTC:2026-01-01T00:15:00Z';
@@ -17,9 +18,9 @@ afterEach(() => {
   delete process.env.MONEY_NOODLE_MAX_LIVE_MAKER_ATTEMPTS;
 });
 
-describe('single-attempt adaptive execution', () => {
+describe('requalifying adaptive entry episodes', () => {
   const makerMiss = (patch: Partial<PaperOrder> = {}) => order({
-    makerCompletedAt: '2026-01-01T00:01:20Z',
+    liquidityRole: 'maker', makerCompletedAt: '2026-01-01T00:01:20Z',
     entryExecutionDecision: {
       policyVersion: ENTRY_EXECUTION_POLICY_VERSION, configuredMode: 'adaptive', executedStyle: 'maker', recommendedStyle: 'maker',
       reason: 'maker', takerNetEdge: 0.18, medianNetEdge: 0.14, makerNetEdge: 0.2,
@@ -29,27 +30,58 @@ describe('single-attempt adaptive execution', () => {
     ...patch,
   });
 
-  it('ends the sequence after one authoritative maker zero-fill', () => {
-    const result = adaptiveTakerFallbackDecision([makerMiss()], Date.parse('2026-01-01T00:01:20Z'), close);
-    expect(result).toMatchObject({ allowed: false, attemptNumber: 2 });
-    expect(result.reason).toContain('Maximum 1 adaptive entry attempt');
+  it('opens a new episode after an authoritative current-policy maker zero-fill', () => {
+    expect(adaptiveEntryEpisodeDecision([makerMiss()], ENTRY_EXECUTION_POLICY_VERSION)).toMatchObject({
+      allowed: true, attemptNumber: 2, retryOfOrderId: logical,
+    });
   });
 
-  it('never follows a partial fill, uncertainty, retired policy attempt, or completed second row', () => {
-    expect(adaptiveTakerFallbackDecision([makerMiss({ status: 'open', filledCount: 0.1 })], Date.parse('2026-01-01T00:02:00Z'), close).allowed).toBe(false);
-    expect(adaptiveTakerFallbackDecision([makerMiss({ status: 'uncertain' })], Date.parse('2026-01-01T00:02:00Z'), close).allowed).toBe(false);
-    expect(adaptiveTakerFallbackDecision([makerMiss({
+  it('uses the same current-generation maker boundary for paper', () => {
+    const paperMiss = makerMiss({
+      executionMode: 'paper', entryExecutionDecision: undefined,
+      entryDecision: {
+        version: 'entry-decision-v2', providerId: 'kalshi', forecastModelVersion: 'test',
+        executionPolicyVersion: PAPER_MANAGED_MAKER_EXECUTION_VERSION, policyVersion: 'test',
+        calculationAt: '2026-01-01T00:01:00Z', side: 'UP', probabilityUp: 0.7, probabilityDown: 0.3,
+        selectedSideProbability: 0.7, confidence: 0.7,
+        confidenceBreakdown: { base: 0.3, dataQuality: 0.2, sampleQuality: 0.2, uncertaintyPenalty: 0 }, actionableAsk: 0.4,
+        actionableBid: 0.39, feeRate: 0.01, netEdge: 0.29, spread: 0.01, secondsRemaining: 840,
+        qualifyingSnapshots: 2, medianNetEdge: 0.28, factors: [],
+      },
+    });
+    expect(adaptiveEntryEpisodeDecision([paperMiss], PAPER_MANAGED_MAKER_EXECUTION_VERSION)).toMatchObject({
+      allowed: true, attemptNumber: 2,
+    });
+  });
+
+  it('caps the sequence after three maker episodes', () => {
+    const second = makerMiss({ id: `${logical}:episode:2`, attemptNumber: 2, entryEpisode: 2, createdAt: '2026-01-01T00:02:00Z' });
+    const third = makerMiss({ id: `${logical}:episode:3`, attemptNumber: 3, entryEpisode: 3, createdAt: '2026-01-01T00:03:00Z' });
+    expect(adaptiveEntryEpisodeDecision([makerMiss(), second], ENTRY_EXECUTION_POLICY_VERSION)).toMatchObject({ allowed: true, attemptNumber: 3 });
+    const ended = adaptiveEntryEpisodeDecision([makerMiss(), second, third], ENTRY_EXECUTION_POLICY_VERSION);
+    expect(ended.allowed).toBe(false);
+    expect(ended.reason).toContain('Maximum 3 entry episodes');
+  });
+
+  it('never follows a fill, uncertainty, taker, rejection, or retired-policy row', () => {
+    expect(adaptiveEntryEpisodeDecision([makerMiss({ status: 'open', filledCount: 0.1 })], ENTRY_EXECUTION_POLICY_VERSION).allowed).toBe(false);
+    expect(adaptiveEntryEpisodeDecision([makerMiss({ status: 'uncertain' })], ENTRY_EXECUTION_POLICY_VERSION).allowed).toBe(false);
+    expect(adaptiveEntryEpisodeDecision([makerMiss({
+      entryExecutionDecision: { ...makerMiss().entryExecutionDecision!, executedStyle: 'taker' },
+    })], ENTRY_EXECUTION_POLICY_VERSION).allowed).toBe(false);
+    expect(adaptiveEntryEpisodeDecision([makerMiss({ status: 'rejected' })], ENTRY_EXECUTION_POLICY_VERSION).allowed).toBe(false);
+    expect(adaptiveEntryEpisodeDecision([makerMiss({
       entryExecutionDecision: { ...makerMiss().entryExecutionDecision!, policyVersion: 'retired-v1' },
-    })], Date.parse('2026-01-01T00:02:00Z'), close).allowed).toBe(false);
-    const fallback = makerMiss({ id: `${logical}:retry:2`, attemptNumber: 2, createdAt: '2026-01-01T00:02:00Z' });
-    expect(adaptiveTakerFallbackDecision([makerMiss(), fallback], Date.parse('2026-01-01T00:03:00Z'), close).allowed).toBe(false);
+    })], ENTRY_EXECUTION_POLICY_VERSION).allowed).toBe(false);
   });
 });
 
 describe('bounded maker retry policy', () => {
-  it('creates durable unique ids for retry reservations and venue clients', () => {
+  it('creates distinct durable ids for historical retries and current episodes', () => {
     expect(makerAttemptId(logical, 1)).toBe(logical);
     expect(makerAttemptId(logical, 2)).toBe(`${logical}:retry:2`);
+    expect(entryEpisodeId(logical, 1)).toBe(logical);
+    expect(entryEpisodeId(logical, 2)).toBe(`${logical}:episode:2`);
   });
 
   it('allows one retry after cooldown with enough contract time', () => {
@@ -87,11 +119,12 @@ describe('bounded maker retry policy', () => {
 
   it('finds attempts for the requested track and excludes copied exit records', () => {
     const retry = order({ id: `${logical}:retry:2`, attemptNumber: 2, createdAt: '2026-01-01T00:02:00Z' });
+    const episode = order({ id: `${logical}:episode:3`, attemptNumber: 3, createdAt: '2026-01-01T00:03:00Z' });
     const exit = order({ id: `${logical}:exit:venue`, status: 'sold' });
     const unrelated = order({ id: 'live:ETH:other', logicalOrderId: 'live:ETH:other', symbol: 'ETH' });
     const paperLogical = logical.replace('live:', 'paper:');
     const paper = order({ id: paperLogical, logicalOrderId: paperLogical, executionMode: 'paper' });
-    expect(entryAttemptsForLogicalOrder([unrelated, exit, retry, paper, order({ logicalOrderId: undefined })], logical).map((item) => item.id)).toEqual([logical, `${logical}:retry:2`]);
+    expect(entryAttemptsForLogicalOrder([unrelated, exit, episode, retry, paper, order({ logicalOrderId: undefined })], logical).map((item) => item.id)).toEqual([logical, `${logical}:retry:2`, `${logical}:episode:3`]);
     expect(entryAttemptsForLogicalOrder([paper, order()], paperLogical, 'paper').map((item) => item.id)).toEqual([paperLogical]);
   });
 });

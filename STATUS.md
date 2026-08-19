@@ -34,6 +34,39 @@ Snapshot from local durable files at 2026-08-19T01:44:04Z. Full method, cohorts,
 - Latest walk-forward run: `walk-forward:875:fnv1a-27542176`, generated 2026-08-18T22:00:08Z. Candidate mean window return was 5.75% against baseline 2.37% over 438 test windows; it beat baseline 5/5 folds but was positive only 3/5 with modal parameters in 3/5. Decision: `baseline_retained`.
 - The current Next development server occupied about 3.7 GB RSS. RSS is not retained heap and dev mode carries compiler/cache overhead, but this materially disagrees with the prior 70 MB post-sharding RSS measurement and needs a like-for-like profile.
 
+### Requalifying maker episodes deployed live, 2026-08-19
+
+The maintainer found that v4's `maker missed · sequence ended` state was too broad: one authoritative
+zero-fill locked the asset/side for the rest of its settlement window even when the signal subsequently
+earned the entry checks again. The approved v5 design does **not** require the signal to become
+nonqualifying. Instead, each maker miss resets execution qualification at `makerCompletedAt`; two new
+qualifying snapshots spanning 15 seconds, both strictly after completion, may authorize the next episode.
+See [docs/requalifying-entry-episodes-design.md](docs/requalifying-entry-episodes-design.md).
+
+`maker-high30-requalify3-fresh1c-v5` permits at most three episodes per asset/side/window. Every episode
+reruns reduce-only sizing, current maker/high-edge routing, exact quote, portfolio, funding, exposure,
+live-risk, and reconciliation gates. Any fill, working or uncertain state, rejection, stale-policy order,
+taker refusal/no-fill, or episode 3 ends rearming. Later IDs are durable `:episode:2` / `:episode:3` rows;
+historical `:retry:` rows cannot open v5 authority. Paper uses the same post-completion boundary under
+`paper-managed-maker-requalify3-v3` while retaining independent simulated fills.
+
+This is an explicit execution decision, not a measured promotion. At the decision read, v4 had only four
+live attempts: one fill and three maker zero-fills; because v4 prohibited later episodes, it supplied no
+prospective episode-2 outcome sample. The main unresolved risk is repeated exposure to the same
+continuously qualified but adversely selected signal. Fresh persistence, the three-episode ceiling,
+unchanged reduced sizing, and stop-on-any-fill semantics bound the first generation. Source, tests, policy
+manifest, dashboard labels, SPEC, and design records are updated.
+
+**Deployment check, 2026-08-19T23:43–23:46Z.** Automation was manually paused and drained. Manual
+reconciliation recovered one fill, agreed one local/venue-managed position, canceled no resting remainder,
+and reported restart-safe with 28¢ reserved. The production build passed, the local server restarted under
+`npm run start`, and startup reconciliation passed against 5,520.32¢ venue cash with 0¢ reserved, one local
+settlement-pending position, zero venue-managed positions, zero recovered fills, and zero canceled resting
+orders. The authenticated manifest published v5, the read model published the three-episode ceiling, and the
+operator explicitly resumed live mode with no blockers and 1,905¢ available. No v5 live or paper order had
+fired at the first post-resume read, so this verifies build, policy identity, restart, and reconciliation—not
+episode-2 routing or economics.
+
 ### High-edge execution, direction observation, and reduce-only sizing deployed live, 2026-08-19
 
 Full 2026-08-19T22:43:38Z durable-data review in
@@ -828,8 +861,9 @@ Interpretation: the newer exact ledger snapshot is slightly negative lifetime an
 ### Execution and Safety
 
 - Signed Kalshi balances, positions, orders, fills, cancellation, and v2 order submission.
-- `maker-high30-one-attempt-fresh1c-v4` gives each edge-entry sequence one attempt: a managed post-only maker below 30pp issuance edge, or a capped fresh-quote IOC evaluation at 30pp+. Maker execution supports UP/YES and DOWN/NO with passive repricing, cancellation confirmation polling, fill/fee reconciliation, and exact sub-cent accounting; an authoritative zero-fill is terminal.
-- Paper execution mirrors live's relative `entry-sizing-reduce30-below-edge30-v1` sizing and exact-contract managed-maker pricing while retaining independent fills. A shared pure state machine chooses the refreshed initial passive limit and all progressive reprices. Paper polls independently every two seconds while live management runs concurrently, keeps live's issuance-sized quantity, and requires opposite-outcome public taker prints to consume displayed queue-ahead volume; ask touch alone is telemetry, not a fill. Incomplete terminal trade evidence is excluded rather than scored as a miss. Paper also receives one attempt; portfolio/correlation/funding limits and its separate bankroll remain unchanged.
+- Source policy `maker-high30-requalify3-fresh1c-v5` permits up to three separately requalified episodes: a managed post-only maker below 30pp issuance edge, or a capped fresh-quote IOC evaluation at 30pp+. After an authoritative maker zero-fill, the next episode requires two new post-completion snapshots over 15 seconds; no nonqualifying gap is required. Maker execution supports UP/YES and DOWN/NO with passive repricing, cancellation confirmation polling, fill/fee reconciliation, and exact sub-cent accounting. The funded worker is running v5 after a quiescent restart and authoritative startup
+reconciliation.
+- Paper execution mirrors live's relative `entry-sizing-reduce30-below-edge30-v1` sizing and v5 episode boundary while retaining independent fills under `paper-managed-maker-requalify3-v3`. A shared pure state machine chooses the refreshed initial passive limit and all progressive reprices. Paper polls independently every two seconds while live management runs concurrently, keeps live's issuance-sized quantity, and requires opposite-outcome public taker prints to consume displayed queue-ahead volume; ask touch alone is telemetry, not a fill. Incomplete terminal trade evidence is excluded rather than scored as a miss. Portfolio/correlation/funding limits and its separate bankroll remain unchanged.
 - Contemporaneous paper intents receive a separate `matched-live-fill-shadow-v1` overlay when live fills authoritatively. It is capped at observed live and requested paper quantity and records exact live price/fee terms, but cannot alter the independent paper status, budget, P&L, or public track record. The maker report exposes matched, both-filled, and live-only counts without blending the lanes.
 - Explicit live arming, environment opt-in, kill switch, pause/resume, per-trade cap, order-rate cap, budget allocation, loss stops, and automatic safety suspension on ambiguous failures.
 - Pause is a quiescent drain: withdraw intent, serialize behind execution, cancel/confirm managed remainders, reconcile authoritatively, and report restart-safe only when no working or uncertain transaction remains.
@@ -1171,22 +1205,25 @@ Remaining work:
 - Segment fill and return by displayed-ahead proxy, imbalance, repricing path, resting duration, profit state, probability deterioration, asset, side, and time remaining.
 - Compare accepted filled orders with accepted no-fills by settlement window.
 - Measure independent-paper/live agreement and disagreements against the separately stored matched-live overlay; never substitute the selected live fill for the independent paper result.
-- Recalibrate maker fill probability only after enough prospective fills and no-fills exist under `paper-managed-maker-trade-queue-v2`.
-- Current execution identity is `maker-high30-one-attempt-fresh1c-v4` with
-  `entry-sizing-reduce30-below-edge30-v1`. Below 30pp there is one reduced-size managed maker; at 30pp+
-  there is one full-base capped IOC only after the exact refreshed quote re-clears every absolute gate.
-  There is no second attempt or fallback. Historical v3 rows retain
-  `maker-taker-adaptive-one-miss-slippage1c-v3` and must not be pooled with v4.
+- Recalibrate maker fill probability only after enough prospective fills and no-fills exist under
+  `paper-managed-maker-requalify3-v3`; keep the retired v2 cohort separate.
+- Current execution identity is `maker-high30-requalify3-fresh1c-v5` with
+  `entry-sizing-reduce30-below-edge30-v1`. Below
+  30pp each qualified episode is a reduced-size managed maker; at 30pp+ it is one full-base capped IOC only
+  after the exact refreshed quote re-clears every absolute gate. A maker zero-fill may requalify up to the
+  three-episode ceiling, but there is no taker fallback. Historical v3/v4 rows retain their execution stamps
+  and must not be pooled with v5.
 - The pre-decision shadow had shown no discrimination: over 618 stamped orders on 2026-08-18, 74 were
   taker-flagged but all executed maker; flagged and unflagged fill rates were 51% and 50%, and fill-selection
-  gaps were −11.2pp and −13.1pp. That evidence did not authorize v4; the 2026-08-19 deployment is an explicit
-  operator decision on retrospective, concentrated evidence, not a claimed promotion.
+  gaps were −11.2pp and −13.1pp. That evidence did not authorize v4 or v5; both 2026-08-19 changes are
+  explicit operator decisions, not claimed promotions.
 - A wholesale switch to taking remains only the counterfactual in
   [reports/take-the-ask-2026-08-18.md](reports/take-the-ask-2026-08-18.md). It is not the deployed policy.
 
-Forbidden for now: depth-aware sizing, any multiplier above 1, a second entry attempt, taker fallback after
-a maker miss, direction-based production cancellation, bypassing any fresh high-edge gate, or queue-aware
-live gates.
+Forbidden for now: depth-aware sizing, any multiplier above 1, more than three entry episodes, rearming
+without fresh post-completion persistence, rearming after any fill or taker result, taker fallback after a
+maker miss, direction-based production cancellation, bypassing any fresh high-edge gate, or queue-aware live
+gates.
 
 ### 6. Verify First Organic Live Switch and Continue Exit Verification
 

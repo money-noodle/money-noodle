@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ADAPTIVE_ENTRY_ATTEMPTS, ENTRY_EXECUTION_POLICY_VERSION, HIGH_EDGE_TAKER_THRESHOLD,
+  ENTRY_EXECUTION_POLICY_VERSION, HIGH_EDGE_TAKER_THRESHOLD, MAX_ENTRY_EPISODES_PER_WINDOW,
   evaluateEntryExecutionPolicy, makerCohortEvidence, parseEntryExecutionMode,
 } from './entry-execution-policy';
 import type { PaperOrder } from './types';
@@ -12,10 +12,10 @@ const base = {
   minimumMedianNetEdge: 0.10, minimumConfidence: 0.65, maximumSpread: 0.02,
 };
 
-describe('high-edge maker/taker entry policy v4', () => {
-  it('records the new policy identity and one-attempt ceiling', () => {
-    expect(ENTRY_EXECUTION_POLICY_VERSION).toBe('maker-high30-one-attempt-fresh1c-v4');
-    expect(ADAPTIVE_ENTRY_ATTEMPTS).toBe(1);
+describe('high-edge maker/taker entry policy v5', () => {
+  it('records the new policy identity and episode ceiling', () => {
+    expect(ENTRY_EXECUTION_POLICY_VERSION).toBe('maker-high30-requalify3-fresh1c-v5');
+    expect(MAX_ENTRY_EPISODES_PER_WINDOW).toBe(3);
   });
 
   it('records a high-edge taker recommendation without changing maker mode', () => {
@@ -52,7 +52,7 @@ describe('high-edge maker/taker entry policy v4', () => {
       ...base, mode: 'adaptive', makerMissFallback: true, fallbackFromOrderId: 'live:BTC:first',
     });
     expect(decision).toMatchObject({ executedStyle: 'maker', makerMissFallback: true, fallbackFromOrderId: 'live:BTC:first' });
-    expect(decision.reason).toContain('do not open fallback authority');
+    expect(decision.reason).toContain('does not permit taker fallback authority');
   });
 
   it('defaults invalid configuration to maker mode', () => {

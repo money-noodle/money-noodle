@@ -1,11 +1,11 @@
-import { ADAPTIVE_ENTRY_ATTEMPTS } from './entry-execution-policy';
+import { MAX_ENTRY_EPISODES_PER_WINDOW } from './entry-execution-policy';
 import type { ExecutionMode, PaperOrder } from './types';
 
 export const MAX_MAKER_ATTEMPTS_PER_CONTRACT = 2;
 export const MAKER_RETRY_COOLDOWN_MS = 30_000;
 export const MAKER_RETRY_LATE_CUTOFF_MS = 120_000;
 
-/** Live defaults to one attempt while retry adverse-selection evidence is negative. */
+/** Maker-only mode retains its historical one-attempt default; adaptive episodes are versioned separately. */
 export function maximumLiveMakerAttempts(): number {
   const configured = Number(process.env.MONEY_NOODLE_MAX_LIVE_MAKER_ATTEMPTS ?? 1);
   return Number.isSafeInteger(configured) && configured >= 1
@@ -25,27 +25,54 @@ export function makerAttemptId(logicalOrderId: string, attemptNumber: number): s
   return attemptNumber <= 1 ? logicalOrderId : `${logicalOrderId}:retry:${attemptNumber}`;
 }
 
+export function entryEpisodeId(logicalOrderId: string, episodeNumber: number): string {
+  return episodeNumber <= 1 ? logicalOrderId : `${logicalOrderId}:episode:${episodeNumber}`;
+}
+
 export function entryAttemptsForLogicalOrder(orders: PaperOrder[], logicalOrderId: string, mode: ExecutionMode = 'live'): PaperOrder[] {
   return orders.filter((order) => order.executionMode === mode
     && !order.id.includes(':exit:')
-    && (order.logicalOrderId === logicalOrderId || order.id === logicalOrderId || order.id.startsWith(`${logicalOrderId}:retry:`)))
+    && (order.logicalOrderId === logicalOrderId || order.id === logicalOrderId
+      || order.id.startsWith(`${logicalOrderId}:retry:`) || order.id.startsWith(`${logicalOrderId}:episode:`)))
     .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
 }
 
-/** Adaptive v4 permits one attempt. The historical function name is retained for durable read paths. */
-export function adaptiveTakerFallbackDecision(
-  attempts: PaperOrder[], _nowMs: number, _closesAt: string, maximumAttempts = ADAPTIVE_ENTRY_ATTEMPTS,
+const orderExecutionPolicyVersion = (order: PaperOrder): string | undefined =>
+  order.entryExecutionDecision?.policyVersion ?? order.entryDecision?.executionPolicyVersion;
+
+/**
+ * V5 re-arms only after an authoritative current-policy maker zero-fill. Persistence is evaluated by the
+ * caller strictly after `makerCompletedAt`; this function owns terminal state, generation, and the cap.
+ */
+export function adaptiveEntryEpisodeDecision(
+  attempts: PaperOrder[], currentPolicyVersion: string, maximumEpisodes = MAX_ENTRY_EPISODES_PER_WINDOW,
 ): MakerRetryDecision {
   const ordered = [...attempts].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-  if (!ordered.length) return { allowed: true, attemptNumber: 1, reason: 'First and only adaptive attempt for this contract window.' };
+  if (!ordered.length) return { allowed: true, attemptNumber: 1, reason: 'First entry episode for this contract window.' };
   if (ordered.some((order) => order.status === 'open' || order.status === 'pending_reservation'
     || order.status === 'uncertain' || (order.filledCount ?? 0) > 0)) {
     return { allowed: false, attemptNumber: ordered.length + 1, reason: 'A filled, open, working, or uncertain entry already exists for this contract window.' };
   }
-  const effectiveMaximum = Math.max(1, Math.min(ADAPTIVE_ENTRY_ATTEMPTS, Math.floor(maximumAttempts)));
-  return {
+  if (ordered.some((order) => orderExecutionPolicyVersion(order) !== currentPolicyVersion)) return {
     allowed: false, attemptNumber: ordered.length + 1,
-    reason: `Maximum ${effectiveMaximum} adaptive entry attempt${effectiveMaximum === 1 ? '' : 's'} reached for this asset/contract window.`,
+    reason: 'A prior execution-policy generation cannot authorize a current entry episode.',
+  };
+  const effectiveMaximum = Math.max(1, Math.min(MAX_ENTRY_EPISODES_PER_WINDOW, Math.floor(maximumEpisodes)));
+  if (ordered.length >= effectiveMaximum) return {
+    allowed: false, attemptNumber: ordered.length + 1,
+    reason: `Maximum ${effectiveMaximum} entry episodes reached for this asset/side/window.`,
+  };
+  const latest = ordered.at(-1)!;
+  if (latest.status !== 'unfilled' || latest.entryExecutionDecision?.executedStyle === 'taker'
+    || latest.liquidityRole !== 'maker' || !Number.isFinite(Date.parse(latest.makerCompletedAt ?? ''))) {
+    return {
+      allowed: false, attemptNumber: ordered.length + 1,
+      reason: 'A new episode requires an authoritative completed maker zero-fill.',
+    };
+  }
+  return {
+    allowed: true, attemptNumber: ordered.length + 1, retryOfOrderId: latest.id,
+    reason: `Fresh post-completion persistence may authorize entry episode ${ordered.length + 1}/${effectiveMaximum}.`,
   };
 }
 

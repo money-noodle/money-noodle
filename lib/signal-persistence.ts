@@ -54,7 +54,7 @@ export interface SignalPersistenceState {
   observations: SignalObservation[];
 }
 
-/** Only observations strictly after an authoritative execution boundary may authorize fallback. */
+/** Only observations strictly after an authoritative execution boundary may authorize a new episode. */
 export function signalPersistenceAfter(
   state: SignalPersistenceState | undefined, after: string,
 ): SignalPersistenceState | undefined {
@@ -181,7 +181,7 @@ export function evaluateSignalPersistenceWithRequirements(
   return { ...base, eligible: true, reason: `${observations.length} qualifying snapshots; median edge ${(medianNetEdge * 100).toFixed(1)}pp; edge ${((spike ?? 0) * 100).toFixed(1)}pp from median.` };
 }
 
-/** Production remains on three snapshots; candidates call the explicit evaluator above. */
+/** Production uses the active versioned requirements; candidates call the explicit evaluator above. */
 export function evaluateSignalPersistence(state: SignalPersistenceState | undefined, nowMs: number, minimumNetEdge: number, minimumQuality: number): SignalEligibility {
   return evaluateSignalPersistenceWithRequirements(state, nowMs, minimumNetEdge, minimumQuality, productionSignalPersistence());
 }

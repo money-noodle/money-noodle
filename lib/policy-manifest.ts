@@ -3,7 +3,7 @@ import { maximumEdgeSpike } from './edge-spike-policy';
 import { PRODUCTION_BASIS_LOG_ODDS_WEIGHT } from './calibration-replay';
 import { MAX_TRADEABLE_PROBABILITY, MIN_TRADEABLE_PROBABILITY } from './dashboard';
 import { classifiedRegimeRequired } from './paper-execution';
-import { ADAPTIVE_ENTRY_ATTEMPTS, ENTRY_EXECUTION_POLICY_VERSION, HIGH_EDGE_TAKER_THRESHOLD, parseEntryExecutionMode } from './entry-execution-policy';
+import { ENTRY_EXECUTION_POLICY_VERSION, HIGH_EDGE_TAKER_THRESHOLD, MAX_ENTRY_EPISODES_PER_WINDOW, parseEntryExecutionMode } from './entry-execution-policy';
 import { ENTRY_SIZING_POLICY_VERSION, FULL_SIZE_EDGE_THRESHOLD, REDUCED_ENTRY_MULTIPLIER } from './entry-sizing-policy';
 import { POST_EXIT_REENTRY_COOLDOWN_MS, PROFIT_REVERSAL_ARM_PERCENT, STRICT_EXIT_MIN_GAIN_CENTS, profitReversalExitEnabled, standaloneExitPolicyVersion } from './exit-policy';
 import { maximumLiveMakerAttempts } from './maker-retry-policy';
@@ -327,12 +327,13 @@ export function activePolicyManifest(providers: TradingProviderDescriptor[], mod
       ]),
       component('execution', 'Entry execution', ENTRY_EXECUTION_POLICY_VERSION, 'production', executionMode === 'maker'
         ? 'Maker-only live execution with separately measured high-edge taker shadows.'
-        : 'One live attempt: fresh 30pp+ edges may take; every lower edge receives one managed maker.', [
+        : 'Up to three requalifying episodes: fresh 30pp+ edges may take; every lower edge receives one managed maker per episode.', [
         { label: 'Production mode', value: executionMode === 'maker' ? 'Managed post-only maker' : 'High-edge adaptive maker/taker' },
         { label: 'High-edge route', value: `Issuance and refreshed taker edge ≥${points(HIGH_EDGE_TAKER_THRESHOLD)}; median ≥10pp; quality ≥65%; spread ≤2¢` },
-        { label: 'Ordinary route', value: `Below ${points(HIGH_EDGE_TAKER_THRESHOLD)}: one managed maker; zero-fill ends the sequence` },
+        { label: 'Ordinary route', value: `Below ${points(HIGH_EDGE_TAKER_THRESHOLD)}: one managed maker per qualified episode` },
         { label: 'Pre-submit ask movement', value: '≤1.0¢; fresh quote re-runs gates, all-in reserve uses worst price' },
-        { label: 'Live attempts per contract', value: `${executionMode === 'adaptive' ? ADAPTIVE_ENTRY_ATTEMPTS : maximumLiveMakerAttempts()}` },
+        { label: 'Live entry episodes per side/window', value: `${executionMode === 'adaptive' ? MAX_ENTRY_EPISODES_PER_WINDOW : maximumLiveMakerAttempts()}` },
+        { label: 'Maker miss rearming', value: 'Two new qualifying snapshots over 15s, strictly after completion; no nonqualifying gap required' },
         { label: 'Sizing policy', value: ENTRY_SIZING_POLICY_VERSION },
         { label: 'Sizing', value: `${REDUCED_ENTRY_MULTIPLIER}× below ${points(FULL_SIZE_EDGE_THRESHOLD)}; 1× at or above; no upsizing` },
       ]),

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { beginLiveTransaction, blockExecutionDrain, completeExecutionDrain, endLiveTransaction, getExecutionDrainStatus, startExecutionDrain } from './execution-drain-state';
 import { CALENDAR_EVALUATION_VERSION, calendarFixedSnapshotDue, updateCalendarEvaluationStore, type CalendarEvaluationCycle } from './calendar-evaluation-store';
 import { reconcileExecutionLedger } from './execution-reconciliation';
-import { ADAPTIVE_ENTRY_ATTEMPTS, ENTRY_EXECUTION_POLICY_VERSION, entrySideProbability, evaluateEntryExecutionPolicy, makerCohortEvidence, parseEntryExecutionMode, type EntryExecutionDecision } from './entry-execution-policy';
+import { ENTRY_EXECUTION_POLICY_VERSION, MAX_ENTRY_EPISODES_PER_WINDOW, entrySideProbability, evaluateEntryExecutionPolicy, makerCohortEvidence, parseEntryExecutionMode, type EntryExecutionDecision } from './entry-execution-policy';
 import { observeEntryDirection } from './entry-direction-observation';
 import { evaluateEntrySizing } from './entry-sizing-policy';
 import { POST_EXIT_REENTRY_COOLDOWN_MS, evaluateExitPolicy } from './exit-policy';
@@ -69,7 +69,7 @@ import { getProviderBudgets, providerBudget } from './provider-budget-store';
 import { isStatelessDeployment } from './runtime-environment';
 import { postgresPaperProjectionSyncEnabled, readPublicPaperBudgetFromPostgres, syncPublicPaperBudgetToPostgres } from './postgres-paper-projection';
 import { fetchKalshiReconciliationSnapshot } from './kalshi-reconciliation';
-import { adaptiveTakerFallbackDecision, entryAttemptsForLogicalOrder, makerAttemptId, makerRetryDecision, maximumLiveMakerAttempts, type MakerRetryDecision } from './maker-retry-policy';
+import { adaptiveEntryEpisodeDecision, entryAttemptsForLogicalOrder, entryEpisodeId, makerAttemptId, makerRetryDecision, maximumLiveMakerAttempts, type MakerRetryDecision } from './maker-retry-policy';
 import { evaluateLiveRisk } from './live-risk-policy';
 import { liveBlockers, liveTradingEnabled, maxLiveOrdersPerHour, maxLiveStakeCents, placeKalshiBuy, placeKalshiSell, placeKalshiTakerBuy } from './live-orders';
 import { countFilledLiveVenueOrders } from './order-rate-limit';
@@ -259,22 +259,31 @@ function updateSignalPersistence(dashboard: DashboardData, ledger: Ledger): bool
   return changed;
 }
 
+export function evaluateEntryEpisodePersistence(
+  state: SignalPersistenceState | undefined, nowMs: number, completedAt?: string,
+): SignalEligibility {
+  return evaluateSignalPersistence(
+    completedAt ? signalPersistenceAfter(state, completedAt) : state,
+    nowMs, MIN_NET_EDGE, MIN_ESTIMATE_QUALITY,
+  );
+}
+
 function executionEligibility(prediction: Prediction, side: PositionSide, ledger: Ledger, nowMs = Date.now()): SignalEligibility {
-  return evaluateSignalPersistence(ledger.signalPersistence[persistenceKey(prediction, side)], nowMs, MIN_NET_EDGE, MIN_ESTIMATE_QUALITY);
+  return evaluateEntryEpisodePersistence(ledger.signalPersistence[persistenceKey(prediction, side)], nowMs);
 }
 
 interface LiveAttemptState {
   attempts: PaperOrder[];
   retry: MakerRetryDecision;
   eligibility: SignalEligibility;
-  makerMissFallback: boolean;
-  fallbackFromOrderId?: string;
+  requalifyingEpisode: boolean;
+  requalifiedAfterOrderId?: string;
 }
 
 /**
- * One source of truth for every live selection/readiness/submission call site. Adaptive v4 has one
- * attempt; historical fallback fields remain readable but can no longer open authority. Other configured
- * modes retain the bounded maker-retry helper.
+ * One source of truth for every live selection/readiness/submission call site. Adaptive v5 permits up to
+ * three episodes, but each later episode must earn production persistence strictly after the preceding
+ * authoritative maker zero-fill. Other configured modes retain the historical bounded-retry helper.
  */
 function liveAttemptState(
   prediction: Prediction, side: PositionSide, ledger: Ledger, nowMs = Date.now(),
@@ -282,16 +291,14 @@ function liveAttemptState(
   const attempts = liveAttempts(ledger, prediction, side);
   const adaptive = entryExecutionSettings().mode === 'adaptive';
   const retry = adaptive
-    ? adaptiveTakerFallbackDecision(attempts, nowMs, prediction.market.closesAt, ADAPTIVE_ENTRY_ATTEMPTS)
+    ? adaptiveEntryEpisodeDecision(attempts, ENTRY_EXECUTION_POLICY_VERSION)
     : makerRetryDecision(attempts, nowMs, prediction.market.closesAt, maximumLiveMakerAttempts());
-  const fallback = adaptive && retry.allowed && retry.attemptNumber === 2 && Boolean(retry.retryOfOrderId);
-  const parent = fallback ? attempts.find((attempt) => attempt.id === retry.retryOfOrderId) : undefined;
-  const state = fallback
-    ? signalPersistenceAfter(ledger.signalPersistence[persistenceKey(prediction, side)], parent?.makerCompletedAt ?? '')
-    : ledger.signalPersistence[persistenceKey(prediction, side)];
+  const requalifyingEpisode = adaptive && retry.allowed && retry.attemptNumber > 1 && Boolean(retry.retryOfOrderId);
+  const parent = requalifyingEpisode ? attempts.find((attempt) => attempt.id === retry.retryOfOrderId) : undefined;
+  const state = ledger.signalPersistence[persistenceKey(prediction, side)];
   return {
-    attempts, retry, makerMissFallback: fallback, fallbackFromOrderId: fallback ? parent?.id : undefined,
-    eligibility: evaluateSignalPersistence(state, nowMs, MIN_NET_EDGE, MIN_ESTIMATE_QUALITY),
+    attempts, retry, requalifyingEpisode, requalifiedAfterOrderId: parent?.id,
+    eligibility: evaluateEntryEpisodePersistence(state, nowMs, requalifyingEpisode ? parent?.makerCompletedAt : undefined),
   };
 }
 
@@ -460,7 +467,7 @@ function calendarEvaluationCycle(dashboard: DashboardData, ledger: Ledger): Cale
 
 function entryExecutionDecision(
   prediction: Prediction, side: PositionSide, order: PaperOrder, ledger: Ledger,
-  attempt: Pick<LiveAttemptState, 'eligibility' | 'makerMissFallback' | 'fallbackFromOrderId'>,
+  attempt: Pick<LiveAttemptState, 'eligibility'>,
   refreshedQuote?: { bid: number; ask: number; spread: number },
 ): EntryExecutionDecision {
   const settings = entryExecutionSettings();
@@ -477,8 +484,7 @@ function entryExecutionDecision(
     confidence: prediction.confidence,
     spread,
     makerNetEdge: probability - bid - venueFeeRate('kalshi', bid, 'maker'),
-    makerEvidence: evidence, makerMissFallback: attempt.makerMissFallback,
-    fallbackFromOrderId: attempt.fallbackFromOrderId,
+    makerEvidence: evidence,
   });
 }
 
@@ -520,7 +526,7 @@ function venueQuote(prediction: Prediction, venue: 'polymarket' | 'kalshi', side
  * Builds a candidate order for one mode, applying every deterministic risk check. Returns the reason
  * when it declines, because a silently skipped order is indistinguishable from a broken engine.
  */
-function buildOrder(prediction: Prediction, side: PositionSide, status: TradingControlData, ledger: Ledger, calculationAt: string, modelVersion: string, mode: ExecutionMode, stakeLimitCents: number, venueFilter?: 'kalshi'): { order: PaperOrder } | { reason: string } {
+function buildOrder(prediction: Prediction, side: PositionSide, status: TradingControlData, ledger: Ledger, calculationAt: string, modelVersion: string, mode: ExecutionMode, stakeLimitCents: number, venueFilter?: 'kalshi', eligibilityOverride?: SignalEligibility): { order: PaperOrder } | { reason: string } {
   if (stakeLimitCents <= 0) return { reason: 'Stake sizing produces zero cents. Raise the budget or purchase percentage.' };
   const rejections: string[] = [];
   const candidates = status.venues.flatMap((readiness) => {
@@ -553,7 +559,7 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
   }).sort((a, b) => a.score - b.score);
   const selected = candidates[0];
   if (!selected) return { reason: rejections[0] ?? 'No enabled venue had a usable quote' };
-  const eligibility = executionEligibility(prediction, side, ledger);
+  const eligibility = eligibilityOverride ?? executionEligibility(prediction, side, ledger);
   return { order: {
     id: orderId(prediction, mode, side, ledger), logicalOrderId: orderId(prediction, mode, side, ledger), attemptNumber: 1,
     clientOrderId: orderId(prediction, mode, side, ledger), executionMode: mode,
@@ -677,19 +683,15 @@ function updatePortfolioDecisions(
     }
     const maturity = attempt.eligibility;
     if (!maturity.eligible) {
-      next[key] = { state: 'qualified', reason: `${attempt.makerMissFallback ? 'Maker miss confirmed; fresh post-miss evidence is collecting.' : 'Standalone expected-value policy passes; execution evidence is still collecting.'} ${maturity.reason}`, updatedAt: now };
+      next[key] = { state: 'qualified', reason: `${attempt.requalifyingEpisode ? 'Maker miss confirmed; the next episode is requalifying from post-completion evidence.' : 'Standalone expected-value policy passes; execution evidence is still collecting.'} ${maturity.reason}`, updatedAt: now };
       continue;
     }
-    const candidate = buildOrder(prediction, side, status, ledger, dashboard.generatedAt, dashboard.modelVersion, 'live', Math.min(status.proposedStakeCents, maxLiveStakeCents()), 'kalshi');
+    const candidate = buildOrder(prediction, side, status, ledger, dashboard.generatedAt, dashboard.modelVersion, 'live', Math.min(status.proposedStakeCents, maxLiveStakeCents()), 'kalshi', attempt.eligibility);
     if ('reason' in candidate) {
       next[key] = { state: 'blocked', reason: candidate.reason, updatedAt: now };
       continue;
     }
     const decision = entryExecutionDecision(prediction, side, candidate.order, ledger, attempt);
-    if (attempt.makerMissFallback && decision.executedStyle !== 'taker') {
-      next[key] = { state: 'qualified', reason: decision.reason, updatedAt: now };
-      continue;
-    }
     if (decision.executedStyle === 'taker') {
       const reserveFailure = applyTakerQuoteMovementReserve(candidate.order, candidate.order.entrySizingDecision?.stakeLimitCents
         ?? Math.min(status.proposedStakeCents, maxLiveStakeCents()));
@@ -707,7 +709,7 @@ function updatePortfolioDecisions(
   })), exposures, constraints);
   for (const item of selection) next[item.id] = {
     state: item.selected ? 'portfolio-selected' : 'blocked',
-    reason: `${item.reason}${(retryNumbers.get(item.id) ?? 1) > 1 ? ' Fresh post-miss evidence and absolute taker gates authorize the one capped fallback attempt.' : ''}`,
+    reason: `${item.reason}${(retryNumbers.get(item.id) ?? 1) > 1 ? ` Fresh post-miss persistence authorizes entry episode ${retryNumbers.get(item.id)}/${MAX_ENTRY_EPISODES_PER_WINDOW}; its current edge selects maker or taker normally.` : ''}`,
     expectedProfitCents: item.expectedProfitCents, adjustedExpectedContributionCents: item.adjustedExpectedContributionCents,
     rank: item.rank ?? undefined, updatedAt: now,
   };
@@ -976,21 +978,26 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
     .filter((item) => qualifiesAsBuyEdge(item) && item.market.live && assetAdmitted(item.symbol))
     .flatMap((prediction) => {
       const side = selectedSide(prediction);
-      if (!side || !executionEligibility(prediction, side, ledger).eligible) return [];
+      if (!side) return [];
       if (reentryCooldownRemainingMs(ledger, prediction, 'paper', side) > 0) return [];
-      // V4 gives both tracks one attempt. Before bounded attempts, each paper miss could be submitted
-      // again every collector tick under the same id, overstating its fill rate.
       const logicalId = orderId(prediction, 'paper', side, ledger);
-      const retry = makerRetryDecision(paperAttempts(ledger, prediction, side), Date.now(), prediction.market.closesAt, ADAPTIVE_ENTRY_ATTEMPTS);
-      if (!retry.allowed) return [];
+      const attempts = paperAttempts(ledger, prediction, side);
+      const episode = adaptiveEntryEpisodeDecision(attempts, PAPER_MANAGED_MAKER_EXECUTION_VERSION);
+      if (!episode.allowed) return [];
+      const parent = episode.retryOfOrderId ? attempts.find((attempt) => attempt.id === episode.retryOfOrderId) : undefined;
+      const episodeState = ledger.signalPersistence[persistenceKey(prediction, side)];
+      const eligibility = evaluateEntryEpisodePersistence(episodeState, Date.now(), parent?.makerCompletedAt);
+      if (!eligibility.eligible) return [];
       const candidate = buildOrder(prediction, side, {
         ...status, venues: status.venues.map((readiness) => ({ ...readiness, enabled: paperProviders.has(readiness.venue) })),
-      }, ledger, dashboard.generatedAt, dashboard.modelVersion, 'paper', stakeLimit, 'kalshi');
+      }, ledger, dashboard.generatedAt, dashboard.modelVersion, 'paper', stakeLimit, 'kalshi', eligibility);
       if ('reason' in candidate) return [];
       candidate.order.logicalOrderId = logicalId;
-      candidate.order.attemptNumber = retry.attemptNumber;
-      candidate.order.retryOfOrderId = retry.retryOfOrderId;
-      candidate.order.id = makerAttemptId(logicalId, retry.attemptNumber);
+      candidate.order.attemptNumber = episode.attemptNumber;
+      candidate.order.entryEpisode = episode.attemptNumber;
+      candidate.order.retryOfOrderId = episode.retryOfOrderId;
+      candidate.order.requalifiedAfterOrderId = episode.retryOfOrderId;
+      candidate.order.id = entryEpisodeId(logicalId, episode.attemptNumber);
       candidate.order.clientOrderId = candidate.order.id;
       return [{ prediction, order: candidate.order, portfolioKey: persistenceKey(prediction, side) }];
     })
@@ -1807,7 +1814,16 @@ async function runLive(
     const maximumLiveStake = maxLiveStakeCents();
     const liveStakeCeiling = Math.min(status.proposedStakeCents, maximumLiveStake, liveFunding.spendableCents);
     if (liveStakeCeiling <= 0) { if (!placed) return skip(liveFunding.reason); break; }
-    const built = buildOrder(candidate, side, status, ledger, dashboard.generatedAt, dashboard.modelVersion, 'live', liveStakeCeiling, 'kalshi');
+    const logicalId = orderId(candidate, 'live', side, ledger);
+    const attempt = liveAttemptState(candidate, side, ledger);
+    const { retry } = attempt;
+    if (!retry.allowed || !attempt.eligibility.eligible) {
+      const reason = !retry.allowed ? retry.reason : attempt.eligibility.reason;
+      priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason });
+      if (!placed) return skip(`${candidate.symbol}: ${reason}`);
+      continue;
+    }
+    const built = buildOrder(candidate, side, status, ledger, dashboard.generatedAt, dashboard.modelVersion, 'live', liveStakeCeiling, 'kalshi', attempt.eligibility);
     if ('reason' in built) {
       priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason: built.reason });
       if (!placed) return skip(`${candidate.symbol} ${side}: ${built.reason}`);
@@ -1820,27 +1836,16 @@ async function runLive(
       if (!placed) return skip(liveFunding.reason);
       continue;
     }
-    const logicalId = orderId(candidate, 'live', side, ledger);
-    const attempt = liveAttemptState(candidate, side, ledger);
-    const { retry } = attempt;
-    if (!retry.allowed || !attempt.eligibility.eligible) {
-      const reason = !retry.allowed ? retry.reason : attempt.eligibility.reason;
-      priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason });
-      if (!placed) return skip(`${candidate.symbol}: ${reason}`);
-      continue;
-    }
     built.order.logicalOrderId = logicalId;
     built.order.attemptNumber = retry.attemptNumber;
+    built.order.entryEpisode = retry.attemptNumber;
     built.order.retryOfOrderId = retry.retryOfOrderId;
-    built.order.id = makerAttemptId(logicalId, retry.attemptNumber);
+    built.order.requalifiedAfterOrderId = retry.retryOfOrderId;
+    built.order.id = entryExecutionSettings().mode === 'adaptive'
+      ? entryEpisodeId(logicalId, retry.attemptNumber)
+      : makerAttemptId(logicalId, retry.attemptNumber);
     built.order.clientOrderId = built.order.id;
     built.order.entryExecutionDecision = entryExecutionDecision(candidate, side, built.order, ledger, attempt);
-    // V4 permits one attempt. Historical fallback state cannot manufacture a second durable intent.
-    if (attempt.makerMissFallback && built.order.entryExecutionDecision.executedStyle !== 'taker') {
-      priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason: built.order.entryExecutionDecision.reason });
-      if (!placed) return skip(`${candidate.symbol}: ${built.order.entryExecutionDecision.reason}`);
-      continue;
-    }
     if (built.order.entryExecutionDecision.executedStyle === 'taker') {
       const reserveFailure = applyTakerQuoteMovementReserve(built.order, built.order.entrySizingDecision?.stakeLimitCents ?? liveStakeCeiling);
       if (reserveFailure) {
@@ -1975,7 +1980,7 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
  * Long-shot entries for one track.
  *
  * Deliberately separate from `runPaper`/`runLive` rather than threaded through them: the edge policy's
- * selection, persistence, maker retry, portfolio ranking, and regime gate are all specific to it, and
+ * selection, persistence, entry episode, portfolio ranking, and regime gate are all specific to it, and
  * forcing a second policy through that path would change behaviour the mirror invariant depends on.
  *
  * Every account-wide protection still applies, because those are properties of the venue and the account
@@ -2887,7 +2892,7 @@ export async function getPublicPaperBudget(): Promise<PublicPaperBudget> {
   return publicPaperBudgetFromLedger(await readLedger());
 }
 
-export async function getExecutionSummaries(control: { state: string; mode: string; startingBudgetCents: number; workingEquityCents: number; availableBudgetCents: number; reservedBudgetCents: number; proposedStakeCents: number; perTradeCents: number; epochId?: string; epochStartedAt?: string }): Promise<{ paper: ExecutionSummary; live: ExecutionSummary; executionSignals: ExecutionSignalReadiness[]; liveAvailable: boolean; liveBlockers: string[]; maximumLiveMakerAttempts: number; portfolioConstraints: Pick<PortfolioConstraints, 'maximumPositions' | 'maximumSameWindow' | 'maximumSameGroupPerWindow'>; regimeGate: RegimeGateStatus }> {
+export async function getExecutionSummaries(control: { state: string; mode: string; startingBudgetCents: number; workingEquityCents: number; availableBudgetCents: number; reservedBudgetCents: number; proposedStakeCents: number; perTradeCents: number; epochId?: string; epochStartedAt?: string }): Promise<{ paper: ExecutionSummary; live: ExecutionSummary; executionSignals: ExecutionSignalReadiness[]; liveAvailable: boolean; liveBlockers: string[]; maximumLiveEntryEpisodes: number; portfolioConstraints: Pick<PortfolioConstraints, 'maximumPositions' | 'maximumSameWindow' | 'maximumSameGroupPerWindow'>; regimeGate: RegimeGateStatus }> {
   const [ledger, regimeGate] = await Promise.all([readLedger(), getRegimeGateStatus()]);
   const now = Date.now();
   const persistenceRequirements = productionSignalPersistence();
@@ -2926,15 +2931,15 @@ export async function getExecutionSummaries(control: { state: string; mode: stri
         const liveOrder = attempts.at(-1);
         const adaptive = entryExecutionSettings().mode === 'adaptive';
         const retry = adaptive
-          ? adaptiveTakerFallbackDecision(attempts, now, state.closesAt, ADAPTIVE_ENTRY_ATTEMPTS)
+          ? adaptiveEntryEpisodeDecision(attempts, ENTRY_EXECUTION_POLICY_VERSION)
           : makerRetryDecision(attempts, now, state.closesAt, maximumLiveMakerAttempts());
         const portfolio = ledger.portfolioDecisions[`${state.symbol}:${state.side}:${state.closesAt}`];
-        const fallbackOpen = adaptive && retry.allowed && retry.attemptNumber === 2 && Boolean(liveOrder?.makerCompletedAt);
-        if (fallbackOpen) {
-          result = evaluateSignalPersistence(signalPersistenceAfter(state, liveOrder!.makerCompletedAt!), now, MIN_NET_EDGE, MIN_ESTIMATE_QUALITY);
+        const requalificationOpen = adaptive && retry.allowed && retry.attemptNumber > 1 && Boolean(liveOrder?.makerCompletedAt);
+        if (requalificationOpen) {
+          result = evaluateEntryEpisodePersistence(state, now, liveOrder!.makerCompletedAt);
         }
-        const fallbackState = liveOrder?.status === 'unfilled'
-          ? fallbackOpen
+        const requalificationState = liveOrder?.status === 'unfilled'
+          ? requalificationOpen
             ? !result.eligible ? 'collecting' as const
               : portfolio?.state === 'portfolio-selected' ? 'ready' as const : 'checks_pending' as const
             : 'ended' as const
@@ -2948,17 +2953,18 @@ export async function getExecutionSummaries(control: { state: string; mode: stri
           liveAttempt: liveOrder ? {
             status: liveOrder.status, createdAt: liveOrder.createdAt, filledCount: liveOrder.filledCount,
             quantity: liveOrder.quantity, reason: liveOrder.reason, noFillReason: inferredNoFillReason(liveOrder),
-            attemptNumber: liveOrder.attemptNumber ?? attempts.length, maximumAttempts: adaptive ? ADAPTIVE_ENTRY_ATTEMPTS : maximumLiveMakerAttempts(),
-            retryEligible: fallbackState === 'ready', executedStyle: liveOrder.entryExecutionDecision?.executedStyle,
-            fallbackState,
-            fallbackQualifyingSnapshots: fallbackOpen ? result.qualifyingSnapshots : undefined,
-            fallbackRequiredSnapshots: fallbackOpen ? persistenceRequirements.requiredSnapshots : undefined,
+            attemptNumber: liveOrder.entryEpisode ?? liveOrder.attemptNumber ?? attempts.length,
+            maximumAttempts: adaptive ? MAX_ENTRY_EPISODES_PER_WINDOW : maximumLiveMakerAttempts(),
+            retryEligible: requalificationState === 'ready', executedStyle: liveOrder.entryExecutionDecision?.executedStyle,
+            requalificationState,
+            requalifyingSnapshots: requalificationOpen ? result.qualifyingSnapshots : undefined,
+            requalifyingRequiredSnapshots: requalificationOpen ? persistenceRequirements.requiredSnapshots : undefined,
           } : undefined,
         };
       }),
     liveAvailable: liveTradingEnabled(),
     liveBlockers: liveBlockers(),
-    maximumLiveMakerAttempts: entryExecutionSettings().mode === 'adaptive' ? ADAPTIVE_ENTRY_ATTEMPTS : maximumLiveMakerAttempts(),
+    maximumLiveEntryEpisodes: entryExecutionSettings().mode === 'adaptive' ? MAX_ENTRY_EPISODES_PER_WINDOW : maximumLiveMakerAttempts(),
     regimeGate,
     portfolioConstraints: (() => {
       const constraints = portfolioConstraints();

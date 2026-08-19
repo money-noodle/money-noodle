@@ -137,7 +137,8 @@ can go stale silently — §8 covers that.
 - **No ledger is rewritten.** §3 of the agent rules forbids hand-editing durable state, and the 119
   affected v17 paper orders are evidence of what the desk did. They stay.
 - **`BUY_POLICY_VERSION` does not move.** The entry rule is unchanged; this is execution. Bump the paper
-  execution identifier (`paper-managed-maker-trade-queue-v2`, set in `buildOrder`, `lib/paper-execution.ts`) instead, so
+  execution identifier (`paper-managed-maker-trade-queue-v2` at that design generation; superseded by
+  `paper-managed-maker-requalify3-v3`, set in `buildOrder`, `lib/paper-execution.ts`) instead, so
   pre-fix and post-fix paper cohorts are separable in every report that groups by it.
 
 ## 8. Guarding against a stale constant

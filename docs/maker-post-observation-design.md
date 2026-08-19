@@ -56,7 +56,9 @@ A resting entry is **not a static post**.
 - At the time of this v1 observation design, live and paper could each retry maker with a 30s cooldown and
   no retry inside the final 120 seconds (`lib/maker-retry-policy.ts`). **Superseded for adaptive live on
   2026-08-19:** live attempt 2 is now the fresh post-miss capped taker fallback in
-  `docs/adaptive-entry-fallback-design.md`; paper retains its independent maker simulation behavior.
+  `docs/adaptive-entry-fallback-design.md`; paper retained its independent maker simulation behavior.
+  **Superseded again later on 2026-08-19:** v5 permits up to three maker-miss-requalified episodes on both
+  tracks, with fresh persistence after each completion; see `docs/requalifying-entry-episodes-design.md`.
 
 Simulating a static post at the bid would understate fills, because production climbs toward the ask as its
 horizon expires. **The ladder is the primary arm.** The static post is recorded alongside it as a
