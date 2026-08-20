@@ -6,9 +6,10 @@
 ## 1. Goal
 
 The positive-edge surface should expose enough of Kalshi's displayed ladder to inspect price, level size,
-and cumulative depth while a signal is being monitored. The same surface should stop jumping when a signal
-enters or leaves: cards reserve a stable minimum height, awaiting-confirmation signals are shown by default,
-and a departing signal remains in place while fading before removal.
+and cumulative depth while a signal is being monitored. The same surface should preserve the human learning
+context after a signal stops qualifying: cards reserve a stable minimum height, awaiting-confirmation signals
+are shown by default, and every signal observed in the mounted dashboard remains visible through its market
+window.
 
 ## 2. Data boundary
 
@@ -52,10 +53,15 @@ refresh does not resize the grid.
 Positive-edge cards and the signal body reserve minimum heights. Awaiting-confirmation signals are visible
 by default; the existing control still allows the operator to hide them.
 
-When an active signal disappears from the current qualified set, its last rendered snapshot remains for
-2.4 seconds with a `leaving signal` label and a slow opacity/blur transition. It occupies its grid slot until
-the fade completes, preventing an immediate reflow. If the same asset/window re-enters before expiry, the
-fade is canceled and the current snapshot replaces it.
+When an active signal disappears from the current qualified set, its last qualified snapshot remains fully
+visible with a `signal expired` label and an explicit note that it is retained until market close. It moves
+below current signals rather than being discarded. Its ladder remains available while the market window is
+open, so the operator can inspect how displayed depth evolves after qualification ended.
+
+At `market.closesAt`, not at qualification loss, the retained card begins the 2.4-second opacity/blur fade
+and is then removed. If the same asset/window requalifies before close, its current snapshot replaces the
+retained snapshot and the expired indication clears. Retention is browser-session UI state only: it creates
+no durable history, and a page reload does not reconstruct a signal absent from the current dashboard.
 
 ## 5. Safety and privacy
 
@@ -72,5 +78,5 @@ fade is canceled and the current snapshot replaces it.
 
 Tests pin selected-side UP/DOWN normalization, sorting, level bounds, and cumulative-depth semantics. The
 full typecheck, test suite, and production build must pass. Manual UI verification covers one-active-book
-polling, hidden-tab pause, stable loading/error heights, default-visible awaiting signals, departure fade,
-and re-entry cancellation of the fade.
+polling, hidden-tab pause, stable loading/error heights, default-visible awaiting signals, retention after
+qualification loss, market-close fade, and re-entry replacement of the retained snapshot.

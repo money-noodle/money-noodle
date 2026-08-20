@@ -46,17 +46,19 @@ policy, pricing, paper/live fill evidence, or signed request budgets. Public/sta
 monitoring data.
 
 Awaiting-confirmation signals are visible by default. Signal cards and both opportunity grids reserve
-minimum height, and a signal leaving the qualified set holds its grid slot during a 2.4-second fade; re-entry
-cancels the fade. Design: [docs/edge-order-book-monitor-design.md](docs/edge-order-book-monitor-design.md).
+minimum height. A signal that stops qualifying now keeps its last qualified snapshot and calculation time in
+an explicitly labeled expired section until the market window closes; it remains fully visible and its
+stateful ladder remains inspectable. Requalification replaces that snapshot. Only the window close starts
+the 2.4-second fade and removal. This retention exists only in the mounted browser and writes no evidence.
+Design: [docs/edge-order-book-monitor-design.md](docs/edge-order-book-monitor-design.md).
 
-The built local runtime restarted after a quiescent drain and authoritative reconciliation. Startup
-reconciliation completed READY at `2026-08-20T22:20:41.847Z` with zero local or venue-managed open
-positions; an authenticated smoke read returned ten selected-side bid and ask levels, while an anonymous
-read returned 401. Automation remains manually paused because the separate repeated-episode identity defect
-above is not mechanically cleared. Hosted deployment `dpl_HSTsXU9c7ezT9fyeHy2GRbLNHEvP` reached READY and
-was aliased to `noodle.money`; verification returned 200 for the public dashboard, 401 for an anonymous
-ladder request, and the expected stateless 503 for an authenticated request. The host therefore receives the
-stable public transitions but no monitoring data or execution authority.
+The revised built local runtime restarted after a quiescent drain and authoritative reconciliation. Startup
+reconciliation completed READY at `2026-08-20T22:32:44.323Z` with zero local or venue-managed open
+positions. Automation remains manually paused because the separate repeated-episode identity defect above
+is not mechanically cleared. Hosted deployment `dpl_3eEbN8z7AKfs4ZmJpuqRu9FS15oC` reached READY and is
+aliased to `noodle.money`; verification returned 200 for the public dashboard, 401 for an anonymous ladder
+request, and the expected stateless 503 for an authenticated ladder request. The public signal-retention
+lifecycle is active there, while the host still receives no monitoring data or execution authority.
 
 ### Runtime task cadences are visible without merging their schedulers, 2026-08-20
 
