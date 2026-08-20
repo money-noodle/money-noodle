@@ -55,9 +55,9 @@ Design: [docs/edge-order-book-monitor-design.md](docs/edge-order-book-monitor-de
 The revised built local runtime restarted after a quiescent drain and authoritative reconciliation. Startup
 reconciliation completed READY at `2026-08-20T22:32:44.323Z` with zero local or venue-managed open
 positions. Automation remains manually paused because the separate repeated-episode identity defect above
-is not mechanically cleared. Hosted deployment `dpl_3eEbN8z7AKfs4ZmJpuqRu9FS15oC` reached READY and is
-aliased to `noodle.money`; verification returned 200 for the public dashboard, 401 for an anonymous ladder
-request, and the expected stateless 503 for an authenticated ladder request. The public signal-retention
+is not mechanically cleared. Hosted deployment `dpl_GGRw8SBrPf7SYTx2RyRMQuFGLq5b` from commit
+`ecfbd93` reached READY and is aliased to `noodle.money`; verification returned 200 for the public dashboard,
+401 for an anonymous ladder request, and the expected stateless 503 for an authenticated ladder request. The public signal-retention
 lifecycle is active there, while the host still receives no monitoring data or execution authority.
 
 ### Runtime task cadences are visible without merging their schedulers, 2026-08-20
