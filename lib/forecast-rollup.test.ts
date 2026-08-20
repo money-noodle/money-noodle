@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { compareSummaries } from './forecast-storage';
-import { buildSummaryRollup, leadingStreak, summarizeFromRollups } from './forecast-rollup';
+import {
+  LEGACY_FORECAST_ROLLUP_VERSION, buildSummaryRollup, leadingStreak, legacyRollupNeedsReseal,
+  summarizeFromRollups,
+} from './forecast-rollup';
 import { summarizePerformance } from './performance';
 import { BUY_POLICY_VERSION } from './prediction-policy';
 import type { TrackedForecast } from './types';
@@ -59,6 +62,7 @@ const rollupsFor = (shards: Array<[string, TrackedForecast[]]>) =>
  */
 function counterfactualRow(overrides: {
   id: string; symbol?: string; closesAt: string; price: number; probabilityUp?: number; outcome?: 'UP' | 'DOWN';
+  policyVersion?: string;
 }): TrackedForecast {
   const contractId = `KX${overrides.symbol ?? 'BTC'}15M-${overrides.closesAt}`;
   const closesAt = overrides.closesAt;
@@ -66,7 +70,7 @@ function counterfactualRow(overrides: {
     id: overrides.id,
     symbol: overrides.symbol ?? 'BTC',
     status: 'resolved',
-    policyVersion: BUY_POLICY_VERSION,
+    policyVersion: overrides.policyVersion ?? BUY_POLICY_VERSION,
     // 0.53 clears the 5pp net edge against a 0.40 quote while staying under the 0.55 floor, which is
     // precisely the "rejected only by the floor" case the counterfactual measures.
     probabilityUp: overrides.probabilityUp ?? 0.53,
@@ -212,6 +216,53 @@ describe('the missed-buy counterfactual', () => {
     const merged = summarizeFromRollups(rollupsFor([['2026-08-14', rows]]));
     expect(direct.missedBuyCounterfactual.bestPerWindowStandardError).not.toBeNull();
     expect(compareSummaries(direct, merged)).toEqual([]);
+  });
+
+  it('stores policy identity in the counterfactual merge key', () => {
+    const rollup = buildSummaryRollup('current', [
+      counterfactualRow({ id: 'cf-policy', closesAt: '2026-08-14T00:15:00Z', price: 0.40 }),
+    ]);
+    expect(rollup.counterfactual.assetWindows[0]).toMatchObject({ policyVersion: BUY_POLICY_VERSION });
+    expect(rollup.counterfactual.assetWindows[0].key).toContain(`${BUY_POLICY_VERSION}:BTC:`);
+  });
+
+  it('excludes a differently scoped v2 counterfactual cohort', () => {
+    const row = counterfactualRow({ id: 'cf-current', closesAt: '2026-08-14T00:15:00Z', price: 0.40 });
+    const current = buildSummaryRollup('current', [row]);
+    const retired = structuredClone(current);
+    retired.shardId = 'retired';
+    retired.counterfactual.assetWindows = retired.counterfactual.assetWindows.map((item) => ({
+      ...item, policyVersion: 'retired-policy-v1', key: item.key.replace(BUY_POLICY_VERSION, 'retired-policy-v1'),
+    }));
+
+    const merged = summarizeFromRollups([retired, current]);
+    expect(merged.missedBuyCounterfactual.candidates).toBe(1);
+    expect(merged.missedBuyCounterfactual.windows).toBe(1);
+  });
+
+  it('excludes unscoped legacy v1 counterfactual rows without discarding the rest of the rollup', () => {
+    const row = counterfactualRow({ id: 'cf-legacy', closesAt: '2026-08-14T00:15:00Z', price: 0.40 });
+    const legacy = buildSummaryRollup('legacy', [row]);
+    legacy.version = LEGACY_FORECAST_ROLLUP_VERSION;
+    legacy.counterfactual.assetWindows = legacy.counterfactual.assetWindows.map(({ policyVersion: _policyVersion, ...item }) => item);
+
+    const merged = summarizeFromRollups([legacy]);
+    expect(merged.resolved).toBe(1);
+    expect(merged.missedBuyCounterfactual.candidates).toBe(0);
+    expect(merged.missedBuyCounterfactual.windows).toBe(0);
+  });
+
+  it('requires a legacy rollup containing active-policy rows to be resealed', () => {
+    const currentRow = counterfactualRow({ id: 'cf-current-legacy', closesAt: '2026-08-14T00:15:00Z', price: 0.40 });
+    const retiredRow = counterfactualRow({
+      id: 'cf-retired-legacy', closesAt: '2026-08-14T00:30:00Z', price: 0.40, policyVersion: 'retired-policy-v1',
+    });
+    const legacy = buildSummaryRollup('legacy', [currentRow]);
+    legacy.version = LEGACY_FORECAST_ROLLUP_VERSION;
+
+    expect(legacyRollupNeedsReseal(legacy, [currentRow], BUY_POLICY_VERSION)).toBe(true);
+    expect(legacyRollupNeedsReseal(legacy, [retiredRow], BUY_POLICY_VERSION)).toBe(false);
+    expect(legacyRollupNeedsReseal(buildSummaryRollup('current', [currentRow]), [currentRow], BUY_POLICY_VERSION)).toBe(false);
   });
 
   it('selects one nearest snapshot when the same asset/window is split across shards', () => {

@@ -92,6 +92,44 @@ Snapshot from local durable files at 2026-08-19T01:44:04Z. Full method, cohorts,
 - Latest walk-forward run: `walk-forward:875:fnv1a-27542176`, generated 2026-08-18T22:00:08Z. Candidate mean window return was 5.75% against baseline 2.37% over 438 test windows; it beat baseline 5/5 folds but was positive only 3/5 with modal parameters in 3/5. Decision: `baseline_retained`.
 - The current Next development server occupied about 3.7 GB RSS. RSS is not retained heap and dev mode carries compiler/cache overhead, but this materially disagrees with the prior 70 MB post-sharding RSS measurement and needs a like-for-like profile.
 
+### Forecast rollup policy attribution repaired, 2026-08-20
+
+`forecast-rollup-v1` omitted buy-policy identity from its compact missed-buy counterfactual. The direct
+summary filtered rows to `BUY_POLICY_VERSION`; the rollup merge did not, so after v22 activated it combined
+363 sealed v21 candidates with v22's eight current candidates and reported 371 candidates / 77 windows
+instead of 8 / 4. Every other field reconciled, which is why ordinary storage health remained green while
+`npm run verify:forecast-storage` failed the complete field-by-field gate.
+
+`forecast-rollup-v2` stamps `policyVersion` on each counterfactual asset/window, includes it in the merge
+key, and filters to the active policy before nearest-snapshot and best-per-window selection. Existing
+untagged v1 counterfactual columns are excluded rather than guessed; all of their policy-independent
+statistics remain readable. The verifier now fails explicitly if a legacy rollup contains an active-policy
+resolved row, where exclusion would under-report rather than repair attribution.
+
+At the **2026-08-20T06:08Z** read, the 12 indexed sealed shards contained zero v22 rows; all v22 rows were
+in the open snapshot/journal, where direct and v2 rollup paths independently reproduced 8 candidates / 4
+windows. The repaired read-only verifier passed over **67,346 rows**: 62,997 sealed, 4,349 current open and
+17,492 journal events, with zero errors. No shard, rollup, index or journal was rewritten; the owning
+forecast compactor will emit v2 rollups at its next normal seal. The main caveat is that these counts are a
+point-in-time read of an advancing journal. Design: [docs/forecast-storage-design.md](docs/forecast-storage-design.md) §4.1.
+
+**Deployment check, 2026-08-20T06:13–06:16Z.** Automation paused and drained quiescently; manual
+reconciliation passed with one settlement-pending 28¢ position and restart-safe state. The production build
+passed, the worker restarted, and startup reconciliation passed against 5,428.79¢ venue cash with 0¢
+reserved, zero venue-managed positions, zero recovered fills and zero resting cancellations. The operator
+explicitly resumed live mode with 1,738¢ available. The authenticated Performance route then reported the
+active-policy missed-buy cohort alone — 11 candidates / 5 windows as the journal advanced — and no degraded
+storage state. A fresh read-only verifier passed over **67,439 rows**: 62,997 sealed and 4,442 current open,
+with 17,930 journal events and zero differences between direct and rollup summaries. RSS was about 593 MB
+after that full-history verification and Performance read; RSS is not retained heap and this single
+post-restart observation does not close the separate residency review.
+
+**Hosted deployment check, 2026-08-20T06:17Z.** Manual production deployment
+`dpl_BWFuwFrd2ExLtny9FCZK9mRvhFMg` reached READY and was aliased to `noodle.money`. The canonical public
+API published v22 over seven predictions, served the durable sanitized paper projection, omitted private
+policy-model state, and reported its stateless collector disabled. Forecast shard repair remains
+worker-local; the hosted runtime gained no storage write, collection, reconciliation or execution authority.
+
 ### Mirror fidelity and skip attribution, 2026-08-20
 
 Three changes from the 2026-08-20 divergence review. Full design and the falsification test in

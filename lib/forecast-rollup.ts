@@ -27,7 +27,8 @@ import type { PerformanceSlice, PerformanceSummary, PerformanceTimelinePoint, Se
  * countable, within `SUMMARY_FLOAT_TOLERANCE` for float aggregates, because summing subtotals in a
  * different order moves the last digits and no amount of care removes that.
  */
-export const FORECAST_ROLLUP_VERSION = 'forecast-rollup-v1';
+export const FORECAST_ROLLUP_VERSION = 'forecast-rollup-v2';
+export const LEGACY_FORECAST_ROLLUP_VERSION = 'forecast-rollup-v1';
 
 /** One settlement window's contribution, kept unaveraged so windows split across shards can merge. */
 export interface WindowTotal {
@@ -51,6 +52,8 @@ export interface CounterfactualCandidate {
 
 /** Nearest-five-minute snapshot selected within one shard for an asset/window. */
 export interface CounterfactualAssetWindow {
+  /** Absent only on legacy v1 rollups, whose counterfactual cohort cannot be attributed safely. */
+  policyVersion?: string;
   key: string;
   distanceFromFiveMinutes: number;
   issuedAt: string;
@@ -94,7 +97,8 @@ export interface CycleOutcome {
 }
 
 export interface ForecastSummaryRollup {
-  version: typeof FORECAST_ROLLUP_VERSION;
+  /** v1 remains readable for policy-independent fields; its unscoped counterfactual is ignored. */
+  version: typeof FORECAST_ROLLUP_VERSION | typeof LEGACY_FORECAST_ROLLUP_VERSION;
   shardId: string;
 
   qualified: number;
@@ -149,6 +153,14 @@ export interface ForecastSummaryRollup {
   recent: TrackedForecast[];
 }
 
+/** Excluding an unscoped v1 counterfactual is safe only when it cannot hide active-policy rows. */
+export function legacyRollupNeedsReseal(
+  rollup: ForecastSummaryRollup, rows: TrackedForecast[], activePolicyVersion: string,
+): boolean {
+  return rollup.version === LEGACY_FORECAST_ROLLUP_VERSION
+    && rows.some((row) => row.status === 'resolved' && row.policyVersion === activePolicyVersion);
+}
+
 /**
  * Length of the leading run of a sequence, signed the way both streaks report it: positive while the
  * most recent outcomes are correct, negative while they are wrong.
@@ -184,7 +196,7 @@ function counterfactualRollup(forecasts: TrackedForecast[]): ForecastSummaryRoll
     const resolution = forecast.venueOutcomes?.kalshi;
     const reference = forecast.venueContracts?.kalshi;
     if (!resolution?.outcome || !reference || !contractProvenanceMatches(reference, 'kalshi', resolution.contractId)) continue;
-    pushInto(byAssetWindow, `${forecast.symbol}:${settlementWindowKey(forecast)}`, forecast);
+    pushInto(byAssetWindow, `${forecast.policyVersion}:${forecast.symbol}:${settlementWindowKey(forecast)}`, forecast);
   }
   const assetWindows: CounterfactualAssetWindow[] = [];
   for (const [key, snapshots] of byAssetWindow) {
@@ -210,6 +222,7 @@ function counterfactualRollup(forecasts: TrackedForecast[]): ForecastSummaryRoll
       }
     }
     assetWindows.push({
+      policyVersion: nearest.policyVersion,
       key, distanceFromFiveMinutes: Math.abs(seconds - 300), issuedAt: nearest.issuedAt,
       forecastId: nearest.id, candidates,
     });
@@ -472,6 +485,10 @@ export function summarizeFromRollups(rollups: ForecastSummaryRollup[]): Performa
   // observation whose quote happened to qualify.
   const counterfactualAssetWindows = new Map<string, CounterfactualAssetWindow>();
   for (const item of rollups.flatMap((rollup) => rollup.counterfactual.assetWindows)) {
+    // Legacy v1 records cannot be attributed to a buy policy. Mixing them into the active cohort was
+    // the defect fixed by v2; exclusion is fail-closed and the active-layout verifier ensures a legacy
+    // rollup never contains rows from the current policy.
+    if (item.policyVersion !== BUY_POLICY_VERSION) continue;
     const prior = counterfactualAssetWindows.get(item.key);
     const comparison = prior ? item.distanceFromFiveMinutes - prior.distanceFromFiveMinutes
       || Date.parse(item.issuedAt) - Date.parse(prior.issuedAt)

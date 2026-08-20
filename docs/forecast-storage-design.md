@@ -142,16 +142,16 @@ of id sets. Each shard stores its distinct keys (~2k cycle ids/day, far smaller 
 merge is a union. Exact, not estimated: these counts gate calibration readiness and must not drift.
 
 **Non-additive** — four cases needing explicit handling. What each needs was decided by measurement
-rather than by reasoning about worst cases; see §4.1, which removed most of the difficulty this section
+rather than by reasoning about worst cases; see §4.2, which removed most of the difficulty this section
 originally anticipated.
 
 - `cycleBalancedAccuracy` is the mean over cycles of per-cycle accuracy, so a shard stores per-cycle
-  `(correct, total)` pairs rather than a ratio. Cycles are shard-local in practice (§4.1), but the pairs
+  `(correct, total)` pairs rather than a ratio. Cycles are shard-local in practice (§4.2), but the pairs
   still merge by cycle key so that a future straddling cycle degrades to a correct answer rather than a
   silently wrong one.
 - `currentStreak` and `currentCycleStreak` cannot be read from the tail of the newest shard: the longest
   streak in the retained history is **268 rows**, which crosses shard boundaries. Both are taken as the
-  leading run of the merged sequence, which the merge sorts for itself (see §4.1).
+  leading run of the merged sequence, which the merge sorts for itself (see §4.2).
 - `timeline` is per-row with a rolling 25-row window, and the 500 downsampled points are chosen by index
   into the whole sequence. No fixed-size per-shard statistic reconstructs that. Each shard therefore
   stores a **compact column** of `(id, time, correct, brierScore)` for its resolved qualifying rows —
@@ -173,7 +173,38 @@ both duplicate asset/windows and duplicate clustered windows when storage bounda
 Durable compact provenance references are matched through the contract identity embedded in
 `registryId`, so the gate exercises this path without rehydrating the full contract registry.
 
-### 4.1 What the measurements changed, and what they got wrong
+### 4.1 Policy identity is part of the missed-buy storage key
+
+**Repair agreed 2026-08-20.** The first rollup schema omitted buy-policy identity from
+`CounterfactualAssetWindow`. The direct summary filters rows to `BUY_POLICY_VERSION`, but the rollup merge
+therefore combined candidate rows precomputed under every policy that had been active when a shard was
+sealed. After v22 activated, the direct v22 result was 8 candidates / 4 windows while sealed v1 rollups
+added 363 v21 candidates and reported 371 / 77. All ordinary counts and statistics still reconciled; this
+was a policy-attribution defect isolated to `missedBuyCounterfactual`.
+
+The repaired schema is `forecast-rollup-v2`:
+
+- Every counterfactual asset/window carries its immutable `policyVersion`, and policy identity is part of
+  its merge key. Two policies observing one asset/window are two evidence cohorts, not competing shard
+  candidates.
+- `summarizeFromRollups` filters to the active `BUY_POLICY_VERSION`, matching the direct path before any
+  nearest-snapshot or best-per-window selection.
+- Existing v1 counterfactual records have no policy identity and are excluded rather than guessed. This
+  is lossless for the active repair: the indexed sealed shards were confirmed to contain zero v22 rows;
+  all v22 rows were in the open snapshot/journal and independently reproduced 8 / 4 through both paths.
+- The rest of a v1 rollup remains readable. Its additive, distinct-set, timeline, segment and recent
+  statistics are policy-independent and checksum-valid; discarding the whole rollup would falsely degrade
+  every lifetime figure to the open set.
+- New compactions write v2 rollups through the owning forecast compactor. No shard, index, rollup or
+  journal is hand-edited. The verifier fails closed if a legacy untagged rollup contains a row from the
+  active policy, because exclusion would then under-report rather than repair attribution.
+
+A future policy bump needs no rollup rewrite merely to preserve attribution: newly generated records carry
+that policy's identity, old cohorts remain separate, and the active-policy filter chooses only the named
+cohort. Threshold semantics still belong to the immutable buy-policy version; changing a threshold without
+bumping that version would remain a policy-manifest violation rather than something storage may infer.
+
+### 4.2 What the measurements changed, and what they got wrong
 
 Four properties of the retained history were measured before any of this was built, because each one
 decides a design rather than an implementation detail. Three of them removed difficulty this section had

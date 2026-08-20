@@ -5,7 +5,10 @@ import {
   FORECAST_STORAGE_VERSION, buildForecastStoragePlan, writeForecastStoragePlan,
   type ForecastStorageIndex,
 } from './forecast-storage';
-import { buildSummaryRollup, summarizeFromRollups, type ForecastSummaryRollup } from './forecast-rollup';
+import {
+  FORECAST_ROLLUP_VERSION, LEGACY_FORECAST_ROLLUP_VERSION,
+  buildSummaryRollup, summarizeFromRollups, type ForecastSummaryRollup,
+} from './forecast-rollup';
 import type { PerformanceSummary, TrackedForecast } from './types';
 
 /**
@@ -61,9 +64,12 @@ export async function readShardRollups(): Promise<ForecastSummaryRollup[]> {
   const rollups: ForecastSummaryRollup[] = [];
   for (const entry of index.shards) {
     const rollup = await readJson<ForecastSummaryRollup>(path.join(SHARD_DIR, entry.rollupFile));
-    // A missing rollup is reported by the caller as degraded rather than silently treated as an empty
-    // shard, which would quietly shrink every lifetime figure.
-    if (rollup) rollups.push(rollup);
+    // A missing or unknown rollup is reported by the caller as degraded rather than silently treated as
+    // an empty shard. V1 remains readable because only its unscoped counterfactual column is unsafe; the
+    // merge excludes that column while preserving every policy-independent lifetime statistic.
+    if (rollup && (rollup.version === FORECAST_ROLLUP_VERSION || rollup.version === LEGACY_FORECAST_ROLLUP_VERSION)) {
+      rollups.push(rollup);
+    }
   }
   return rollups;
 }

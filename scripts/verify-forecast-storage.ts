@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
 import { readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { buildSummaryRollup, summarizeFromRollups, type ForecastSummaryRollup } from '../lib/forecast-rollup';
+import {
+  buildSummaryRollup, legacyRollupNeedsReseal, summarizeFromRollups, type ForecastSummaryRollup,
+} from '../lib/forecast-rollup';
+import { BUY_POLICY_VERSION } from '../lib/prediction-policy';
 import {
   FORECAST_STORAGE_VERSION,
   buildForecastStoragePlan,
@@ -85,6 +88,9 @@ async function verifyActive(index: ForecastStorageIndex, journal: ForecastJourna
     if (rows.length !== entry.rowCount) errors.push(`Shard ${entry.shardId} held ${rows.length} rows; index says ${entry.rowCount}.`);
     if (rows.some((row) => !terminal(row))) errors.push(`Shard ${entry.shardId} contains a non-terminal row.`);
     if (rollup.shardId !== entry.shardId) errors.push(`Rollup ${entry.shardId} identifies itself as ${rollup.shardId}.`);
+    if (legacyRollupNeedsReseal(rollup, rows, BUY_POLICY_VERSION)) {
+      errors.push(`Legacy rollup ${entry.shardId} contains active-policy rows and must be resealed by the forecast compactor.`);
+    }
     sealed.push(...rows);
     rollups.push(rollup);
     rollupBytes += Buffer.byteLength(rollupRaw);

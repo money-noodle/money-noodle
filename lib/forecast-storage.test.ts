@@ -42,7 +42,7 @@ describe('forecast storage layout planning', () => {
     expect(plan.index).toMatchObject({ totalRows: 4, openRows: 1, terminalRows: 3 });
     expect(plan.shards.map((shard) => shard.entry.shardId)).toEqual(['2026-08-13', '2026-08-14']);
     expect(plan.shards.find((shard) => shard.entry.shardId === '2026-08-14')?.rollup).toMatchObject({
-      version: 'forecast-rollup-v1', shardId: '2026-08-14', resolved: 1, invalid: 1, pending: 0,
+      version: 'forecast-rollup-v2', shardId: '2026-08-14', resolved: 1, invalid: 1, pending: 0,
     });
     expect(plan.index.shards[1].rollupSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(verifyForecastStoragePlan(rows, plan)).toMatchObject({ ok: true, errors: [] });
@@ -151,7 +151,7 @@ describe('forecast storage layout planning', () => {
       expect(index.shards[0].rollupSha256).toBe(createHash('sha256').update(rollupRaw).digest('hex'));
       expect(open.map((item: TrackedForecast) => item.id)).toEqual(['pending']);
       expect(shard.map((item: TrackedForecast) => item.id)).toEqual(['resolved']);
-      expect(rollup).toMatchObject({ version: 'forecast-rollup-v1', shardId: '2026-08-14', resolved: 1 });
+      expect(rollup).toMatchObject({ version: 'forecast-rollup-v2', shardId: '2026-08-14', resolved: 1 });
       expect(rollup.timeline).toHaveLength(1);
     } finally {
       await rm(root, { recursive: true, force: true });
