@@ -3,6 +3,8 @@ const CALCULATION_PREFETCH_LEAD_MS = 7_000;
 
 export const DATA_FRESHNESS = {
   dashboardPollMs: CALCULATION_WINDOW_MS,
+  /** One public Kalshi book at a time, only while an authenticated operator expands it. */
+  orderBookMonitorPollMs: 2_000,
   observationBucketMs: CALCULATION_WINDOW_MS,
   calculationPrefetchLeadMs: CALCULATION_PREFETCH_LEAD_MS,
   calculationRefreshMs: CALCULATION_WINDOW_MS - CALCULATION_PREFETCH_LEAD_MS,
@@ -56,4 +58,5 @@ export const DATA_CADENCE: DataCadenceItem[] = [
   { id: 'kraken', source: 'Kraken OHLC', cadenceMs: DATA_FRESHNESS.seasonalCacheMs, cadenceLabel: formatCadence(DATA_FRESHNESS.seasonalCacheMs), purpose: 'Multi-year weekly history used for seasonal factors.', mode: 'cache' },
   { id: 'local-history', source: 'Local price history', cadenceMs: DATA_FRESHNESS.localPriceSnapshotMs, cadenceLabel: `${formatCadence(DATA_FRESHNESS.localPriceSnapshotMs)} snapshot`, purpose: 'Accumulates a durable supplemental local seasonal baseline.', mode: 'snapshot' },
   { id: 'accounts', source: 'Venue accounts', cadenceMs: null, cadenceLabel: 'On demand', purpose: 'Refreshes when Portfolio opens or its refresh button is pressed.', mode: 'on-demand' },
+  { id: 'order-book-monitor', source: 'Kalshi order-book monitor', cadenceMs: DATA_FRESHNESS.orderBookMonitorPollMs, cadenceLabel: 'Every 2 seconds while one operator panel is expanded', purpose: 'Displays selected-side price, level quantity, and cumulative public depth; never feeds policy or execution.', mode: 'poll' },
 ] as const;

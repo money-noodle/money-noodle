@@ -14,6 +14,9 @@ Research dashboard, continuous paper shadow trader, and live trading desk across
 venues, in one Next.js app. Real money moves through `lib/live-orders.ts`. Treat every change as though it
 executes against a funded account tonight.
 
+Orient before touching money paths: `SPEC.md` §12 (track separation) → `STATUS.md` (current measurements) → the
+§0 table below.
+
 ## Where authority lives
 
 Read the relevant source before proposing anything. Never reconstruct current behavior from memory — read it.
@@ -24,6 +27,7 @@ Code is authoritative for what the system *does*; `SPEC.md` for what it is *mean
 | `SPEC.md` | Decisions and *why*. §12 governs track separation and policy evaluation. |
 | `STATUS.md` | What is implemented and currently measured. |
 | `lib/trading-provider-registry.ts` | Which venues exist and what each may do. |
+| `lib/market-registry.ts` | Which markets exist and what each may do per lane (market data / paper / live). |
 | `lib/strategy-registry.ts` | Which strategies exist; which is default. |
 | `lib/policy-manifest.ts` | Every buy policy that has been live. |
 | `reports/*.md` | Every measurement, dated, with caveats. |
@@ -34,7 +38,7 @@ prose with the maintainer, then write the doc, then the code.
 
 **Venues, markets, and strategies are registry data.** Do not copy registry enumerations here or into generic
 comments; read the versioned registry (`TRADING_PROVIDER_REGISTRY_VERSION`). A provider's `implementation` is
-intersected per market and lane with `productionMarketCapability`: one market never unlocks another, and config
+intersected per market and lane with `productionMarketCapability` (`lib/market-registry.ts`): one market never unlocks another, and config
 cannot make an unimplemented adapter live. New providers and markets **fail closed**. Name a venue only for
 venue-specific mechanics; otherwise use role-based language.
 
@@ -131,8 +135,8 @@ Do not relax any of these to make a change land.
 - **Fail closed.** Ambiguous venue state suspends the desk. A ledger-versus-venue contradiction stops execution
   and reconciles.
 - **Live execution stays environment-gated, typed-confirmation armed, stake- and rate-capped, and kill-switch
-  protected**, blocked until cash/position/order/fill/resting-order reconciliation passes, repeated every five
-  minutes.
+  protected**, blocked until cash/position/order/fill/resting-order reconciliation passes, repeated on the
+  configured cadence (`configuredReconciliationIntervalMs`, `lib/task-cadence.ts`; default five minutes).
 - **Operator intent is separate from operational state.** Manual pause, kill switch, and config changes never
   auto-resume; only a *system* suspension may, after full reconciliation and every readiness check.
 - **Pause is a quiescent drain**: withdraw intent, serialize behind execution, cancel and confirm managed

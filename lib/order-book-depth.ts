@@ -34,6 +34,47 @@ export interface SelectedDepth {
   depthImbalance?: number;
 }
 
+export interface OrderBookLadderLevel extends OrderBookLevel {
+  /** Displayed quantity from the touch through this level, never inferred hidden liquidity. */
+  cumulativeQuantity: number;
+}
+
+export interface SelectedOrderBookLadder {
+  side: PositionSide;
+  observedAt: string;
+  bids: OrderBookLadderLevel[];
+  asks: OrderBookLadderLevel[];
+}
+
+function cumulativeLevels(levels: OrderBookLevel[]): OrderBookLadderLevel[] {
+  let cumulativeQuantity = 0;
+  return levels.map((level) => {
+    cumulativeQuantity += level.quantity;
+    return { ...level, cumulativeQuantity };
+  });
+}
+
+/** Normalizes Kalshi's dual bid book into one selected side, best price first on both halves. */
+export function selectedSideOrderBook(
+  book: BinaryOrderBook,
+  side: PositionSide,
+  maximumLevels = 10,
+): SelectedOrderBookLadder {
+  const boundedLevels = Number.isSafeInteger(maximumLevels) ? Math.max(1, Math.min(20, maximumLevels)) : 10;
+  const bids = [...(side === 'UP' ? book.yesBids : book.noBids)]
+    .filter((level) => level.quantity > 0)
+    .sort((left, right) => right.price - left.price)
+    .slice(0, boundedLevels);
+  const oppositeBids = side === 'UP' ? book.noBids : book.yesBids;
+  const asks = oppositeBids
+    .filter((level) => level.quantity > 0)
+    .map((level) => ({ price: 1 - level.price, quantity: level.quantity }))
+    .filter((level) => level.price > 0 && level.price < 1)
+    .sort((left, right) => left.price - right.price)
+    .slice(0, boundedLevels);
+  return { side, observedAt: book.observedAt, bids: cumulativeLevels(bids), asks: cumulativeLevels(asks) };
+}
+
 function quantityAt(levels: OrderBookLevel[], price: number): number | undefined {
   const quantity = levels.find((level) => Math.abs(level.price - price) <= 1e-6)?.quantity;
   return quantity === undefined ? undefined : quantity;

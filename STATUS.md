@@ -5,9 +5,9 @@
 
 ## Executive Summary
 
-Money Noodle is operational as a local research dashboard, continuous paper shadow trader, public paper-track-record publisher, and explicitly armed live Kalshi trader. Core UP/YES and DOWN/NO entry, managed maker execution, paper maker mirroring, signed Kalshi reconciliation, quiescent pause/drain, loss gates, budget epochs, provider permissions, contract provenance, target integrity, standalone reduce-only exits, protected switching, model evaluation, and immutable promotion accounting are implemented.
+Money Noodle is operational as a local research dashboard, continuous paper shadow trader, public paper-track-record publisher, and explicitly armed but currently operator-paused live Kalshi trader. Core UP/YES and DOWN/NO entry, managed maker execution, paper maker mirroring, signed Kalshi reconciliation, quiescent pause/drain, loss gates, budget epochs, provider permissions, contract provenance, target integrity, standalone reduce-only exits, protected switching, model evaluation, and immutable promotion accounting are implemented.
 
-The system is mechanically capable. The unresolved question is economic: current evidence does not justify stake expansion, unconditional taker execution, an automatic entry relaxation, queue-aware live gates, or adding a second live venue. The shared buy rule is **v22** — a 2026-08-20 operator narrowing to a +5pp edge floor and a 10–75¢ price band, not an evidence promotion; see below. Live execution is explicitly `maker-high30-requalify3-fresh1c-v5`, not the withdrawn unconditional-taker description attached to v21's first deployment.
+A **repeated-episode order-identity defect was found on 2026-08-20**: acknowledgement-race client IDs truncate away the episode suffix, and reconciliation can attribute one later venue fill to multiple local episode rows. Position comparison should fail closed while exposure remains open, but settled ledger/budget attribution is not safe until the identity fix and an auditable correction land. Separately, current economic evidence does not justify stake expansion, unconditional taker execution, an automatic entry relaxation, queue-aware live gates, or adding a second live venue. The shared buy rule is **v22** — a 2026-08-20 operator narrowing to a +5pp edge floor and a 10–75¢ price band, not an evidence promotion; see below. Live execution identity remains `maker-high30-requalify3-fresh1c-v5`, but its repeated-episode create-retry path must not be treated as mechanically cleared.
 
 A second policy runs on the same market — the long-shot round trip, §2 below. Its current 12¢→97¢/600s cohort is paper-only; live arming is false. The parameters were selected from a retrospective sweep and therefore define a new collection cohort rather than evidence-backed promotion. It relaxes none of the edge policy's constraints and changes no edge rule.
 
@@ -15,11 +15,48 @@ A second policy runs on the same market — the long-shot round trip, §2 below.
 | --- | --- |
 | Dashboard and public paper track record | Functional locally and through optional Postgres projection |
 | Forecast and performance tracking | Functional; forecast summary storage verifies, but walk-forward checkpoint cohorts can drift after late resolution and require evaluator v3 |
-| Live execution | Kalshi live-capable and active in local control; no current open/working positions in the local ledger snapshot |
+| Live execution | Kalshi live-capable but operator-paused since the 2026-08-20 monitor deployment; repeated maker episodes have an unresolved client-ID/reconciliation collision, so execution was not resumed |
 | Paper execution | Continuous and independently accounted; exact-contract managed repricing now uses public trade/queue evidence concurrently with live |
 | Model evaluation | Automatic walk-forward scheduler continues monitoring; latest run retained baseline and evaluator v2 is explicitly barred from promotion |
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
-| Operational safety | Startup/periodic/manual reconciliation, quiescent drain, guarded auto-resume, loss gates, and failure injection are implemented |
+| Operational safety | Position reconciliation should fail closed on duplicated open exposure, but one settled fill is currently duplicated across three local episode rows and needs auditable repair |
+
+### Repeated maker episode client IDs collided, 2026-08-20
+
+The order-size investigation found one venue fill attributed to all three local HYPE UP episodes for the
+14:30Z window. `placeKalshiBuy` constructs post-only acknowledgement-race IDs from the first 30 characters
+of the episode client ID; episode suffixes occur after that prefix. `clientMatches` accepts the same
+truncated `-1`/`-2` forms for every local episode, so the later episode-3 venue order matched episodes 1
+and 2 despite both having terminal zero-fill observations. All three local rows now carry one venue order
+ID and the same 0.47-contract cost/P&L attribution.
+
+This is a local matching defect, not a duplicate Kalshi fill. No order was submitted during the
+investigation. The required repair is collision-resistant bounded client identity plus exact matching, then
+an auditable ledger/budget correction rather than a hand edit. Full evidence and the separate Kalshi
+size/queue/partial-fill findings are in
+[reports/kalshi-order-size-and-fill-mechanics-2026-08-20.md](reports/kalshi-order-size-and-fill-mechanics-2026-08-20.md).
+
+### Authenticated edge order-book monitoring and stable signal transitions implemented, 2026-08-20
+
+Positive-edge cards now expose an on-demand selected-side Kalshi ladder with price, level quantity,
+cumulative displayed depth, spread, and timestamp. Only one operator panel polls at a time, every two
+seconds from request completion; hidden tabs pause reads. The authenticated stateful route uses public depth
+only and a read helper that does not populate the execution depth cache, so opening the UI cannot alter
+policy, pricing, paper/live fill evidence, or signed request budgets. Public/stateless dashboards receive no
+monitoring data.
+
+Awaiting-confirmation signals are visible by default. Signal cards and both opportunity grids reserve
+minimum height, and a signal leaving the qualified set holds its grid slot during a 2.4-second fade; re-entry
+cancels the fade. Design: [docs/edge-order-book-monitor-design.md](docs/edge-order-book-monitor-design.md).
+
+The built local runtime restarted after a quiescent drain and authoritative reconciliation. Startup
+reconciliation completed READY at `2026-08-20T22:20:41.847Z` with zero local or venue-managed open
+positions; an authenticated smoke read returned ten selected-side bid and ask levels, while an anonymous
+read returned 401. Automation remains manually paused because the separate repeated-episode identity defect
+above is not mechanically cleared. Hosted deployment `dpl_HSTsXU9c7ezT9fyeHy2GRbLNHEvP` reached READY and
+was aliased to `noodle.money`; verification returned 200 for the public dashboard, 401 for an anonymous
+ladder request, and the expected stateless 503 for an authenticated request. The host therefore receives the
+stable public transitions but no monitoring data or execution authority.
 
 ### Runtime task cadences are visible without merging their schedulers, 2026-08-20
 

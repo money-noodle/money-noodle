@@ -9,6 +9,7 @@ import {
 import { AccountDialog } from '@/components/account-dialog';
 import { DataFreshnessDialog } from '@/components/data-freshness-dialog';
 import { MarketChart } from '@/components/market-chart';
+import { OrderBookLadder } from '@/components/order-book-ladder';
 import { PerformanceDialog } from '@/components/performance-dialog';
 import { PaperBudgetDialog } from '@/components/paper-budget-panel';
 import { PolicyDialog } from '@/components/policy-dialog';
@@ -148,7 +149,7 @@ function PredictionDetail({ prediction, news }: { prediction: Prediction; news: 
 function PredictionCard({ prediction, news }: { prediction: Prediction; news: DashboardData['news'] }) {
   const up = prediction.modelProbabilityUp >= 0.5;
   return <Dialog>
-    <Card className="group overflow-hidden transition duration-200 hover:-translate-y-0.5 hover:border-input hover:shadow-[0_18px_50px_rgba(0,0,0,.25)]">
+    <Card className="group flex h-full min-h-[430px] flex-col overflow-hidden transition duration-200 hover:-translate-y-0.5 hover:border-input hover:shadow-[0_18px_50px_rgba(0,0,0,.25)]">
       <CardHeader className="flex-row items-start justify-between space-y-0 border-b p-4">
         <div className="flex items-center gap-2.5">
           {prediction.iconUrl ? <img src={prediction.iconUrl} alt="" className="size-8 rounded-full ring-1 ring-border"/> : <div className="size-8 rounded-full bg-secondary"/>}
@@ -156,7 +157,7 @@ function PredictionCard({ prediction, news }: { prediction: Prediction; news: Da
         </div>
         <SignalBadge prediction={prediction}/>
       </CardHeader>
-      <CardContent className="p-4">
+      <CardContent className="flex-1 p-4">
         <div className="flex items-end justify-between">
           <div><p className="text-[10px] uppercase tracking-[.16em] text-muted-foreground">Model says</p><p className={cn('mt-1 font-mono text-3xl font-semibold tracking-tight', up ? 'text-gain' : 'text-loss')}>{Math.round(up ? prediction.modelProbabilityUp * 100 : (1 - prediction.modelProbabilityUp) * 100)}% <span className="text-xs">{up ? 'UP' : 'DOWN'}</span></p></div>
           <div className="text-right"><p className="text-[10px] text-muted-foreground">closes in</p><p className="mt-1 text-xs"><Countdown closesAt={prediction.market.closesAt}/></p></div>
@@ -197,11 +198,16 @@ function ProbabilityCell({ label, probabilityUp, model = false, approximate = fa
  * signed session, so `publicView` skips that fetch and omits the per-candidate execution badges rather
  * than leaving every card stuck on an indefinite "checking execution".
  */
+const SIGNAL_EXIT_FADE_MS = 2_400;
+const signalKey = (prediction: Prediction) => `${prediction.symbol}:${prediction.market.closesAt}`;
+interface DisplayedSignal { key: string; prediction: Prediction; exitAt?: number }
+
 function PositiveEdgeBuys({ predictions, updatedAt, publicView = false, onRefresh, refreshing = false }: { predictions: Prediction[]; updatedAt: string; publicView?: boolean; onRefresh?: () => void; refreshing?: boolean }) {
   const [now, setNow] = useState(() => Date.parse(updatedAt));
   const [executionSignals, setExecutionSignals] = useState<ExecutionSignalReadiness[]>([]);
   const [executionSignalsLoaded, setExecutionSignalsLoaded] = useState(false);
-  const [showConfirmingSignals, setShowConfirmingSignals] = useState(false);
+  const [showConfirmingSignals, setShowConfirmingSignals] = useState(true);
+  const [expandedBookKey, setExpandedBookKey] = useState<string>();
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
@@ -227,6 +233,33 @@ function PositiveEdgeBuys({ predictions, updatedAt, publicView = false, onRefres
   const ranked = stale ? [] : [...predictions]
     .filter((prediction) => qualifiesAsBuyEdge(prediction))
     .sort((a, b) => edgeStrength(b) - edgeStrength(a));
+  const rankedSignature = ranked.map(signalKey).join('|');
+  const [displayedSignals, setDisplayedSignals] = useState<DisplayedSignal[]>(() => ranked.map((prediction) => ({ key: signalKey(prediction), prediction })));
+  useEffect(() => {
+    const currentKeys = new Set(ranked.map(signalKey));
+    const exitAt = Date.now() + SIGNAL_EXIT_FADE_MS;
+    setDisplayedSignals((previous) => {
+      const priorByKey = new Map(previous.map((item) => [item.key, item]));
+      const current = ranked.map((prediction) => ({ key: signalKey(prediction), prediction }));
+      const exiting = previous.filter((item) => !currentKeys.has(item.key)).map((item) => ({
+        ...item, exitAt: item.exitAt ?? exitAt,
+      }));
+      // A signal that returns before its timer expires is rebuilt from the current prediction above,
+      // which deliberately cancels the fade and discards the stale snapshot.
+      return [...current.map((item) => ({ ...priorByKey.get(item.key), ...item, exitAt: undefined })), ...exiting];
+    });
+  }, [predictions, rankedSignature]);
+  useEffect(() => {
+    const nextExitAt = displayedSignals.flatMap((item) => item.exitAt === undefined ? [] : [item.exitAt]).sort((a, b) => a - b)[0];
+    if (nextExitAt === undefined) return;
+    const timer = window.setTimeout(() => {
+      const currentTime = Date.now();
+      setDisplayedSignals((items) => items.filter((item) => item.exitAt === undefined || item.exitAt > currentTime));
+    }, Math.max(0, nextExitAt - Date.now()) + 20);
+    return () => window.clearTimeout(timer);
+  }, [displayedSignals]);
+  const rankedKeys = new Set(ranked.map(signalKey));
+  const exitingSignals = displayedSignals.filter((item) => item.exitAt !== undefined && !rankedKeys.has(item.key));
   const readinessFor = (prediction: Prediction) => {
     const side = bestEntry(prediction)?.side ?? (prediction.modelProbabilityUp >= 0.5 ? 'UP' : 'DOWN');
     return executionSignals.find((item) => item.symbol === prediction.symbol && item.side === side
@@ -242,7 +275,14 @@ function PositiveEdgeBuys({ predictions, updatedAt, publicView = false, onRefres
   });
   const displayedRanked = publicView || !executionSignalsLoaded
     ? ranked : [...confirmedOrAttempted, ...(showConfirmingSignals ? confirming : [])];
-  return <section className="mb-8 overflow-hidden rounded-xl border bg-card/80 shadow-[0_20px_70px_rgba(0,0,0,.18)]">
+  const justRemovedSignals = displayedSignals.filter((item) => !rankedKeys.has(item.key) && item.exitAt === undefined);
+  const displayedRows = [
+    ...displayedRanked.map((prediction) => ({ key: signalKey(prediction), prediction, exiting: false })),
+    // Keep a just-removed node mounted through the state transition so opacity can animate from one.
+    ...justRemovedSignals.map((item) => ({ ...item, exiting: true })),
+    ...exitingSignals.map((item) => ({ ...item, exiting: true })),
+  ];
+  return <section className="mb-8 min-h-[450px] overflow-hidden rounded-xl border bg-card/80 shadow-[0_20px_70px_rgba(0,0,0,.18)]">
     <div className="flex flex-col justify-between gap-2 border-b px-4 py-3 sm:flex-row sm:items-center">
       <div className="flex items-center gap-2"><div className="grid size-7 place-items-center rounded-md bg-primary/10 text-primary"><Zap className="size-4"/></div><div><h2 className="text-xs font-semibold">Positive-edge signals</h2><p className="text-[9px] text-muted-foreground">Signal qualification: {Math.round(MIN_NET_EDGE * 100)}–{Math.round(MAX_NET_EDGE * 100)}pp net edge and ≥{Math.round(MIN_ESTIMATE_QUALITY * 100)}% quality. Execution additionally waits {EXECUTION_WARMUP_MS / 1000}s, requires {REQUIRED_QUALIFYING_SNAPSHOTS} persistent snapshots over {REQUIRED_OBSERVATION_SPAN_MS / 1000}s, and stops entries in the final {EXECUTION_LATE_CUTOFF_MS / 1000}s.</p></div></div>
       <div className={cn('flex items-center gap-2 font-mono text-[9px]', stale ? 'text-warn' : 'text-muted-foreground')} title={Number.isFinite(calculatedAt) ? new Date(calculatedAt).toLocaleString() : 'Invalid calculation timestamp'}><span className="relative flex size-2">{!stale && <span className="absolute inline-flex size-full animate-ping rounded-full bg-data opacity-50"/>}<span className={cn('relative inline-flex size-2 rounded-full', stale ? 'bg-warn' : 'bg-data')}/></span>{stale ? 'Expired' : `Calculated ${new Date(calculatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} · ${Math.floor(calculationAgeMs / 1_000)}s ago`}
@@ -250,10 +290,10 @@ function PositiveEdgeBuys({ predictions, updatedAt, publicView = false, onRefres
             so this exists for when polling or the collector has stopped. */}
         {onRefresh && <Button variant="ghost" size="icon" className="size-6" onClick={onRefresh} disabled={refreshing} title="Re-fetch live venue quotes and the oracle reference now" aria-label="Refresh market data"><RefreshCw className={cn('size-3', refreshing && 'animate-spin')}/></Button>}</div>
     </div>
-    {!publicView && executionSignalsLoaded && ranked.length > 0 && <div className="flex items-center justify-between gap-3 border-b bg-background/20 px-4 py-2.5"><div><p className="text-[9px] font-medium">Confirmed and attempted buys · {confirmedOrAttempted.length}</p><p className="text-[8px] text-muted-foreground">Only execution-confirmed signals and current-window attempts are shown below.</p></div>{confirming.length > 0 && <Button variant="ghost" size="sm" className="h-7 text-[9px]" onClick={() => setShowConfirmingSignals((shown) => !shown)}>{showConfirmingSignals ? 'Hide' : 'Show'} {confirming.length} signal{confirming.length === 1 ? '' : 's'} awaiting confirmation</Button>}</div>}
-    {ranked.length ? <div className="grid [grid-template-columns:repeat(auto-fit,minmax(280px,1fr))]">
+    {!publicView && executionSignalsLoaded && ranked.length > 0 && <div className="flex items-center justify-between gap-3 border-b bg-background/20 px-4 py-2.5"><div><p className="text-[9px] font-medium">Confirmed and attempted buys · {confirmedOrAttempted.length}</p><p className="text-[8px] text-muted-foreground">Signals awaiting execution confirmation are expanded by default.</p></div>{confirming.length > 0 && <Button variant="ghost" size="sm" className="h-7 text-[9px]" onClick={() => setShowConfirmingSignals((shown) => !shown)}>{showConfirmingSignals ? 'Hide' : 'Show'} {confirming.length} signal{confirming.length === 1 ? '' : 's'} awaiting confirmation</Button>}</div>}
+    {displayedRows.length ? <div className="grid min-h-[390px] [grid-template-columns:repeat(auto-fit,minmax(280px,1fr))]">
       {!publicView && executionSignalsLoaded && confirmedOrAttempted.length === 0 && <div className="col-span-full flex min-h-24 items-center justify-center border-b p-5 text-center"><div><ShieldCheck className="mx-auto size-5 text-muted-foreground"/><p className="mt-2 text-xs font-medium">No confirmed or attempted buy right now</p><p className="mt-1 text-[9px] text-muted-foreground">{confirming.length} base edge signal{confirming.length === 1 ? ' is' : 's are'} still awaiting execution confirmation.</p></div></div>}
-      {displayedRanked.map((prediction, index) => {
+      {displayedRows.map(({ prediction, key, exiting }, index) => {
         const bestVenue = bestEntry(prediction);
         const side = bestVenue?.side ?? (prediction.modelProbabilityUp >= 0.5 ? 'UP' : 'DOWN');
         const isUp = side === 'UP';
@@ -265,8 +305,8 @@ function PositiveEdgeBuys({ predictions, updatedAt, publicView = false, onRefres
           : portfolio?.state === 'qualified' ? 'qualified only'
           : portfolio?.state === 'blocked' ? 'portfolio blocked'
           : 'portfolio checking';
-        return <Fragment key={prediction.symbol}>{!publicView && executionSignalsLoaded && showConfirmingSignals && index === confirmedOrAttempted.length && <div className="col-span-full border-y bg-warn/[.03] px-4 py-2.5"><p className="text-[9px] font-medium text-warn">Signals awaiting confirmation</p><p className="text-[8px] text-muted-foreground">These pass the base edge policy but are not executable buys yet.</p></div>}<div className="border-b border-r p-4">
-          <div className="flex items-center justify-between gap-2"><span className="font-mono text-[9px] text-muted-foreground">#{ranked.indexOf(prediction) + 1} edge strength</span><div className="flex flex-wrap justify-end gap-1">{!publicView && <><Badge variant="outline" className={cn('font-mono text-[8px]', portfolio?.state === 'portfolio-selected' ? 'border-data/25 text-data' : portfolio?.state === 'switch-candidate' ? 'border-data/30 text-data' : portfolio?.state === 'blocked' ? 'border-warn/25 text-warn' : 'border-warn/25 text-warn')} title={portfolio?.reason}>{portfolioLabel}</Badge><Badge variant="outline" className={cn('font-mono text-[8px]', execution.className)} title={execution.detail}>{execution.label}</Badge></>}<Badge className={cn('border font-mono text-[9px]', isUp ? 'border-gain/20 bg-gain/10 text-gain' : 'border-loss/20 bg-loss/10 text-loss')}>{isUp ? 'UP' : 'DOWN'}</Badge></div></div>
+        return <Fragment key={key}>{!exiting && !publicView && executionSignalsLoaded && showConfirmingSignals && index === confirmedOrAttempted.length && <div className="col-span-full border-y bg-warn/[.03] px-4 py-2.5"><p className="text-[9px] font-medium text-warn">Signals awaiting confirmation</p><p className="text-[8px] text-muted-foreground">These pass the base edge policy but are not executable buys yet.</p></div>}<div className={cn('min-h-[390px] border-b border-r p-4 transition-[opacity,filter,transform] duration-[2400ms] ease-out', exiting ? 'pointer-events-none translate-y-1 opacity-0 blur-[1px]' : 'opacity-100')}>
+          <div className="flex items-center justify-between gap-2"><span className="font-mono text-[9px] text-muted-foreground">{exiting ? 'leaving signal' : `#${ranked.indexOf(prediction) + 1} edge strength`}</span><div className="flex flex-wrap justify-end gap-1">{exiting && <Badge variant="outline" className="border-muted-foreground/20 font-mono text-[8px] text-muted-foreground">leaving</Badge>}{!publicView && !exiting && <><Badge variant="outline" className={cn('font-mono text-[8px]', portfolio?.state === 'portfolio-selected' ? 'border-data/25 text-data' : portfolio?.state === 'switch-candidate' ? 'border-data/30 text-data' : portfolio?.state === 'blocked' ? 'border-warn/25 text-warn' : 'border-warn/25 text-warn')} title={portfolio?.reason}>{portfolioLabel}</Badge><Badge variant="outline" className={cn('font-mono text-[8px]', execution.className)} title={execution.detail}>{execution.label}</Badge></>}<Badge className={cn('border font-mono text-[9px]', isUp ? 'border-gain/20 bg-gain/10 text-gain' : 'border-loss/20 bg-loss/10 text-loss')}>{isUp ? 'UP' : 'DOWN'}</Badge></div></div>
           <div className="mt-3 flex items-center gap-2">{prediction.iconUrl && <img src={prediction.iconUrl} alt="" className="size-5 rounded-full"/>}<span className="text-sm font-semibold">{prediction.symbol}</span></div>
           <div className="mt-3 grid grid-cols-3 gap-1.5"><ProbabilityCell label="Money Noodle" probabilityUp={prediction.modelProbabilityUp} model/><ProbabilityCell label="Polymarket" probabilityUp={prediction.market.live ? prediction.market.probabilityUp : undefined} askUp={prediction.market.askUp} askDown={prediction.market.askDown} enabled={prediction.enabledTradingVenues.includes('polymarket')}/><ProbabilityCell label="Kalshi" probabilityUp={prediction.kalshi?.live ? prediction.kalshi.probabilityUp : undefined} askUp={prediction.kalshi?.askUp} askDown={prediction.kalshi?.askDown} enabled={prediction.enabledTradingVenues.includes('kalshi')} approximate/></div>
           {bestVenue && <p className="mt-2 font-mono text-[8px] text-data">{bestVenue.venue === 'kalshi' ? 'Kalshi' : 'Polymarket'} {bestVenue.side} {(bestVenue.price * 100).toFixed(1)}¢ + {(bestVenue.feeRate * 100).toFixed(1)}¢ fee · expected value {bestVenue.netEdge >= 0 ? '+' : ''}{(bestVenue.netEdge * 100).toFixed(1)}pp</p>}
@@ -275,9 +315,10 @@ function PositiveEdgeBuys({ predictions, updatedAt, publicView = false, onRefres
           <div className="mt-3 flex items-center justify-between text-[9px]"><span className="text-muted-foreground">Model confidence</span><span className="font-mono font-semibold text-foreground">{Math.round(prediction.confidence * 100)}%</span></div>
           <Progress value={prediction.confidence * 100} className="mt-1.5 h-1"/>
           <div className="mt-3 flex items-center justify-between gap-2 border-t pt-2 text-[9px] text-muted-foreground"><span className="flex items-center gap-1"><Clock3 className="size-2.5"/>closes in <Countdown closesAt={prediction.market.closesAt}/></span><span className="font-mono">calc {new Date(calculatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span></div>
+          {!publicView && prediction.kalshi?.ticker && <OrderBookLadder ticker={prediction.kalshi.ticker} side={side} expanded={expandedBookKey === key} active={!exiting} onToggle={() => setExpandedBookKey((current) => current === key ? undefined : key)}/>}
         </div></Fragment>;
       })}
-    </div> : <div className="flex min-h-28 items-center justify-center p-6 text-center"><div><ShieldCheck className="mx-auto size-5 text-muted-foreground"/><p className="mt-2 text-xs font-medium">{stale ? 'Calculation window expired' : 'No positive-edge buy right now'}</p><p className="mt-1 text-[10px] text-muted-foreground">{stale ? `The prior calculation exceeded ${DATA_FRESHNESS.observationBucketMs / 1_000} seconds and was cleared while fresh actionable data is requested.` : 'Every current market is priced at or above our estimate once fees are included, so there is no edge to buy.'}</p>{stale && Number.isFinite(calculatedAt) && <p className="mt-1 font-mono text-[9px] text-warn">Last calculated {new Date(calculatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} · {Math.floor(calculationAgeMs / 1_000)}s ago</p>}{stale && onRefresh && <Button variant="outline" size="sm" className="mt-3" onClick={onRefresh} disabled={refreshing}><RefreshCw className={cn(refreshing && 'animate-spin')}/>Refresh now</Button>}</div></div>}
+    </div> : <div className="flex min-h-[390px] items-center justify-center p-6 text-center"><div><ShieldCheck className="mx-auto size-5 text-muted-foreground"/><p className="mt-2 text-xs font-medium">{stale ? 'Calculation window expired' : 'No positive-edge buy right now'}</p><p className="mt-1 text-[10px] text-muted-foreground">{stale ? `The prior calculation exceeded ${DATA_FRESHNESS.observationBucketMs / 1_000} seconds and was cleared while fresh actionable data is requested.` : 'Every current market is priced at or above our estimate once fees are included, so there is no edge to buy.'}</p>{stale && Number.isFinite(calculatedAt) && <p className="mt-1 font-mono text-[9px] text-warn">Last calculated {new Date(calculatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} · {Math.floor(calculationAgeMs / 1_000)}s ago</p>}{stale && onRefresh && <Button variant="outline" size="sm" className="mt-3" onClick={onRefresh} disabled={refreshing}><RefreshCw className={cn(refreshing && 'animate-spin')}/>Refresh now</Button>}</div></div>}
     {!stale && <details className="group border-t bg-background/20">
       <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-[10px] text-muted-foreground transition hover:bg-secondary/30 hover:text-foreground [&::-webkit-details-marker]:hidden"><span className="flex items-center gap-2"><Info className="size-3.5"/>Debug edge calculations for all {predictions.length} markets</span><ChevronDown className="size-3.5 transition-transform group-open:rotate-180"/></summary>
       <div className="border-t p-3">

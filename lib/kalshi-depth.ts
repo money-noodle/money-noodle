@@ -6,15 +6,23 @@ const books = new Map<string, BinaryOrderBook>();
 const inFlight = new Map<string, Promise<void>>();
 const FRESH_MS = 10_000;
 
-/** Exact public depth read for execution simulation. Unlike `observeKalshiOrderBook`, this is awaited. */
-export async function fetchKalshiOrderBookNow(ticker: string): Promise<BinaryOrderBook | undefined> {
+/**
+ * Exact uncached public depth read. UI monitoring uses this form so opening a panel cannot populate the
+ * execution telemetry cache and thereby become an accidental input to paper/live fill evidence.
+ */
+export async function readKalshiOrderBookNow(ticker: string): Promise<BinaryOrderBook | undefined> {
   const base = (process.env.KALSHI_BASE_URL ?? 'https://api.elections.kalshi.com/trade-api/v2').replace(/\/$/, '');
   const response = await fetch(`${base}/markets/${encodeURIComponent(ticker)}/orderbook?depth=20`, {
     headers: { Accept: 'application/json', 'User-Agent': 'MoneyNoodle/0.2 local-research' },
     signal: AbortSignal.timeout(2_500), cache: 'no-store',
   });
   if (!response.ok) throw new Error(`Kalshi order book returned ${response.status}.`);
-  const parsed = parseKalshiOrderBook(await response.json(), new Date().toISOString());
+  return parseKalshiOrderBook(await response.json(), new Date().toISOString());
+}
+
+/** Exact public depth read for execution simulation. Unlike `observeKalshiOrderBook`, this is awaited. */
+export async function fetchKalshiOrderBookNow(ticker: string): Promise<BinaryOrderBook | undefined> {
+  const parsed = await readKalshiOrderBookNow(ticker);
   if (parsed) books.set(ticker, parsed);
   return parsed;
 }
