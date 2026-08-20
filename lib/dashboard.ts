@@ -17,6 +17,7 @@ import { getEnabledTradingVenues } from './trading-control';
 import { getTradingProviderConfiguration, normalizeTradingProviderConfiguration } from './trading-provider-config-store';
 import { isStatelessDeployment } from './runtime-environment';
 import { tradingProviderRegistry } from './trading-provider-registry';
+import { beginTaskCadenceRun, taskCadenceStatuses } from './task-cadence-runtime';
 import type { ChartPoint, ContractBasis, DashboardData, Direction, Factor, MarketQuote, NewsItem, PolicyManifest, Prediction, PublicDashboardData, VenueQuote } from './types';
 
 const minute = 60_000;
@@ -394,6 +395,7 @@ async function buildDashboard(force = false, liveOnly = false): Promise<Dashboar
     tradingProviders,
     policyManifest: activePolicyManifest(tradingProviders, MODEL_VERSION, promotions),
     collector: collectorStatus(),
+    taskCadences: taskCadenceStatuses({ stateless }),
     sourceStatus: {
       polymarket: Object.values(marketResult.value).some((quote) => quote.live),
       kalshi: Object.values(alignedKalshi).some((quote) => quote.live), coinGecko: coinsResult.value.length > 0,
@@ -441,9 +443,20 @@ const dashboardAge = () => latestDashboard ? Date.now() - Date.parse(latestDashb
 
 /** One build at a time. Concurrent callers join the running build rather than queueing another. */
 function startDashboardBuild(force: boolean, liveOnly: boolean): Promise<DashboardData> {
+  if (buildInFlight) return buildInFlight;
   const started = Date.now();
-  buildInFlight ??= buildDashboard(force, liveOnly)
-    .then((dashboard) => { latestDashboard = dashboard; return dashboard; })
+  const taskRun = beginTaskCadenceRun('dashboard-calculation', started);
+  buildInFlight = buildDashboard(force, liveOnly)
+    .then((dashboard) => {
+      taskRun.succeed();
+      dashboard.taskCadences = taskCadenceStatuses({ stateless: isStatelessDeployment() });
+      latestDashboard = dashboard;
+      return dashboard;
+    })
+    .catch((error) => {
+      taskRun.fail(error);
+      throw error;
+    })
     .finally(() => {
       const elapsed = Date.now() - started;
       // A build slower than the window it serves means the cycle cannot keep up; say so rather than

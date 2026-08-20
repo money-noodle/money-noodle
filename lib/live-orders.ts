@@ -7,6 +7,7 @@ import {
   selectedManagedMakerQuote,
 } from './managed-maker';
 import { selectedSideDepth } from './order-book-depth';
+import { beginTaskCadenceRun } from './task-cadence-runtime';
 
 export { backOffValidKalshiPrice, floorToValidKalshiPrice } from './managed-maker';
 import type { BinaryOrderBook, EntryExecutionObservation, PositionSide } from './types';
@@ -122,6 +123,18 @@ async function marketQuote(ticker: string): Promise<KalshiBookQuote> {
   return { yesBid, yesAsk, ranges: market.price_ranges, orderBook };
 }
 
+async function preSubmitQuote(ticker: string): Promise<KalshiBookQuote> {
+  const taskRun = beginTaskCadenceRun('exact-pre-submit-quote');
+  try {
+    const quote = await marketQuote(ticker);
+    taskRun.succeed();
+    return quote;
+  } catch (error) {
+    taskRun.fail(error);
+    throw error;
+  }
+}
+
 /** Converts Kalshi's YES-denominated fill/limit price to the side the ledger owns. */
 export function selectedSidePriceFromYes(yesPrice: number, side: PositionSide): number {
   return side === 'UP' ? yesPrice : 1 - yesPrice;
@@ -201,7 +214,7 @@ export async function placeKalshiBuy(input: {
   let orderPrice = 0;
   let created: KalshiCreateOrderV2Response | undefined;
   for (let createAttempt = 0; createAttempt < 3 && !created; createAttempt += 1) {
-    const quote = selectedQuote(await marketQuote(input.ticker), positionSide);
+    const quote = selectedQuote(await preSubmitQuote(input.ticker), positionSide);
     // After each acknowledgement race, concede one more valid tick rather than repeatedly chasing
     // the moving ask at the highest passive level. Paper calls this same pure decision.
     orderPrice = initialManagedMakerPrice({
@@ -363,7 +376,7 @@ export async function placeKalshiTakerBuy(input: {
     try { await input.onObservation?.(observation); }
     catch (error) { console.error('Entry execution observation could not be persisted immediately:', error); }
   };
-  const quote = selectedQuote(await marketQuote(input.ticker), positionSide);
+  const quote = selectedQuote(await preSubmitQuote(input.ticker), positionSide);
   const maximumDollars = input.maximumPriceCents / 100;
   const limit = floorToValidKalshiPrice(Math.min(maximumDollars, quote.ask + 1e-8), quote.ranges);
   if (limit + 1e-9 < quote.ask) throw new Error(`Taker not submitted: current ${positionSide} ask ${(quote.ask * 100).toFixed(1)}c exceeds approved ${(maximumDollars * 100).toFixed(1)}c cap.`);

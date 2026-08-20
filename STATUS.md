@@ -21,6 +21,16 @@ A second policy runs on the same market — the long-shot round trip, §2 below.
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
 | Operational safety | Startup/periodic/manual reconciliation, quiescent drain, guarded auto-resume, loss gates, and failure injection are implemented |
 
+### Runtime task cadences are visible without merging their schedulers, 2026-08-20
+
+The data-freshness dialog now separates input TTLs from eight task clocks and shows each task's cadence,
+activation condition, purpose, request cost, last run, and process-local health. The shared registry covers
+dashboard prefetch, 15-second edge observation, exact pre-submit quotes, the bounded 2-second managed maker,
+ordinary and active-trailing long-shot entry watches, long-shot target exits, and periodic/event-triggered
+reconciliation. Existing timers, queues, quote caches, request budgets, and policy behavior are unchanged;
+price trajectory and spread remain observation-only evidence. Design boundary:
+[docs/task-cadence-observability-design.md](docs/task-cadence-observability-design.md).
+
 ## Current Measured State
 
 Snapshot from local durable files at 2026-08-19T01:44:04Z. Full method, cohorts, corrections, and caveats in [reports/open-experiment-status-2026-08-19.md](reports/open-experiment-status-2026-08-19.md).

@@ -2,10 +2,8 @@ import 'server-only';
 import { liveTradingEnabled } from './live-orders';
 import { reconcileLiveExecution } from './paper-execution';
 import { getKalshiReconciliationStatus, setKalshiReconciliationStatus } from './reconciliation-state';
+import { configuredReconciliationIntervalMs } from './task-cadence';
 
-const DEFAULT_INTERVAL_MS = 5 * 60_000;
-const MINIMUM_INTERVAL_MS = 60_000;
-const MAXIMUM_INTERVAL_MS = 60 * 60_000;
 const FAILURE_RETRY_MS = 30_000;
 
 interface PeriodicRuntime { nextAtMs: number; consecutiveFailures: number; inFlight: boolean }
@@ -18,9 +16,7 @@ function runtime(): PeriodicRuntime {
 }
 
 export function periodicReconciliationIntervalMs(environment: Record<string, string | undefined> = process.env): number {
-  const seconds = Number(environment.MONEY_NOODLE_RECONCILIATION_INTERVAL_SECONDS ?? DEFAULT_INTERVAL_MS / 1000);
-  if (!Number.isFinite(seconds) || seconds <= 0) return DEFAULT_INTERVAL_MS;
-  return Math.min(MAXIMUM_INTERVAL_MS, Math.max(MINIMUM_INTERVAL_MS, seconds * 1000));
+  return configuredReconciliationIntervalMs(environment);
 }
 
 export function initialPeriodicReconciliationAt(completedAt: string | undefined, nowMs: number, intervalMs: number): number {

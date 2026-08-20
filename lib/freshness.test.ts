@@ -3,7 +3,8 @@ import { DATA_CADENCE, DATA_FRESHNESS, formatCadence, isFreshCalculationTimestam
 
 describe('data freshness metadata', () => {
   it('derives displayed cadence from runtime constants', () => {
-    expect(DATA_CADENCE.find((item) => item.id === 'polymarket')?.cadenceMs).toBe(DATA_FRESHNESS.dashboardPollMs);
+    expect(DATA_CADENCE.find((item) => item.id === 'polymarket')?.cadenceMs).toBe(DATA_FRESHNESS.polymarketCacheMs);
+    expect(DATA_CADENCE.find((item) => item.id === 'kalshi')?.cadenceMs).toBe(DATA_FRESHNESS.kalshiCacheMs);
     expect(DATA_CADENCE.find((item) => item.id === 'coingecko')?.cadenceLabel).toBe(formatCadence(DATA_FRESHNESS.coinGeckoCacheMs));
     expect(DATA_CADENCE.find((item) => item.id === 'kraken')?.cadenceLabel).toBe(formatCadence(DATA_FRESHNESS.seasonalCacheMs));
   });

@@ -36,6 +36,8 @@ import {
   TRAILING_ENTRY_POLL_MS, beginTrailingEntry, evaluateTrailingEntry, observeTrailingEntry,
   trailingGainCents, trailingIsFast, type TrailingEntryState,
 } from './trailing-entry';
+import { LONG_SHOT_ENTRY_POLL_MS } from './task-cadence';
+import { beginTaskCadenceRun, recordTaskCadenceSuccess } from './task-cadence-runtime';
 
 /**
  * Entry cadence while nothing is being trailed, and the quote max-age at that cadence.
@@ -45,7 +47,6 @@ import {
  * the poll interval so the timer governs the cadence rather than the cache occasionally serving the
  * previous tick's value.
  */
-const LONG_SHOT_ENTRY_POLL_MS = 1_000;
 const TRAILING_QUOTE_MAX_AGE_MS = TRAILING_ENTRY_POLL_MS - 50;
 
 /** Live trailing state per asset/window/side. Cleared when the entry resolves, abandons, or expires. */
@@ -934,6 +935,8 @@ export function applyPaperMakerSimulation(order: PaperOrder, result: PaperMakerS
 }
 
 async function managePaperMakerOrder(order: PaperOrder, ledger: Ledger): Promise<void> {
+  const managedRun = beginTaskCadenceRun('managed-maker');
+  const quoteRun = beginTaskCadenceRun('exact-pre-submit-quote');
   try {
     const result = await simulateManagedPaperMaker({
       side: order.side, requestedCount: order.quantity,
@@ -942,9 +945,13 @@ async function managePaperMakerOrder(order: PaperOrder, ledger: Ledger): Promise
     }, {
       quote: () => fetchKalshiManagedMakerQuote(order.contractId, order.side),
       tradesSince: (sinceMs) => fetchKalshiTradePrintsSince(order.contractId, sinceMs),
+      onInitialQuoteSettled: (error) => error === undefined ? quoteRun.succeed() : quoteRun.fail(error),
     });
+    managedRun.succeed();
     applyPaperMakerSimulation(order, result, ledger);
   } catch (error) {
+    quoteRun.fail(error);
+    managedRun.fail(error);
     const reservedCents = order.stakeCents;
     order.status = 'rejected';
     order.makerCompletedAt = new Date().toISOString();
@@ -1104,17 +1111,25 @@ async function executePreparedLiveBuy(
       // separately awaited crash-recovery boundary.
     };
     const approvedMaximumPrice = order.approvedMaximumPrice ?? order.askPrice;
-    const fill = executionStyle === 'taker'
-      ? await placeKalshiTakerBuy({
-        ticker: order.contractId, positionSide: order.side, maximumPriceCents: approvedMaximumPrice * 100,
-        count: order.quantity, clientOrderId: order.clientOrderId ?? order.id, onAccepted, onObservation,
-        authorizeQuote: authorizeTakerQuote,
-      })
-      : await placeKalshiBuy({
-        ticker: order.contractId, positionSide: order.side, priceCents: approvedMaximumPrice * 100,
-        startPriceCents: (order.issuanceBidPrice ?? order.bidPrice) * 100,
-        count: order.quantity, clientOrderId: order.clientOrderId ?? order.id, onAccepted, onObservation,
-      });
+    const managedRun = executionStyle === 'maker' ? beginTaskCadenceRun('managed-maker') : undefined;
+    let fill: Awaited<ReturnType<typeof placeKalshiBuy>>;
+    try {
+      fill = executionStyle === 'taker'
+        ? await placeKalshiTakerBuy({
+          ticker: order.contractId, positionSide: order.side, maximumPriceCents: approvedMaximumPrice * 100,
+          count: order.quantity, clientOrderId: order.clientOrderId ?? order.id, onAccepted, onObservation,
+          authorizeQuote: authorizeTakerQuote,
+        })
+        : await placeKalshiBuy({
+          ticker: order.contractId, positionSide: order.side, priceCents: approvedMaximumPrice * 100,
+          startPriceCents: (order.issuanceBidPrice ?? order.bidPrice) * 100,
+          count: order.quantity, clientOrderId: order.clientOrderId ?? order.id, onAccepted, onObservation,
+        });
+      managedRun?.succeed();
+    } catch (error) {
+      managedRun?.fail(error);
+      throw error;
+    }
     order.venueOrderId = fill.venueOrderId;
     order.filledCount = fill.filledCount;
     order.liquidityRole = fill.liquidityRole;
@@ -1900,6 +1915,7 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
   changed = await settleDueOrders(ledger) || changed;
   changed = await updateSoldCounterfactuals(ledger) || changed;
   if (changed) await writeLedger(ledger);
+  recordTaskCadenceSuccess('edge-observation', dashboard.generatedAt);
   const regimeSentinel = regimeSentinelCandidate(dashboard, ledger);
   const regimeGate = await updateRegimeGate(regimeSentinel);
   // Evaluation collection is deliberately detached: storage or settlement failure cannot delay or
@@ -2311,6 +2327,8 @@ async function pollDenseWatch(settings: LongShotSettings): Promise<void> {
 async function longShotEntryTick(): Promise<void> {
   if (longShotEntryRunning) return;
   longShotEntryRunning = true;
+  const taskRun = beginTaskCadenceRun(longShotEntryIntervalMs === TRAILING_ENTRY_POLL_MS
+    ? 'long-shot-trailing' : 'long-shot-entry');
   try {
     const settings = longShotSettings();
     if (!settings.enabled) return;
@@ -2422,8 +2440,10 @@ async function longShotEntryTick(): Promise<void> {
     engineQueue = operation.then(() => undefined, () => undefined);
     await operation;
   } catch (error) {
+    taskRun.fail(error);
     console.error('Long-shot entry poll failed:', error);
   } finally {
+    taskRun.succeed();
     longShotEntryRunning = false;
     // A trail that started or ended this tick changes the cadence the next one should run at.
     startLongShotEntryPoller();
@@ -2469,6 +2489,7 @@ function startLongShotEntryPoller(): void {
 async function longShotExitTick(): Promise<void> {
   if (longShotPollRunning) return;
   longShotPollRunning = true;
+  const taskRun = beginTaskCadenceRun('long-shot-target-exit');
   try {
     if (getExecutionDrainStatus().phase === 'draining') return;
     const ledger = await readLedger();
@@ -2502,8 +2523,10 @@ async function longShotExitTick(): Promise<void> {
     engineQueue = operation.then(() => undefined, () => undefined);
     await operation;
   } catch (error) {
+    taskRun.fail(error);
     console.error('Long-shot exit poll failed:', error);
   } finally {
+    taskRun.succeed();
     longShotPollRunning = false;
   }
 }
@@ -2564,6 +2587,7 @@ export async function pauseAndDrainLiveExecution(reason = 'Paused by user · pap
 /** Authoritative startup/manual barrier. Live orders remain blocked until this returns ready. */
 export function reconcileLiveExecution(options: { trigger?: 'startup' | 'manual' | 'automatic' | 'periodic'; pauseOnFailure?: boolean } = {}): Promise<KalshiReconciliationStatus> {
   return serializedReconciliation(async () => {
+    const taskRun = beginTaskCadenceRun('reconciliation');
     const trigger = options.trigger ?? 'manual';
     const startedAt = new Date().toISOString();
     const previousStatus = getKalshiReconciliationStatus();
@@ -2610,12 +2634,14 @@ export function reconcileLiveExecution(options: { trigger?: 'startup' | 'manual'
         };
         setKalshiReconciliationStatus(status);
         await autoResumeTradingAfterReconciliation().catch((error) => console.error('Guarded auto-resume check failed:', error));
+        taskRun.succeed();
         return status;
       } catch (error) {
         const reason = error instanceof Error ? error.message : 'Unknown Kalshi reconciliation failure';
         if (options.pauseOnFailure !== false) await recordTradingReconciliationFailure(reason).catch((auditError) => console.error('Unable to persist reconciliation failure:', auditError));
         const status: KalshiReconciliationStatus = { ...previousStatus, phase: 'blocked', trigger, startedAt, completedAt: new Date().toISOString(), reason };
         setKalshiReconciliationStatus(status);
+        taskRun.fail(error);
         return status;
       }
     });

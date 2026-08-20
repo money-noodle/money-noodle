@@ -887,6 +887,7 @@ export interface DashboardData {
   tradingProviders: TradingProviderDescriptor[];
   policyManifest: PolicyManifest;
   collector: CollectorStatus;
+  taskCadences: import('./task-cadence').TaskCadenceStatus[];
   sourceStatus: {
     polymarket: boolean;
     kalshi: boolean;

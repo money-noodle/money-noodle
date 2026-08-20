@@ -36,6 +36,8 @@ export interface PaperMakerSimulationDependencies {
   now?: () => number;
   checks?: number;
   pollMs?: number;
+  /** Synchronous observability hook for the on-demand quote; it must not perform I/O. */
+  onInitialQuoteSettled?: (error?: unknown) => void;
 }
 
 /**
@@ -79,7 +81,14 @@ export async function simulateManagedPaperMaker(input: {
   const wait = dependencies.wait ?? ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
   const checks = dependencies.checks ?? MAKER_MANAGEMENT_CHECKS;
   const pollMs = dependencies.pollMs ?? MAKER_MANAGEMENT_POLL_MS;
-  const initialQuote = await dependencies.quote();
+  let initialQuote: ManagedMakerQuote;
+  try {
+    initialQuote = await dependencies.quote();
+    dependencies.onInitialQuoteSettled?.();
+  } catch (error) {
+    dependencies.onInitialQuoteSettled?.(error);
+    throw error;
+  }
   const initialPrice = initialManagedMakerPrice({
     quote: initialQuote, maximumPrice: input.maximumPrice, requestedStart: input.requestedStart,
   });
