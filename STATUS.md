@@ -148,8 +148,29 @@ Per §12.3 that channel must stay open — paper's value there is measuring what
 the tracks symmetric would delete the measurement. What was missing was the label, which (1) supplies.
 
 New: `lib/live-skip.ts`, `lib/live-skip-store.ts`, `lib/ioc-fill-model.ts` and their tests.
-`npm run typecheck` and `npm test` (962 tests, 117 files) pass. **Not yet deployed:** the running server
-serves the previous build until it is rebuilt and restarted.
+`npm run typecheck` and `npm test` (964 tests, 117 files) pass.
+
+**Two defects found in review before deploy, both fixed.** (a) Three withholds inside the switch path
+bypassed the journal entirely, leaving that path with the single-slot problem this change removes; fixing
+them exposed a missing class, since §12.3 decomposes `paper − live` into fill, limit and stop drag and
+there was no `fill`. (b) Both new taker paths recorded *missing evidence* as a genuine no-fill. The
+order-book fetch is allowed to fail silently, so a data outage would have been logged as an
+`ioc_no_fill`, biasing downward the exact fill rate this change exists to measure — and on the exit it
+would have stranded the position, because `standaloneExitAttemptedAt` disables retry permanently.
+
+**Deployment check, 2026-08-20T06:00–06:03Z.** The desk was allowed to go quiet rather than paused: a
+manual pause sets `operatorIntent: paused` and per §4 never auto-resumes, so draining would have left
+the desk off pending a manual resume. The one open live position, `live:HYPE:UP:2026-08-20T06:00:00Z:episode:2`
+at 29¢, settled `won` at +24.38¢, leaving 0¢ reserved and nothing open, working, uncertain or
+exit-pending. The production build passed and the local server restarted under `npm run start`. Startup
+reconciliation passed against 0¢ reserved with 0 fill states recovered and 0 managed remainders canceled;
+the desk stayed `active`/`live` with operator intent `active` and 1,766¢ available, so no resume was
+required. The skip journal began writing on the first live cycle and folded 5 events into 2 episodes —
+a four-cycle `none` run and a `persistence` episode — which is the attribution surface working on real
+cycles rather than in a test. Commit `fbbe10b` is pushed; `npx vercel --prod` is Ready and the hosted
+root returns its login redirect. No paper order had been created at the first post-restart read, so this
+verifies build, restart, reconciliation and the journal — **not** the exit fill model, the taker route,
+or any economics.
 
 ### Entry admission narrowed to buy policy v22, 2026-08-20
 
