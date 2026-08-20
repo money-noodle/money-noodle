@@ -1429,7 +1429,11 @@ export function executePaperStandaloneExit(
   // recording it as a no-fill would both understate paper's exit completion rate and — because
   // `standaloneExitAttemptedAt` permanently disables retry for both tracks — strand the position with
   // exits switched off. The managed maker simulation makes the same distinction via `evidenceComplete`.
-  if (order.venue === 'kalshi' && !book) {
+  // Venue-agnostic on purpose. Scoping this to Kalshi would fail *open* on any future paper-capable
+  // venue with no book source: the sweep would return zero, the exit would be stamped as a genuine
+  // no-fill, and `standaloneExitAttemptedAt` would strand the position with retry disabled. New venues
+  // fail closed (AGENTS.md §0), so no book means no classification, whoever the venue is.
+  if (!book) {
     order.reason = `${decision.policy} exit deferred: no exact-contract order book was available to price the reduce-only IOC. The attempt is not recorded as a fill miss and will be re-evaluated.`;
     return;
   }

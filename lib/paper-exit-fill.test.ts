@@ -118,6 +118,15 @@ describe('paper standalone exit is an IOC, not a guaranteed sale', () => {
     expect((state as never as { orders: PaperOrder[] }).orders).toHaveLength(0);
   });
 
+  it('defers for any venue without a book, not just Kalshi', () => {
+    // Scoping the evidence guard to Kalshi would fail open on a future paper-capable venue: the sweep
+    // returns zero, the exit is stamped a genuine no-fill, and retry is disabled for the window.
+    const position = order({ venue: 'polymarket' as never });
+    executePaperStandaloneExit(position, decision(0.50), ledger(), undefined, NOW);
+    expect(position.status).toBe('open');
+    expect(position.standaloneExitAttemptedAt).toBeUndefined();
+  });
+
   it('reads the correct ladder for a DOWN position', () => {
     const position = order({ side: 'DOWN' });
     // NO bids are the DOWN side's own bids; the deep YES ladder must not be sold into.
