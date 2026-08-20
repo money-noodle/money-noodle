@@ -131,6 +131,95 @@ Snapshot from local durable files at 2026-08-19T01:44:04Z. Full method, cohorts,
 - Latest walk-forward run: `walk-forward:1000:fnv1a-503b1e2c`, generated 2026-08-20T12:16:10Z. Candidate mean window return was 11.07% against baseline 9.77% over 500 test windows; it was positive 5/5 folds but beat baseline only 2/5, so the evaluator retained baseline. All evaluator-v2 runs are now monitoring-only regardless of their numerical result. The preceding 975-window run and its reproducibility failure were reviewed in `reports/walk-forward-model-candidate-review-2026-08-20.md`.
 - The current Next development server occupied about 3.7 GB RSS. RSS is not retained heap and dev mode carries compiler/cache overhead, but this materially disagrees with the prior 70 MB post-sharding RSS measurement and needs a like-for-like profile.
 
+### Repository-health review recorded, 2026-08-20
+
+A codebase review (not an economic measurement) of the whole tree as committed, reporting the things that
+will cost the most if deferred rather than a list of defects. None blocks the desk; none was changed in the
+review itself.
+
+- **The working tree fails its own gate.** As of the review the uncommitted `components/dashboard.tsx` WIP
+  references an undefined `exiting` at lines 306–316, so `npm run typecheck` fails; a freshly checked-out
+  `HEAD` typechecks clean and `npm test` passes 118 files / 978 tests. There is no CI, so nothing enforces
+  typecheck-and-tests-green on the way out of a commit. `npm run dev` must not serve the departing state while
+the WIP is uncommitted.
+- **`lib/paper-execution.ts` is a 3,233-line orchestrator** importing ~40 modules (edge and long-shot
+  strategies, mirror/live, trailing entries, managed makers, target exits, hold sentinels, calendar
+evaluation, dense watch). `types.ts` is 2,076 lines and `forecast-tracker.ts` 724. This is the highest
+single file of every behavior change; splitting is the largest future structural cost and should happen
+uphill across the existing store/register seams only after a design doc, never as drive-by repair.
+- **Atomic-write `.tmp` orphans collect.** `data/` and `.cache/` held seven `${target}.${pid}.${rand}.tmp`
+  files whose writing PIDs are all dead and whose rename targets all exist (mtimes 3–6 days old). They are
+  atomic-write leftovers, never evidence, so removing them is not a ledger edit; a startup sweep should do
+  this automatically rather than by hand each time. `data/` is ~740 MB and `.next` ~2.6 GB locally.
+- **No linter or CI.** `package.json` had only `typecheck` and `test`; no formatter config exists. The code
+  already reads cleanly, so the value is cheap enforcement, not a reformat.
+- **`SPEC.md` (175 KB) and `STATUS.md` (137 KB) are near the navigability limit.** The repo already split
+  docs/ and reports/; picking a split threshold for the two living truth files now is cheaper than when they
+  finish growing past the comfortable diff range.
+- **Single-factor session auth is the only public-internet gate.** `lib/auth.ts` issues 14-day HMAC sessions
+  with no rotation; that is deliberate for a single operator, but the login throttle design (per-IP lockout
+  weaker on stateless hosts, the fixed delay treated as the guarantee) is the boundary to revisit if this
+  ever grows more than one principal.
+
+Follow-ups agreed with the maintainer and now landed as separate work (see the next subsection): CI
+running typecheck/test/lint, an ESLint config, and a startup sweep for stale atomic-write `.tmp` files.
+This entry is the measurement; those changes are recorded below.
+
+### CI, ESLint, and stale-`.tmp` sweep shipped, 2026-08-20
+
+The three follow-ups from the repository-health review above are now in place:
+
+- **CI** (`.github/workflows/ci.yml`) runs `npm ci`, `npm run typecheck`, `npm run lint`, `npm test`, and
+  `npm run build` on push to `main` and every pull request. There was no CI before, so the tree could
+  depart and still look committed.
+- **ESLint** (`eslint.config.mjs`, Next 16 flat-config `eslint-config-next/core-web-vitals` + `typescript`;
+  no `next lint`; lint runs via `npm run lint`). The codebase predates three stricter React-19 rules, so
+  `react-hooks/set-state-in-effect`, `react-hooks/purity`, and test `no-explicit-any` are whitelisted to
+  warnings rather than risks-turned-errors while the money-path components are refactored deliberately;
+  they stay visible on every run. `no-unused-vars` honours the codebase's underscore ignore convention.
+  As introduced, lint is **0 errors / 37 warnings** across the tree; two genuine findings
+  (`@next/next/no-assign-module-variable` in a test, `react/no-unescaped-entities`) were fixed rather than
+  silenced.
+- **Stale `.tmp` sweep** (`cleanupStaleTmpFiles` in `lib/local-data-archive.ts`). Atomic-write temps are
+  `${target}.<pid>.<rand>.tmp` then `rename`; a crashed writer leaves an orphan that is never evidence, but
+  none of them was ever reclaimed automatically. The sweep reclaims one only when it is past
+  `STALE_TMP_MS` (60 s) **and** its rename target already exists, so a temp can never be the sole copy of a
+  durable file. It runs fire-and-forget in the Node-only `instrumentation.node.ts` startup module (never on
+  an Edge or stateless host) and via `npm run cleanup:stale-tmp`. Seven accrued orphans (5 under `data/`, 2 under
+  `.cache/`) were reclaimed in this change; a new `lib/local-data-archive.test.ts` describe block pins the
+  reclaim rules over a grid of pinned-clock cases, including an absent optional root.
+
+Typecheck, lint (0 errors / 37 warnings), 118 test files / 983 tests, and a warning-free production build
+passed before activation. The built local runtime then activated these changes after a quiescent drain.
+Startup reconciliation completed READY at `2026-08-20T23:33:34.362Z` with zero local or venue-managed open
+positions, automation remained manually paused, and the startup/explicit cleanup checks left zero temp files. Hosted deployment
+`dpl_6Czy9yPgrwNaG9bEE5oq5btyzgLT` reached READY at `noodle.money`; the production build emitted no Edge
+runtime warnings, and public/stateless smoke checks returned the expected 200/401/503 boundaries.
+
+### Recent strict-value exits cost upside in a small fixed slice; no policy change, 2026-08-20
+
+A fresh 2026-08-20T23:26Z reload of 3,059 durable orders found 10 non-switch live `strict-value-v1` exits
+attempted in the fixed 18-hour interval ending 23:14Z, across 10 independent settlement windows. Every one
+would have settled in the money if held. Exit-minus-hold was −33.1¢ total and −3.3¢ ±1.5 per clustered
+window (`t = −2.23`); the nine paper exits covered eight windows and were also negative. Full non-switch live
+history remained +855¢, but only `t ≈ 1.07` across 96 windows because 16 large reversal saves offset
+foregone upside on 88 hold-would-win exits. The interval is small, selected by recency, gives no redeployment
+credit, and does not authorize an exit-policy change. Full method and caveats:
+[reports/exit-cost-vs-save-2026-08-20.md](reports/exit-cost-vs-save-2026-08-20.md).
+
+### Rested maker misses had favorable hold outcomes but do not authorize higher bids, 2026-08-20
+
+A current reload of the fixed `2026-08-20T05:24Z..23:24Z` live edge cohort separated 62 unfilled rows into
+55 actual rested maker misses, five post-only create rejections, and two taker cap refusals. The 55 rested
+misses resolved across 32 independent windows: 36 would win, with a hypothetical +50.0% aggregate
+hold-to-settlement return at their posted prices and a +52.8% ±16.7% clustered mean (`t = 3.15`). That is
+not a reachable fill strategy: the cohort is selected by the price path failing to trade through the queue.
+Against always-UP on the same rows, the model-selected side added only +5.7pp ±5.7pp (`t = 1.00`), and
+contemporaneous filled entries won less often, in the expected adverse-selection direction. The fixed recent
+regime, conditional-on-no-fill bias, and omitted causal fill path dominate the nominal result. No bid, cap,
+route, or attempt policy changes. Full method:
+[reports/unfilled-entries-2026-08-20.md](reports/unfilled-entries-2026-08-20.md).
+
 ### Forecast rollup policy attribution repaired, 2026-08-20
 
 `forecast-rollup-v1` omitted buy-policy identity from its compact missed-buy counterfactual. The direct

@@ -29,8 +29,8 @@ describe('hosted projection read', () => {
       return { default: () => client };
     });
     process.env.MONEY_NOODLE_DATABASE_URL = 'postgres://reader@example.test/db';
-    const module = await import('./postgres-paper-projection');
-    return module.readPublicPaperPerformanceFromPostgres();
+    const pgModule = await import('./postgres-paper-projection');
+    return pgModule.readPublicPaperPerformanceFromPostgres();
   }
 
   it('drops fields an older snapshot still carries after they were withdrawn', async () => {

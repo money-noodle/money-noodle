@@ -404,7 +404,7 @@ function NearMoneyPanel({ report }: { report: NearMoneyReport }) {
       <span className="font-mono">{report.definition.entryLowCents}–{report.definition.entryHighCents}¢</span> with at
       least {Math.round(report.definition.minimumSecondsRemaining / 60)} minutes left, and hold to settlement —
       with or without a stop, expressed in cents below what was paid. Stops are quoted against the entry ask
-      because the bid sits under it from the moment of entry, so a stop "back to what I paid" fires on
+      because the bid sits under it from the moment of entry, so a stop &quot;back to what I paid&quot; fires on
       essentially every position and measures the spread.
     </p>
 

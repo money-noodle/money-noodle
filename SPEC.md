@@ -1,6 +1,6 @@
 # Money Noodle — Living Product Specification
 
-> **Status:** Draft 0.43 · **Updated:** 2026-08-20
+> **Status:** Draft 0.44 · **Updated:** 2026-08-20
 > This is the source of truth for product scope, architecture, model behavior, and safety decisions. Update the decision log whenever a requirement changes. Current implementation progress is tracked separately in [`STATUS.md`](STATUS.md).
 
 ## 1. Product statement
@@ -463,6 +463,12 @@ The single-array forecast snapshot is now a memory-residency and startup risk, n
 
 The persistent local worker also maintains an optional S3-compatible off-machine archive. Every 24 hours a detached, low-priority process compresses durable JSON/JSONL files into SHA-256-addressed immutable blobs, uploads only missing content, reads every new blob back through gzip while verifying its original checksum and byte count, and commits a timestamped manifest only after all files pass. Vercel/stateless workers cannot start it. Archive v1 never deletes or mutates local source data; rolling local removal remains locked behind repeated successful archives and a separate restore test. Credentials belong only to a dedicated object-read/write application in local environment configuration, never Vercel or the repository.
 
+The persistent worker also performs best-effort startup reclamation of orphaned atomic-write temp files under
+`data/` and `.cache/`. A `${target}.<pid>.<rand>.tmp` may be removed only when it is older than 60 seconds
+and the real rename target already exists; an absent target, fresh file, symlink, hidden subtree, malformed
+name, or stateless host is never touched. This housekeeping cannot rewrite a ledger or be the only owner of
+durable content, and it never delays startup reconciliation or collector activation.
+
 ### MongoDB migration
 
 Replace repository implementations without changing domain/services. Add TTL indexes for raw cache records and durable collections for forecasts, outcomes, trades, and audit events. Credentials do **not** belong in MongoDB documents in plaintext.
@@ -518,6 +524,7 @@ Recommended future service boundaries:
 - No silent fallback to fabricated data.
 - Structured server logs without credentials or signed payloads.
 - Unit tests for normalization, factor math, risk checks, and venue signing; integration tests against demo/sandbox APIs; end-to-end tests for confirmation flow.
+- GitHub CI runs dependency installation, typecheck, Next/React/TypeScript lint, the full Vitest suite, and a production build on every push to `main` and pull request. Lint warnings remain visible, but any lint error fails the gate.
 
 ## 10. Delivery plan
 
@@ -808,6 +815,7 @@ order ceiling and serialized live execution queue are venue and account properti
 
 | Date | Decision |
 |---|---|
+| 2026-08-20 | Add repository verification and narrowly bounded temp-file housekeeping without changing trading behavior. GitHub CI runs `npm ci`, typecheck, ESLint, all tests, and the production build on pushes to `main` and pull requests with read-only repository permission. Next 16 lint uses the ESLint flat config and direct CLI; three inherited React/TypeScript rule families remain warnings, while errors fail CI. At persistent Node startup only, asynchronously reclaim an atomic-write temp older than 60 seconds only if its real rename target already exists; tolerate absent optional roots and skip hidden trees, symlinks, malformed names, and stateless hosts. The sweep never touches durable targets, policy, execution, or evidence. Activated locally after quiescent drain and READY startup reconciliation at `2026-08-20T23:33:34.362Z`; zero temp files remained and live stayed manually paused. Hosted deployment `dpl_6Czy9yPgrwNaG9bEE5oq5btyzgLT` reached READY without the prior Edge-runtime instrumentation warnings. |
 | 2026-08-20 | Revise the positive-edge display lifecycle for human inspection without changing qualification. A signal observed in the mounted dashboard now keeps its last qualified snapshot, signal-calculation time, expired label, and stateful ladder access after it stops qualifying; current signals remain first and retained signals form a separate section. Requalification replaces the snapshot. Only `market.closesAt` starts the 2.4-second fade and removal. Retention is browser-session-only and cannot feed policy, ranking, execution, or durable evidence. Activated locally after quiescent drain and READY startup reconciliation at `2026-08-20T22:32:44.323Z`. Hosted deployment `dpl_GGRw8SBrPf7SYTx2RyRMQuFGLq5b` from commit `ecfbd93` reached READY and was verified at `noodle.money`; its stateless boundary still excludes the authenticated ladder while the public signal-retention lifecycle is active. See `docs/edge-order-book-monitor-design.md` §4. |
 | 2026-08-20 | Add an authenticated, stateful, observation-only Kalshi ladder to signed positive-edge cards. Normalize YES/NO bids to the selected UP/DOWN side, label only displayed level and cumulative quantity, permit one expanded card at a time, poll two seconds after completion, and pause in hidden tabs. Keep the public/stateless surface unchanged and use an uncached read that cannot populate execution depth evidence. Stabilize signal-card and section heights, show awaiting-confirmation signals by default, and retain departing grid slots through a 2.4-second fade whose cancellation replaces stale data on re-entry. No policy, ranking, sizing, fill, reconciliation, or order path changes. Activated locally after quiescent drain and READY startup reconciliation at `2026-08-20T22:20:41.847Z`; live remained manually paused because the separate repeated-episode identity defect was not cleared. Hosted deployment `dpl_HSTsXU9c7ezT9fyeHy2GRbLNHEvP` reached READY with the monitor blocked by its stateless boundary. See `docs/edge-order-book-monitor-design.md`. |
 | 2026-08-20 | Treat repeated managed-maker episodes as not mechanically cleared after finding that acknowledgement-race client IDs truncate away the episode suffix and reconciliation accepts the same truncated retry IDs for multiple local rows. One real HYPE fill was consequently attributed to three local episodes; this was a matching defect, not three venue fills. Keep the ordinary position contradiction fail-close, but do not trust settled per-episode ledger/budget attribution or resume repeated-episode execution until collision-resistant bounded IDs, exact matching, and an auditable correction land. No order was submitted during the investigation. See `reports/kalshi-order-size-and-fill-mechanics-2026-08-20.md`. |

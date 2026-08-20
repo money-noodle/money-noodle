@@ -15,6 +15,51 @@ export const LOCAL_ARCHIVE_VERSION = 'money-noodle-local-archive-v1';
 const STATE_FILE = 'archive-state.json';
 const LOCK_DIR = '.archive-upload.lock';
 
+/**
+ * Orphaned atomic-write temp files are removed only after this age. Atomic writes are
+ * `${target}.<pid>.<rand>.tmp` then `rename`; an orphan is a write whose process died between the write and
+ * the rename. A `.tmp` is never on a read path and is not evidence, so reclaiming one is not a ledger edit.
+ */
+export const STALE_TMP_MS = 60_000;
+const TMP_SUFFIX = /\.(\d+)\.([a-z0-9]+)\.tmp$/;
+
+/**
+ * Removes orphaned `${target}.<pid>.<rand>.tmp` files under a data directory.
+ *
+ * Reclaims only when the rename target already exists (so a temp can never be the sole copy of a durable
+ * file) and only past `STALE_TMP_MS` (so a slow in-progress write is not disturbed). Best-effort durable
+ * housekeeping; the owning writer's `rename` remains the only mutation of the real file.
+ */
+export async function cleanupStaleTmpFiles(dataDirectory: string, now = Date.now()): Promise<number> {
+  let removed = 0;
+  async function visit(directory: string): Promise<void> {
+    const entries = await readdir(directory, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    });
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
+      const absolute = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (!entry.name.startsWith('.')) await visit(absolute);
+      } else if (entry.isFile() && TMP_SUFFIX.test(entry.name)) {
+        const details = await stat(absolute).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === 'ENOENT') return undefined;
+          throw error;
+        });
+        if (!details || now - details.mtimeMs <= STALE_TMP_MS) continue;
+        const target = absolute.replace(TMP_SUFFIX, '');
+        const hasTarget = await stat(target).then(() => true).catch(() => false);
+        if (!hasTarget) continue;
+        await rm(absolute, { force: true });
+        removed += 1;
+      }
+    }
+  }
+  await visit(dataDirectory);
+  return removed;
+}
+
 export interface LocalArchiveConfig {
   bucket: string;
   region: string;

@@ -1,5 +1,5 @@
 import { Readable } from 'node:stream';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { GetObjectCommand, HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
@@ -8,7 +8,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 
 import {
-  archiveIntervalMs, archiveLocalData, listArchiveCandidates, localArchiveConfig, readLocalArchiveState,
+  STALE_TMP_MS, archiveIntervalMs, archiveLocalData, cleanupStaleTmpFiles, listArchiveCandidates,
+  localArchiveConfig, readLocalArchiveState,
   type ArchiveObjectStore, type LocalArchiveConfig,
 } from './local-data-archive';
 
@@ -100,5 +101,64 @@ describe('local durable-data archive', () => {
     expect(state).toMatchObject({ lastManifestKey: second.manifestKey, newBlobs: 0, reusedBlobs: 1 });
     expect(state?.lastError).toBeUndefined();
     expect(JSON.parse(await readFile(path.join(config.dataDirectory, 'archive-state.json'), 'utf8'))).toMatchObject({ version: 'money-noodle-local-archive-v1' });
+  });
+});
+
+// Pure housekeeping over a pinned clock: the claim is that an orphaned atomic-write temp is reclaimed only
+// when it is old enough and its rename target (the real file) already exists, so a temp can never be the
+// sole copy of a durable file and a slow in-progress write is never disturbed.
+describe('cleanupStaleTmpFiles', () => {
+  const now = 1_000_000_000_000;
+  const oldSeconds = Math.floor((now - STALE_TMP_MS - 5_000) / 1000); // well past the stale threshold
+  const freshSeconds = Math.floor((now - 500) / 1000); // younger than the stale threshold
+
+  it('reclaims an old orphaned temp whose rename target exists', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'money-noodle-cleanup-'));
+    roots.push(dir);
+    await writeFile(path.join(dir, 'ledger.json'), '{}');
+    const orphan = path.join(dir, 'ledger.json.111.aaaa.tmp');
+    await writeFile(orphan, '{}');
+    await utimes(orphan, oldSeconds, oldSeconds);
+    expect(await cleanupStaleTmpFiles(dir, now)).toBe(1);
+    expect(await readdir(dir)).toEqual(['ledger.json']);
+  });
+
+  it('leaves a fresh temp alone even when its target exists', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'money-noodle-cleanup-'));
+    roots.push(dir);
+    await writeFile(path.join(dir, 'data.json'), '{}');
+    const recent = path.join(dir, 'data.json.222.bbbb.tmp');
+    await writeFile(recent, '{}');
+    await utimes(recent, freshSeconds, freshSeconds);
+    expect(await cleanupStaleTmpFiles(dir, now)).toBe(0);
+    expect((await readdir(dir)).sort()).toEqual(['data.json', path.basename(recent)]);
+  });
+
+  it('never reclaims a temp whose rename target is missing (it may be the only copy)', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'money-noodle-cleanup-'));
+    roots.push(dir);
+    const only = path.join(dir, 'new.json.333.cccc.tmp');
+    await writeFile(only, '{}');
+    await utimes(only, oldSeconds, oldSeconds);
+    expect(await cleanupStaleTmpFiles(dir, now)).toBe(0);
+    expect(await readdir(dir)).toEqual([path.basename(only)]);
+  });
+
+  it('leaves non-pattern and nested-dot entries untouched', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'money-noodle-cleanup-'));
+    roots.push(dir);
+    await writeFile(path.join(dir, 'plain.tmp'), '{}');
+    await utimes(path.join(dir, 'plain.tmp'), oldSeconds, oldSeconds);
+    await mkdir(path.join(dir, '.hidden'));
+    const hidden = path.join(dir, '.hidden', 'a.json.444.dddd.tmp');
+    await writeFile(hidden, '{}');
+    await utimes(hidden, oldSeconds, oldSeconds);
+    expect(await cleanupStaleTmpFiles(dir, now)).toBe(0);
+    expect(await readdir(dir)).toEqual(['.hidden', 'plain.tmp']);
+  });
+
+  it('treats an absent optional root as already clean', async () => {
+    const dir = path.join(os.tmpdir(), `money-noodle-missing-${process.pid}-${Date.now()}`);
+    expect(await cleanupStaleTmpFiles(dir, now)).toBe(0);
   });
 });
