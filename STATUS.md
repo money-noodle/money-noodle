@@ -185,16 +185,16 @@ The three follow-ups from the repository-health review above are now in place:
   none of them was ever reclaimed automatically. The sweep reclaims one only when it is past
   `STALE_TMP_MS` (60 s) **and** its rename target already exists, so a temp can never be the sole copy of a
   durable file. It runs fire-and-forget in the Node-only `instrumentation.node.ts` startup module (never on
-  an Edge or stateless host) and via `npm run cleanup:stale-tmp`. Seven accrued orphans (5 under `data/`, 2 under
-  `.cache/`) were reclaimed in this change; a new `lib/local-data-archive.test.ts` describe block pins the
+  an Edge or stateless host) and via `npm run cleanup:stale-tmp`. Seven accrued orphans (5 under `data/`, 2
+  under `.cache/`) were reclaimed in this change; a new `lib/local-data-archive.test.ts` describe block pins the
   reclaim rules over a grid of pinned-clock cases, including an absent optional root.
 
 Typecheck, lint (0 errors / 37 warnings), 118 test files / 983 tests, and a warning-free production build
 passed before activation. The built local runtime then activated these changes after a quiescent drain.
 Startup reconciliation completed READY at `2026-08-20T23:33:34.362Z` with zero local or venue-managed open
-positions, automation remained manually paused, and the startup/explicit cleanup checks left zero temp files. Hosted deployment
-`dpl_6Czy9yPgrwNaG9bEE5oq5btyzgLT` reached READY at `noodle.money`; the production build emitted no Edge
-runtime warnings, and public/stateless smoke checks returned the expected 200/401/503 boundaries.
+positions, automation remained manually paused, and the startup/explicit cleanup checks left zero temp
+files. Hosted deployment `dpl_HJ3bPFwwzDgv8926nPPjtqU3DBMA` from commit `9c6e45a` reached READY at
+`noodle.money`; the production build emitted no Edge runtime warnings, and public/stateless smoke checks returned the expected 200/401/503 boundaries.
 
 ### Recent strict-value exits cost upside in a small fixed slice; no policy change, 2026-08-20
 
