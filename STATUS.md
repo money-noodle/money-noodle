@@ -160,7 +160,7 @@ Probability replay is exact for 4,597/4,967 observations; 370 are reconstructed.
 for 2,792 and absent for 2,175. Missing quality inputs do not directly invalidate this candidate—it leaves
 the confidence formula and threshold fixed—but prohibit a whole-history quality candidate. Separately,
 `promotionRefusal` omitted `maximumEdge` and `minimumSelectedProbability` from its deploy-then-record
-identity check; both are now included and tested in source, pending the next deployment. Eligibility also
+identity check; both are now included, tested, and active. Eligibility also
 refuses every `expanding-window-v2-replay` run as monitoring-only and reserves
 `expanding-window-v3-policy-complete-prospective` for the agreed replacement. Collection and v2 evaluation
 continue while promotion fails closed. Next is an evaluator-v3 design with a frozen cohort manifest,
