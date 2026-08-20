@@ -33,8 +33,11 @@ export const EXECUTION_LATE_CUTOFF_MS = 30_000;
  * of what the gate admits evaporated before it could be bought.
  *
  * **The evidence is ask-priced and does not test fills.** The sentinel's maker-touch instrumentation
- * carries one observation. v21 ships alongside the switch to taking the ask, which is what makes an
- * ask-priced counterfactual describe what the desk actually does.
+ * carries one observation. V21 was intended to ship alongside unconditional taking, but the execution
+ * audit found that `taker` still followed the gated adaptive recommendation and retained maker whenever a
+ * strict taker check failed. Current v5 also rests below 30pp and takes only a freshly requalified 30pp+
+ * edge. The counterfactual therefore supports the persistence admission change only; it does not establish
+ * executable return under either historical v21 execution or the current route.
  */
 export const REQUIRED_QUALIFYING_SNAPSHOTS = 2;
 export const REQUIRED_OBSERVATION_SPAN_MS = 15_000;

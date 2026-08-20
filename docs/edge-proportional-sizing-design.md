@@ -1,8 +1,16 @@
 # Edge-proportional entry sizing — design note
 
-> Status: **proposal, no code.** Written 2026-08-19 against the measurement in
+> Status: **superseded proposal, no code.** Written 2026-08-19 against the admitted-population
+> measurement in
 > [reports/edge-buy-opportunities-2026-08-19.md](../reports/edge-buy-opportunities-2026-08-19.md) §1.
-> Nothing here is authorized by existing. It ends at §7, a decision for the maintainer.
+> A later realized-execution review found that 0.3×–3× proportional sizing increased modeled capital
+> about 76% while clustered returns remained negative and nearly unchanged; **do not implement this
+> proposal.** Production instead uses reduce-only `entry-sizing-reduce30-below-edge30-v1`, with no
+> multiplier above 1. See
+> [reports/execution-direction-sizing-review-2026-08-19.md](../reports/execution-direction-sizing-review-2026-08-19.md)
+> and [high-edge-execution-reduced-sizing-design.md](high-edge-execution-reduced-sizing-design.md).
+> Dollar-denominated account, window, and correlation-group ceilings remain a prerequisite for any future
+> proposal above 1×, not evidence that this proposal should be revived.
 
 ## 1. What is being proposed
 

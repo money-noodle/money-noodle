@@ -157,21 +157,31 @@ and −754.27¢ exact P&L on 940¢. Its latest settled 12¢→97¢ predecessor c
 the derived v2 cohort has no settled order. Retiring that lane is an operator choice about research value,
 not a live-risk action.
 
-### Eleven ideas screened; sizing is the one worth effort, 2026-08-19
+### Eleven ideas screened; sizing was the one worth further evaluation, 2026-08-19
 
 Full measurement in [reports/edge-buy-opportunities-2026-08-19.md](reports/edge-buy-opportunities-2026-08-19.md).
-Method is the admitted population — first qualifying calculation per `(symbol, closesAt, side)`, at the
-recorded ask, held to settlement, window-clustered, under the live v21 bounds. The harness returns
-**+20.8% ±5.2 over 671 windows** against `analyze:loss-decomposition`'s +20.9% for v19, which is the
+Method was the admitted population — first qualifying calculation per `(symbol, closesAt, side)`, at the
+recorded ask, held to settlement, window-clustered, under the live v21 bounds. The harness returned
+**+20.8% ±5.2 over 671 windows** against `analyze:loss-decomposition`'s +20.9% for v19, which was the
 control. About **thirty-three comparisons** were evaluated; **no policy, gate, execution, sizing, or
-calibration change is authorized by any of it.**
+calibration change was authorized by any of it.**
 
-- **Sizing is the largest measured lever and changes no admission.** Identical 3,078 decisions, only the
-  weight: flat +18.6% per $1, capped 0.3×–3× edge-proportional **+28.9%**, better on **9 of 9 days**, with
-  the ten highest-edge rows contributing **4.0%** of the profit. Below a 35pp edge it is +19.9% against
-  +14.8%. The desk already ranks by `expectedProfitCents` ≈ `edge / cost` and then commits the same dollar
-  to every winner. **The blocker is not evidence, it is that global exposure caps are position counts**,
-  which stop being dollar caps the moment the ticket varies. Proposal, no code:
+**Subsequent correction:** the proposed 0.3×–3× proportional arm did not reproduce on realized executed
+money; it increased modeled capital about 76% while clustered returns remained negative and nearly
+unchanged. It is superseded and must not be implemented. Production later adopted the separately approved,
+reduce-only `entry-sizing-reduce30-below-edge30-v1`, with no multiplier above 1. Dollar-denominated account,
+window, and correlation-group ceilings remain mandatory before any future proposal above 1×; they are not
+an authorization to revive proportional upsizing. See
+[reports/execution-direction-sizing-review-2026-08-19.md](reports/execution-direction-sizing-review-2026-08-19.md)
+and [docs/high-edge-execution-reduced-sizing-design.md](docs/high-edge-execution-reduced-sizing-design.md).
+
+- **Sizing appeared to be the largest lever on the admitted population and changed no admission.**
+  Identical 3,078 decisions, only the weight: flat +18.6% per $1, capped 0.3×–3× edge-proportional
+  **+28.9%**, better on **9 of 9 days**, with the ten highest-edge rows contributing **4.0%** of the
+  profit. Below a 35pp edge it was +19.9% against +14.8%. The desk already ranked by
+  `expectedProfitCents` ≈ `edge / cost` and then committed the same dollar to every winner. This read
+  described position-count exposure caps as the sole blocker; the subsequent realized-money correction
+  above established that execution evidence is also a blocker and superseded the proposal:
   [docs/edge-proportional-sizing-design.md](docs/edge-proportional-sizing-design.md).
 - **The edge spike separates realized money out-of-sample, and the committed sentinel says it is not a
   forecast effect.** On v19+ orders — chosen after the threshold was set — live fresh +0.2% against spiked
