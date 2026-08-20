@@ -40,13 +40,18 @@ const feeRate = (price) => 0.07 * price * (1 - price);
 /**
  * Production requirements by immutable policy identity, never inferred from a deployment timestamp.
  * A new policy fails closed in this monitor until its requirements are stated here.
+ *
+ * The price band is carried per version rather than hardcoded below. It was a shared literal while
+ * every live policy used 5-97c, which meant v22's 10-75c band would have been scored against v21's
+ * — blending eras on the one axis v22 changed, and overstating what the gate admitted.
  */
 const POLICY_REQUIREMENTS = new Map([
-  ['buy-binary-edge-net5to35-quality50-owned55-price5to97-v17', { floor: 0.05, ceiling: 0.35, lateCutoff: 120, snapshots: 3, spanMs: 30_000 }],
-  ['buy-binary-edge-net5to35-quality50-owned55-price5to97-fresh2pp-v18', { floor: 0.05, ceiling: 0.35, lateCutoff: 120, snapshots: 3, spanMs: 30_000 }],
-  ['buy-binary-edge-net5to35-quality50-owned55-price5to97-v19', { floor: 0.05, ceiling: 0.35, lateCutoff: 120, snapshots: 3, spanMs: 30_000 }],
-  ['buy-binary-edge-netminus5-nocap-quality50-owned55-price5to97-late30-v20', { floor: -0.05, ceiling: 1, lateCutoff: 30, snapshots: 3, spanMs: 30_000 }],
-  ['buy-binary-edge-netminus5-nocap-quality50-owned55-price5to97-late30-persist2of15-v21', { floor: -0.05, ceiling: 1, lateCutoff: 30, snapshots: 2, spanMs: 15_000 }],
+  ['buy-binary-edge-net5to35-quality50-owned55-price5to97-v17', { floor: 0.05, ceiling: 0.35, lateCutoff: 120, snapshots: 3, spanMs: 30_000, minPrice: 0.05, maxPrice: 0.97 }],
+  ['buy-binary-edge-net5to35-quality50-owned55-price5to97-fresh2pp-v18', { floor: 0.05, ceiling: 0.35, lateCutoff: 120, snapshots: 3, spanMs: 30_000, minPrice: 0.05, maxPrice: 0.97 }],
+  ['buy-binary-edge-net5to35-quality50-owned55-price5to97-v19', { floor: 0.05, ceiling: 0.35, lateCutoff: 120, snapshots: 3, spanMs: 30_000, minPrice: 0.05, maxPrice: 0.97 }],
+  ['buy-binary-edge-netminus5-nocap-quality50-owned55-price5to97-late30-v20', { floor: -0.05, ceiling: 1, lateCutoff: 30, snapshots: 3, spanMs: 30_000, minPrice: 0.05, maxPrice: 0.97 }],
+  ['buy-binary-edge-netminus5-nocap-quality50-owned55-price5to97-late30-persist2of15-v21', { floor: -0.05, ceiling: 1, lateCutoff: 30, snapshots: 2, spanMs: 15_000, minPrice: 0.05, maxPrice: 0.97 }],
+  ['buy-binary-edge-net5-nocap-quality50-owned55-price10to75-late30-persist2of15-v22', { floor: 0.05, ceiling: 1, lateCutoff: 30, snapshots: 2, spanMs: 15_000, minPrice: 0.10, maxPrice: 0.75 }],
 ]);
 
 const since = Date.now() - HOURS * 3_600_000;
@@ -66,7 +71,7 @@ for (const row of await readForecastHistory(DATA)) {
     if (!(price > 0) || price >= 1) continue;
     const probability = side === 'UP' ? row.probabilityUp : 1 - row.probabilityUp;
     const netEdge = probability - price - feeRate(price);
-    if (price < 0.05 || price > 0.97) continue;
+    if (price < requirements.minPrice || price > requirements.maxPrice) continue;
     if (probability < 0.55 || (row.confidence ?? 0) < 0.5) continue;
     if (netEdge < requirements.floor || netEdge >= requirements.ceiling) continue;
     const key = `${row.policyVersion}|${row.symbol}|${row.closesAt}|${side}`;

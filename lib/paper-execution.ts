@@ -78,6 +78,7 @@ import { selectPortfolio, cryptoExposureGroup, DEFAULT_PORTFOLIO_CONSTRAINTS, pa
 import { PORTFOLIO_CHOICE_SET_VERSION, type PortfolioChoiceSetRecord } from './portfolio-choice-set';
 import { maintainPortfolioChoiceSets, recordPortfolioChoiceSet } from './portfolio-choice-set-store';
 import { bestEntry, bestVenueEntry, BUY_POLICY_VERSION, edgeStrength, MAX_ENTRY_PRICE, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, qualifiesAsBuyEdge, qualifiesVenueBuyEdge, sideProbability, venueFeeRate } from './prediction-policy';
+import { cloneQuoteTrajectorySpreadObservation } from './quote-trajectory-spread';
 import { getKalshiReconciliationStatus, serializedReconciliation, setKalshiReconciliationStatus, type KalshiReconciliationStatus } from './reconciliation-state';
 import { getRegimeGateStatus, updateRegimeGate, type RegimeGateStatus, type RegimeSentinelCandidate } from './regime-gate-store';
 import { advanceSignalPersistence, evaluateSignalPersistence, evaluateSignalPersistenceIgnoringSpike, productionSignalPersistence, signalPersistenceAfter, type SignalEligibility, type SignalPersistenceState } from './signal-persistence';
@@ -602,6 +603,8 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
       edgeSpike: eligibility.edgeSpike,
       basis: prediction.basis ? { ...prediction.basis } : undefined,
       cycleRegime: prediction.cycleRegime ? { ...prediction.cycleRegime } : undefined,
+      quoteTrajectorySpread: prediction.quoteTrajectorySpread
+        ? cloneQuoteTrajectorySpreadObservation(prediction.quoteTrajectorySpread) : undefined,
       calibrationReplay: prediction.calibrationReplay ? {
         ...prediction.calibrationReplay,
         basisInput: prediction.calibrationReplay.basisInput ? { ...prediction.calibrationReplay.basisInput } : undefined,

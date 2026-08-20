@@ -1,6 +1,6 @@
 import { contractProvenanceMatches } from './contract-provenance';
 import { pushInto } from './group';
-import { BUY_POLICY_VERSION, MIN_CALIBRATION_SAMPLE, MIN_ENTRY_PRICE, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, MIN_SELECTED_SIDE_PROBABILITY, venueFeeRate } from './prediction-policy';
+import { BUY_POLICY_VERSION, MAX_ENTRY_PRICE, MIN_CALIBRATION_SAMPLE, MIN_ENTRY_PRICE, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, MIN_SELECTED_SIDE_PROBABILITY, venueFeeRate } from './prediction-policy';
 import type { BenchmarkScore, CalibrationBin, EdgeBucket, LeadTimeSlice, MissedBuyCounterfactual, PerformanceSlice, PerformanceSummary, PerformanceTimelinePoint, SegmentGroup, SegmentStat, TrackedForecast } from './types';
 
 export const MAX_PERFORMANCE_TIMELINE_POINTS = 500;
@@ -189,7 +189,7 @@ function missedBuyCounterfactual(forecasts: TrackedForecast[]): MissedBuyCounter
       const probability = quote.side === 'UP' ? nearest.probabilityUp : 1 - nearest.probabilityUp;
       const fee = venueFeeRate('kalshi', quote.price, 'taker');
       const edge = probability - quote.price - fee;
-      if (quote.price < MIN_ENTRY_PRICE || quote.price > 0.97 || edge < MIN_NET_EDGE || probability >= MIN_SELECTED_SIDE_PROBABILITY) continue;
+      if (quote.price < MIN_ENTRY_PRICE || quote.price > MAX_ENTRY_PRICE || edge < MIN_NET_EDGE || probability >= MIN_SELECTED_SIDE_PROBABILITY) continue;
       candidates.push({
         key: `${nearest.id}:${quote.side}:${quote.price}`,
         closesAt: settlementWindowKey(nearest), edge,

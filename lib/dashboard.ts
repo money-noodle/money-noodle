@@ -12,6 +12,7 @@ import { readPromotionLedger } from './model-promotion-store';
 import { summarizePerformance } from './performance';
 import { activePolicyManifest } from './policy-manifest';
 import { bestEntry, edgeStrength, qualifiesAsBuyEdge } from './prediction-policy';
+import { buildQuoteTrajectorySpreadObservation, type QuotePathSample } from './quote-trajectory-spread';
 import { estimateSettlementAverage } from './settlement-average';
 import { getEnabledTradingVenues } from './trading-control';
 import { getTradingProviderConfiguration, normalizeTradingProviderConfiguration } from './trading-provider-config-store';
@@ -322,28 +323,60 @@ export function alignedKalshiQuote(market: MarketQuote | undefined, quote: Venue
   return quote;
 }
 
+function polymarketContractId(symbol: string, quote: MarketQuote): string {
+  return quote.contract?.contractId ?? quote.url.split('/').filter(Boolean).at(-1) ?? symbol;
+}
+
+function quotePathSamples(input: {
+  market: Record<string, MarketQuote>;
+  kalshi: Record<string, VenueQuote>;
+  polymarketSourceObservedAt: number;
+  kalshiSourceObservedAt: number;
+}): QuotePathSample[] {
+  const samples: QuotePathSample[] = [];
+  for (const [symbol, quote] of Object.entries(input.market)) {
+    if (!quote.live || [quote.bidUp, quote.askUp, quote.bidDown, quote.askDown].some((value) => value === undefined)) continue;
+    samples.push({
+      providerId: 'polymarket', symbol, contractId: polymarketContractId(symbol, quote), closesAt: quote.closesAt,
+      sourceObservedAt: input.polymarketSourceObservedAt,
+      bidUp: quote.bidUp!, askUp: quote.askUp!, bidDown: quote.bidDown!, askDown: quote.askDown!,
+    });
+  }
+  for (const [symbol, quote] of Object.entries(input.kalshi)) {
+    if (!quote.live) continue;
+    samples.push({
+      providerId: 'kalshi', symbol, contractId: quote.ticker, closesAt: quote.closesAt,
+      sourceObservedAt: input.kalshiSourceObservedAt,
+      bidUp: quote.bidUp, askUp: quote.askUp, bidDown: quote.bidDown, askDown: quote.askDown,
+    });
+  }
+  return samples;
+}
+
 async function buildDashboard(force = false, liveOnly = false): Promise<DashboardData> {
   const refreshSlowFeeds = force && !liveOnly;
   const [coinsResult, marketResult, kalshiResult, newsResult, seasonalResult, referenceResult] = await Promise.all([
     cached('coingecko', DATA_FRESHNESS.coinGeckoCacheMs, fetchCoinSnapshots, refreshSlowFeeds),
     cached('polymarket', DATA_FRESHNESS.polymarketCacheMs, fetchPolymarketQuotes, force),
     cached('kalshi', DATA_FRESHNESS.kalshiCacheMs, fetchKalshiQuotes, force)
-      .catch(() => ({ value: {} as Record<string, VenueQuote>, fromCache: false })),
+      .catch(() => ({ value: {} as Record<string, VenueQuote>, fromCache: false, savedAt: Date.now() })),
     cached('news', DATA_FRESHNESS.newsCacheMs, fetchCryptoNews, refreshSlowFeeds),
     cached('seasonal-history', DATA_FRESHNESS.seasonalCacheMs, fetchSeasonalHistory, false)
-      .catch(() => ({ value: {} as Record<string, ChartPoint[]>, fromCache: false })),
+      .catch(() => ({ value: {} as Record<string, ChartPoint[]>, fromCache: false, savedAt: Date.now() })),
     cached('price-series', DATA_FRESHNESS.contractReferenceCacheMs, fetchPriceSeries, force)
-      .catch(() => ({ value: {} as Record<string, PriceSeries>, fromCache: false })),
+      .catch(() => ({ value: {} as Record<string, PriceSeries>, fromCache: false, savedAt: Date.now() })),
   ]);
+  const calculationAtMs = Date.now();
   const minuteResult = { value: Object.fromEntries(Object.values(referenceResult.value).map((entry) => [entry.symbol, entry.closes])), fromCache: referenceResult.fromCache };
   const alignedKalshi = Object.fromEntries(Object.entries(kalshiResult.value).flatMap(([symbol, quote]) => {
-    const aligned = alignedKalshiQuote(marketResult.value[symbol], quote);
+    const aligned = alignedKalshiQuote(marketResult.value[symbol], quote, calculationAtMs);
     return aligned ? [[symbol, aligned]] : [];
   })) as Record<string, VenueQuote>;
   const prices = Object.fromEntries(coinsResult.value.map((coin) => [coin.symbol, coin.price]));
   const history = await recordPriceHistory(prices);
   const oracleHistory = await recordOracleHistory(
     Object.fromEntries(Object.values(referenceResult.value).map((entry) => [entry.symbol, entry.currentPrice])),
+    referenceResult.savedAt,
   );
   const venueHistory = await recordVenueHistory(
     Object.fromEntries(Object.entries(marketResult.value).map(([symbol, quote]) => [symbol, quote.probabilityUp])),
@@ -354,6 +387,10 @@ async function buildDashboard(force = false, liveOnly = false): Promise<Dashboar
       polymarketAskUp: Object.fromEntries(Object.entries(marketResult.value).flatMap(([symbol, quote]) => quote.askUp === undefined ? [] : [[symbol, quote.askUp]])),
       kalshiBidUp: Object.fromEntries(Object.entries(alignedKalshi).map(([symbol, quote]) => [symbol, quote.bidUp])),
       kalshiAskUp: Object.fromEntries(Object.entries(alignedKalshi).map(([symbol, quote]) => [symbol, quote.askUp])),
+      quotePathSamples: quotePathSamples({
+        market: marketResult.value, kalshi: alignedKalshi,
+        polymarketSourceObservedAt: marketResult.savedAt, kalshiSourceObservedAt: kalshiResult.savedAt,
+      }),
     },
   );
   const stateless = isStatelessDeployment();
@@ -378,17 +415,36 @@ async function buildDashboard(force = false, liveOnly = false): Promise<Dashboar
   // Persist regime diagnostics separately and attach the current path prefix for later outcome
   // analysis. Nothing below reads these features into probability, confidence, ranking, or gates.
   const cycleRegimes = stateless ? {} as Record<string, NonNullable<Prediction['cycleRegime']>>
-    : await recordCyclePathObservations(predictions, oracleHistory).catch((error) => {
+    : await recordCyclePathObservations(predictions, oracleHistory, calculationAtMs).catch((error) => {
       console.error('Cycle path tracking failed:', error);
       return {} as Record<string, NonNullable<Prediction['cycleRegime']>>;
     });
-  for (const prediction of predictions) prediction.cycleRegime = cycleRegimes[prediction.symbol];
+  const collectedQuoteSamples = venueHistory.flatMap((point) => point.quotePathSamples ?? []);
+  for (const prediction of predictions) {
+    prediction.cycleRegime = cycleRegimes[prediction.symbol];
+    const entry = bestEntry(prediction);
+    if (!entry) continue;
+    const contractId = entry.venue === 'kalshi'
+      ? prediction.kalshi?.ticker
+      : polymarketContractId(prediction.symbol, prediction.market);
+    const closesAt = entry.venue === 'kalshi' ? prediction.kalshi?.closesAt : prediction.market.closesAt;
+    if (!contractId || !closesAt) continue;
+    prediction.quoteTrajectorySpread = buildQuoteTrajectorySpreadObservation({
+      calculationAtMs, symbol: prediction.symbol, providerId: entry.venue, contractId, side: entry.side, closesAt,
+      underlyingSamples: oracleHistory.flatMap((point) => {
+        const price = point.prices[prediction.symbol];
+        return point.sourceObservedAt === undefined || !Number.isFinite(price)
+          ? [] : [{ sourceObservedAt: point.sourceObservedAt, price }];
+      }),
+      quoteSamples: collectedQuoteSamples,
+    });
+  }
   // Forecast and performance persistence belongs exclusively to the durable worker.
   const performance = stateless ? summarizePerformance([]) : await trackCalculations(predictions, MODEL_VERSION).catch((error) => {
     console.error('Forecast tracking failed:', error);
     return summarizePerformance([]);
   });
-  const generatedAt = new Date();
+  const generatedAt = new Date(calculationAtMs);
   return {
     generatedAt: generatedAt.toISOString(), expiresAt: new Date(generatedAt.getTime() + minute).toISOString(),
     modelVersion: MODEL_VERSION,
@@ -425,7 +481,8 @@ function publicPolicyManifest(manifest: PolicyManifest): PolicyManifest {
 /** Removes every control/performance field from the unauthenticated server response. */
 export function publicDashboardData(dashboard: DashboardData): PublicDashboardData {
   const { tradingProviders: _providers, performance: _performance, policyManifest, ...publicData } = dashboard;
-  return { ...publicData, policyManifest: publicPolicyManifest(policyManifest) };
+  const predictions = publicData.predictions.map(({ quoteTrajectorySpread: _trajectory, ...prediction }) => prediction);
+  return { ...publicData, predictions, policyManifest: publicPolicyManifest(policyManifest) };
 }
 
 /**

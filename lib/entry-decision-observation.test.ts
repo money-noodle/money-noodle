@@ -7,8 +7,8 @@ import path from 'node:path';
 import type { EntryDecisionSnapshot } from './types';
 
 /**
- * `entry-decision-v2` records two things the desk already computed at decision time and threw away at the
- * order boundary: the edge spike, and the numeric cycle-regime features behind the coarse label.
+ * `entry-decision-v2` records values the desk already computed at decision time and would otherwise throw
+ * away at the order boundary: the edge spike, numeric cycle regime, and prospective quote-path observation.
  *
  * The reason they were added is that neither could be scored against realized money — the 2026-08-19
  * screen could reconstruct a volatility ratio for only 605 of 995 v17+ orders and could not reconstruct
@@ -32,6 +32,7 @@ describe('entry-decision-v2 is additive', () => {
     // field written from one date onward was read as "did not touch" for every earlier record.
     expect(v1.edgeSpike).toBeUndefined();
     expect(v1.cycleRegime).toBeUndefined();
+    expect(v1.quoteTrajectorySpread).toBeUndefined();
     expect('edgeSpike' in v1).toBe(false);
   });
 
@@ -59,7 +60,8 @@ describe('the recorded observations are isolated from anything that can move mon
   it('is read by no module on a pricing, sizing, gating, or execution path', () => {
     for (const file of forbidden) {
       const source = readFileSync(path.join(process.cwd(), 'lib', file), 'utf8');
-      const reads = /entryDecision(\?)?\.(edgeSpike|cycleRegime)/.test(source);
+      const reads = /entryDecision(\?)?\.(edgeSpike|cycleRegime|quoteTrajectorySpread)/.test(source)
+        || /prediction(\?)?\.quoteTrajectorySpread/.test(source);
       expect({ file, reads }).toEqual({ file, reads: false });
     }
   });
@@ -69,6 +71,7 @@ describe('the recorded observations are isolated from anything that can move mon
     expect(source.match(/version: 'entry-decision-v2'/g)).toHaveLength(1);
     expect(source).toContain('edgeSpike: eligibility.edgeSpike');
     expect(source).toContain('cycleRegime: prediction.cycleRegime ? { ...prediction.cycleRegime } : undefined');
+    expect(source).toContain('cloneQuoteTrajectorySpreadObservation(prediction.quoteTrajectorySpread)');
   });
 
   it('clones the regime features rather than aliasing the prediction it came from', () => {
@@ -76,5 +79,6 @@ describe('the recorded observations are isolated from anything that can move mon
     // recorded decision, which is the one thing a decision snapshot exists to prevent.
     const source = readFileSync(path.join(process.cwd(), 'lib', 'paper-execution.ts'), 'utf8');
     expect(source).not.toContain('cycleRegime: prediction.cycleRegime,');
+    expect(source).not.toContain('quoteTrajectorySpread: prediction.quoteTrajectorySpread,');
   });
 });

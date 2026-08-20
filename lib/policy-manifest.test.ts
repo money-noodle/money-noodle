@@ -49,6 +49,7 @@ describe('published policy manifest', () => {
     expect(published.activeBuyPolicyVersion).toBe(BUY_POLICY_VERSION);
     expect(published.activeBuyPolicyActivatedAt).toBe(published.history[0].activatedAt);
     expect(published.history[0].changes.length).toBeGreaterThan(0);
+    expect(published.history[0].evidence.some((item) => item.includes('reports/'))).toBe(true);
   });
 
   it('keeps the history an unbroken, non-overlapping chain', () => {
@@ -68,7 +69,7 @@ describe('published policy manifest', () => {
     delete process.env.MONEY_NOODLE_ALLOW_DOWN_ENTRY;
     delete process.env.MONEY_NOODLE_MAX_NET_EDGE;
     delete process.env.MONEY_NOODLE_EXCLUDED_ASSETS;
-    expect(detail('buy', 'Net edge after fees')).toBe('≥-5pp and <100pp');
+    expect(detail('buy', 'Net edge after fees')).toBe('≥5pp and <100pp');
     expect(detail('buy', 'Selected-side probability')).toBe('≥55%');
     expect(detail('buy', 'Entry timing')).toBe('90-second warm-up; no entry in final 30 seconds');
     // One row each, not one per track: the published policy says the tracks cannot differ.
@@ -86,7 +87,7 @@ describe('published policy manifest', () => {
     process.env.MONEY_NOODLE_MIN_SWITCH_PROBABILITY_ADVANTAGE = '0.25';
     process.env.MONEY_NOODLE_MAX_LIVE_MAKER_ATTEMPTS = '2';
     process.env.MONEY_NOODLE_ENTRY_EXECUTION_MODE = 'adaptive';
-    expect(detail('buy', 'Net edge after fees')).toBe('≥-5pp and <25pp');
+    expect(detail('buy', 'Net edge after fees')).toBe('≥5pp and <25pp');
     expect(detail('eligibility', 'DOWN/NO entry')).toBe('Suspended by operator switch');
     expect(detail('eligibility', 'Assets withheld')).toBe('DOGE, SOL');
     expect(detail('regime', 'Status')).toBe('Disabled; entries are not gated');

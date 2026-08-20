@@ -46,14 +46,18 @@ export function summarizeCyclePath(input: Array<Pick<CyclePathPoint, 'at' | 'pri
   for (let index = 1; index < signs.length; index += 1) if (signs[index] !== signs[index - 1]) flips += 1;
   const signFlipRate = signs.length > 1 ? flips / (signs.length - 1) : null;
   const prices = points.map((point) => point.price);
-  const trendEfficiency = points.length > 1 && pathDistance > 0 ? Math.abs(points.at(-1)!.price - points[0].price) / pathDistance : null;
+  const netChange = points.length > 1 ? points.at(-1)!.price - points[0].price : null;
+  const trendEfficiency = netChange !== null && pathDistance > 0 ? Math.abs(netChange) / pathDistance : null;
+  const signedTrendEfficiency = netChange !== null && pathDistance > 0 ? netChange / pathDistance : null;
+  const netChangePercent = netChange !== null && points[0].price > 0 ? (netChange / points[0].price) * 100 : null;
   const rangePercent = prices.length ? (Math.max(...prices) / Math.min(...prices) - 1) * 100 : null;
   const localVolatilityPerSecond = elapsedSeconds > 0 ? Math.sqrt(squaredLogMovement / elapsedSeconds) : null;
   const autocorrelation = lagOneAutocorrelation(returns);
   return {
     observedAt, observationCount: points.length, coverageSeconds,
     signFlipRate: finite(signFlipRate as number), lagOneAutocorrelation: finite(autocorrelation as number),
-    trendEfficiency: finite(trendEfficiency as number), rangePercent: finite(rangePercent as number),
+    trendEfficiency: finite(trendEfficiency as number), signedTrendEfficiency: finite(signedTrendEfficiency as number),
+    netChangePercent: finite(netChangePercent as number), rangePercent: finite(rangePercent as number),
     localVolatilityPerSecond: finite(localVolatilityPerSecond as number),
     localVolatility15mPercent: localVolatilityPerSecond === null ? null : localVolatilityPerSecond * Math.sqrt(900) * 100,
     regime: regimeLabel(points.length, signFlipRate, autocorrelation, trendEfficiency),

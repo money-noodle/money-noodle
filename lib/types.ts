@@ -361,10 +361,62 @@ export interface CycleRegimeFeatures {
   signFlipRate: number | null;
   lagOneAutocorrelation: number | null;
   trendEfficiency: number | null;
+  /** V2 observation fields. Absent on historical rows; positive means the underlying moved up. */
+  signedTrendEfficiency?: number | null;
+  netChangePercent?: number | null;
   rangePercent: number | null;
   localVolatilityPerSecond: number | null;
   localVolatility15mPercent: number | null;
   regime: CycleRegimeLabel;
+}
+
+export interface TrajectoryCoverage {
+  sourceStartedAt: string;
+  sourceEndedAt: string;
+  observationCount: number;
+  coverageSeconds: number;
+  maximumGapSeconds: number;
+}
+
+export interface UnderlyingTrajectoryFeature extends TrajectoryCoverage {
+  startPrice: number;
+  endPrice: number;
+  netChangePercent: number;
+  pathDistancePercent: number;
+  signedTrendEfficiency: number | null;
+}
+
+export interface QuoteTrajectoryFeature extends TrajectoryCoverage {
+  startMidpoint: number;
+  endMidpoint: number;
+  midpointChangeCents: number;
+  midpointPathDistanceCents: number;
+  midpointSignedTrendEfficiency: number | null;
+  startSpread: number;
+  endSpread: number;
+  spreadChangeCents: number;
+  spreadPathDistanceCents: number;
+  spreadSignedEfficiency: number | null;
+}
+
+export interface TrajectoryHorizons<T> {
+  trailing60Seconds?: T;
+  cycleToDate?: T;
+  trailing60SecondsUnavailableReason?: string;
+  cycleToDateUnavailableReason?: string;
+}
+
+/** Prospective observation only. A policy may not read this until a separately versioned promotion. */
+export interface QuoteTrajectorySpreadObservation {
+  version: 'quote-trajectory-spread-observation-v1';
+  calculationAt: string;
+  symbol: string;
+  providerId: TradingVenue;
+  contractId: string;
+  side: PositionSide;
+  closesAt: string;
+  underlying: TrajectoryHorizons<UnderlyingTrajectoryFeature>;
+  quote: TrajectoryHorizons<QuoteTrajectoryFeature>;
 }
 
 export interface CyclePathPoint { at: string; offsetSeconds: number; price: number; basisPercent: number }
@@ -474,6 +526,8 @@ export interface Prediction {
   basis?: ContractBasis;
   /** Persisted for validation only; never consumed by probability, confidence, or execution gates. */
   cycleRegime?: CycleRegimeFeatures;
+  /** Prospective provider/side trajectory and spread evidence; observation only. */
+  quoteTrajectorySpread?: QuoteTrajectorySpreadObservation;
   /** Explicit final-minute average and maker-touch estimates are observation-only until validated. */
   settlementAverageEstimate?: SettlementAverageEstimate;
   makerFillEstimate?: MakerFillEstimate;
@@ -536,6 +590,8 @@ export interface TrackedForecast {
   calibrationReplay?: CalibrationReplaySnapshot;
   /** Observation-only path state available at issuance. */
   cycleRegime?: CycleRegimeFeatures;
+  /** Absent on legacy and unqualified rows; never default absence to a flat path. */
+  quoteTrajectorySpread?: QuoteTrajectorySpreadObservation;
   settlementAverageEstimate?: SettlementAverageEstimate;
   makerFillEstimate?: MakerFillEstimate;
   venueProbabilityUp?: number;
@@ -1413,6 +1469,8 @@ export interface EntryDecisionSnapshot {
   basis?: ContractBasis;
   /** v2+. Observation-only path state at issuance; the coarse label alone is on `PaperOrder`. */
   cycleRegime?: CycleRegimeFeatures;
+  /** Prospective quote-path evidence. Historical v2 rows legitimately lack it. */
+  quoteTrajectorySpread?: QuoteTrajectorySpreadObservation;
   calibrationReplay?: CalibrationReplaySnapshot;
   settlementAverageEstimate?: SettlementAverageEstimate;
   factors: Factor[];

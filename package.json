@@ -42,7 +42,8 @@
     "analyze:missed-entries": "node --max-old-space-size=8192 --expose-gc scripts/analyze-missed-entries.mjs",
     "analyze:winner-preserving-filters": "node --max-old-space-size=8192 --expose-gc scripts/analyze-winner-preserving-filters.mjs",
     "analyze:execution-direction-sizing": "node --max-old-space-size=8192 --expose-gc scripts/analyze-execution-direction-sizing.mjs",
-    "analyze:xrp-exclusion": "node --max-old-space-size=8192 --expose-gc scripts/analyze-xrp-exclusion.mjs"
+    "analyze:xrp-exclusion": "node --max-old-space-size=8192 --expose-gc scripts/analyze-xrp-exclusion.mjs",
+    "analyze:entry-admission-v22": "node --max-old-space-size=8192 --expose-gc scripts/analyze-entry-admission-v22.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1111.0",

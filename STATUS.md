@@ -7,7 +7,7 @@
 
 Money Noodle is operational as a local research dashboard, continuous paper shadow trader, public paper-track-record publisher, and explicitly armed live Kalshi trader. Core UP/YES and DOWN/NO entry, managed maker execution, paper maker mirroring, signed Kalshi reconciliation, quiescent pause/drain, loss gates, budget epochs, provider permissions, contract provenance, target integrity, standalone reduce-only exits, protected switching, model evaluation, and immutable promotion accounting are implemented.
 
-The system is mechanically capable. The unresolved question is economic: current evidence does not justify stake expansion, unconditional taker execution, an automatic entry relaxation, queue-aware live gates, or adding a second live venue. The shared buy rule remains v21; live execution is explicitly `maker-high30-requalify3-fresh1c-v5`, not the withdrawn unconditional-taker description attached to v21's first deployment.
+The system is mechanically capable. The unresolved question is economic: current evidence does not justify stake expansion, unconditional taker execution, an automatic entry relaxation, queue-aware live gates, or adding a second live venue. The shared buy rule is **v22** — a 2026-08-20 operator narrowing to a +5pp edge floor and a 10–75¢ price band, not an evidence promotion; see below. Live execution is explicitly `maker-high30-requalify3-fresh1c-v5`, not the withdrawn unconditional-taker description attached to v21's first deployment.
 
 A second policy runs on the same market — the long-shot round trip, §2 below. Its current 12¢→97¢/600s cohort is paper-only; live arming is false. The parameters were selected from a retrospective sweep and therefore define a new collection cohort rather than evidence-backed promotion. It relaxes none of the edge policy's constraints and changes no edge rule.
 
@@ -36,6 +36,49 @@ or open-position observations already captured by the execution engine. Values o
 calculation window are visibly stale. This adds no venue request, polling loop, ledger field, or path back into
 pricing and execution.
 
+### Quote trajectory and spread collection deployed and running, 2026-08-20
+
+The collection-only generation in
+[docs/quote-trajectory-spread-signal-design.md](docs/quote-trajectory-spread-signal-design.md) preserves feed
+source timestamps so a cached fallback cannot manufacture a flat path, derives signed underlying and exact
+provider/side midpoint direction plus spread widening/narrowing over trailing-60-second and contiguous
+cycle-to-date horizons, and stamps the selected observation only on new qualified forecasts and immutable
+entry decisions. Four unique observations over 45 seconds are required; a stale latest point, malformed or
+crossed book, contract change, or gap over two calculation buckets leaves the feature unavailable rather than
+substituting another provider or a zero.
+
+This uses only quotes existing tasks already fetched and adds no poll, scheduler, request, public projection,
+policy read, ranking weight, gate, sizing, execution, exit, or promotion path. Any selection or gate candidate
+still requires a separate precommitted design and sentinel generation under SPEC §12.5.
+
+**Deployment check, 2026-08-20T04:50–04:54Z.** Live automation paused and drained quiescently; manual
+reconciliation passed with 28¢ reserved. The production build passed, the server restarted, and startup
+reconciliation reported the local ledger, venue cash, positions, orders, fills, IDs, resting orders, and
+reservations in agreement. The operator explicitly resumed live mode with 1,625¢ available and 28¢ reserved.
+At the first post-warm-up read, venue history held 112 exact-book samples over 16 source timestamps and oracle
+history held eight source-timestamped samples. The production feature calculator returned both trailing and
+cycle-to-date quote and underlying features from the live cache; the collector was running with a successful
+04:54:27Z cycle and no last error. Two bounded Kalshi read-limit backoffs occurred at startup and recovered.
+
+There was not yet a qualified signal record: all seven predictions had zero currently admissible v22 options,
+so the private dashboard and forecast journal correctly carried zero selected observations. This is an
+operational verification of source collection and feature calculation, not an economic sample. The main
+caveat is candidate sparsity under the narrower v22 entry band; only future qualified calculations stamp the
+durable selected observation.
+
+**First durable cohort, 2026-08-20T05:05:57Z.** The forecast journal then held 10 unique qualified
+observations from 2026-08-20T05:01:14Z–05:05:30Z: nine SOL and one HYPE. All 10 carried cycle-to-date
+underlying direction; eight carried cycle-to-date quote/spread features; five carried both trailing-60-second
+features. Missing horizons remained explicitly unavailable under the source coverage rules rather than
+becoming flat values. None had resolved, so this verifies prospective persistence only and supplies no
+economic result; the greatest caveat is ten highly concentrated observations over four minutes.
+
+**Hosted deployment check, 2026-08-20T05:04Z.** Manual `npx vercel --prod` deployment
+`dpl_J5rvqJ6nTtdNcjRNBHvoVEB3vP4u` reached READY and aliased `noodle.money`. The canonical public API
+published v22 with +5pp edge and 10–75¢ ask bounds over seven predictions, omitted
+`quoteTrajectorySpread`, and reported its stateless collector disabled. Hosted therefore exposes the policy
+and sanitized dashboard without acquiring collection, storage, reconciliation, or execution authority.
+
 ## Current Measured State
 
 Snapshot from local durable files at 2026-08-19T01:44:04Z. Full method, cohorts, corrections, and caveats in [reports/open-experiment-status-2026-08-19.md](reports/open-experiment-status-2026-08-19.md).
@@ -48,6 +91,44 @@ Snapshot from local durable files at 2026-08-19T01:44:04Z. Full method, cohorts,
 - The active local long-shot cohort is `long-shot-round-trip-buy12-sell97-win600-v1`, paper only: 8 resolved attempts in 4 windows, all losses, −402c on 402c, no mark exits, and 0 current-policy hold-sentinel records.
 - Latest walk-forward run: `walk-forward:875:fnv1a-27542176`, generated 2026-08-18T22:00:08Z. Candidate mean window return was 5.75% against baseline 2.37% over 438 test windows; it beat baseline 5/5 folds but was positive only 3/5 with modal parameters in 3/5. Decision: `baseline_retained`.
 - The current Next development server occupied about 3.7 GB RSS. RSS is not retained heap and dev mode carries compiler/cache overhead, but this materially disagrees with the prior 70 MB post-sharding RSS measurement and needs a like-for-like profile.
+
+### Entry admission narrowed to buy policy v22, 2026-08-20
+
+`MIN_NET_EDGE` returns to **+5pp** (from −5pp at v20) and the price band narrows to **10–75¢** (from
+5–97¢). Nothing else moved: side floor, quality floor, persistence, warm-up, late cutoff, execution
+policy `maker-high30-requalify3-fresh1c-v5`, sizing, and exits are unchanged. Both tracks changed at
+once — the rule layer takes no execution mode, so the mirror invariant holds by construction.
+
+**This is an operator narrowing, not an evidence promotion, and it reverses v20 on evidence that still
+reproduces.** Full corrected review:
+[reports/entry-admission-v22-review-2026-08-20.md](reports/entry-admission-v22-review-2026-08-20.md);
+reproduce with `npm run analyze:entry-admission-v22`. At the 2026-08-20T05:00:49Z read of 66,728
+forecasts / 66,651 resolved, exact-provider first-to-fire replay found **3,941 v21 versus 3,373 v22
+positions**: zero added and **568 omitted**, a 14.4% reduction. The omitted cohort returned **+26.1%
+±7.6 over 238 settlement timestamps**; v22's surviving cohort returned +19.2% ±2.3 over 837.
+
+This corrects the original uncertainty: the previously stated **±3.8pp belonged to the edge-floor
+subgroup**, not the whole omitted cohort's settlement-window-clustered standard error. Scored on every
+v21 position, with omissions earning zero and later v22 first fires retained, v22 changes ask-priced
+return by **−3.7pp ±1.3pp** and bounded payout edge by **−1.09pp ±0.31pp**. Price-first exclusive
+attribution is 487 edge-floor positions (+21.3% ±3.8), 72 above 75¢ (+8.1% ±5.2), and nine below 10¢
+(+173.2% ±185.9). The edge-floor population v20 cited remains positive and is not treated as refuted.
+
+**The caveat that most threatens this:** every figure is retrospective and ask-priced with no
+persistence, maker-fill selection, portfolio capacity, sizing, exits, or budget reuse. Ask-priced return
+is an upper bound this book has never realized, and concentrating capital on fewer higher-conviction
+tickets remains the stated reason for accepting the reduction — a judgment about execution reality,
+not a result the replay produced. The corrected replay weakens rather than supports the economic case
+for v22; it cannot reverse the operator decision automatically.
+
+Both band ends now bind. The former 97¢ ceiling refused no row the expected-value gate had not already
+refused, so under §5.7 it was not a control; at 75¢ it is one. `maximumNetEdge()` remains disarmed at
+1, leaving the 10¢ floor as the only gate bounding the documented above-35pp calibration inversion.
+
+V22 activated in the built local runtime at **2026-08-20T04:50:15Z** during the quiescent deployment
+recorded in the trajectory-collection section above. Startup reconciliation passed and live mode was
+explicitly resumed. Source, policy manifest history, SPEC §3.7 and its decision log, the reproducible
+analysis, and affected tests are updated; the runtime publishes v22.
 
 ### XRP exclusion re-evaluated; current evidence is null, 2026-08-20
 

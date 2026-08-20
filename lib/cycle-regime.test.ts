@@ -10,6 +10,8 @@ describe('observation-only cycle regime features', () => {
     expect(result.coverageSeconds).toBe(60);
     expect(result.signFlipRate).toBe(0);
     expect(result.trendEfficiency).toBeCloseTo(1);
+    expect(result.signedTrendEfficiency).toBeCloseTo(1);
+    expect(result.netChangePercent).toBeCloseTo(4);
     expect(result.rangePercent).toBeCloseTo(4);
     expect(result.localVolatility15mPercent).toBeGreaterThan(0);
     expect(result.regime).toBe('trending');
@@ -20,6 +22,8 @@ describe('observation-only cycle regime features', () => {
     expect(result.signFlipRate).toBe(1);
     expect(result.lagOneAutocorrelation).toBeLessThan(-0.99);
     expect(result.trendEfficiency).toBe(0);
+    expect(result.signedTrendEfficiency).toBe(0);
+    expect(result.netChangePercent).toBe(0);
     expect(result.regime).toBe('mean-reverting');
   });
 
@@ -28,6 +32,8 @@ describe('observation-only cycle regime features', () => {
     expect(short.regime).toBe('insufficient');
     expect(short.signFlipRate).toBeNull();
     expect(short.trendEfficiency).toBeNull();
+    expect(short.signedTrendEfficiency).toBeNull();
+    expect(short.netChangePercent).toBe(0);
     expect(short.rangePercent).toBe(0);
   });
 
@@ -36,5 +42,12 @@ describe('observation-only cycle regime features', () => {
     expect(result.observationCount).toBe(3);
     expect(result.coverageSeconds).toBe(30);
     expect(result.trendEfficiency).toBeCloseTo(1);
+  });
+
+  it('retains downward direction separately from absolute trend efficiency', () => {
+    const result = summarizeCyclePath([point(0, 104), point(15, 103), point(30, 102), point(45, 101)]);
+    expect(result.trendEfficiency).toBe(1);
+    expect(result.signedTrendEfficiency).toBe(-1);
+    expect(result.netChangePercent).toBeCloseTo(-3 / 104 * 100);
   });
 });

@@ -25,9 +25,12 @@ describe('binary buy policy v13', () => {
     expect(qualifiesAsBuyEdge(candidate())).toBe(true);
     // The same 70% belief bought at 90c is a losing trade and must be rejected.
     expect(qualifiesAsBuyEdge(candidate({ market: { ...market, askUp: 0.90 } }))).toBe(false);
-    // A high directional likelihood is not sufficient on its own. At v20 the floor is -5pp, so the
-    // price has to be far enough above the belief to fail even a gate that tolerates negative edge.
-    expect(qualifiesAsBuyEdge(candidate({ modelProbabilityUp: 0.95, market: { ...market, askUp: 0.94 } }))).toBe(true);
+    // A high directional likelihood is not sufficient on its own. **Restored at v22:** with the floor
+    // back at +5pp a correctly priced favourite no longer qualifies — a 95% belief bought at 94c is
+    // fair value, not edge. Under v20's -5pp floor this same row was admitted.
+    expect(qualifiesAsBuyEdge(candidate({ modelProbabilityUp: 0.95, market: { ...market, askUp: 0.94 } }))).toBe(false);
+    // The same belief qualifies once the price is below it by more than the floor plus fees.
+    expect(qualifiesAsBuyEdge(candidate({ modelProbabilityUp: 0.95, market: { ...market, askUp: 0.70 } }))).toBe(true);
     expect(qualifiesAsBuyEdge(candidate({ modelProbabilityUp: 0.80, market: { ...market, askUp: 0.90 } }))).toBe(false);
     // v13 restores the 55% floor after the prospective 52.5–55% v12 cohort lost when filled live.
     expect(qualifiesAsBuyEdge(candidate({ modelProbabilityUp: 0.55, market: { ...market, askUp: 0.42 } }))).toBe(true);
@@ -37,7 +40,9 @@ describe('binary buy policy v13', () => {
   it('rejects a cheap side when the independent model still calls that side an underdog', () => {
     const cheapDownUnderdog = candidate({
       modelProbabilityUp: 0.6,
-      market: { ...market, askUp: 0.95, askDown: 0.20 },
+      // UP sits at 70c rather than 95c so the v22 price ceiling does not decide this case: the claim
+      // under test is that the *probability floor* rejects the cheap underdog, not the price band.
+      market: { ...market, askUp: 0.70, askDown: 0.20 },
     });
     expect(venueEntryOptions(cheapDownUnderdog)[0]).toMatchObject({ side: 'DOWN', probability: 0.4 });
     expect(bestEntry(cheapDownUnderdog)).toMatchObject({ side: 'UP', probability: 0.6 });

@@ -2,7 +2,7 @@ import { venueFeeFraction, type LiquidityRole } from './venue-fee-schedule';
 import type { PositionSide, Prediction } from './types';
 
 /**
- * Binary buy policy v17.
+ * Binary buy policy v22.
  *
  * The objective is profit, not forecast accuracy. A well-calibrated forecast still loses money when
  * it is bought at or above fair value, so qualification is expressed as expected value net of venue
@@ -15,17 +15,24 @@ import type { PositionSide, Prediction } from './types';
 /**
  * Minimum expected value per $1 of payout, after fees, before a buy qualifies.
  *
- * **Lowered from 5pp to −5pp at v20.** The 5pp floor was refusing 402 decisions that returned +17.5%
- * ±6.5 held to settlement — at or above the rate of the population it was already admitting. The bulk of
- * that increment is ordinary 50–85¢ contracts where the per-window and stake-weighted views agree to
- * within a point, so it is not an artefact of how the cohort is weighted.
+ * **Restored to +5pp at v22**, reversing the v20 reduction to −5pp. A positive floor means the desk only
+ * buys when its own probability exceeds the all-in cost of the contract, so every admitted row is a claim
+ * of mispricing rather than agreement with a correctly priced favourite.
  *
- * A negative floor is deliberate and reads oddly: it admits contracts the model prices at or slightly
- * below the ask. Those are not edge trades. They are favourites the market has priced correctly and the
- * model agrees with, and they paid because the desk's slots were empty — measured at 0 of 67 v19 orders
- * at the 3-position cap.
+ * **This reverses a decision whose evidence still reproduces, and that is an operator choice rather than
+ * a measured promotion.** v20 lowered the floor because the 5pp gate was refusing 402 decisions that
+ * returned +17.5% ±6.5 held to settlement. Replayed at 2026-08-20 over every recorded resolved snapshot,
+ * that cohort is still positive: the exact-provider replay found 487 edge-floor decisions inside the
+ * new price band returning +21.3% ±3.8 over 204 settlement timestamps. Across every v21 position, v22
+ * was −3.7pp ±1.3 ask-priced versus v21; see `reports/entry-admission-v22-review-2026-08-20.md`.
+ *
+ * Those are ask-priced replays with no fill model. The desk fills roughly 48% of maker attempts and its
+ * own measurements show adverse selection concentrating fills on the moves running against it, so an
+ * ask-priced return is an upper bound this book has never realized. Concentrating capital on fewer,
+ * higher-conviction tickets is the stated reason for accepting that trade. It is not what the replay
+ * shows, and the replay is recorded here so the cost stays visible rather than being rediscovered later.
  */
-export const MIN_NET_EDGE = -0.05;
+export const MIN_NET_EDGE = 0.05;
 /**
  * Upper bound on claimed edge, above which the claim is treated as model failure rather than opportunity.
  *
@@ -68,15 +75,26 @@ export const MIN_SELECTED_SIDE_PROBABILITY = 0.55;
 /**
  * Entry price bounds.
  *
- * These are our own limits, not venue limits: Kalshi quotes from $0.001 to $0.999. The ceiling keeps
- * a payout-room backstop, though the expected-value test binds well before it: the model's probability
- * is clamped at 0.97 and edge must clear 5pp after fees, so nothing above roughly 91c can qualify.
- * The price floor remains permissive because selected-side probability now rejects model-underdog
- * longshots independently of price; price cohorts remain measurable without treating cheapness as edge.
+ * These are our own limits, not venue limits: Kalshi quotes from $0.001 to $0.999.
+ *
+ * **Narrowed from 5–97¢ to 10–75¢ at v22.** Both ends now bind rather than acting as backstops, which
+ * the previous band did not: with the 97¢ ceiling the expected-value test refused everything above
+ * roughly 91¢ on its own, so the ceiling admitted no row the edge floor was not already deciding.
+ * At 75¢ the ceiling is a live constraint — a 75¢ ask needs P(side) of at least 81.3% to clear the
+ * +5pp floor after its 1.3¢ fee, and the probability cap of 0.97 leaves room for that. Under §5.7 this
+ * is now a gate that changes admitted rows, and may be described as one.
+ *
+ * The 10¢ floor is deliberately above the old 5¢ one. Cheapness is not edge, and the floor bounds how
+ * far into the model's documented calibration inversion the desk can reach: above 35pp of claimed edge
+ * the model predicted 64.0% and realized 37.6% over 218 windows, and claimed edge rises as price falls.
+ * `maximumNetEdge()` remains disarmed, so price is the only gate bounding that cohort. Replayed at
+ * 2026-08-20 the band admits no row v21 did not already admit — it is purely restrictive, and it
+ * withheld nine exact-provider decisions below 10¢ at the corrected review read; two won, with return
+ * uncertainty wider than the estimate itself.
  */
-export const MIN_ENTRY_PRICE = 0.05;
-export const MAX_ENTRY_PRICE = 0.97;
-export const BUY_POLICY_VERSION = 'buy-binary-edge-netminus5-nocap-quality50-owned55-price5to97-late30-persist2of15-v21';
+export const MIN_ENTRY_PRICE = 0.10;
+export const MAX_ENTRY_PRICE = 0.75;
+export const BUY_POLICY_VERSION = 'buy-binary-edge-net5-nocap-quality50-owned55-price10to75-late30-persist2of15-v22';
 /** Minimum unique resolved 15-minute settlement timestamps, never updates or per-asset cycles. */
 export const MIN_CALIBRATION_SAMPLE = 100;
 

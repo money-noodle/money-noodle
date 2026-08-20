@@ -45,7 +45,7 @@ describe('paper execution fills', () => {
 
   it('uses fractional Kalshi quantity when a whole contract does not fit', () => {
     expect(estimatePaperFill(25, 0.50, 'kalshi')?.quantity).toBe(0.48);
-    expect(estimatePaperFill(4, MIN_ENTRY_PRICE, 'kalshi')?.quantity).toBe(0.6);
+    expect(estimatePaperFill(4, MIN_ENTRY_PRICE, 'kalshi')?.quantity).toBe(0.3);
     expect(estimatePaperFill(10, 0.35, 'kalshi')).toMatchObject({ quantity: 0.25, stakeCents: 10 });
     expect(estimatePaperFill(9, 0.28, 'kalshi')).toMatchObject({ quantity: 0.28, stakeCents: 9 });
     expect(estimatePaperFill(1, 0.50, 'kalshi')).toBeNull();
@@ -125,13 +125,12 @@ describe('paper execution fills', () => {
   });
 
   it('leaves expensive entries to the expected-value gate rather than a price ceiling', () => {
-    // The price ceiling is permissive, so edge after fees is what actually binds: even a maximally
-    // confident model cannot clear the bar near the top of the range.
     const mostConfident = 0.97;
     const dearest = mostConfident - MIN_NET_EDGE - venueFeeRate('kalshi', 0.9, ENTRY_ADMISSION_FEE_ROLE);
-    // **Reversed at v20.** With the floor at -5pp the expected-value test no longer binds before the
-    // price ceiling: the dearest price a 97% belief can clear is above MAX_ENTRY_PRICE, so the 97c
-    // ceiling is now a live constraint rather than a backstop the EV gate reaches first.
+    // **Still a live constraint at v22, for the opposite reason.** v20 made the ceiling bind by
+    // dropping the floor to -5pp; v22 restores the +5pp floor but narrows the ceiling to 75c, and the
+    // dearest price a 97% belief can clear (~91c) is still above it. Under SPEC 5.7 the price ceiling
+    // therefore continues to refuse rows the expected-value gate would admit, and remains a control.
     expect(dearest).toBeGreaterThan(MAX_ENTRY_PRICE);
     expect(bestEntry({
       modelProbabilityUp: mostConfident, enabledTradingVenues: ['kalshi'],

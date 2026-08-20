@@ -149,8 +149,9 @@ describe('public dashboard payload', () => {
     predictions: [],
   } as unknown as DashboardData);
 
-  it('withholds provider permissions and the model promotion record from unauthenticated callers', () => {
+  it('withholds provider permissions, model promotion, and worker trajectory evidence from unauthenticated callers', () => {
     const signed = dashboard();
+    signed.predictions = [{ quoteTrajectorySpread: { version: 'quote-trajectory-spread-observation-v1' } } as unknown as DashboardData['predictions'][number]];
     expect(signed.policyManifest.model).toBeDefined();
     expect(signed.policyManifest.components.some((component) => component.kind === 'provider')).toBe(true);
 
@@ -162,5 +163,6 @@ describe('public dashboard payload', () => {
     expect(published.policyManifest.activeBuyPolicyVersion).toBe(signed.policyManifest.activeBuyPolicyVersion);
     expect('tradingProviders' in published).toBe(false);
     expect('performance' in published).toBe(false);
+    expect(published.predictions[0].quoteTrajectorySpread).toBeUndefined();
   });
 });

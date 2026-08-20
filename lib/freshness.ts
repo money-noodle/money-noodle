@@ -15,6 +15,8 @@ export const DATA_FRESHNESS = {
   seasonalCacheMs: 24 * 60 * 60_000,
   localPriceSnapshotMs: 60 * 60_000,
   venueHistoryMinimumSpacingMs: 10_000,
+  /** Slightly more than one contract window, so cycle-to-date quote paths survive to settlement. */
+  quotePathHistoryWindowMs: 16 * 60_000,
   oracleSampleMinimumSpacingMs: 10_000,
   oracleHistoryWindowMs: 30 * 60_000,
   venueSmoothingWindowMs: 3 * 60_000,

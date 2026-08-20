@@ -10,6 +10,7 @@ import {
 } from './forecast-store';
 import { DATA_FRESHNESS } from './freshness';
 import { calculationObservationId, signalObservationId, TRACKING_POLICY_VERSION } from './observation-window';
+import { cloneQuoteTrajectorySpreadObservation } from './quote-trajectory-spread';
 import type { ContractProvenanceRecord, PerformanceSummary, Prediction, TrackedForecast, TradingVenue, VenueOutcomeRecord } from './types';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
@@ -341,6 +342,8 @@ function newTrackedForecast(prediction: Prediction, modelVersion: string, observ
     basisProbabilityUp: prediction.basis?.probabilityUp,
     calibrationReplay: prediction.calibrationReplay,
     cycleRegime: prediction.cycleRegime,
+    quoteTrajectorySpread: qualified && prediction.quoteTrajectorySpread
+      ? cloneQuoteTrajectorySpreadObservation(prediction.quoteTrajectorySpread) : undefined,
     settlementAverageEstimate: prediction.settlementAverageEstimate,
     makerFillEstimate: prediction.makerFillEstimate,
     venueProbabilityUp: prediction.venueProbabilityUp,

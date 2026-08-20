@@ -39,9 +39,56 @@ const component = (
  */
 const history: PolicyManifestHistoryEntry[] = [
   {
+    version: 'buy-binary-edge-net5-nocap-quality50-owned55-price10to75-late30-persist2of15-v22',
+    activatedAt: '2026-08-20T04:50:15.000Z',
+    status: 'active',
+    summary: 'Narrowed entry admission: the net-edge floor returns to +5pp and the price band narrows to 10-75c. Purely restrictive; no row v21 refused becomes admissible.',
+    changes: [
+      'MIN_NET_EDGE -0.05 -> 0.05, reversing the v20 reduction',
+      'MIN_ENTRY_PRICE 0.05 -> 0.10 and MAX_ENTRY_PRICE 0.97 -> 0.75',
+      'No change to the side floor, quality floor, persistence, warm-up, late cutoff, execution policy, sizing or exits',
+      'maximumNetEdge() remains disarmed at 1; the 10c price floor is now the only gate bounding the calibration-inversion cohort',
+      'Known cost accepted, as at v21: the regime-gate store scopes candidates by buy-policy version, so the bump discards the accumulated v21 windows and re-warms',
+    ],
+    // **An operator decision, not a measured promotion, and it reverses a decision whose evidence still
+    // reproduces.** SPEC 12.5 requires committed sentinels for promotion; nothing here clears that bar and
+    // nothing is claimed to. What was done instead is to price the change before deploying it and record
+    // the cost.
+    //
+    // Corrected replay 2026-08-20 over 66,651 resolved snapshots, requiring the exact provider outcome:
+    // both policies run first-to-fire independently per symbol/side/window. V22 admits **zero** positions
+    // v21 did not and refuses 568, a 14.4% volume reduction. The refused cohort returned +26.1% +/-7.6
+    // clustered over 238 settlement timestamps against +19.2% +/-2.3 for v22 over 837. Scored on every
+    // v21 position, v22 is -3.7pp +/-1.3 on ROI and -1.09pp +/-0.31 on bounded payout edge.
+    //
+    // The original review attached +/-3.8pp to the whole refused cohort. That was the edge-floor
+    // subgroup's standard error, not the whole cohort's settlement-window-clustered uncertainty. Price-
+    // first exclusive attribution at the corrected read is 487 edge-floor decisions (+21.3% +/-3.8),
+    // 72 above 75c (+8.1% +/-5.2), and nine below 10c (+173.2% +/-185.9). The positive edge-floor result
+    // remains the same population v20 cited when it lowered the floor; it is not treated as refuted.
+    //
+    // The counterweight is that every figure above is ask-priced with no fill model. Live fills roughly
+    // 48% of shared decisions as a maker, exit fills are unmodelled in paper, and the desk's own
+    // direction measurements show adverse moves filling 63.6% against favourable moves at 31.7%. An
+    // ask-priced return is an upper bound this book has never realized, and concentrating capital on
+    // fewer higher-conviction tickets is the stated reason for accepting the reduction. That is a
+    // judgement about execution reality, not a result this replay produced.
+    //
+    // Both ends of the band now bind, which the previous one did not: at a 97c ceiling the expected-value
+    // test already refused everything above roughly 91c, so the old ceiling changed no admitted row and
+    // under SPEC 5.7 should not have been called a control. At 75c it is one.
+    evidence: [
+      'reports/entry-admission-v22-review-2026-08-20.md · exact-provider replay, uncertainty correction, and deployment status',
+      'npm run analyze:entry-admission-v22 · 66,651 resolved snapshots, 3,941 -> 3,373 decisions, 0 added, 568 dropped at the cited read',
+      'lib/prediction-policy.ts MIN_NET_EDGE · the v20 evidence this reverses, reproduced rather than refuted',
+      'SPEC.md 12.5 · promotion requires committed sentinel evidence; this is an operator narrowing and claims no promotion',
+    ],
+  },
+  {
     version: 'buy-binary-edge-netminus5-nocap-quality50-owned55-price5to97-late30-persist2of15-v21',
     activatedAt: '2026-08-19T00:45:00.000Z',
-    status: 'active',
+    deactivatedAt: '2026-08-20T04:50:15.000Z',
+    status: 'superseded',
     summary: 'Promoted the two-snapshot persistence candidate and configured gated maker/taker execution; the intended unconditional taker switch was not implemented.',
     changes: [
       'REQUIRED_QUALIFYING_SNAPSHOTS 3 -> 2 and REQUIRED_OBSERVATION_SPAN_MS 30s -> 15s, promoting persistence-two-consecutive-v1',
