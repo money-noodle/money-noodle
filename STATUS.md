@@ -92,6 +92,65 @@ Snapshot from local durable files at 2026-08-19T01:44:04Z. Full method, cohorts,
 - Latest walk-forward run: `walk-forward:875:fnv1a-27542176`, generated 2026-08-18T22:00:08Z. Candidate mean window return was 5.75% against baseline 2.37% over 438 test windows; it beat baseline 5/5 folds but was positive only 3/5 with modal parameters in 3/5. Decision: `baseline_retained`.
 - The current Next development server occupied about 3.7 GB RSS. RSS is not retained heap and dev mode carries compiler/cache overhead, but this materially disagrees with the prior 70 MB post-sharding RSS measurement and needs a like-for-like profile.
 
+### Mirror fidelity and skip attribution, 2026-08-20
+
+Three changes from the 2026-08-20 divergence review. Full design and the falsification test in
+[docs/mirror-fidelity-and-skip-attribution-design.md](docs/mirror-fidelity-and-skip-attribution-design.md).
+**No entry rule, threshold, size or gate moved**; buy policy stays v22 and `lib/mirror-invariant.test.ts`
+still asserts the rule layer takes no execution mode.
+
+**1. Live skips are durable (`live-skip-v1`).** SPEC §12.8 step 2, previously unimplemented — the ledger
+kept `lastLiveSkip`, one overwritten slot. Every gate in `runLive` now names its own class (`stop`,
+`operator`, `environment`, `reconciliation`, `rate_limit`, `budget`, `funding`, `exposure`, `portfolio`,
+`persistence`, `regime`, `staleness`, `none`) and writes an episode to `data/live-skips.journal.jsonl`.
+A classifier over the existing free-text reasons was rejected: a new gate would silently inherit whichever
+pattern matched. Records fold consecutive identical cycles into one episode, so 2026-08-19's six-hour risk
+stop is one row with a cycle count and its settlement windows rather than ~1,440 rows. Operator intent
+separates a system `stop` from an `operator` pause. `windowsWithheldBy(records, 'stop')` joined to the
+paper book on `closesAt` is the number that previously required reconstructing from the control audit.
+The three withholds inside the switch path journal too, under class `fill` — §12.3 decomposes
+`paper − live` into fill, limit and stop drag, so a reduce-only exit that did not fill is fill drag and
+not a ranking decision. The one `lastLiveSkip` line reporting a *completed* switch is deliberately not
+journalled; it is a status line, not a withhold.
+No execution authority; a failed write is logged and dropped rather than stalling a cycle.
+
+**2. The paper exit has a fill model (`paper-ioc-exit-depth-v1`).** It previously set `status = 'sold'`
+unconditionally — 106 of 106 attempts completed, against live's 50 of 87 (57.5%). **The agreed design
+changed before implementation:** `placeKalshiSell` sends `immediate_or_cancel` with `post_only: false`
+and returns `liquidityRole: 'taker'`, so the exit never rests and cannot be modelled by the resting-maker
+print loop. It is now a single sweep of displayed depth at or above `decision.executableBid`, with
+partial fills and a no-fill that retains the position exactly as live does, neither automatically
+retried. Deliberately conservative: displayed size only, one instant, no price improvement, no market
+impact.
+
+Both new taker paths distinguish missing evidence from a genuine no-fill: the order-book fetch is
+allowed to fail silently, and sweeping an absent book would have recorded a data outage as an
+`ioc_no_fill` — and, on the exit, stranded the position, since `standaloneExitAttemptedAt` disables
+retry permanently. The entry returns its reservation and marks the attempt `rejected`; the exit defers
+without stamping. This mirrors the maker simulation's existing `evidenceComplete` posture.
+
+**Expect the published paper track record to fall.** Live's 37 exit no-fills retained positions that
+returned +55.5% (25 won, 12 lost), so live's failures to exit were profitable and paper was clipping the
+same winners at a worse price. The old number was optimistic; the direction of the correction is right
+and its magnitude is not predicted. The 106 already-recorded costless exits stay in the ledger as
+evidence of what the v3 simulator did — `paperExitFillVersion` keeps the cohorts unpooled.
+
+**3. Paper takes the route live takes (`paper-managed-execution-route-ioc-v4`).** SPEC §12.2 specifies
+the mirror as an independent simulation with "the same versioned episode boundary and route decision";
+the route half was never implemented, so all 556 paper edge orders were makers against live's 15 takers
+and the high-edge IOC route the v4/v5 execution change was about had no mirror. `runPaper` now calls the
+same `evaluateEntryExecutionPolicy` and branches, refreshing the exact contract and re-checking the
+one-cent cap and taker authorization before sweeping depth. `post_only_race` stays unmirrorable — it has
+no meaning for an order that never rests. The version bump resets the paper execution cohort.
+
+**Deliberately not done: paper still ignores live's risk stops, hourly ceiling and reconciliation gate.**
+Per §12.3 that channel must stay open — paper's value there is measuring what the stop cost, and making
+the tracks symmetric would delete the measurement. What was missing was the label, which (1) supplies.
+
+New: `lib/live-skip.ts`, `lib/live-skip-store.ts`, `lib/ioc-fill-model.ts` and their tests.
+`npm run typecheck` and `npm test` (962 tests, 117 files) pass. **Not yet deployed:** the running server
+serves the previous build until it is rebuilt and restarted.
+
 ### Entry admission narrowed to buy policy v22, 2026-08-20
 
 `MIN_NET_EDGE` returns to **+5pp** (from −5pp at v20) and the price band narrows to **10–75¢** (from

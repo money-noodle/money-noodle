@@ -1711,6 +1711,13 @@ export interface PaperOrder {
   standaloneExitAttemptedAt?: string;
   standaloneExitHoldValueCents?: number;
   standaloneExitOptimisticHoldValueCents?: number;
+  /** Paper only: which exit fill simulation produced this outcome. Absent on rows written before v1,
+   *  which recorded a costless exit that always completed and must not be pooled with simulated ones. */
+  paperExitFillVersion?: string;
+  /** Paper only: displayed size at or above the exit limit at the instant the IOC was simulated. */
+  paperExitDisplayedAtLimit?: number;
+  /** Paper only: which entry route the execution policy chose, mirroring live's `entryExecutionDecision`. */
+  paperEntryRoute?: 'maker' | 'taker';
   /** Reduce-only close terms when a position is sold before settlement or to fund a superior candidate. */
   exitClientOrderId?: string;
   exitRequestedAt?: string;

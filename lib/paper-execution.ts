@@ -11,6 +11,22 @@ import { POST_EXIT_REENTRY_COOLDOWN_MS, evaluateExitPolicy } from './exit-policy
 import { estimateMakerFill } from './maker-fill-model';
 import { fetchKalshiManagedMakerQuote, fetchKalshiQuote, fetchKalshiTradePrintsSince } from './kalshi-market-data';
 import { observeKalshiOrderBook } from './kalshi-depth';
+import { immediateBuyFill, immediateSellFill } from './ioc-fill-model';
+import type { LiveSkipClass } from './live-skip';
+import { recordLiveSkip } from './live-skip-store';
+
+/**
+ * Journals a withhold decided inside the switch path.
+ *
+ * These three sites wrote only to `lastLiveSkip` when the journal landed, which left the switch path
+ * with exactly the single-slot problem SPEC §12.8 step 2 exists to remove. The window is the incumbent's
+ * own settlement window: a switch withheld is a decision about that window, not about the account.
+ */
+function recordSwitchSkip(classification: LiveSkipClass, reason: string, incumbent: PaperOrder, ledger: Ledger): void {
+  ledger.lastLiveSkip = { reason, at: new Date().toISOString() };
+  void recordLiveSkip({ classification, reason, windows: [incumbent.closesAt], symbol: incumbent.symbol, side: incumbent.side })
+    .catch((error) => console.error('Live skip journal write failed:', error));
+}
 import { PAPER_MANAGED_MAKER_EXECUTION_VERSION, simulateManagedPaperMaker, type PaperMakerSimulationResult } from './paper-maker-simulation';
 import { isFreshCalculationTimestamp } from './freshness';
 import { selectedSideDepth } from './order-book-depth';
@@ -92,8 +108,8 @@ import {
 import { REQUIRED_SWITCH_SNAPSHOTS, REQUIRED_SWITCH_SPAN_MS, advanceSwitchPersistence, switchCooldownRemainingMs, switchEvidenceReady, switchEvidenceSpanMs, type SwitchPersistenceState } from './switch-hysteresis';
 import { evaluateSwitchProbabilityGate, switchPolicySettings, valueSwitch } from './switch-policy';
 import { autoResumeTradingAfterReconciliation, getTradingControl, pauseTrading, reconcileTradingBudget, recordTradingReconciliationFailure, releaseTradingBudget, reserveTradingBudget, settleTradingBudget, stopTradingForLiveRisk, suspendTrading } from './trading-control';
-import { takerQuoteCap } from './taker-quote-policy';
-import type { DashboardData, ExecutionMode, ExecutionSignalReadiness, ExecutionSummary, MarketFunding, MarketId, PaperOrder, PortfolioDecisionView, PositionLifecycleObservation, PositionSide, Prediction, ProviderBudgetConfiguration, PublicPaperBudget, PublicPaperExecutionRecord, StrategyId, TradingControlData, TradingProviderId } from './types';
+import { refreshedAskFitsTakerCap, takerQuoteCap } from './taker-quote-policy';
+import type { BinaryOrderBook, DashboardData, ExecutionMode, ExecutionSignalReadiness, ExecutionSummary, MarketFunding, MarketId, PaperOrder, PortfolioDecisionView, PositionLifecycleObservation, PositionSide, Prediction, ProviderBudgetConfiguration, PublicPaperBudget, PublicPaperExecutionRecord, StrategyId, TradingControlData, TradingProviderId } from './types';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const LEDGER_FILE = path.join(DATA_DIR, 'paper-orders.json');
@@ -967,13 +983,93 @@ async function managePaperMakerOrder(order: PaperOrder, ledger: Ledger): Promise
   }
 }
 
-async function managePaperMakerOrders(orders: PaperOrder[], ledger: Ledger): Promise<boolean> {
+/**
+ * Simulates the taker branch as the IOC it is: refresh the exact contract, re-check the same gates live
+ * re-checks, then cross whatever displayed depth the limit reaches.
+ *
+ * Live's taker path re-reads the quote before submitting and refuses on two conditions this mirrors —
+ * the ask moved past the one-cent cap, and the refreshed quote no longer clears the taker gates. What it
+ * cannot mirror is `post_only_race`, which has no meaning for an order that never rests.
+ */
+async function managePaperTakerOrder(order: PaperOrder, ledger: Ledger, authorize?: PaperTakerAuthorizer): Promise<void> {
+  const quoteRun = beginTaskCadenceRun('exact-pre-submit-quote');
+  const reservedCents = order.stakeCents;
+  try {
+    const quote = await fetchKalshiManagedMakerQuote(order.contractId, order.side);
+    quoteRun.succeed();
+    const refuse = (noFillReason: PaperOrder['noFillReason'], reason: string) => {
+      order.status = 'unfilled';
+      order.noFillReason = noFillReason;
+      order.reason = reason;
+      order.makerCompletedAt = new Date().toISOString();
+      ledger.paperBudget.availableCents += reservedCents;
+    };
+    const cap = takerQuoteCap(order.issuanceAskPrice ?? order.askPrice);
+    if (!cap) return refuse('pre_submit_quote_moved', 'Issuance ask cannot produce a valid one-cent taker cap.');
+    if (!refreshedAskFitsTakerCap(quote.ask, cap)) {
+      return refuse('pre_submit_quote_moved', `Refreshed ask ${(quote.ask * 100).toFixed(1)}c moved beyond the ${(cap.maximumPrice * 100).toFixed(1)}c taker cap.`);
+    }
+    const refusal = authorize?.({ bid: quote.bid, ask: quote.ask, spread: quote.ask - quote.bid });
+    if (refusal) return refuse('pre_submit_quote_moved', `Refreshed quote no longer authorizes taking: ${refusal}`);
+
+    if (!quote.orderBook) {
+      // `fetchKalshiManagedMakerQuote` swallows an order-book failure and returns the quote without one.
+      // Sweeping an absent book would manufacture an `ioc_no_fill` out of a data outage and bias the very
+      // fill rate this simulation exists to measure, so the attempt is excluded rather than classified.
+      order.status = 'rejected';
+      order.makerCompletedAt = new Date().toISOString();
+      order.reason = 'Exact-contract order book was unavailable; the reservation was returned and the attempt was excluded rather than recorded as an IOC miss.';
+      ledger.paperBudget.availableCents += reservedCents;
+      return;
+    }
+    const fill = immediateBuyFill(quote.orderBook, order.side, quote.ask, order.quantity);
+    order.entryExecutionObservations = [...(order.entryExecutionObservations ?? []), {
+      at: new Date().toISOString(), event: fill.filledCount > 0 ? 'paper_fill' : 'paper_expired',
+      selectedBid: quote.bid, selectedAsk: quote.ask, spread: quote.ask - quote.bid,
+      limitPrice: quote.ask, filledCount: fill.filledCount,
+      remainingCount: Number((order.quantity - fill.filledCount).toFixed(2)),
+      displayedAtLimit: fill.displayedAtLimit,
+    }];
+    order.makerCompletedAt = new Date().toISOString();
+    if (fill.filledCount <= 0) {
+      return refuse('ioc_no_fill', 'Exact-contract paper IOC found no displayed depth at or inside the refreshed ask.');
+    }
+    // An IOC buy lifts a resting offer, so it pays the taker schedule. Costs round up, per AGENTS.md §1.
+    const purchaseCents = Math.ceil(fill.cashCents - 1e-9);
+    const feeCents = venueFeeCents(order.venue, fill.averagePrice * 100, fill.filledCount, 'taker');
+    const accountedStakeCents = purchaseCents + feeCents;
+    if (accountedStakeCents > reservedCents) throw new Error(`Simulated paper IOC cost ${accountedStakeCents}c exceeded its ${reservedCents}c reservation.`);
+    order.status = 'open';
+    order.liquidityRole = 'taker';
+    order.filledCount = fill.filledCount;
+    order.quantity = fill.filledCount;
+    order.authoritativeFillPrice = fill.averagePrice;
+    order.initialSubmittedPrice = quote.ask;
+    order.feeCents = feeCents;
+    order.stakeCents = accountedStakeCents;
+    order.potentialPayoutCents = Math.round(fill.filledCount * 100);
+    order.reason = `Exact-contract paper IOC crossed ${fill.levelsConsumed} displayed level(s) at or inside the refreshed ask.`;
+    ledger.paperBudget.availableCents += reservedCents - accountedStakeCents;
+  } catch (error) {
+    quoteRun.fail(error);
+    order.status = 'rejected';
+    order.makerCompletedAt = new Date().toISOString();
+    order.reason = `Independent paper taker simulation unavailable; reservation returned without classifying a fill miss. ${error instanceof Error ? error.message : 'Unknown simulation error'}`;
+    ledger.paperBudget.availableCents += reservedCents;
+  }
+}
+
+async function managePaperEntryOrders(orders: PaperOrder[], ledger: Ledger, authorizers?: Map<string, PaperTakerAuthorizer>): Promise<boolean> {
   if (!orders.length) return false;
-  await Promise.all(orders.map((order) => managePaperMakerOrder(order, ledger)));
+  await Promise.all(orders.map((order) => order.paperEntryRoute === 'taker'
+    ? managePaperTakerOrder(order, ledger, authorizers?.get(order.id))
+    : managePaperMakerOrder(order, ledger)));
   return true;
 }
 
-async function runPaper(dashboard: DashboardData, status: TradingControlData, ledger: Ledger, regimeGate: RegimeGateStatus, budgets: ProviderBudgetConfiguration, startedOrders: PaperOrder[] = []): Promise<boolean> {
+type PaperTakerAuthorizer = (quote: { bid: number; ask: number; spread: number }) => string | undefined;
+
+async function runPaper(dashboard: DashboardData, status: TradingControlData, ledger: Ledger, regimeGate: RegimeGateStatus, budgets: ProviderBudgetConfiguration, startedOrders: PaperOrder[] = [], authorizers?: Map<string, PaperTakerAuthorizer>): Promise<boolean> {
   if (ledger.paperBudget.availableCents <= 0) return false;
   // The mirror obeys policy-level live entry rules, the adaptive regime gate included. It remains
   // independent from live operational switches so simulation continues while real-money trading is off.
@@ -1009,7 +1105,7 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
       candidate.order.requalifiedAfterOrderId = episode.retryOfOrderId;
       candidate.order.id = entryEpisodeId(logicalId, episode.attemptNumber);
       candidate.order.clientOrderId = candidate.order.id;
-      return [{ prediction, order: candidate.order, portfolioKey: persistenceKey(prediction, side) }];
+      return [{ prediction, order: candidate.order, portfolioKey: persistenceKey(prediction, side), eligibility }];
     })
     // Funding is a feasibility filter applied after candidates exist, so a pair without allocation
     // headroom drops out while another provider's candidate for the same window survives.
@@ -1035,13 +1131,30 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
     // Reserve the same issuance-sized quantity live would submit. The independent manager refreshes
     // the exact contract before choosing its first limit; unlike the old `restAtBid` path it does not
     // buy extra paper quantity merely because the passive limit is cheaper than the issuance ask.
-    const resting: PaperOrder = { ...built.order, status: 'pending_reservation', liquidityRole: 'maker' };
+    // SPEC 12.2: the mirror runs "the same versioned episode boundary and route decision". Paper used to
+    // hardcode maker here, so the high-edge IOC route lived only in live and the cohort the v4/v5
+    // execution change was about had no mirror at all. This is the same call `runLive` makes, on the
+    // same inputs; the rule layer is untouched and still takes no execution mode.
+    const route = entryExecutionDecision(built.prediction, built.order.side, built.order, ledger, { eligibility: built.eligibility });
+    const resting: PaperOrder = {
+      ...built.order, status: 'pending_reservation',
+      liquidityRole: route.executedStyle, entryExecutionDecision: route, paperEntryRoute: route.executedStyle,
+    };
+    if (route.executedStyle === 'taker') {
+      // Size and reserve at the worst permitted price, exactly as live does before a taker IOC.
+      const reserveFailure = applyTakerQuoteMovementReserve(resting, resting.entrySizingDecision?.stakeLimitCents ?? resting.stakeCents);
+      if (reserveFailure) continue;
+    }
     const funding = marketFundingFor(budgets, 'paper', orderProviderId(resting), orderMarketId(resting), ledger,
       ledger.paperBudget.availableCents, ledger.paperBudget.availableCents);
     if (resting.stakeCents > funding.spendableCents) continue;
     ledger.paperBudget.availableCents -= resting.stakeCents;
     ledger.orders.push(resting);
     startedOrders.push(resting);
+    authorizers?.set(resting.id, (quote) => {
+      const refreshed = entryExecutionDecision(built.prediction, built.order.side, resting, ledger, { eligibility: built.eligibility }, quote);
+      return refreshed.executedStyle === 'taker' ? undefined : refreshed.reason;
+    });
     placed += 1;
   }
   return placed > 0;
@@ -1283,18 +1396,107 @@ function clearEntryPersistence(ledger: Ledger, order: PaperOrder): void {
   delete ledger.portfolioDecisions[key];
 }
 
-function executePaperStandaloneExit(order: PaperOrder, decision: NonNullable<ReturnType<typeof evaluateExitPolicy>>, ledger: Ledger): void {
-  const payoutCents = Math.max(0, Math.floor(decision.netLiquidationCents + 1e-9));
-  order.status = 'sold';
+/**
+ * Durable identity for the paper exit fill simulation.
+ *
+ * Before v1 there was no simulation at all: the paper exit marked itself `sold` at the modelled net
+ * liquidation value unconditionally, so every exit paper decided on completed. Live's reduce-only IOC
+ * completed 57.5% of the time over the same period, which made `paper - live` uninterpretable in the one
+ * place paper was claiming an outcome live could not have achieved.
+ */
+export const PAPER_EXIT_FILL_VERSION = 'paper-ioc-exit-depth-v1';
+
+/**
+ * Simulates the reduce-only exit as the immediate-or-cancel taker it actually is.
+ *
+ * `placeKalshiSell` sends `time_in_force: 'immediate_or_cancel'`, `post_only: false`, `reduce_only: true`
+ * and comes back `liquidityRole: 'taker'`. It therefore crosses displayed bids at or above
+ * `decision.executableBid` once and cancels the rest. This mirrors that, including the two outcomes the
+ * old code could not express — a partial fill that retains the remainder, and a no-fill that keeps the
+ * whole position — and it mirrors live's rule that neither one is automatically retried, which
+ * `standaloneExitAttemptedAt` already enforces for both tracks.
+ *
+ * It is not a full mirror and must not be read as one. Live can also fail on a venue error, an ambiguous
+ * response, or a reconciliation contradiction; paper has no analogue for any of those and does not invent
+ * one. What it does now model is the depth question, which is what decides most real no-fills.
+ */
+export function executePaperStandaloneExit(
+  order: PaperOrder, decision: NonNullable<ReturnType<typeof evaluateExitPolicy>>, ledger: Ledger,
+  book: BinaryOrderBook | undefined = order.venue === 'kalshi' ? observeKalshiOrderBook(order.contractId) : undefined,
+  nowMs: number = Date.now(),
+): void {
+  // Evidence before outcome. `observeKalshiOrderBook` can miss, and an absent book is not an empty book:
+  // recording it as a no-fill would both understate paper's exit completion rate and — because
+  // `standaloneExitAttemptedAt` permanently disables retry for both tracks — strand the position with
+  // exits switched off. The managed maker simulation makes the same distinction via `evidenceComplete`.
+  if (order.venue === 'kalshi' && !book) {
+    order.reason = `${decision.policy} exit deferred: no exact-contract order book was available to price the reduce-only IOC. The attempt is not recorded as a fill miss and will be re-evaluated.`;
+    return;
+  }
+  const attemptedAt = new Date(nowMs).toISOString();
   order.standaloneExitPolicy = decision.policy;
-  order.standaloneExitAttemptedAt = new Date().toISOString();
+  order.standaloneExitAttemptedAt = attemptedAt;
   order.standaloneExitHoldValueCents = decision.holdValueCents;
   order.standaloneExitOptimisticHoldValueCents = decision.optimisticHoldValueCents;
-  order.saleProceedsCents = decision.netLiquidationCents;
-  order.payoutCents = decision.netLiquidationCents;
+  order.paperExitFillVersion = PAPER_EXIT_FILL_VERSION;
+
+  const fill = immediateSellFill(book, order.side, decision.executableBid, order.quantity);
+  order.paperExitDisplayedAtLimit = fill.displayedAtLimit;
+
+  if (fill.filledCount <= 0) {
+    // Live's own wording, because the state is the same one: the position rides to settlement.
+    order.reason = `${decision.policy} reduce-only exit received no fill; position retained and no automatic exit retry will occur.`;
+    return;
+  }
+
+  const originalQuantity = order.quantity;
+  // Taker schedule: an IOC sell lifts a resting bid, so it is never the maker on its own fill.
+  const exitFeeCents = venueFeeCents(order.venue, fill.averagePrice * 100, fill.filledCount, 'taker');
+  const netProceedsCents = fill.cashCents - exitFeeCents;
+
+  if (fill.filledCount + 1e-8 < originalQuantity) {
+    const soldRatio = fill.filledCount / originalQuantity;
+    const soldActualStake = (order.actualStakeCents ?? order.stakeCents) * soldRatio;
+    const remainingActualStake = (order.actualStakeCents ?? order.stakeCents) - soldActualStake;
+    const remainingReserved = Math.ceil(remainingActualStake - 1e-9);
+    const releasedStake = Math.max(0, order.stakeCents - remainingReserved);
+    const payoutCents = Math.max(0, Math.floor(netProceedsCents + 1e-9));
+    const partial: PaperOrder = {
+      ...order, id: `${order.id}:exit:${attemptedAt}`, status: 'sold',
+      quantity: fill.filledCount, filledCount: fill.filledCount, stakeCents: releasedStake,
+      actualStakeCents: soldActualStake,
+      actualPurchaseCents: (order.actualPurchaseCents ?? entryFillPrice(order) * originalQuantity * 100) * soldRatio,
+      actualFeeCents: (order.actualFeeCents ?? order.feeCents) * soldRatio,
+      potentialPayoutCents: Math.round(fill.filledCount * 100), exitPending: false,
+      exitPrice: fill.averagePrice, exitFeeCents,
+      saleProceedsCents: netProceedsCents, payoutCents: netProceedsCents,
+      pnlCents: payoutCents - releasedStake,
+      actualPnlCents: netProceedsCents - soldActualStake, settledAt: attemptedAt,
+      reason: `${decision.policy} reduce-only exit filled partially; remainder retained and automatic exit retry disabled.`,
+    };
+    order.quantity = Number((originalQuantity - fill.filledCount).toFixed(2));
+    order.filledCount = order.quantity;
+    order.actualPurchaseCents = (order.actualPurchaseCents ?? entryFillPrice(order) * originalQuantity * 100) * (1 - soldRatio);
+    order.actualFeeCents = (order.actualFeeCents ?? order.feeCents) * (1 - soldRatio);
+    order.actualStakeCents = remainingActualStake;
+    order.stakeCents = remainingReserved;
+    order.potentialPayoutCents = Math.round(order.quantity * 100);
+    order.reason = partial.reason;
+    ledger.orders.push(partial);
+    ledger.paperBudget.availableCents += payoutCents;
+    ledger.paperBudget.realizedPnlCents += payoutCents - releasedStake;
+    return;
+  }
+
+  const payoutCents = Math.max(0, Math.floor(netProceedsCents + 1e-9));
+  order.status = 'sold';
+  order.exitPrice = fill.averagePrice;
+  order.exitFeeCents = exitFeeCents;
+  order.saleProceedsCents = netProceedsCents;
+  order.payoutCents = netProceedsCents;
   order.pnlCents = payoutCents - order.stakeCents;
-  order.actualPnlCents = decision.netLiquidationCents - (order.actualStakeCents ?? order.stakeCents);
-  order.settledAt = new Date().toISOString();
+  order.actualPnlCents = netProceedsCents - (order.actualStakeCents ?? order.stakeCents);
+  order.settledAt = attemptedAt;
   order.reason = `${decision.policy}: ${decision.reason}`;
   ledger.paperBudget.availableCents += payoutCents;
   ledger.paperBudget.realizedPnlCents += payoutCents - order.stakeCents;
@@ -1503,7 +1705,7 @@ async function executeSwitch(plan: SwitchPlan, status: TradingControlData, ledge
     });
     incumbent.exitPending = false;
     if (exit.filledCount <= 0) {
-      ledger.lastLiveSkip = { reason: `${incumbent.symbol} reduce-only switch exit did not fill; incumbent retained.`, at: new Date().toISOString() };
+      recordSwitchSkip('fill', `${incumbent.symbol} reduce-only switch exit did not fill; incumbent retained.`, incumbent, ledger);
       return true;
     }
     const originalQuantity = incumbent.quantity;
@@ -1548,7 +1750,7 @@ async function executeSwitch(plan: SwitchPlan, status: TradingControlData, ledge
       ledger.orders.push(partial);
       await writeLedger(ledger);
       if (releasedStakeCents > 0) await settleTradingBudget(releasedStakeCents, Math.max(0, Math.floor(netProceedsCents + 1e-9)), incumbent.venue, `${partial.id}:partial-switch-exit`);
-      ledger.lastLiveSkip = { reason: `${incumbent.symbol} switch exit filled ${exit.filledCount.toFixed(2)} of ${originalQuantity.toFixed(2)}; replacement withheld.`, at: new Date().toISOString() };
+      recordSwitchSkip('fill', `${incumbent.symbol} switch exit filled ${exit.filledCount.toFixed(2)} of ${originalQuantity.toFixed(2)}; replacement withheld.`, incumbent, ledger);
       return true;
     }
     incumbent.status = 'sold';
@@ -1572,7 +1774,7 @@ async function executeSwitch(plan: SwitchPlan, status: TradingControlData, ledge
     return true;
   } catch (error) {
     const reason = error instanceof Error ? error.message : 'Live switch failed';
-    ledger.lastLiveSkip = { reason: `Switch outcome uncertain; incumbent reservation retained pending reconciliation: ${reason}`, at: new Date().toISOString() };
+    recordSwitchSkip('reconciliation', `Switch outcome uncertain; incumbent reservation retained pending reconciliation: ${reason}`, incumbent, ledger);
     automaticReconciliationRequested = true;
     await suspendTrading(`Live switch uncertain: ${reason}`);
     return true;
@@ -1714,22 +1916,41 @@ async function runLive(
   dashboard: DashboardData, status: TradingControlData, ledger: Ledger, regimeGate: RegimeGateStatus,
   budgets: ProviderBudgetConfiguration, portfolioAudit: PortfolioSelectionAudit,
 ): Promise<boolean> {
-  const skip = (reason: string) => { ledger.lastLiveSkip = { reason, at: new Date().toISOString() }; return false; };
-  if (!liveTradingEnabled()) return skip('Live trading is off in the environment.');
-  if (!status.tradingProviders?.find((provider) => provider.id === 'kalshi')?.liveEnabled) return skip('Kalshi is disabled for live automated trading in the provider registry.');
+  // SPEC 12.8 step 2. `lastLiveSkip` remains the single-slot status the dashboard renders; the journal
+  // beside it is the durable per-window record that makes `paper - live` decomposable instead of
+  // reconstructable. Every gate names its own class: a classifier pattern-matching on these prose
+  // reasons would mislabel the next gate someone adds, and AGENTS.md 5.7 asks that a gate be described
+  // by what it actually does. Journal writes are fire-and-forget — a trading cycle must never fail or
+  // stall because an observation could not be persisted.
+  const openWindows = [...new Set(dashboard.predictions.map((item) => item.market.closesAt).filter(Boolean))];
+  const skip = (classification: LiveSkipClass, reason: string, scope?: { symbol?: string; side?: PositionSide }) => {
+    ledger.lastLiveSkip = { reason, at: new Date().toISOString() };
+    void recordLiveSkip({ classification, reason, windows: openWindows, ...scope })
+      .catch((error) => console.error('Live skip journal write failed:', error));
+    return false;
+  };
+  if (!liveTradingEnabled()) return skip('environment', 'Live trading is off in the environment.');
+  if (!status.tradingProviders?.find((provider) => provider.id === 'kalshi')?.liveEnabled) return skip('environment', 'Kalshi is disabled for live automated trading in the provider registry.');
   const reconciliation = getKalshiReconciliationStatus();
-  if (reconciliation.phase !== 'ready') return skip(`Kalshi reconciliation ${reconciliation.phase}: ${reconciliation.reason}`);
-  if (status.control.state !== 'active') return skip(`Automation is ${status.control.state}.`);
-  if (status.control.mode !== 'live') return skip('Execution mode is paper.');
+  if (reconciliation.phase !== 'ready') return skip('reconciliation', `Kalshi reconciliation ${reconciliation.phase}: ${reconciliation.reason}`);
+  if (status.control.state !== 'active') {
+    // A risk stop leaves operator intent active while the state is paused. That distinction is the one
+    // SPEC 12.3 most needs recorded: it is the difference between "the desk chose not to trade" and
+    // "the desk was stopped out", and reconstructing it from the control audit is what made the
+    // 2026-08-20 divergence review expensive.
+    const systemSuspension = status.control.operatorIntent === 'active';
+    return skip(systemSuspension ? 'stop' : 'operator', `Automation is ${status.control.state}.`);
+  }
+  if (status.control.mode !== 'live') return skip('operator', 'Execution mode is paper.');
   if (!status.liveRisk.allowed) {
     const reason = `Live risk stop: ${status.liveRisk.reasons.join(' ')}`;
     await stopTradingForLiveRisk(reason);
-    return skip(reason);
+    return skip('stop', reason);
   }
-  if (!regimeGate.allowsEntries) return skip(`Adaptive regime gate: ${regimeGate.reason}`);
-  if (!isFreshCalculationTimestamp(dashboard.generatedAt)) return skip('Calculation snapshot is older than 15 seconds.');
+  if (!regimeGate.allowsEntries) return skip('regime', `Adaptive regime gate: ${regimeGate.reason}`);
+  if (!isFreshCalculationTimestamp(dashboard.generatedAt)) return skip('staleness', 'Calculation snapshot is older than 15 seconds.');
   const filledOrdersLastHour = countFilledLiveVenueOrders(ledger.orders, Date.now() - 3_600_000);
-  if (filledOrdersLastHour >= maxLiveOrdersPerHour()) return skip(`Hourly live filled-order limit of ${maxLiveOrdersPerHour()} reached (${filledOrdersLastHour} orders with fills; unfilled/rejected excluded).`);
+  if (filledOrdersLastHour >= maxLiveOrdersPerHour()) return skip('rate_limit', `Hourly live filled-order limit of ${maxLiveOrdersPerHour()} reached (${filledOrdersLastHour} orders with fills; unfilled/rejected excluded).`);
   const open = ledger.orders.filter((order) => order.executionMode === 'live' && (order.status === 'open' || order.status === 'pending_reservation' || order.status === 'uncertain'));
   const maximumPositions = maximumOpenPositions();
   // A strongly superior opposite side of the same asset is a replacement, never an additive hedge.
@@ -1742,14 +1963,14 @@ async function runLive(
   if (open.length >= maximumPositions) {
     // A complete switch consumes two accepted venue orders: reduce-only exit, then replacement entry.
     // Never close a position if the hourly ceiling would then prevent its replacement.
-    if (filledOrdersLastHour > maxLiveOrdersPerHour() - 2) return skip(`Switch needs two potential fill slots; ${filledOrdersLastHour}/${maxLiveOrdersPerHour()} filled orders in the last hour.`);
+    if (filledOrdersLastHour > maxLiveOrdersPerHour() - 2) return skip('rate_limit', `Switch needs two potential fill slots; ${filledOrdersLastHour}/${maxLiveOrdersPerHour()} filled orders in the last hour.`);
     const plan = bestSwitch(dashboard, status, ledger, open);
     if (plan) return executeSwitch(plan, status, ledger);
     const pending = Object.values(ledger.switchPersistence)[0];
     const settings = switchPolicySettings();
     return pending
-      ? skip(`Switch candidate is collecting persistence ${pending.observations}/${REQUIRED_SWITCH_SNAPSHOTS}; minimum observed gain ${pending.minimumDeltaCents.toFixed(2)}c.`)
-      : skip(`Holding the constrained portfolio; no replacement clears liquidation costs plus ${(settings.minimumGainCents + settings.uncertaintyMarginCents).toFixed(2)}c required gain.`);
+      ? skip('persistence', `Switch candidate is collecting persistence ${pending.observations}/${REQUIRED_SWITCH_SNAPSHOTS}; minimum observed gain ${pending.minimumDeltaCents.toFixed(2)}c.`)
+      : skip('portfolio', `Holding the constrained portfolio; no replacement clears liquidation costs plus ${(settings.minimumGainCents + settings.uncertaintyMarginCents).toFixed(2)}c required gain.`);
   }
   const allQualified = [...dashboard.predictions]
     .filter((item) => qualifiesAsBuyEdge(item) && item.market.live && Boolean(selectedSide(item)))
@@ -1762,7 +1983,7 @@ async function runLive(
     .filter((item) => assetAdmitted(item.symbol))
     .filter((item) => regimeAdmits(regimeByCandidate.get(item.symbol)));
   if (allQualified.length && !regimeAllowed.length) {
-    return skip(`No qualifying window has a characterised 15-second path yet (${allQualified.map((i) => `${i.symbol}:${regimeByCandidate.get(i.symbol) ?? 'unobserved'}`).join(', ')}).`);
+    return skip('regime', `No qualifying window has a characterised 15-second path yet (${allQualified.map((i) => `${i.symbol}:${regimeByCandidate.get(i.symbol) ?? 'unobserved'}`).join(', ')}).`);
   }
   const qualified = regimeAllowed.filter((item) => {
     const side = selectedSide(item)!;
@@ -1790,11 +2011,11 @@ async function runLive(
     if (warming) {
       const side = selectedSide(warming)!;
       const decision = ledger.portfolioDecisions[persistenceKey(warming, side)];
-      return skip(`${warming.symbol} ${side}: ${decision?.reason ?? `qualified but not execution-ready — ${executionEligibility(warming, side, ledger).reason}`}`);
+      return skip('persistence', `${warming.symbol} ${side}: ${decision?.reason ?? `qualified but not execution-ready — ${executionEligibility(warming, side, ledger).reason}`}`, { symbol: warming.symbol, side });
     }
     const blocked = allQualified.map((item) => ({ item, side: selectedSide(item)!, retry: liveAttemptState(item, selectedSide(item)!, ledger).retry })).filter(({ retry }) => !retry.allowed);
-    if (blocked.length) return skip(blocked.map(({ item, retry }) => `${item.symbol}: ${retry.reason}`).join(' '));
-    return skip('No new positive-edge binary buy qualifies right now.');
+    if (blocked.length) return skip('persistence', blocked.map(({ item, retry }) => `${item.symbol}: ${retry.reason}`).join(' '));
+    return skip('none', 'No new positive-edge binary buy qualifies right now.');
   }
   /**
    * Drain the ranked selection rather than taking only its head.
@@ -1831,27 +2052,27 @@ async function runLive(
       status.workingEquityCents, status.control.availableBudgetCents);
     const maximumLiveStake = maxLiveStakeCents();
     const liveStakeCeiling = Math.min(status.proposedStakeCents, maximumLiveStake, liveFunding.spendableCents);
-    if (liveStakeCeiling <= 0) { if (!placed) return skip(liveFunding.reason); break; }
+    if (liveStakeCeiling <= 0) { if (!placed) return skip('funding', liveFunding.reason); break; }
     const logicalId = orderId(candidate, 'live', side, ledger);
     const attempt = liveAttemptState(candidate, side, ledger);
     const { retry } = attempt;
     if (!retry.allowed || !attempt.eligibility.eligible) {
       const reason = !retry.allowed ? retry.reason : attempt.eligibility.reason;
       priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason });
-      if (!placed) return skip(`${candidate.symbol}: ${reason}`);
+      if (!placed) return skip('persistence', `${candidate.symbol}: ${reason}`, { symbol: candidate.symbol, side });
       continue;
     }
     const built = buildOrder(candidate, side, status, ledger, dashboard.generatedAt, dashboard.modelVersion, 'live', liveStakeCeiling, 'kalshi', attempt.eligibility);
     if ('reason' in built) {
       priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason: built.reason });
-      if (!placed) return skip(`${candidate.symbol} ${side}: ${built.reason}`);
+      if (!placed) return skip('budget', `${candidate.symbol} ${side}: ${built.reason}`, { symbol: candidate.symbol, side });
       continue;
     }
     // Defence in depth: sizing already respected the ceiling, so a stake above it means a rounding or
     // fee-reserve path put real money outside the operator's allocation.
     if (built.order.stakeCents > liveFunding.spendableCents) {
       priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason: liveFunding.reason });
-      if (!placed) return skip(liveFunding.reason);
+      if (!placed) return skip('funding', liveFunding.reason, { symbol: candidate.symbol, side });
       continue;
     }
     built.order.logicalOrderId = logicalId;
@@ -1868,12 +2089,12 @@ async function runLive(
       const reserveFailure = applyTakerQuoteMovementReserve(built.order, built.order.entrySizingDecision?.stakeLimitCents ?? liveStakeCeiling);
       if (reserveFailure) {
         priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason: reserveFailure });
-        if (!placed) return skip(`${candidate.symbol}: ${reserveFailure}`);
+        if (!placed) return skip('budget', `${candidate.symbol}: ${reserveFailure}`, { symbol: candidate.symbol, side });
         continue;
       }
       if (built.order.stakeCents > liveFunding.spendableCents) {
         priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason: liveFunding.reason });
-        if (!placed) return skip(liveFunding.reason);
+        if (!placed) return skip('funding', liveFunding.reason, { symbol: candidate.symbol, side });
         continue;
       }
     }
@@ -1976,7 +2197,8 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
   const budgets = await getProviderBudgets({ revision: status.control.revision });
   changed = resolveRestingPaperOrders(dashboard, ledger) || changed;
   const startedPaperOrders: PaperOrder[] = [];
-  changed = await runPaper(dashboard, status, ledger, regimeGate, budgets, startedPaperOrders) || changed;
+  const paperTakerAuthorizers = new Map<string, PaperTakerAuthorizer>();
+  changed = await runPaper(dashboard, status, ledger, regimeGate, budgets, startedPaperOrders, paperTakerAuthorizers) || changed;
   // Persist paper intent and its reservation before either manager starts. Paper then polls exact public
   // evidence concurrently with live's signed order lifecycle, so a twelve-second live order can no
   // longer starve a twelve-second paper order of every intermediate observation.
@@ -1985,7 +2207,7 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
     for (const order of startedPaperOrders) void recordMakerRestrictionOrder(order)
       .catch((error) => console.error('Paper maker restriction sentinel decision write failed:', error));
   }
-  const paperManagement = managePaperMakerOrders(startedPaperOrders, ledger);
+  const paperManagement = managePaperEntryOrders(startedPaperOrders, ledger, paperTakerAuthorizers);
   const liveManagement = runLive(dashboard, status, ledger, regimeGate, budgets, portfolioUpdate.audit);
   const [paperChanged, liveChanged] = await Promise.all([paperManagement, liveManagement]);
   changed = paperChanged || liveChanged || changed;

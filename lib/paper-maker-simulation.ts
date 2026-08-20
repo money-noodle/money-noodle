@@ -3,8 +3,16 @@ import { selectedSideDepth } from './order-book-depth';
 import type { EntryExecutionObservation, PositionSide } from './types';
 import type { KalshiTradePrint } from './kalshi-market-data';
 
-/** Durable identity stamped on paper edge-policy orders using this managed queue simulation. */
-export const PAPER_MANAGED_MAKER_EXECUTION_VERSION = 'paper-managed-maker-requalify3-v3';
+/**
+ * Durable identity stamped on paper edge-policy orders using this execution simulation.
+ *
+ * **v4 resets the paper execution cohort.** Two things changed at once and neither is comparable with a
+ * v3 row. Paper now takes the route `evaluateEntryExecutionPolicy` chooses instead of always resting as
+ * a maker, so a v4 order may be a simulated IOC; and the standalone exit now simulates its own IOC
+ * against displayed depth instead of completing unconditionally. v3 rows remain valid evidence of what
+ * the v3 simulator did and must not be pooled with v4 rows.
+ */
+export const PAPER_MANAGED_MAKER_EXECUTION_VERSION = 'paper-managed-execution-route-ioc-v4';
 
 export interface PaperMakerQueueState {
   side: PositionSide;
