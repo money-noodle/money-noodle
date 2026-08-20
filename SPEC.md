@@ -1,6 +1,6 @@
 # Money Noodle — Living Product Specification
 
-> **Status:** Draft 0.38 · **Updated:** 2026-08-19
+> **Status:** Draft 0.39 · **Updated:** 2026-08-20
 > This is the source of truth for product scope, architecture, model behavior, and safety decisions. Update the decision log whenever a requirement changes. Current implementation progress is tracked separately in [`STATUS.md`](STATUS.md).
 
 ## 1. Product statement
@@ -636,7 +636,7 @@ Recommended future service boundaries:
 
 Three lanes are needed and only two exist. Live runs the active policy with real money. Paper is supposed to run the *same* policy with a simulated version of live's maker execution, so that `paper − live` isolates real queue, venue, reconciliation, and capital effects rather than mixing in a taker fill assumption. The always-fills benchmark belongs in a separate ask-fill shadow. There is no lane for a change the desk is considering but has not adopted.
 
-Because the third lane is missing, speculative changes have leaked into paper — paper trades XRP that live withholds, and paper ignores the adaptive regime gate that live obeys — and one-off evaluations have been written three separate times and thrown away (`missedBuyCounterfactual`, `buildMakerShadow`, and the regime-gate sentinel loop in `data/regime-gate.json`).
+Before buy policy v17 unified the tracks on 2026-08-17, the missing third lane let speculative changes leak into paper — paper traded XRP that live withheld, and paper ignored the adaptive regime gate that live obeyed — while one-off evaluations were written three separate times and thrown away (`missedBuyCounterfactual`, `buildMakerShadow`, and the regime-gate sentinel loop in `data/regime-gate.json`). The historical failure motivates this section; the current rule layer now enforces the mirror invariant below.
 
 Both failures are the same mistake. Paper's entire value is that exactly one variable differs from live. Add a second and the subtraction stops meaning anything: when the books disagree, nothing distinguishes a policy difference from a fill difference from a cohort live never traded.
 
@@ -644,8 +644,8 @@ Both failures are the same mistake. Paper's entire value is that exactly one var
 
 | Lane | Policy | Money | Execution | Answers |
 |---|---|---|---|---|
-| **Live** | active | real | maker post-only, real fills | What did the desk actually earn? |
-| **Paper mirror** | active, *identical* | simulated | bounded maker at bid, observed ask-touch fill | Was the decision right under comparable maker execution, and what did real execution/capital cost? |
+| **Live** | active | real | current versioned execution policy: managed maker by default, with a narrowly gated fresh-quote IOC route; real fills | What did the desk actually earn? |
+| **Paper mirror** | active, *identical* | simulated | independent maker simulation with the same versioned episode boundary and route decision | Was the decision right under comparable execution, and what did real execution/capital cost? |
 | **Evaluation** | candidate, non-production | none | never places an order | Should this change be adopted? |
 
 ### 12.3 The mirror invariant
@@ -740,7 +740,9 @@ A side-by-side comparison surface reports the mirror against live per settlement
 4. **Candidate store and retroactive screening**, ultimately published in the Policy dialog. *(Partially implemented: the first persistence candidate is collecting and appears in the signed Performance view; generalized `BuyPolicy` candidates and the Policy surface remain.)*
 5. **Committed sentinels and promotion criteria**, reusing the model-promotion shape. *(First committed sentinel implemented with a sample-count review lock and no promotion path; generalized comparative criteria remain.)*
 
-Step 1 has an immediate, intended consequence: **paper stops trading XRP and starts obeying the regime gate.** XRP evidence collection therefore pauses until step 4 restores it as a candidate. That is accepted rather than worked around — XRP already clears −2se on both tracks independently (live −45.7% ±21.5 over 41 windows, paper −35.1% ±13.0 over 81), so more of the same evidence is worth less than a mirror that can be trusted.
+Step 1 had an immediate, intended consequence: **paper stopped trading XRP and began obeying the regime gate.** XRP execution evidence therefore paused until a non-production candidate lane can restore it. That was accepted rather than worked around because the then-current executed evidence cleared −2se on both tracks independently (live −45.7% ±21.5 over 41 windows, paper −35.1% ±13.0 over 81), and a trustworthy mirror was worth more than additional rows from the same policy mixture.
+
+**XRP review updated 2026-08-20.** The historical result reproduced exactly, but its fills end under legacy through v13/v14 and do not measure v21/v5. A current-v21, first-to-fire, ask-priced reconstruction was +1.0% ±12.5 over 59 XRP decisions/windows, with XRP −12.1pp ±12.8 against the same-window non-XRP mean over 58 paired windows. The prospective portfolio journal had only three unique resolved XRP candidates; one completed persistence, lost, and was independently portfolio-blocked, so asset admission alone would have changed zero recorded selections. This less-than-one-day replay contains no current-policy XRP execution and establishes neither harm nor value. The exclusion remains production policy; removing it would be a manual, versioned bounded experiment rather than an evidence promotion. See `reports/xrp-exclusion-review-2026-08-20.md`.
 
 ### 12.9 Out of scope
 
@@ -798,6 +800,7 @@ order ceiling and serialized live execution queue are venue and account properti
 
 | Date | Decision |
 |---|---|
+| 2026-08-20 | Retain the edge policy's XRP exclusion after reproducing the old executed loss but finding null current-policy signal evidence. Historical realized return remains −45.7% ±21.5 over 41 live fills/windows and −35.1% ±13.0 over 85 paper fills / 81 windows, all ending under legacy through v13/v14. The v21 first-to-fire ask replay was +1.0% ±12.5 over 59 decisions/windows and −12.1pp ±12.8 against same-window non-XRP peers over 58 paired windows; it spans less than one day and contains no current XRP execution. This neither promotes removal nor proves current harm. Any later removal is a manual bounded experiment requiring a new shared buy-policy version and immutable manifest history. See `reports/xrp-exclusion-review-2026-08-20.md`. |
 | 2026-08-19 | Replace v4's whole-window lockout with `maker-high30-requalify3-fresh1c-v5`. An authoritative current-policy maker zero-fill ends one episode, then the same continuously qualifying signal may earn a new episode from the ordinary two snapshots over 15 seconds strictly after maker completion; it need not first become nonqualifying. Cap at three episodes per asset/side/window, rerun sizing, route, quote, portfolio, funding, risk, and reconciliation on each, and let any fill, ambiguity, non-maker terminal result, stale generation, or episode 3 end rearming. Paper uses the same boundary under `paper-managed-maker-requalify3-v3`. This is an explicit operator sequencing decision, not an evidence promotion; v4 supplied only four live attempts at the decision read. See `docs/requalifying-entry-episodes-design.md`. |
 | 2026-08-19 | Deploy `maker-high30-one-attempt-fresh1c-v4` with `entry-sizing-reduce30-below-edge30-v1` by explicit operator decision. Below 30pp, commit 30% of the current base ticket to one managed maker and let zero-fill end the sequence. At 30pp+, retain 1× base and submit one capped IOC only if an immediate exact quote still clears 30pp fresh taker edge, 10pp persistence median, 65% quality, 2¢ spread, and the existing 1¢ movement and safety gates. No route upsizes. Direction-based maker refusal/cancellation remains observation-only under `entry-direction-observation-v1`. The 30pp result was retrospective, concentrated, and not promotion-grade; live deployment was chosen because paper cannot establish signed IOC or actual queue fills. See `docs/high-edge-execution-reduced-sizing-design.md`. |
 | 2026-08-19 | Replace retroactive contract-selection reconstruction with a prospective, observation-only `portfolio-choice-set-v1` journal. After each positive-edge live intent is durable, detach an immutable record of the exact production candidate states, persistence/retry/cooldown evidence, runtime caps, account-wide exposures, portfolio output, drain actions, issued order, and exact Kalshi outcomes. Pre-register one issued-minus-production-preferred comparison clustered by settlement window; diagnostic review starts at 30 resolved windows and any differing-choice claim requires 60 overall plus 20 differing windows. No historical backfill, automatic promotion, ranking change, or money-path dependency is permitted. See `docs/portfolio-choice-set-journal-design.md`. |

@@ -1,13 +1,13 @@
 # Money Noodle - Implementation Status
 
-> Living status document. Updated 2026-08-19.
+> Living status document. Updated 2026-08-20.
 > Product requirements and architecture decisions live in [SPEC.md](SPEC.md).
 
 ## Executive Summary
 
 Money Noodle is operational as a local research dashboard, continuous paper shadow trader, public paper-track-record publisher, and explicitly armed live Kalshi trader. Core UP/YES and DOWN/NO entry, managed maker execution, paper maker mirroring, signed Kalshi reconciliation, quiescent pause/drain, loss gates, budget epochs, provider permissions, contract provenance, target integrity, standalone reduce-only exits, protected switching, model evaluation, and immutable promotion accounting are implemented.
 
-The system is mechanically capable. The unresolved question is economic: current evidence does not justify stake expansion, unconditional taker execution, another entry relaxation, queue-aware live gates, or adding a second live venue. The configured v21 execution mode is itself under review because runtime behavior is selective maker/taker rather than the unconditional taking its manifest and earlier status prose describe.
+The system is mechanically capable. The unresolved question is economic: current evidence does not justify stake expansion, unconditional taker execution, an automatic entry relaxation, queue-aware live gates, or adding a second live venue. The shared buy rule remains v21; live execution is explicitly `maker-high30-requalify3-fresh1c-v5`, not the withdrawn unconditional-taker description attached to v21's first deployment.
 
 A second policy runs on the same market — the long-shot round trip, §2 below. Its current 12¢→97¢/600s cohort is paper-only; live arming is false. The parameters were selected from a retrospective sweep and therefore define a new collection cohort rather than evidence-backed promotion. It relaxes none of the edge policy's constraints and changes no edge rule.
 
@@ -33,6 +33,28 @@ Snapshot from local durable files at 2026-08-19T01:44:04Z. Full method, cohorts,
 - The active local long-shot cohort is `long-shot-round-trip-buy12-sell97-win600-v1`, paper only: 8 resolved attempts in 4 windows, all losses, −402c on 402c, no mark exits, and 0 current-policy hold-sentinel records.
 - Latest walk-forward run: `walk-forward:875:fnv1a-27542176`, generated 2026-08-18T22:00:08Z. Candidate mean window return was 5.75% against baseline 2.37% over 438 test windows; it beat baseline 5/5 folds but was positive only 3/5 with modal parameters in 3/5. Decision: `baseline_retained`.
 - The current Next development server occupied about 3.7 GB RSS. RSS is not retained heap and dev mode carries compiler/cache overhead, but this materially disagrees with the prior 70 MB post-sharding RSS measurement and needs a like-for-like profile.
+
+### XRP exclusion re-evaluated; current evidence is null, 2026-08-20
+
+Full review:
+[reports/xrp-exclusion-review-2026-08-20.md](reports/xrp-exclusion-review-2026-08-20.md); reproduce with
+`npm run analyze:xrp-exclusion`. At the 2026-08-20T00:01:37Z read of 2,730 orders / 65,854 resolved
+forecasts, the original executed-loss result reproduced exactly: live **−45.7% ±21.5 over 41 fills/windows**
+and paper **−35.1% ±13.0 over 85 fills / 81 windows**. Those rows ended under legacy through v13/v14 and
+do not measure v21/v5.
+
+A reconstruction of the current v21 first-to-fire rule found XRP **+1.0% ±12.5 over 59 decisions/windows**
+from 2026-08-19T00:42Z–23:57Z, versus non-XRP **+9.7% ±5.9 over 364 decisions / 83 settlement
+timestamps**; the paired XRP-minus-peer difference was **−12.1pp ±12.8 over 58 common windows**. Fifty-
+eight of 59 XRP decisions were below 30pp and would use the reduced ticket; they returned +2.7% ±12.6.
+This is ask-priced, less than one day, reconstructs persistence from bounded forecast history, and contains no
+current-policy XRP execution, so it establishes neither harm nor value.
+
+The prospective choice journal held three unique resolved XRP candidates across 17 issued-order records.
+Only one had completed persistence; it lost, but the portfolio independently blocked it for negative adjusted
+expected contribution. Removing only the asset gate would have changed zero recorded selections in this tiny,
+conditional sample. No blocker or buy-policy change was made. Removal would be an explicit bounded operator
+experiment requiring a new shared buy-policy version and manifest history, not an evidence promotion.
 
 ### Requalifying maker episodes deployed live, 2026-08-19
 

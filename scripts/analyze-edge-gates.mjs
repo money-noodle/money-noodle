@@ -148,10 +148,10 @@ const qualifying = rows.filter((r) => r.netEdge >= 0.05 && r.netEdge < 0.35
   && r.confidence >= 0.5 && r.probability >= 0.55 && r.ask >= 0.05 && r.ask <= 0.97);
 
 console.log(`resolved entries with a recorded ask: ${rows.length}`);
-console.log(`admitted by the current gates (v17):  ${qualifying.length} rows in ${new Set(qualifying.map((r) => r.window)).size} settlement windows`);
+console.log(`admitted by the retired v17 gates:  ${qualifying.length} rows in ${new Set(qualifying.map((r) => r.window)).size} settlement windows`);
 const overall = score(qualifying);
 if (overall) {
-  console.log(`\ncurrent policy cohort: ${pct(overall.winRate)} win, ${signed(overall.meanReturn)} mean return `
+  console.log(`\nretired v17 policy cohort: ${pct(overall.winRate)} win, ${signed(overall.meanReturn)} mean return `
     + `[${signed(overall.lo)}, ${signed(overall.hi)}] clustered on ${overall.clusters} windows`);
   const naive = (() => {
     const returns = qualifying.map(unitReturn);
@@ -168,8 +168,8 @@ const band = (rows, key, edges) => edges.slice(0, -1).map((lo, i) => {
   return [`${key} ${lo.toFixed(2)}-${hi.toFixed(2)}`, rows.filter((r) => r[key] >= lo && r[key] < hi)];
 });
 
-table('net edge (within all other current gates)', band(qualifying, 'netEdge', [0.05, 0.10, 0.15, 0.20, 0.25, 0.35]));
-table('entry price (within all other current gates)', band(qualifying, 'ask', [0.05, 0.20, 0.40, 0.60, 0.80, 0.98]));
+table('net edge (within all other retired v17 gates)', band(qualifying, 'netEdge', [0.05, 0.10, 0.15, 0.20, 0.25, 0.35]));
+table('entry price (within all other retired v17 gates)', band(qualifying, 'ask', [0.05, 0.20, 0.40, 0.60, 0.80, 0.98]));
 table('model side probability', band(qualifying, 'probability', [0.55, 0.60, 0.65, 0.75, 0.85, 1.01]));
 table('estimate quality (confidence)', band(qualifying, 'confidence', [0.5, 0.6, 0.7, 0.8, 1.01]));
 
