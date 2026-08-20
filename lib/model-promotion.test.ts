@@ -4,7 +4,8 @@ vi.mock('server-only', () => ({}));
 
 import {
   activeModel, appendPromotion, evaluatePromotionEligibility, promotionEntry, promotionRefusal,
-  PROMOTION_CONFIRMATION, PROMOTION_MIN_TEST_TRADES, ROLLBACK_CONFIRMATION,
+  PROMOTION_CONFIRMATION, PROMOTION_MIN_TEST_TRADES, PROMOTION_REQUIRED_EVALUATOR_POLICY_VERSION,
+  ROLLBACK_CONFIRMATION,
   type PromotionContext, type PromotionRequest,
 } from './model-promotion';
 import type { WalkForwardEvaluationRun, WalkForwardParameters } from './types';
@@ -15,7 +16,8 @@ const parameters: WalkForwardParameters = {
 };
 
 const run = (over: Partial<WalkForwardEvaluationRun> = {}): WalkForwardEvaluationRun => ({
-  id: 'run-1', policyVersion: 'p', generatedAt: '2026-08-13T00:00:00Z', checkpointWindows: 425,
+  id: 'run-1', policyVersion: PROMOTION_REQUIRED_EVALUATOR_POLICY_VERSION,
+  generatedAt: '2026-08-13T00:00:00Z', checkpointWindows: 425,
   datasetFingerprint: 'fnv', datasetStartsAt: 'a', datasetEndsAt: 'b',
   exactReplayObservations: 900, reconstructedReplayObservations: 0, maximumBaselineReplayError: 0.001,
   exactConfidenceReplayObservations: 900, absentConfidenceReplayObservations: 0, maximumConfidenceReplayError: 0,
@@ -29,6 +31,12 @@ const run = (over: Partial<WalkForwardEvaluationRun> = {}): WalkForwardEvaluatio
 const failing = (e: ReturnType<typeof evaluatePromotionEligibility>) => e.criteria.filter((c) => !c.met).map((c) => c.id);
 
 describe('promotion eligibility', () => {
+  it('keeps evaluator v2 monitoring while refusing it as promotion evidence', () => {
+    const v2 = run({ policyVersion: 'expanding-window-v2-replay' });
+    expect(v2.decision).toBe('candidate_passed_review_thresholds');
+    expect(failing(evaluatePromotionEligibility(v2))).toContain('evaluator-generation');
+  });
+
   it('is stricter than the evaluator: passing review is necessary but not sufficient', () => {
     const thin = run({ candidate: { ...run().candidate, trades: PROMOTION_MIN_TEST_TRADES - 1 } });
     expect(thin.decision).toBe('candidate_passed_review_thresholds');
@@ -120,6 +128,12 @@ describe('promotion request refusal', () => {
   it('refuses parameters that differ from the running model even when the version matches', () => {
     const drifted = { ...parameters, basisWeight: parameters.basisWeight + 0.1 };
     expect(promotionRefusal(promote({ parameters: drifted }), context())).toMatch(/basisWeight/);
+  });
+
+  it('includes both production gate bounds in the deploy-then-record integrity check', () => {
+    expect(promotionRefusal(promote({ parameters: { ...parameters, maximumEdge: 1 } }), context())).toMatch(/maximumEdge/);
+    expect(promotionRefusal(promote({ parameters: { ...parameters, minimumSelectedProbability: 0.5 } }), context()))
+      .toMatch(/minimumSelectedProbability/);
   });
 
   it('refuses a promotion whose evidence is not the newest run', () => {

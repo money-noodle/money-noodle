@@ -14,10 +14,10 @@ A second policy runs on the same market — the long-shot round trip, §2 below.
 | Area | Status |
 | --- | --- |
 | Dashboard and public paper track record | Functional locally and through optional Postgres projection |
-| Forecast and performance tracking | Functional and deterministic; large forecast history is now a memory-residency risk rather than a latency one |
+| Forecast and performance tracking | Functional; forecast summary storage verifies, but walk-forward checkpoint cohorts can drift after late resolution and require evaluator v3 |
 | Live execution | Kalshi live-capable and active in local control; no current open/working positions in the local ledger snapshot |
 | Paper execution | Continuous and independently accounted; exact-contract managed repricing now uses public trade/queue evidence concurrently with live |
-| Model evaluation | Automatic walk-forward scheduler and immutable manual promotion ledger implemented; latest run retained baseline |
+| Model evaluation | Automatic walk-forward scheduler continues monitoring; latest run retained baseline and evaluator v2 is explicitly barred from promotion |
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
 | Operational safety | Startup/periodic/manual reconciliation, quiescent drain, guarded auto-resume, loss gates, and failure injection are implemented |
 
@@ -89,7 +89,7 @@ Snapshot from local durable files at 2026-08-19T01:44:04Z. Full method, cohorts,
 - Live budget control, whole-cent view: active live mode, 2,000c starting budget, 1,610c available, 0c reserved, and −390c current-epoch realized P&L. No entry was open, pending-reservation, or uncertain.
 - v21 had run for about one hour. A policy-aware reconstruction found 43 admitted decisions, 35 satisfying 2-over-15 persistence, 15 matched live orders and 6 fills. The ledger held 18 live v21 orders: 13 labelled taker with 4 fills, and 5 labelled maker with 2 fills. This is operational attribution, not an economic sample.
 - The active local long-shot cohort is `long-shot-round-trip-buy12-sell97-win600-v1`, paper only: 8 resolved attempts in 4 windows, all losses, −402c on 402c, no mark exits, and 0 current-policy hold-sentinel records.
-- Latest walk-forward run: `walk-forward:875:fnv1a-27542176`, generated 2026-08-18T22:00:08Z. Candidate mean window return was 5.75% against baseline 2.37% over 438 test windows; it beat baseline 5/5 folds but was positive only 3/5 with modal parameters in 3/5. Decision: `baseline_retained`.
+- Latest walk-forward run: `walk-forward:1000:fnv1a-503b1e2c`, generated 2026-08-20T12:16:10Z. Candidate mean window return was 11.07% against baseline 9.77% over 500 test windows; it was positive 5/5 folds but beat baseline only 2/5, so the evaluator retained baseline. All evaluator-v2 runs are now monitoring-only regardless of their numerical result. The preceding 975-window run and its reproducibility failure were reviewed in `reports/walk-forward-model-candidate-review-2026-08-20.md`.
 - The current Next development server occupied about 3.7 GB RSS. RSS is not retained heap and dev mode carries compiler/cache overhead, but this materially disagrees with the prior 70 MB post-sharding RSS measurement and needs a like-for-like profile.
 
 ### Forecast rollup policy attribution repaired, 2026-08-20
@@ -129,6 +129,51 @@ post-restart observation does not close the separate residency review.
 API published v22 over seven predictions, served the durable sanitized paper projection, omitted private
 policy-model state, and reported its stateless collector disabled. Forecast shard repair remains
 worker-local; the hosted runtime gained no storage write, collection, reconciliation or execution authority.
+
+### Latest walk-forward candidate reviewed; no promotion, 2026-08-20
+
+Full review: [reports/walk-forward-model-candidate-review-2026-08-20.md](reports/walk-forward-model-candidate-review-2026-08-20.md).
+Reproduce with `npm run analyze:walk-forward-review`. Production remains Blend 0.4; no promotion ledger
+entry, forecast parameter, buy policy, execution policy, sizing, stake or live authority changed.
+
+The stored 975-window run reported candidate +11.38% against baseline +8.24% over 488 held-out settlement
+windows, with one parameter set selected in 5/5 folds. It improved Brier/log loss overall and was positive
+5/5, but beat baseline only 3/5. The fresh production-code reconstruction did not reproduce the immutable
+fingerprint (`fnv1a-bccfee60` → `fnv1a-c9e217a4`): baseline moved to +8.45% on 314 rather than 315 trades,
+while candidate stayed +11.38% on 323. Delayed resolution can therefore change a historical checkpoint
+whose ordered row/window manifest is not retained.
+
+Paired on every settlement timestamp, current candidate-minus-baseline ask-and-hold return was **+2.93pp
+±1.56pp standard error over 488 windows**; it does not clear two SE. Window-clustered Brier improved by
+0.00192 ±0.00060 and log loss by 0.00638 ±0.00173. Only 39 windows changed trade coverage or selection;
+22 different-selection windows supplied 92.6% of the return advantage. Continuous held-out drawdown was
+8.59 normalized stake units against baseline 9.27; the stored 7.00/8.69 values reset at fold boundaries.
+
+The evaluator still cannot referee promotion. It fixes production's selected side, ask, fee and venue;
+hard-codes the old 5–97¢ band rather than v22's 10–75¢; assumes ask fill and hold; and has no persistence,
+route, maker/IOC fill, exit, portfolio, sizing or budget arm. Only 77 of 323 candidate selections overlap
+any live intent and 80 any paper intent, a production-selected subset that cannot stand in for execution.
+The 648-parameter search is nested inside held-out folds, but 36 overlapping checkpoint reviews (10 passes)
+remain repeated looks rather than independent confirmation.
+
+Probability replay is exact for 4,597/4,967 observations; 370 are reconstructed. Quality inputs are exact
+for 2,792 and absent for 2,175. Missing quality inputs do not directly invalidate this candidate—it leaves
+the confidence formula and threshold fixed—but prohibit a whole-history quality candidate. Separately,
+`promotionRefusal` omitted `maximumEdge` and `minimumSelectedProbability` from its deploy-then-record
+identity check; both are now included and tested in source, pending the next deployment. Eligibility also
+refuses every `expanding-window-v2-replay` run as monitoring-only and reserves
+`expanding-window-v3-policy-complete-prospective` for the agreed replacement. Collection and v2 evaluation
+continue while promotion fails closed. Next is an evaluator-v3 design with a frozen cohort manifest,
+policy-complete side/provider replay, separate prospective execution simulation, paired predeclared gates
+and one locked future review—not promotion.
+
+Activated in the local production runtime at **2026-08-20T15:57:00Z** after a quiescent drain and passing
+startup reconciliation. PID 88223 resumed live automation with 1,632¢ available, 0¢ reserved, no local or
+venue-managed open position, and the 15-second collector running successfully. The authenticated
+performance route reported 1,007 resolved evaluation windows, next checkpoint 1,025, and the v2-generation
+eligibility failure. Hosted deployment `dpl_HKfLWAkwkB18eU7y5XMycBLQNxgd` reached READY and was aliased to
+`https://noodle.money`; its collector remained disabled and it gained no storage-write, reconciliation or
+execution authority.
 
 ### Mirror fidelity and skip attribution, 2026-08-20
 
@@ -1422,18 +1467,34 @@ both, and 60 resolved attempts are reportable against the 12.5% break-even clust
 
 The evaluator and promotion ledger exist, but promotion criteria still need to become decision-grade.
 
-Remaining work:
+The 2026-08-20 review of `walk-forward:975:fnv1a-bccfee60` establishes that adding thresholds to the
+existing score is not enough. Its cohort fingerprint no longer reproduces after later settlements; its
+baseline is not the buy policy active at generation or v22 today; and a candidate cannot change the stored
+production-selected side, provider or cost. Full findings and paired uncertainty:
+[reports/walk-forward-model-candidate-review-2026-08-20.md](reports/walk-forward-model-candidate-review-2026-08-20.md).
 
-- Add review thresholds for held-out Brier/log loss regression, coverage, drawdown, and window-clustered uncertainty.
-- Report signal-policy return separately from maker-executable return so model quality is not confused with fill selection.
-- Add the explicit clock/quality candidate dimension now that quality replay inputs are persisted prospectively.
-- Correct for winner's curse from selecting the largest apparent edge across correlated assets.
-- Require stable held-out return across enough independent windows before any parameter deploy-and-record cycle.
+Design evaluator v3 before coding it:
 
-Current stance: baseline retained. Latest run `walk-forward:875:fnv1a-27542176` (2026-08-18T22:00:08Z)
-returned +5.75% candidate versus +2.37% baseline mean window return over 438 test windows and beat baseline
-5/5 folds, but was positive only 3/5 with modal parameters in 3/5. No automatic evaluator result may change
-production, and no manual promotion should be recorded unless every evidence gate clears.
+- Freeze every cited run's ordered settlement-window and selected-row cohort in a content-addressed
+  manifest so late resolution cannot rewrite an immutable checkpoint.
+- Replay one explicit `BuyPolicy` and regenerate side, provider and all-in cost from every decision-time
+  actionable quote; never inherit production's selected side.
+- Report paired, window-clustered signal-policy return separately from a prospective simulated-execution
+  lane using versioned route, depth and trade evidence. The candidate lane receives no order authority.
+- Predeclare gates for return lower bound, Brier/log-loss non-regression, coverage, continuous drawdown,
+  replay coverage and fold consistency. Score quality candidates only on exact confidence-input rows.
+- Treat 25-window checkpoints as monitoring, not repeated promotion attempts. Lock the reviewed
+  `(basisWeight=0.65, slowTiltScale=0.5)` candidate for one future prospective cohort and one review at an
+  agreed independent-window bar.
+
+Until that implementation exists, v2 continues to collect and report monitoring checkpoints but
+`evaluatePromotionEligibility` refuses its evaluator generation before considering its numerical gates.
+
+Current stance: Blend 0.4 retained. The reviewed 975-window candidate was +11.38% against +8.24%, but
+promotion eligibility failed at 3/5 folds beating baseline; paired return on its current reconstruction was
++2.93pp ±1.56pp SE and the checkpoint fingerprint changed. The subsequent 1,000-window checkpoint retained
+baseline at only 2/5 folds beating it. No promotion can be recorded under evaluator v2 even if a later
+overlapping checkpoint crosses its mechanical gates.
 
 ### 4. Decide the Profit-Reversal Exit Policy From Prospective Evidence
 

@@ -19,6 +19,13 @@ export const PROMOTION_MIN_BEAT_BASELINE_FOLDS = 4;
 export const PROMOTION_MIN_MEAN_WINDOW_RETURN_GAP = 0.02;
 /** Replay must be near-exact, or the candidate was scored on reconstructed inputs it never saw. */
 export const PROMOTION_MAX_REPLAY_ERROR = 0.005;
+/**
+ * Evaluator v2 is monitoring-only after its 2026-08-20 review found an unreproducible cohort,
+ * production-inherited side/provider choices, stale price bounds, and no execution arm. Reserving a new
+ * exact version here makes promotion fail closed while collection and v2 monitoring continue. Adding an
+ * implementation under this version requires the separately agreed evaluator-v3 design and tests.
+ */
+export const PROMOTION_REQUIRED_EVALUATOR_POLICY_VERSION = 'expanding-window-v3-policy-complete-prospective';
 
 // The record shape lives in types.ts so the published policy manifest and this module cannot
 // describe a promotion differently.
@@ -40,6 +47,12 @@ export function evaluatePromotionEligibility(run: WalkForwardEvaluationRun | und
   if (!run) return { eligible: false, criteria: [{ id: 'run-present', met: false, detail: 'No walk-forward run has been recorded.' }] };
   const gap = run.candidate.meanWindowReturn - run.baseline.meanWindowReturn;
   const criteria = [
+    {
+      id: 'evaluator-generation', met: run.policyVersion === PROMOTION_REQUIRED_EVALUATOR_POLICY_VERSION,
+      detail: run.policyVersion === PROMOTION_REQUIRED_EVALUATOR_POLICY_VERSION
+        ? `Evaluator ${run.policyVersion} is approved for promotion review.`
+        : `Evaluator ${run.policyVersion} is monitoring-only; ${PROMOTION_REQUIRED_EVALUATOR_POLICY_VERSION} is required.`,
+    },
     {
       id: 'evaluator-decision', met: run.decision === 'candidate_passed_review_thresholds',
       detail: `Evaluator decision ${run.decision}.`,
@@ -123,7 +136,8 @@ export interface PromotionContext {
 }
 
 const parameterKeys: Array<keyof WalkForwardParameters> = [
-  'temperature', 'basisWeight', 'volatilityScale', 'slowTiltScale', 'probabilityCap', 'minimumEdge', 'minimumQuality',
+  'temperature', 'basisWeight', 'volatilityScale', 'slowTiltScale', 'probabilityCap', 'minimumEdge',
+  'maximumEdge', 'minimumSelectedProbability', 'minimumQuality',
 ];
 
 function divergentParameters(claimed: WalkForwardParameters, running: WalkForwardParameters): string[] {

@@ -107,9 +107,18 @@ export function buildWalkForwardDataset(forecasts: TrackedForecast[]): Evaluatio
     .sort((a, b) => Date.parse(a.closesAt) - Date.parse(b.closesAt));
 }
 
-interface SelectedTrade { result: number; profitPerContract: number }
+export interface SelectedTrade {
+  rowId: string;
+  symbol: string;
+  side: 'UP' | 'DOWN';
+  edge: number;
+  cost: number;
+  result: number;
+  profitPerContract: number;
+}
 
-function selectedTrade(window: EvaluationWindow, parameters: WalkForwardParameters): SelectedTrade | null {
+/** The exact top-one policy decision scored by the evaluator, exported for read-only review tooling. */
+export function selectedTrade(window: EvaluationWindow, parameters: WalkForwardParameters): SelectedTrade | null {
   const candidates = window.rows.flatMap((row) => {
     // Real production rows with an identified entry venue must have a venue-specific matching target.
     // Synthetic evaluator fixtures without an entry venue remain useful for pure scoring tests.
@@ -130,7 +139,10 @@ function selectedTrade(window: EvaluationWindow, parameters: WalkForwardParamete
     // levels, which is the exact axis on which return per dollar rises with edge while win rate falls
     // (reports/edge-magnitude-2026-08-18.md). `profitPerContract` is retained beside it so runs scored
     // under the old unit stay comparable rather than being silently restated.
-    return [{ edge, result: profitPerContract / cost, profitPerContract }];
+    return [{
+      rowId: row.id, symbol: row.symbol, side: row.entrySide, edge, cost,
+      result: profitPerContract / cost, profitPerContract,
+    }];
   });
   // Select only the largest apparent edge in each correlated window. This makes the winner's curse
   // part of the out-of-sample result rather than treating all selected assets as independent wins.

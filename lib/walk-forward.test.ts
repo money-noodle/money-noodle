@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { TrackedForecast } from './types';
 import {
   buildWalkForwardDataset, candidateProbability, PRODUCTION_BASELINE_PARAMETERS,
-  runWalkForwardEvaluation, scoreWalkForward, WALK_FORWARD_CANDIDATES,
+  runWalkForwardEvaluation, scoreWalkForward, selectedTrade, WALK_FORWARD_CANDIDATES,
 } from './walk-forward';
 
 function forecast(index: number, patch: Partial<TrackedForecast> = {}): TrackedForecast {
@@ -45,6 +45,13 @@ describe('walk-forward evaluation', () => {
     expect(score.windows).toBe(1);
     expect(score.observations).toBe(2);
     expect(score.trades).toBe(1);
+  });
+
+  it('exposes the exact selected row and economics to read-only review tooling', () => {
+    const window = buildWalkForwardDataset([forecast(0)])[0];
+    expect(selectedTrade(window, PRODUCTION_BASELINE_PARAMETERS)).toMatchObject({
+      rowId: 'BTC:0', symbol: 'BTC', side: 'UP', cost: 0.56,
+    });
   });
 
   it('never scores a real venue entry against a legacy or mismatched venue outcome', () => {
