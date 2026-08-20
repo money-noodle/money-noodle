@@ -31,6 +31,11 @@ reconciliation. Existing timers, queues, quote caches, request budgets, and poli
 price trajectory and spread remain observation-only evidence. Design boundary:
 [docs/task-cadence-observability-design.md](docs/task-cadence-observability-design.md).
 
+Signed open-order rows now show the latest owned-side venue bid/ask and its age, updating from the managed-order
+or open-position observations already captured by the execution engine. Values older than one 15-second
+calculation window are visibly stale. This adds no venue request, polling loop, ledger field, or path back into
+pricing and execution.
+
 ## Current Measured State
 
 Snapshot from local durable files at 2026-08-19T01:44:04Z. Full method, cohorts, corrections, and caveats in [reports/open-experiment-status-2026-08-19.md](reports/open-experiment-status-2026-08-19.md).

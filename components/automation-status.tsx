@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { usePublicPaperBudget, usePublicPaperPerformance } from '@/components/use-public-paper';
 import { DATA_FRESHNESS } from '@/lib/freshness';
 import { fundingOpenedLabel, fundingScopeLine, fundingScopeTitle } from '@/lib/funding-label';
+import { latestOpenOrderVenueQuote } from '@/lib/open-order-quote';
 import type { ExecutionSummary, PaperOrder, PaperOrderStatus, PublicPaperExecutionRecord, TradingControlData } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
@@ -106,6 +107,11 @@ function OpenOrderRow({ order }: { order: PaperOrder }) {
   const entryPriceCents = order.actualPurchaseCents !== undefined && order.quantity > 0
     ? order.actualPurchaseCents / order.quantity
     : (order.authoritativeFillPrice ?? order.initialSubmittedPrice ?? order.askPrice) * 100;
+  const venueQuote = latestOpenOrderVenueQuote(order);
+  const venueQuoteAgeSeconds = venueQuote
+    ? Math.max(0, Math.floor((Date.now() - Date.parse(venueQuote.observedAt)) / 1_000)) : undefined;
+  const venueQuoteStale = venueQuoteAgeSeconds !== undefined
+    && venueQuoteAgeSeconds > DATA_FRESHNESS.observationBucketMs / 1_000;
   const state = order.exitPending ? 'exit pending' : order.status === 'pending_reservation' ? 'entry pending' : order.status;
   return <div className="rounded-md border bg-background/45 px-3 py-2">
     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -125,6 +131,9 @@ function OpenOrderRow({ order }: { order: PaperOrder }) {
       {order.latestNetProfitPercent !== undefined && <span className={cn(order.latestNetProfitPercent > 0 ? 'text-gain' : order.latestNetProfitPercent < 0 ? 'text-loss' : '')}><span className="text-muted-foreground">executable </span>{order.latestNetProfitPercent >= 0 ? '+' : ''}{(order.latestNetProfitPercent * 100).toFixed(1)}%</span>}
     </div>
     <div className="mt-1 grid grid-cols-2 gap-1 font-mono text-[8px] sm:grid-cols-3"><span><span className="text-muted-foreground">entry edge </span><span className={entryNetEdge >= 0.05 ? 'text-gain' : ''}>{entryNetEdge >= 0 ? '+' : ''}{(entryNetEdge * 100).toFixed(1)}pp</span></span><span><span className="text-muted-foreground">quality </span>{(order.confidence * 100).toFixed(1)}%</span><span><span className="text-muted-foreground">current P({order.side}) </span>{(ownedProbability * 100).toFixed(1)}%</span></div>
+    {venueQuote
+      ? <div className={cn('mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 rounded border px-2 py-1 font-mono text-[9px]', venueQuoteStale ? 'border-warn/20 bg-warn/[.03]' : 'border-data/20 bg-data/[.03]')} title={`Latest owned-side ${order.venue} quote captured by the ${venueQuote.source === 'position' ? 'open-position' : 'order-management'} cycle at ${new Date(venueQuote.observedAt).toLocaleString()}.`}><span className={cn('size-1.5 rounded-full', venueQuoteStale ? 'bg-warn' : 'bg-data')}/><span className="text-muted-foreground">{venueQuoteStale ? 'venue quote' : 'venue now'}</span><strong className="font-medium text-foreground">{(venueQuote.bid * 100).toFixed(1)}¢ bid</strong><span className="text-muted-foreground">{(venueQuote.ask * 100).toFixed(1)}¢ ask</span><span className={cn('ml-auto text-[8px]', venueQuoteStale ? 'text-warn' : 'text-muted-foreground')}>{venueQuoteAgeSeconds}s ago</span></div>
+      : <div className="mt-1.5 rounded border border-dashed px-2 py-1 font-mono text-[8px] text-muted-foreground">Venue quote awaiting the first execution/open-position observation.</div>}
     <p className="mt-1 truncate font-mono text-[8px] text-muted-foreground" title={order.contractId}>{order.contractId}</p>
     {order.entryExecutionDecision && <p className="mt-1 text-[8px] text-muted-foreground">Execution: <span className="uppercase text-foreground">{order.entryExecutionDecision.executedStyle}</span>{order.entryExecutionDecision.recommendedStyle !== order.entryExecutionDecision.executedStyle ? ` · shadow recommends ${order.entryExecutionDecision.recommendedStyle}` : ''}</p>}
     {order.profitLockArmedAt && <p className="mt-1 text-[8px] text-warn">75% profit lock armed · high water {order.peakNetProfitPercent === undefined ? '—' : `+${(order.peakNetProfitPercent * 100).toFixed(1)}%`}</p>}
