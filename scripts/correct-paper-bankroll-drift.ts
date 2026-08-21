@@ -81,7 +81,11 @@ async function main(): Promise<void> {
   const expected = fromRecords + applied;
   const driftCents = budget.realizedPnlCents - expected;
 
-  const openStake = paper.filter((order) => ['open', 'pending_reservation', 'uncertain'].includes(order.status))
+  // The edge paper bankroll never funds long-shot positions. Counting their independently funded open
+  // stake here manufactures a residual whenever that strategy has exposure, even though both counters
+  // are correct. Historical leaked long-shot sales remain handled explicitly in `contributing` above.
+  const openStake = paper.filter((order) => strategyOf(order) === EDGE
+    && ['open', 'pending_reservation', 'uncertain'].includes(order.status))
     .reduce((sum, order) => sum + (order.stakeCents ?? 0), 0);
   const availableResidual = budget.availableCents - (budget.startingCents + budget.realizedPnlCents - openStake);
 

@@ -36,9 +36,9 @@ describe('requalifying adaptive entry episodes', () => {
     });
   });
 
-  it('uses the same current-generation maker boundary for paper', () => {
+  it('uses the simulator generation for a production-shaped paper row that also carries the shared route generation', () => {
     const paperMiss = makerMiss({
-      executionMode: 'paper', entryExecutionDecision: undefined,
+      executionMode: 'paper',
       entryDecision: {
         version: 'entry-decision-v2', providerId: 'kalshi', forecastModelVersion: 'test',
         executionPolicyVersion: PAPER_MANAGED_MAKER_EXECUTION_VERSION, policyVersion: 'test',
@@ -49,8 +49,12 @@ describe('requalifying adaptive entry episodes', () => {
         qualifyingSnapshots: 2, medianNetEdge: 0.28, factors: [],
       },
     });
+    expect(paperMiss.entryExecutionDecision?.policyVersion).toBe(ENTRY_EXECUTION_POLICY_VERSION);
     expect(adaptiveEntryEpisodeDecision([paperMiss], PAPER_MANAGED_MAKER_EXECUTION_VERSION)).toMatchObject({
       allowed: true, attemptNumber: 2,
+    });
+    expect(adaptiveEntryEpisodeDecision([paperMiss], 'paper-managed-execution-route-ioc-v4')).toMatchObject({
+      allowed: false, reason: 'A prior execution-policy generation cannot authorize a current entry episode.',
     });
   });
 

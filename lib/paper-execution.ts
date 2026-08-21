@@ -5,6 +5,7 @@ import { beginLiveTransaction, blockExecutionDrain, completeExecutionDrain, endL
 import { CALENDAR_EVALUATION_VERSION, calendarFixedSnapshotDue, updateCalendarEvaluationStore, type CalendarEvaluationCycle } from './calendar-evaluation-store';
 import { reconcileExecutionLedger } from './execution-reconciliation';
 import { ENTRY_EXECUTION_POLICY_VERSION, MAX_ENTRY_EPISODES_PER_WINDOW, entrySideProbability, evaluateEntryExecutionPolicy, makerCohortEvidence, parseEntryExecutionMode, type EntryExecutionDecision } from './entry-execution-policy';
+import { executionMirrorPairStamp } from './execution-mirror-pair';
 import { observeEntryDirection } from './entry-direction-observation';
 import { evaluateEntrySizing } from './entry-sizing-policy';
 import { POST_EXIT_REENTRY_COOLDOWN_MS, evaluateExitPolicy } from './exit-policy';
@@ -1112,6 +1113,7 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
       candidate.order.requalifiedAfterOrderId = episode.retryOfOrderId;
       candidate.order.id = entryEpisodeId(logicalId, episode.attemptNumber);
       candidate.order.clientOrderId = candidate.order.id;
+      candidate.order.executionMirrorPair = executionMirrorPairStamp(candidate.order);
       return [{ prediction, order: candidate.order, portfolioKey: persistenceKey(prediction, side), eligibility }];
     })
     // Funding is a feasibility filter applied after candidates exist, so a pair without allocation
@@ -1173,9 +1175,12 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
  */
 export function attachMatchedLiveFillShadow(orders: PaperOrder[], liveOrder: PaperOrder, capturedAt = new Date().toISOString()): boolean {
   if (liveOrder.executionMode !== 'live' || (liveOrder.filledCount ?? 0) <= 0 || liveOrder.authoritativeFillPrice === undefined) return false;
+  const prospectivePairId = liveOrder.executionMirrorPair?.id;
   const candidates = orders.filter((order) => order.executionMode === 'paper' && !order.id.includes(':exit:')
-    && order.symbol === liveOrder.symbol && order.side === liveOrder.side && order.closesAt === liveOrder.closesAt
-    && Math.abs(Date.parse(order.createdAt) - Date.parse(liveOrder.createdAt)) <= 60_000)
+    && (prospectivePairId
+      ? order.executionMirrorPair?.id === prospectivePairId
+      : order.symbol === liveOrder.symbol && order.side === liveOrder.side && order.closesAt === liveOrder.closesAt
+        && Math.abs(Date.parse(order.createdAt) - Date.parse(liveOrder.createdAt)) <= 60_000))
     .sort((a, b) => Math.abs(Date.parse(a.createdAt) - Date.parse(liveOrder.createdAt)) - Math.abs(Date.parse(b.createdAt) - Date.parse(liveOrder.createdAt)));
   const paperOrder = candidates[0];
   if (!paperOrder) return false;
@@ -2095,6 +2100,7 @@ async function runLive(
       ? entryEpisodeId(logicalId, retry.attemptNumber)
       : makerAttemptId(logicalId, retry.attemptNumber);
     built.order.clientOrderId = liveEntryClientOrderId(built.order.id);
+    built.order.executionMirrorPair = executionMirrorPairStamp(built.order);
     // A deterministic hash collision or accidental reuse is impossible to repair after submission. Stop
     // before reservation or any signed venue request rather than allowing two local intents to share it.
     try {

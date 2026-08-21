@@ -6,13 +6,13 @@ import type { KalshiTradePrint } from './kalshi-market-data';
 /**
  * Durable identity stamped on paper edge-policy orders using this execution simulation.
  *
- * **v4 resets the paper execution cohort.** Two things changed at once and neither is comparable with a
- * v3 row. Paper now takes the route `evaluateEntryExecutionPolicy` chooses instead of always resting as
- * a maker, so a v4 order may be a simulated IOC; and the standalone exit now simulates its own IOC
- * against displayed depth instead of completing unconditionally. v3 rows remain valid evidence of what
- * the v3 simulator did and must not be pooled with v4 rows.
+ * **v5 resets the paper execution cohort.** V4 added route-aware IOC simulation, but production-shaped
+ * rows carried both the paper generation and shared live route generation; retry validation read the
+ * latter and silently suppressed every paper episode after episode 1. V5 restores the approved three-
+ * episode boundary without changing first-attempt fill arithmetic. V3/v4 rows remain immutable evidence
+ * of their simulators and must not be pooled with v5.
  */
-export const PAPER_MANAGED_MAKER_EXECUTION_VERSION = 'paper-managed-execution-route-ioc-v4';
+export const PAPER_MANAGED_MAKER_EXECUTION_VERSION = 'paper-managed-execution-route-ioc-requalify3-v5';
 
 export interface PaperMakerQueueState {
   side: PositionSide;
@@ -22,6 +22,16 @@ export interface PaperMakerQueueState {
   filledCount: number;
   purchaseCents: number;
   observedTradeIds: Set<string>;
+}
+
+export interface PaperMakerTradeEvidence {
+  consumingTradeCount: number;
+  consumingTradeQuantity: number;
+  firstConsumingTradeAt?: string;
+  lastConsumingTradeAt?: string;
+  queueAheadBefore?: number;
+  queueAheadAfter?: number;
+  fillAdded: number;
 }
 
 export interface PaperMakerSimulationResult {
@@ -52,14 +62,24 @@ export interface PaperMakerSimulationDependencies {
  * Applies aggressive public trade prints to our conservative queue proxy. A selected-side resting bid
  * is consumed by a taker buying the opposite outcome. Ask touch alone is deliberately not a fill.
  */
-export function applyTradePrintsToPaperQueue(state: PaperMakerQueueState, trades: KalshiTradePrint[], acceptedAtMs: number): void {
+export function applyTradePrintsToPaperQueue(
+  state: PaperMakerQueueState, trades: KalshiTradePrint[], acceptedAtMs: number,
+): PaperMakerTradeEvidence {
   const consumingTakerSide = state.side === 'UP' ? 'no' : 'yes';
+  const queueAheadBefore = state.queueAhead;
+  const filledBefore = state.filledCount;
+  let consumingTradeCount = 0, consumingTradeQuantity = 0;
+  let firstConsumingTradeAt: string | undefined, lastConsumingTradeAt: string | undefined;
   for (const trade of [...trades].sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.id.localeCompare(b.id))) {
     if (state.observedTradeIds.has(trade.id)) continue;
     state.observedTradeIds.add(trade.id);
     if (Date.parse(trade.at) + 1e-6 < acceptedAtMs || trade.takerSide !== consumingTakerSide) continue;
     const selectedTradePrice = state.side === 'UP' ? trade.yesPrice : trade.noPrice;
     if (selectedTradePrice > state.currentLimit + 1e-9 || state.queueAhead === undefined) continue;
+    consumingTradeCount += 1;
+    consumingTradeQuantity += trade.count;
+    firstConsumingTradeAt ??= trade.at;
+    lastConsumingTradeAt = trade.at;
     let available = trade.count;
     const ahead = Math.min(state.queueAhead, available);
     state.queueAhead = Math.max(0, state.queueAhead - ahead);
@@ -76,6 +96,15 @@ export function applyTradePrintsToPaperQueue(state: PaperMakerQueueState, trades
       break;
     }
   }
+  return {
+    consumingTradeCount,
+    consumingTradeQuantity,
+    firstConsumingTradeAt,
+    lastConsumingTradeAt,
+    queueAheadBefore,
+    queueAheadAfter: state.queueAhead,
+    fillAdded: state.filledCount - filledBefore,
+  };
 }
 
 /** Independent two-second paper manager using live's exact pricing path and public queue/trade evidence. */
@@ -119,11 +148,21 @@ export async function simulateManagedPaperMaker(input: {
 
   for (let attempt = 0; attempt < checks; attempt += 1) {
     await wait(pollMs);
+    const readStartedAt = new Date(now()).toISOString();
     const tradeRead = dependencies.tradesSince(acceptedAtMs);
     const quoteRead = attempt < checks - 1 ? dependencies.quote() : Promise.resolve<ManagedMakerQuote | undefined>(undefined);
     const [tradeResult, quoteResult] = await Promise.allSettled([tradeRead, quoteRead]);
     finalTradeReadSucceeded = tradeResult.status === 'fulfilled';
-    if (tradeResult.status === 'fulfilled') applyTradePrintsToPaperQueue(state, tradeResult.value, acceptedAtMs);
+    if (tradeResult.status === 'fulfilled') {
+      const evidence = applyTradePrintsToPaperQueue(state, tradeResult.value, acceptedAtMs);
+      observations.push({
+        at: new Date(now()).toISOString(), event: 'paper_trade_evidence', limitPrice: state.currentLimit,
+        filledCount: Number(state.filledCount.toFixed(2)),
+        remainingCount: Number((input.requestedCount - state.filledCount).toFixed(2)),
+        readStartedAt,
+        ...evidence,
+      });
+    }
     if (state.filledCount + 1e-8 >= state.requestedCount) break;
     if (attempt >= checks - 1 || quoteResult.status !== 'fulfilled' || !quoteResult.value) continue;
 

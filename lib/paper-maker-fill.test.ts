@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 
 import { applyPaperMakerSimulation, attachMatchedLiveFillShadow, resolveRestingPaperOrders } from './paper-execution';
+import { executionMirrorPairStamp } from './execution-mirror-pair';
 import { initialManagedMakerPrice, nextManagedMakerPrice, selectedManagedMakerQuote } from './managed-maker';
 import { applyTradePrintsToPaperQueue, simulateManagedPaperMaker, type PaperMakerQueueState } from './paper-maker-simulation';
 import type { BinaryOrderBook, DashboardData, PaperOrder } from './types';
@@ -64,12 +65,22 @@ describe('trade-print queue model', () => {
       side: 'UP', requestedCount: 4, currentLimit: 0.42, queueAhead: 10,
       filledCount: 0, purchaseCents: 0, observedTradeIds: new Set(),
     };
-    applyTradePrintsToPaperQueue(state, [trade({ id: 'first', count: 9 })], 0);
+    const first = applyTradePrintsToPaperQueue(state, [trade({ id: 'first', count: 9 })], 0);
     expect(state.filledCount).toBe(0);
     expect(state.queueAhead).toBe(1);
-    applyTradePrintsToPaperQueue(state, [trade({ id: 'first', count: 9 }), trade({ id: 'second', count: 5 })], 0);
+    expect(first).toMatchObject({
+      consumingTradeCount: 1, consumingTradeQuantity: 9, queueAheadBefore: 10, queueAheadAfter: 1,
+      fillAdded: 0,
+    });
+    const second = applyTradePrintsToPaperQueue(
+      state, [trade({ id: 'first', count: 9 }), trade({ id: 'second', count: 5 })], 0,
+    );
     expect(state.filledCount).toBe(4);
     expect(state.purchaseCents).toBeCloseTo(168);
+    expect(second).toMatchObject({
+      consumingTradeCount: 1, consumingTradeQuantity: 5, queueAheadBefore: 1, queueAheadAfter: 0,
+      fillAdded: 4,
+    });
   });
 
   it('uses YES takers to consume a DOWN/NO resting bid', () => {
@@ -113,6 +124,10 @@ describe('independent paper maker manager', () => {
     expect(result.filledCount).toBe(4);
     expect(result.averagePrice).toBe(0.42);
     expect(result.observations.map((item) => item.event)).toContain('amend_accepted');
+    expect(result.observations.find((item) => item.event === 'paper_trade_evidence' && item.fillAdded === 4)).toMatchObject({
+      consumingTradeCount: 1, consumingTradeQuantity: 4, firstConsumingTradeAt: new Date(3_000).toISOString(),
+      queueAheadBefore: 0, queueAheadAfter: 0, fillAdded: 4,
+    });
     expect(result.observations.at(-1)).toMatchObject({ event: 'paper_fill', filledCount: 4 });
   });
 
@@ -165,6 +180,22 @@ describe('independent paper maker manager', () => {
 });
 
 describe('matched-live shadow', () => {
+  it('uses an exact prospective pair instead of the nearest same-window paper row', () => {
+    const intended = order({ createdAt: '2026-08-15T00:00:00Z', calculationAt: '2026-08-15T00:00:00Z' });
+    intended.executionMirrorPair = executionMirrorPairStamp(intended);
+    const nearer = order({ id: 'paper:nearer', createdAt: '2026-08-15T00:00:10Z', calculationAt: '2026-08-15T00:00:10Z' });
+    nearer.executionMirrorPair = executionMirrorPairStamp(nearer);
+    const live = order({
+      id: 'live:BTC:UP:x', executionMode: 'live', status: 'open', createdAt: '2026-08-15T00:00:10Z',
+      calculationAt: intended.calculationAt, quantity: 1, requestedQuantity: 1, filledCount: 1,
+      authoritativeFillPrice: 0.44, actualFeeCents: 0, venueOrderId: 'venue-live',
+    });
+    live.executionMirrorPair = executionMirrorPairStamp(live);
+    expect(attachMatchedLiveFillShadow([intended, nearer, live], live)).toBe(true);
+    expect(intended.matchedLiveFill?.liveOrderId).toBe(live.id);
+    expect(nearer.matchedLiveFill).toBeUndefined();
+  });
+
   it('records authoritative live terms separately and caps them at paper quantity', () => {
     const paper = order({ status: 'unfilled', quantity: 4.17, requestedQuantity: 4.17 });
     const live = order({

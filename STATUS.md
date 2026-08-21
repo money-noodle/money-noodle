@@ -1,6 +1,6 @@
 # Money Noodle - Implementation Status
 
-> Living status document. Updated 2026-08-20.
+> Living status document. Updated 2026-08-21.
 > Product requirements and architecture decisions live in [SPEC.md](SPEC.md).
 
 ## Executive Summary
@@ -9,6 +9,8 @@ Money Noodle is operational as a local research dashboard, continuous paper shad
 
 The **repeated-episode order-identity defect found on 2026-08-20 was mechanically repaired and its known ledger damage corrected on 2026-08-21**. New live episode IDs retain collision-resistant identity through every create retry; reconciliation no longer fuzzy-matches truncated legacy IDs and blocks one venue order from owning multiple local entries. Ledger v8 preserves the HYPE before/after correction and trading control preserves the +54¢ whole-cent audit event. Separately, current economic evidence does not justify stake expansion, unconditional taker execution, an automatic entry relaxation, queue-aware live gates, or adding a second live venue. The shared buy rule remains **v22** — a 2026-08-20 operator narrowing to a +5pp edge floor and a 10–75¢ price band, not an evidence promotion. Live execution identity is now `maker-high30-requalify3-fresh1c-idv2-v6`; episode policy, sizing, and routes are unchanged.
 
+A 2026-08-21 mirror review found that paper v4 first attempts were useful but its generation check suppressed every episode after episode 1. The defect is repaired under `paper-managed-execution-route-ioc-requalify3-v5`, with exact prospective four-cell pairing and bounded public trade/queue evidence. The closed v4 sample matched route and quantity 69/69 and fill/no-fill 79.7%, but captured only 62.5% of fills among 61 accepted paired live makers; v5 starts a separate collection cohort and does not rewrite that history. Paper does not feed funded execution, so no live order rule changed.
+
 A second policy runs on the same market — the long-shot round trip, §2 below. Its current 12¢→97¢/600s cohort is paper-only; live arming is false. The parameters were selected from a retrospective sweep and therefore define a new collection cohort rather than evidence-backed promotion. It relaxes none of the edge policy's constraints and changes no edge rule.
 
 | Area | Status |
@@ -16,7 +18,7 @@ A second policy runs on the same market — the long-shot round trip, §2 below.
 | Dashboard and public paper track record | Functional locally and through optional Postgres projection |
 | Forecast and performance tracking | Functional; forecast summary storage verifies, but walk-forward checkpoint cohorts can drift after late resolution and require evaluator v3 |
 | Live execution | Kalshi live-capable and operator-paused; repeated-episode identity and known ledger damage are repaired under v6, but funded execution was not resumed automatically |
-| Paper execution | Continuous and independently accounted; exact-contract managed repricing now uses public trade/queue evidence concurrently with live |
+| Paper execution | Continuous and independently accounted under v5; three-episode generation ownership is repaired, exact prospective four-cell pairing is collecting, and fills remain conservative pending exact queue calibration |
 | Model evaluation | Automatic walk-forward scheduler continues monitoring; latest run retained baseline and evaluator v2 is explicitly barred from promotion |
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
 | Operational safety | Collision-resistant bounded live IDs, exact reconciliation ownership, quiescent drain, account reconciliation, kill switch, and budget/risk ceilings are implemented; current state is paused, READY, and restart-safe |
@@ -50,6 +52,50 @@ and restart-safe. Commit `fa1bf7c` passed GitHub CI and Vercel production deploy
 retaining the expected 200/401/503 stateless boundaries. Full design and evidence:
 [docs/live-order-identity-correction-design.md](docs/live-order-identity-correction-design.md) and
 [reports/kalshi-order-size-and-fill-mechanics-2026-08-20.md](reports/kalshi-order-size-and-fill-mechanics-2026-08-20.md).
+
+### Paper mirror v4 reviewed and requalification repaired under v5, 2026-08-21
+
+A final current-ledger replay of `paper-managed-execution-route-ioc-v4` measured 103 paper attempts in 55
+settlement windows from `2026-08-20T06:09:04Z` through `2026-08-21T02:16:39Z`. The primary one-to-one
+cohort has 69 exact symbol/side/close/episode pairs starting within one second across 41 windows. Route and
+requested quantity matched 69/69; fill/no-fill matched 79.7% (15 both, five paper-only, nine live-only,
+40 neither). Window-clustered paper-minus-live fill rate was −2.8pp ±9.4pp. Conditional on 61 accepted
+live makers, paper had no false-positive fills but reproduced only 15/24 live fills: 85.2% overall agreement
+and 62.5% live-fill capture. Exact FIFO rank and cancellations ahead remain private, so this supports
+“conservative approximation,” not “live equivalent.”
+
+The audit found a deterministic defect more important than calibration: `runPaper` validated the paper-v4
+simulator identity, while production-shaped paper rows exposed the shared live route identity first. The
+identities never equaled, so `adaptiveEntryEpisodeDecision` rejected every paper zero-fill as a stale
+generation. Paper recorded 103 episode-1 attempts and zero later episodes while live recorded 14 episode-2
+and five episode-3 attempts, including four fills. The test fixture had deleted the shared route field and
+therefore missed the production shape. No funded path read paper outcomes.
+
+The repair advances paper execution to `paper-managed-execution-route-ioc-requalify3-v5` and makes
+generation ownership lane-aware: paper reads its simulator generation and live retains its route generation.
+Production-shaped tests keep both fields and v4 cannot authorize v5. New orders stamp exact
+`entry-execution-mirror-pair-v1` identities from the complete calculation and episode; the signed performance
+report counts paired, one-sided, ambiguous, both-fill, paper-only, live-only and neither-fill outcomes without
+nearest-time inference or conditioning on a live fill. Each successful paper trade read now records bounded
+read timing, consuming print count/quantity and time bounds, queue before/after and fill added. None of these
+fields is public or read by execution.
+
+Current paper exit-depth evidence is small but directionally aligned: 7/13 paper exits and 10/17 live exits
+completed, with 7/8 agreement among same-position decisions starting within one second. The paper edge
+bankroll tied exactly at the final read (10,000¢ start − 2,284¢ realized − 0¢ open = 7,716¢ available). The dry-run checker
+now excludes separately funded long-shot open stake and reported a 0¢ residual without writing data.
+Authenticated `queue_position_fp` collection remains deferred: it shares signed-read capacity with fills and
+reconciliation, so an unbudgeted observation could affect money-state execution. See
+[docs/paper-live-mirror-fidelity-repair-design.md](docs/paper-live-mirror-fidelity-repair-design.md) and
+[reports/paper-live-mirror-fidelity-2026-08-21.md](reports/paper-live-mirror-fidelity-2026-08-21.md);
+reproduce with `npm run analyze:paper-live-mirror`.
+
+Typecheck, lint (0 errors / 37 inherited warnings), 121 test files / 1,007 tests, and the production build
+passed. The active worker was pause/drained from funded mode with zero positions and reservations, then
+restarted. Startup reconciliation completed READY at `2026-08-21T02:55:42.322Z` with zero local and
+venue-managed positions; control remained operator-paused and restart-safe at 1,780¢ available / −220¢
+realized. The signed performance route published `entry-execution-mirror-pair-v1` with a clean zero-row
+prospective cohort. No policy or funded execution changed, and live was not automatically resumed.
 
 ### Authenticated edge order-book monitoring and stable signal transitions implemented, 2026-08-20
 
@@ -1333,7 +1379,7 @@ Interpretation: the newer exact ledger snapshot is slightly negative lifetime an
 
 - Signed Kalshi balances, positions, orders, fills, cancellation, and v2 order submission.
 - Source policy `maker-high30-requalify3-fresh1c-idv2-v6` permits up to three separately requalified episodes: a managed post-only maker below 30pp issuance edge, or a capped fresh-quote IOC evaluation at 30pp+. After an authoritative maker zero-fill, the next episode requires two new post-completion snapshots over 15 seconds; no nonqualifying gap is required. Maker execution supports UP/YES and DOWN/NO with passive repricing, cancellation confirmation polling, fill/fee reconciliation, exact sub-cent accounting, collision-resistant bounded client IDs, and one-to-one reconciliation ownership. The funded worker is running v6 after a quiescent restart and authoritative startup reconciliation.
-- Paper execution mirrors live's relative `entry-sizing-reduce30-below-edge30-v1` sizing and episode boundary while retaining independent fills under `paper-managed-maker-requalify3-v3`. A shared pure state machine chooses the refreshed initial passive limit and all progressive reprices. Paper polls independently every two seconds while live management runs concurrently, keeps live's issuance-sized quantity, and requires opposite-outcome public taker prints to consume displayed queue-ahead volume; ask touch alone is telemetry, not a fill. Incomplete terminal trade evidence is excluded rather than scored as a miss. Portfolio/correlation/funding limits and its separate bankroll remain unchanged.
+- Paper execution uses `paper-managed-execution-route-ioc-requalify3-v5` for the same route decision, repaired three-episode boundary, and relative `entry-sizing-reduce30-below-edge30-v1` sizing while retaining independent fills. A shared pure state machine chooses the refreshed initial passive limit and all progressive reprices. Paper polls independently every two seconds while live management runs concurrently, keeps live's issuance-sized quantity, and requires opposite-outcome public taker prints to consume displayed queue-ahead volume; ask touch alone is telemetry, not a fill. Incomplete terminal trade evidence is excluded rather than scored as a miss. Exact prospective pair IDs and bounded queue-consumption evidence are reporting-only. Portfolio/correlation/funding limits and its separate bankroll remain unchanged.
 - Contemporaneous paper intents receive a separate `matched-live-fill-shadow-v1` overlay when live fills authoritatively. It is capped at observed live and requested paper quantity and records exact live price/fee terms, but cannot alter the independent paper status, budget, P&L, or public track record. The maker report exposes matched, both-filled, and live-only counts without blending the lanes.
 - Explicit live arming, environment opt-in, kill switch, pause/resume, per-trade cap, order-rate cap, budget allocation, loss stops, and automatic safety suspension on ambiguous failures.
 - Pause is a quiescent drain: withdraw intent, serialize behind execution, cancel/confirm managed remainders, reconcile authoritatively, and report restart-safe only when no working or uncertain transaction remains.
@@ -1691,8 +1737,9 @@ Remaining work:
 - Segment fill and return by displayed-ahead proxy, imbalance, repricing path, resting duration, profit state, probability deterioration, asset, side, and time remaining.
 - Compare accepted filled orders with accepted no-fills by settlement window.
 - Measure independent-paper/live agreement and disagreements against the separately stored matched-live overlay; never substitute the selected live fill for the independent paper result.
-- Recalibrate maker fill probability only after enough prospective fills and no-fills exist under
-  `paper-managed-maker-requalify3-v3`; keep the retired v2 cohort separate.
+- Keep v2/v3/v4 paper cohorts separate from repaired
+  `paper-managed-execution-route-ioc-requalify3-v5`; recalibrate only after enough complete prospective
+  `entry-execution-mirror-pair-v1` live/paper pairs exist under v5.
 - Current execution identity is `maker-high30-requalify3-fresh1c-idv2-v6` with
   `entry-sizing-reduce30-below-edge30-v1`. Below
   30pp each qualified episode is a reduced-size managed maker; at 30pp+ it is one full-base capped IOC only

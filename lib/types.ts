@@ -1544,9 +1544,15 @@ export interface EntryDecisionSnapshot {
   factors: Factor[];
 }
 
+export interface ExecutionMirrorPairStamp {
+  version: 'entry-execution-mirror-pair-v1';
+  /** Exact prospective decision identity shared only by paper/live rows built from the same calculation. */
+  id: string;
+}
+
 export interface EntryExecutionObservation {
   at: string;
-  event: 'paper_submitted' | 'paper_fill' | 'paper_expired' | 'create_quote' | 'create_rejected'
+  event: 'paper_submitted' | 'paper_trade_evidence' | 'paper_fill' | 'paper_expired' | 'create_quote' | 'create_rejected'
     | 'accepted' | 'management_quote' | 'amend_accepted' | 'amend_rejected'
     | 'cancel_requested' | 'cancel_confirmed' | 'terminal_fill';
   selectedBid?: number;
@@ -1563,6 +1569,15 @@ export interface EntryExecutionObservation {
   cancellationLatencyMs?: number;
   restingDurationMs?: number;
   touched?: boolean;
+  /** Bounded public-print evidence used by one paper queue-depletion pass. */
+  consumingTradeCount?: number;
+  consumingTradeQuantity?: number;
+  firstConsumingTradeAt?: string;
+  lastConsumingTradeAt?: string;
+  queueAheadBefore?: number;
+  queueAheadAfter?: number;
+  fillAdded?: number;
+  readStartedAt?: string;
   reason?: string;
 }
 
@@ -1628,6 +1643,8 @@ export interface PaperOrder {
   requalifiedAfterOrderId?: string;
   /** Deterministic id submitted to the venue; retained even when the HTTP response is lost. */
   clientOrderId?: string;
+  /** Observation-only prospective join; no execution, budget, or reconciliation path may read it. */
+  executionMirrorPair?: ExecutionMirrorPairStamp;
   /** Stable append-only correction that explains a historical row projection. */
   identityCorrectionId?: string;
   /** Venue order identifier, persisted as soon as Kalshi acknowledges an order. */
@@ -1915,6 +1932,27 @@ export interface MakerExecutionSegment {
 }
 
 export interface MakerFillReport {
+  /** Complete prospective pairs, including no-fills; exact IDs only and never inferred by timestamp. */
+  executionMirrorPairs: {
+    version: 'entry-execution-mirror-pair-v1';
+    stampedIntents: number;
+    pairedIntents: number;
+    decidedPairs: number;
+    awaitingPairs: number;
+    paperOnlyIntents: number;
+    liveOnlyIntents: number;
+    ambiguousPairIds: number;
+    bothFilled: number;
+    paperOnlyFills: number;
+    liveOnlyFills: number;
+    neitherFilled: number;
+    sameRoute: number;
+    sameRequestedQuantity: number;
+    bothFilledSameQuantity: number;
+    fillAgreement: number | null;
+    paperCaptureOfLiveFills: number | null;
+    meanPaperMinusLiveFillPrice: number | null;
+  };
   /** Authoritative live fills overlaid on contemporaneous paper intents, never mixed into paper P&L. */
   matchedLivePaper: {
     matchedIntents: number;

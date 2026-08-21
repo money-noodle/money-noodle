@@ -147,12 +147,16 @@ describe('public paper performance projection', () => {
 
   it('scores paper orders only, so a live result can never reach a public reader', async () => {
     executionOrders.mockResolvedValue([
-      order('paper-win', 'paper', 250),
+      { ...order('paper-win', 'paper', 250), executionMirrorPair: {
+        version: 'entry-execution-mirror-pair-v1', id: 'private-pair-id',
+      } } as PaperOrder,
       order('live-win', 'live', 9_999),
     ]);
-    const { paperRecord } = await getPublicPaperPerformance();
+    const projection = await getPublicPaperPerformance();
+    const { paperRecord } = projection;
     expect(paperRecord.settled).toBe(1);
     expect(paperRecord.realizedPnlCents).toBe(250);
+    expect(JSON.stringify(projection)).not.toContain('private-pair-id');
   });
 
   it('reads the replicated projection on a hosted dashboard instead of the local ledger', async () => {

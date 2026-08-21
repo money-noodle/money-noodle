@@ -1,4 +1,5 @@
 import { ACTION_COUNTERFACTUAL_VERSION, buildActionCounterfactuals, clusterByWindow } from './action-counterfactual';
+import { buildExecutionMirrorPairReport } from './execution-mirror-pair';
 import { normalizeMarketId } from './market-registry';
 import { EDGE_BINARY_BUY, normalizeStrategyId } from './strategy-registry';
 import { BUY_POLICY_VERSION } from './prediction-policy';
@@ -233,6 +234,7 @@ export function buildMakerFillReport(orders: PaperOrder[], forecasts: TrackedFor
   const matchedPaper = orders.filter((order) => order.executionMode === 'paper' && Boolean(order.matchedLiveFill));
   const independentlyFilledMatchedPaper = matchedPaper.filter((order) => (order.filledCount ?? 0) > 0);
   return {
+    executionMirrorPairs: buildExecutionMirrorPairReport(orders),
     matchedLivePaper: {
       matchedIntents: matchedPaper.length,
       independentPaperFills: independentlyFilledMatchedPaper.length,

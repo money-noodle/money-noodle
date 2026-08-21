@@ -37,8 +37,14 @@ export function entryAttemptsForLogicalOrder(orders: PaperOrder[], logicalOrderI
     .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
 }
 
-const orderExecutionPolicyVersion = (order: PaperOrder): string | undefined =>
-  order.entryExecutionDecision?.policyVersion ?? order.entryDecision?.executionPolicyVersion;
+/**
+ * Each lane owns a different execution generation. Live's route generation is the funded implementation;
+ * paper's entry-decision generation is the simulator. A production paper row carries both fields, so a
+ * shared fallback order silently suppresses paper requalification whenever their names differ.
+ */
+const orderExecutionPolicyVersion = (order: PaperOrder): string | undefined => order.executionMode === 'paper'
+  ? order.entryDecision?.executionPolicyVersion
+  : order.entryExecutionDecision?.policyVersion ?? order.entryDecision?.executionPolicyVersion;
 
 /**
  * V5 re-arms only after an authoritative current-policy maker zero-fill. Persistence is evaluated by the
