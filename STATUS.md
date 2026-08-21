@@ -95,7 +95,10 @@ passed. The active worker was pause/drained from funded mode with zero positions
 restarted. Startup reconciliation completed READY at `2026-08-21T02:55:42.322Z` with zero local and
 venue-managed positions; control remained operator-paused and restart-safe at 1,780¢ available / −220¢
 realized. The signed performance route published `entry-execution-mirror-pair-v1` with a clean zero-row
-prospective cohort. No policy or funded execution changed, and live was not automatically resumed.
+prospective cohort. Commit `5b7e258` passed GitHub CI and Vercel production deployment
+`dpl_AXognWmXECmYaVBTE2Tfj3BXZ9JG` reached READY at `noodle.money`; smoke checks retained the expected
+200/401/503 stateless boundaries and exposed no pair identity publicly. No policy or funded execution
+changed, and live was not automatically resumed.
 
 ### Authenticated edge order-book monitoring and stable signal transitions implemented, 2026-08-20
 

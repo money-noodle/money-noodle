@@ -232,4 +232,6 @@ Typecheck, lint (0 errors / 37 inherited warnings), 121 test files / 1,007 tests
 passed. The active funded worker was pause/drained with zero positions and reservations before restart.
 Startup reconciliation completed READY at `2026-08-21T02:55:42.322Z`; control remained operator-paused and
 restart-safe. The signed performance route exposed a clean zero-row prospective pair cohort, as expected
-before the first v5 intent. No funded execution was resumed automatically.
+before the first v5 intent. Commit `5b7e258` passed GitHub CI and Vercel production deployment
+`dpl_AXognWmXECmYaVBTE2Tfj3BXZ9JG` reached READY; public smoke checks exposed no pair identity. No funded
+execution was resumed automatically.
