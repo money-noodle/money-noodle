@@ -1,10 +1,12 @@
 import { DATA_FRESHNESS } from './freshness';
 import type {
-  PositionSide, QuoteTrajectoryFeature, QuoteTrajectorySpreadObservation, TradingVenue,
-  TrajectoryCoverage, TrajectoryHorizons, UnderlyingTrajectoryFeature,
+  PositionSide, QuoteTrajectoryFeature, QuoteTrajectorySpreadObservation, QuoteTrajectorySpreadObservationV2,
+  QuoteTrajectoryWindowGrid, TradingVenue, TrajectoryCoverage, TrajectoryHorizons, TrajectoryWindowGrid,
+  TrajectoryWindowSeconds, UnderlyingTrajectoryFeature,
 } from './types';
 
-export const QUOTE_TRAJECTORY_SPREAD_VERSION = 'quote-trajectory-spread-observation-v1' as const;
+export const QUOTE_TRAJECTORY_SPREAD_VERSION = 'quote-trajectory-spread-observation-v2' as const;
+export const TRAJECTORY_WINDOW_SECONDS = [2, 30, 60, 120, 240, 360, 480, 600] as const satisfies readonly TrajectoryWindowSeconds[];
 export const TRAJECTORY_TRAILING_WINDOW_MS = 60_000;
 export const TRAJECTORY_MINIMUM_OBSERVATIONS = 4;
 export const TRAJECTORY_MINIMUM_COVERAGE_MS = 45_000;
@@ -143,7 +145,7 @@ function summarizeUnderlying(points: Array<{ atMs: number; value: number }>): Un
   };
 }
 
-interface QuoteValue { midpoint: number; spread: number }
+interface QuoteValue { ask: number; midpoint: number; spread: number }
 
 function summarizeQuote(points: Array<{ atMs: number; value: QuoteValue }>): QuoteTrajectoryFeature {
   const first = points[0].value;
@@ -177,7 +179,55 @@ function quoteValue(sample: QuotePathSample, side: PositionSide): QuoteValue | n
   if (![bid, ask].every(Number.isFinite) || !(bid > 0) || !(ask > 0) || bid >= 1 || ask >= 1) return null;
   if (bid > ask + PRICE_EPSILON) return null;
   const spread = ask < bid ? 0 : ask - bid;
-  return { midpoint: (bid + ask) / 2, spread };
+  return { ask, midpoint: (bid + ask) / 2, spread };
+}
+
+function emptyWindowGrid(): TrajectoryWindowGrid {
+  return { 2: null, 30: null, 60: null, 120: null, 240: null, 360: null, 480: null, 600: null };
+}
+
+/**
+ * Selects an observed point at the requested lookback boundary without pretending a 15-second sample is
+ * a two-second quote. Boundary tolerance is at most one window and never more than one ordinary bucket.
+ */
+function windowStart<T>(
+  prepared: PreparedPath<T>, calculationAtMs: number, windowSeconds: TrajectoryWindowSeconds,
+): { atMs: number; value: T } | undefined {
+  if (prepared.reason || prepared.points.length < 2) return undefined;
+  const windowMs = windowSeconds * 1_000;
+  const targetMs = calculationAtMs - windowMs;
+  const start = prepared.points.filter((point) => point.atMs <= targetMs).at(-1);
+  const end = prepared.points.at(-1);
+  if (!start || !end || start.atMs >= end.atMs) return undefined;
+  const maximumBoundaryLagMs = Math.min(windowMs, DATA_FRESHNESS.observationBucketMs);
+  return targetMs - start.atMs <= maximumBoundaryLagMs ? start : undefined;
+}
+
+function decisionWindowGrid(
+  underlying: PreparedPath<number>, quotes: PreparedPath<QuoteValue>, calculationAtMs: number,
+  side: PositionSide,
+): QuoteTrajectoryWindowGrid {
+  const venueMoves = emptyWindowGrid();
+  const underlyingMoves = emptyWindowGrid();
+  const quoteAges = emptyWindowGrid();
+  const quoteEnd = quotes.points.at(-1);
+  const underlyingEnd = underlying.points.at(-1);
+  for (const windowSeconds of TRAJECTORY_WINDOW_SECONDS) {
+    const quoteStart = windowStart(quotes, calculationAtMs, windowSeconds);
+    if (quoteStart && quoteEnd) {
+      venueMoves[windowSeconds] = (quoteEnd.value.ask - quoteStart.value.ask) * 100;
+      quoteAges[windowSeconds] = (calculationAtMs - quoteStart.atMs) / 1_000;
+    }
+    const underlyingStart = windowStart(underlying, calculationAtMs, windowSeconds);
+    if (underlyingStart && underlyingEnd) {
+      underlyingMoves[windowSeconds] = ((underlyingEnd.value - underlyingStart.value) / underlyingStart.value) * 100;
+    }
+  }
+  return {
+    selectedSide: side, venueMoves, underlyingMoves, quoteAges,
+    windowCoverage: TRAJECTORY_WINDOW_SECONDS.filter((windowSeconds) => venueMoves[windowSeconds] !== null).length,
+    issuedAt: new Date(calculationAtMs).toISOString(),
+  };
 }
 
 export function buildQuoteTrajectorySpreadObservation(input: {
@@ -189,7 +239,7 @@ export function buildQuoteTrajectorySpreadObservation(input: {
   closesAt: string;
   underlyingSamples: UnderlyingPathSample[];
   quoteSamples: QuotePathSample[];
-}): QuoteTrajectorySpreadObservation {
+}): QuoteTrajectorySpreadObservationV2 {
   const closesAtMs = Date.parse(input.closesAt);
   const cycleStartedAtMs = closesAtMs - 15 * 60_000;
   const underlying = preparePath<number>({
@@ -209,7 +259,8 @@ export function buildQuoteTrajectorySpreadObservation(input: {
     calculationAtMs: input.calculationAtMs,
     cycleStartedAtMs,
     value: (sample) => quoteValue(sample as QuotePathSample, input.side),
-    equal: (left, right) => closeNumber(left.midpoint, right.midpoint) && closeNumber(left.spread, right.spread),
+    equal: (left, right) => closeNumber(left.ask, right.ask)
+      && closeNumber(left.midpoint, right.midpoint) && closeNumber(left.spread, right.spread),
   });
   return {
     version: QUOTE_TRAJECTORY_SPREAD_VERSION,
@@ -221,6 +272,7 @@ export function buildQuoteTrajectorySpreadObservation(input: {
     closesAt: input.closesAt,
     underlying: horizon(underlying, input.calculationAtMs, summarizeUnderlying),
     quote: horizon(quotes, input.calculationAtMs, summarizeQuote),
+    decisionWindows: decisionWindowGrid(underlying, quotes, input.calculationAtMs, input.side),
   };
 }
 
@@ -236,5 +288,30 @@ function cloneHorizons<T extends object>(value: TrajectoryHorizons<T>): Trajecto
 export function cloneQuoteTrajectorySpreadObservation(
   value: QuoteTrajectorySpreadObservation,
 ): QuoteTrajectorySpreadObservation {
-  return { ...value, underlying: cloneHorizons(value.underlying), quote: cloneHorizons(value.quote) };
+  if (value.version === 'quote-trajectory-spread-observation-v1') {
+    return { ...value, underlying: cloneHorizons(value.underlying), quote: cloneHorizons(value.quote) };
+  }
+  return {
+    ...value,
+    underlying: cloneHorizons(value.underlying),
+    quote: cloneHorizons(value.quote),
+    decisionWindows: {
+      ...value.decisionWindows,
+      venueMoves: { ...value.decisionWindows.venueMoves },
+      underlyingMoves: { ...value.decisionWindows.underlyingMoves },
+      quoteAges: { ...value.decisionWindows.quoteAges },
+    },
+  };
+}
+
+/** Copies only evidence for the exact order target; one provider or window can never unlock another. */
+export function quoteTrajectoryForDecision(
+  value: QuoteTrajectorySpreadObservation | QuoteTrajectorySpreadObservation[] | undefined,
+  identity: Pick<QuoteTrajectorySpreadObservationV2, 'providerId' | 'contractId' | 'side' | 'closesAt'>,
+): QuoteTrajectorySpreadObservationV2 | undefined {
+  const exact = (Array.isArray(value) ? value : value ? [value] : []).find((observation) =>
+    observation.version === QUOTE_TRAJECTORY_SPREAD_VERSION
+    && observation.providerId === identity.providerId && observation.contractId === identity.contractId
+    && observation.side === identity.side && observation.closesAt === identity.closesAt);
+  return exact ? cloneQuoteTrajectorySpreadObservation(exact) as QuoteTrajectorySpreadObservationV2 : undefined;
 }

@@ -8,7 +8,8 @@ import type { EntryDecisionSnapshot } from './types';
 
 /**
  * `entry-decision-v2` records values the desk already computed at decision time and would otherwise throw
- * away at the order boundary: the edge spike, numeric cycle regime, and prospective quote-path observation.
+ * away at the order boundary: the edge spike and numeric cycle regime. Historical v1 quote-path evidence
+ * remains readable there; the v2 grid is stamped once at the owning-order level to avoid duplication.
  *
  * The reason they were added is that neither could be scored against realized money — the 2026-08-19
  * screen could reconstruct a volatility ratio for only 605 of 995 v17+ orders and could not reconstruct
@@ -61,7 +62,8 @@ describe('the recorded observations are isolated from anything that can move mon
     for (const file of forbidden) {
       const source = readFileSync(path.join(process.cwd(), 'lib', file), 'utf8');
       const reads = /entryDecision(\?)?\.(edgeSpike|cycleRegime|quoteTrajectorySpread)/.test(source)
-        || /prediction(\?)?\.quoteTrajectorySpread/.test(source);
+        || /prediction(\?)?\.quoteTrajectorySpread/.test(source)
+        || /order(\?)?\.quoteTrajectorySpread/.test(source);
       expect({ file, reads }).toEqual({ file, reads: false });
     }
   });
@@ -71,7 +73,18 @@ describe('the recorded observations are isolated from anything that can move mon
     expect(source.match(/version: 'entry-decision-v2'/g)).toHaveLength(1);
     expect(source).toContain('edgeSpike: eligibility.edgeSpike');
     expect(source).toContain('cycleRegime: prediction.cycleRegime ? { ...prediction.cycleRegime } : undefined');
-    expect(source).toContain('cloneQuoteTrajectorySpreadObservation(prediction.quoteTrajectorySpread)');
+    expect(source).toContain('quoteTrajectorySpread: quoteTrajectoryForDecision(');
+    expect(source).toContain('prediction.quoteTrajectorySpreads ?? prediction.quoteTrajectorySpread');
+    expect(source.indexOf('quoteTrajectorySpread: quoteTrajectoryForDecision')).toBeLessThan(source.indexOf('async function executePreparedLiveBuy'));
+  });
+
+  it('writes the v2 grid once before execution and advances the additive ledger envelope', () => {
+    const source = readFileSync(path.join(process.cwd(), 'lib', 'paper-execution.ts'), 'utf8');
+    expect(source.match(/quoteTrajectorySpread: quoteTrajectoryForDecision/g)).toHaveLength(1);
+    expect(source).toContain('interface Ledger { version: 7;');
+    expect(source).not.toContain('interface Ledger { version: 6;');
+    expect(source).toContain('const candidate = buildOrder(prediction, side,');
+    expect(source).toContain('candidate.order.entryEpisode = episode.attemptNumber');
   });
 
   it('clones the regime features rather than aliasing the prediction it came from', () => {
@@ -80,5 +93,6 @@ describe('the recorded observations are isolated from anything that can move mon
     const source = readFileSync(path.join(process.cwd(), 'lib', 'paper-execution.ts'), 'utf8');
     expect(source).not.toContain('cycleRegime: prediction.cycleRegime,');
     expect(source).not.toContain('quoteTrajectorySpread: prediction.quoteTrajectorySpread,');
+    expect(source).not.toContain('cloneQuoteTrajectorySpreadObservation(prediction.quoteTrajectorySpread)');
   });
 });

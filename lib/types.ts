@@ -406,9 +406,24 @@ export interface TrajectoryHorizons<T> {
   cycleToDateUnavailableReason?: string;
 }
 
-/** Prospective observation only. A policy may not read this until a separately versioned promotion. */
-export interface QuoteTrajectorySpreadObservation {
-  version: 'quote-trajectory-spread-observation-v1';
+export type TrajectoryWindowSeconds = 2 | 30 | 60 | 120 | 240 | 360 | 480 | 600;
+export type TrajectoryWindowGrid = Record<TrajectoryWindowSeconds, number | null>;
+
+/** Decision-time grid added by v2. Null means that exact window was unavailable, never a flat move. */
+export interface QuoteTrajectoryWindowGrid {
+  selectedSide: PositionSide;
+  /** Selected-side executable ask movement, in cents. */
+  venueMoves: TrajectoryWindowGrid;
+  /** Canonical Kraken-basis price movement, in percent; DOWN is not silently negated. */
+  underlyingMoves: TrajectoryWindowGrid;
+  /** Age in seconds of the oldest venue quote used for each move. */
+  quoteAges: TrajectoryWindowGrid;
+  /** Number of non-null venue windows, from zero through eight. */
+  windowCoverage: number;
+  issuedAt: string;
+}
+
+interface QuoteTrajectorySpreadObservationBase {
   calculationAt: string;
   symbol: string;
   providerId: TradingVenue;
@@ -418,6 +433,21 @@ export interface QuoteTrajectorySpreadObservation {
   underlying: TrajectoryHorizons<UnderlyingTrajectoryFeature>;
   quote: TrajectoryHorizons<QuoteTrajectoryFeature>;
 }
+
+/** Legacy prospective observation. Absence of the v2 grid must remain absence. */
+export interface QuoteTrajectorySpreadObservationV1 extends QuoteTrajectorySpreadObservationBase {
+  version: 'quote-trajectory-spread-observation-v1';
+}
+
+/** Prospective observation only. A policy may not read this until a separately versioned promotion. */
+export interface QuoteTrajectorySpreadObservationV2 extends QuoteTrajectorySpreadObservationBase {
+  version: 'quote-trajectory-spread-observation-v2';
+  decisionWindows: QuoteTrajectoryWindowGrid;
+}
+
+export type QuoteTrajectorySpreadObservation =
+  | QuoteTrajectorySpreadObservationV1
+  | QuoteTrajectorySpreadObservationV2;
 
 export interface CyclePathPoint { at: string; offsetSeconds: number; price: number; basisPercent: number }
 export interface CyclePathRecord {
@@ -526,8 +556,10 @@ export interface Prediction {
   basis?: ContractBasis;
   /** Persisted for validation only; never consumed by probability, confidence, or execution gates. */
   cycleRegime?: CycleRegimeFeatures;
-  /** Prospective provider/side trajectory and spread evidence; observation only. */
+  /** Prospective best-entry provider/side trajectory and spread evidence; observation only. */
   quoteTrajectorySpread?: QuoteTrajectorySpreadObservation;
+  /** Private calculation-time slices used to stamp the exact provider/side ultimately issued. */
+  quoteTrajectorySpreads?: QuoteTrajectorySpreadObservation[];
   /** Explicit final-minute average and maker-touch estimates are observation-only until validated. */
   settlementAverageEstimate?: SettlementAverageEstimate;
   makerFillEstimate?: MakerFillEstimate;
@@ -1433,8 +1465,9 @@ export type ExecutionMode = 'paper' | 'live';
 /**
  * Immutable issuance-time evidence explaining why an order cleared the binary edge-buy gates.
  *
- * `entry-decision-v2` adds `edgeSpike` and the numeric `cycleRegime` features. Both were already
- * computed at decision time and thrown away; v1 rows simply lack them and must never be reinterpreted
+ * `entry-decision-v2` adds `edgeSpike` and the numeric `cycleRegime` features. It also hosted the v1
+ * trajectory observation; v2 trajectory grids live at the owning-order level so they are not duplicated.
+ * These values were already computed at decision time and thrown away; v1 rows simply lack them and must never be reinterpreted
  * as "the feature was absent". Every added field is reporting-only — nothing that prices, sizes, gates,
  * or trades may read them (`lib/entry-decision-observation.test.ts` asserts it).
  */
@@ -1469,7 +1502,7 @@ export interface EntryDecisionSnapshot {
   basis?: ContractBasis;
   /** v2+. Observation-only path state at issuance; the coarse label alone is on `PaperOrder`. */
   cycleRegime?: CycleRegimeFeatures;
-  /** Prospective quote-path evidence. Historical v2 rows legitimately lack it. */
+  /** Legacy nested quote-path evidence. New v2 grid writes live on the owning order to avoid duplication. */
   quoteTrajectorySpread?: QuoteTrajectorySpreadObservation;
   calibrationReplay?: CalibrationReplaySnapshot;
   settlementAverageEstimate?: SettlementAverageEstimate;
@@ -1626,6 +1659,8 @@ export interface PaperOrder {
     stakeLimitCents: number;
     reason: string;
   };
+  /** Decision-time trajectory grid. Observation-only; absent on legacy and unavailable rows. */
+  quoteTrajectorySpread?: QuoteTrajectorySpreadObservation;
   /** Prospective reporting-only selected-side quote direction; no production decision may read it. */
   entryDirectionObservation?: {
     version: 'entry-direction-observation-v1';

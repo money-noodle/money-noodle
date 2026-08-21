@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildQuoteTrajectorySpreadObservation, cloneQuoteTrajectorySpreadObservation,
+  buildQuoteTrajectorySpreadObservation, cloneQuoteTrajectorySpreadObservation, quoteTrajectoryForDecision,
+  QUOTE_TRAJECTORY_SPREAD_VERSION, TRAJECTORY_WINDOW_SECONDS,
   type QuotePathSample, type UnderlyingPathSample,
 } from './quote-trajectory-spread';
 
@@ -59,6 +60,52 @@ describe('quote trajectory and spread observation', () => {
     expect(result.quote.trailing60Seconds?.spreadChangeCents).toBeCloseTo(0, 12);
     expect(result.underlying.cycleToDate).toEqual(result.underlying.trailing60Seconds);
     expect(result.quote.cycleToDate).toEqual(result.quote.trailing60Seconds);
+  });
+
+  it('computes the complete eight-window decision grid from exact source boundaries', () => {
+    const customOffsets = Array.from({ length: 301 }, (_, index) => -600_000 + index * 2_000);
+    const prices = customOffsets.map((_, index) => 100 + index * 0.01);
+    const bids = customOffsets.map((_, index) => 0.18 + index * 0.001);
+    const asks = customOffsets.map((_, index) => 0.20 + index * 0.001);
+    const result = observation({
+      underlyingSamples: underlying(prices, customOffsets),
+      quoteSamples: quotes({ bids, asks, customOffsets }),
+    });
+
+    expect(result.version).toBe(QUOTE_TRAJECTORY_SPREAD_VERSION);
+    expect(result.decisionWindows.windowCoverage).toBe(8);
+    expect(result.decisionWindows.selectedSide).toBe('UP');
+    expect(result.decisionWindows.issuedAt).toBe(new Date(calculationAtMs).toISOString());
+    for (const windowSeconds of TRAJECTORY_WINDOW_SECONDS) {
+      expect(result.decisionWindows.quoteAges[windowSeconds]).toBe(windowSeconds);
+      expect(result.decisionWindows.venueMoves[windowSeconds]).toBeCloseTo(windowSeconds * 0.05, 12);
+      expect(result.decisionWindows.underlyingMoves[windowSeconds]).toBeGreaterThan(0);
+    }
+  });
+
+  it('does not relabel an ordinary 15-second reading as a two-second move', () => {
+    const customOffsets = Array.from({ length: 41 }, (_, index) => -600_000 + index * 15_000);
+    const prices = customOffsets.map((_, index) => 100 + index * 0.1);
+    const bids = customOffsets.map((_, index) => 0.30 + index * 0.002);
+    const asks = customOffsets.map((_, index) => 0.32 + index * 0.002);
+    const grid = observation({
+      underlyingSamples: underlying(prices, customOffsets),
+      quoteSamples: quotes({ bids, asks, customOffsets }),
+    }).decisionWindows;
+
+    expect(grid.venueMoves[2]).toBeNull();
+    expect(grid.underlyingMoves[2]).toBeNull();
+    expect(grid.quoteAges[2]).toBeNull();
+    expect(grid.windowCoverage).toBe(7);
+    expect(grid.quoteAges[30]).toBe(30);
+    expect(grid.venueMoves[600]).toBeCloseTo(8, 12);
+  });
+
+  it('records selected-side ask movement rather than midpoint movement', () => {
+    const result = observation({ quoteSamples: quotes({
+      bids: [0.40, 0.40, 0.40, 0.40], asks: [0.42, 0.43, 0.44, 0.45],
+    }) });
+    expect(result.decisionWindows.venueMoves[30]).toBeCloseTo(2, 12);
   });
 
   it('uses the named side book rather than assuming DOWN is the complement of UP', () => {
@@ -168,6 +215,22 @@ describe('quote trajectory and spread observation', () => {
     expect(cloned).not.toBe(original);
     expect(cloned.quote).not.toBe(original.quote);
     expect(cloned.quote.trailing60Seconds).not.toBe(original.quote.trailing60Seconds);
-    expect(JSON.stringify(original).length).toBeLessThan(4_000);
+    expect(cloned.version).toBe('quote-trajectory-spread-observation-v2');
+    if (cloned.version !== 'quote-trajectory-spread-observation-v2') throw new Error('Expected v2 clone.');
+    expect(cloned.decisionWindows).not.toBe(original.decisionWindows);
+    expect(cloned.decisionWindows.venueMoves).not.toBe(original.decisionWindows.venueMoves);
+    expect(JSON.stringify(original).length).toBeLessThan(5_000);
+  });
+
+  it('stamps only the exact v2 provider, contract, side, and window identity', () => {
+    const original = observation();
+    const identity = { providerId: 'kalshi' as const, contractId: 'KXBTC', side: 'UP' as const, closesAt };
+    expect(quoteTrajectoryForDecision(original, identity)).toEqual(original);
+    expect(quoteTrajectoryForDecision([
+      observation({ side: 'DOWN', quoteSamples: quotes({ side: 'DOWN' }) }), original,
+    ], identity)).toEqual(original);
+    expect(quoteTrajectoryForDecision(original, { ...identity, side: 'DOWN' })).toBeUndefined();
+    expect(quoteTrajectoryForDecision(original, { ...identity, contractId: 'OTHER' })).toBeUndefined();
+    expect(quoteTrajectoryForDecision({ ...original, version: 'quote-trajectory-spread-observation-v1' }, identity)).toBeUndefined();
   });
 });

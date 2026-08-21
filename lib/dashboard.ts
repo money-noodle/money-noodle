@@ -11,7 +11,7 @@ import { estimateMakerTouch } from './maker-fill-model';
 import { readPromotionLedger } from './model-promotion-store';
 import { summarizePerformance } from './performance';
 import { activePolicyManifest } from './policy-manifest';
-import { bestEntry, edgeStrength, qualifiesAsBuyEdge } from './prediction-policy';
+import { bestEntry, edgeStrength, qualifiesAsBuyEdge, venueEntryOptions } from './prediction-policy';
 import { buildQuoteTrajectorySpreadObservation, type QuotePathSample } from './quote-trajectory-spread';
 import { estimateSettlementAverage } from './settlement-average';
 import { getEnabledTradingVenues } from './trading-control';
@@ -422,22 +422,31 @@ async function buildDashboard(force = false, liveOnly = false): Promise<Dashboar
   const collectedQuoteSamples = venueHistory.flatMap((point) => point.quotePathSamples ?? []);
   for (const prediction of predictions) {
     prediction.cycleRegime = cycleRegimes[prediction.symbol];
-    const entry = bestEntry(prediction);
-    if (!entry) continue;
-    const contractId = entry.venue === 'kalshi'
-      ? prediction.kalshi?.ticker
-      : polymarketContractId(prediction.symbol, prediction.market);
-    const closesAt = entry.venue === 'kalshi' ? prediction.kalshi?.closesAt : prediction.market.closesAt;
-    if (!contractId || !closesAt) continue;
-    prediction.quoteTrajectorySpread = buildQuoteTrajectorySpreadObservation({
-      calculationAtMs, symbol: prediction.symbol, providerId: entry.venue, contractId, side: entry.side, closesAt,
-      underlyingSamples: oracleHistory.flatMap((point) => {
-        const price = point.prices[prediction.symbol];
-        return point.sourceObservedAt === undefined || !Number.isFinite(price)
-          ? [] : [{ sourceObservedAt: point.sourceObservedAt, price }];
-      }),
-      quoteSamples: collectedQuoteSamples,
+    const underlyingSamples = oracleHistory.flatMap((point) => {
+      const price = point.prices[prediction.symbol];
+      return point.sourceObservedAt === undefined || !Number.isFinite(price)
+        ? [] : [{ sourceObservedAt: point.sourceObservedAt, price }];
     });
+    const quoteTrajectorySpreads = venueEntryOptions(prediction).flatMap((option) => {
+      const contractId = option.venue === 'kalshi'
+        ? prediction.kalshi?.ticker
+        : polymarketContractId(prediction.symbol, prediction.market);
+      const closesAt = option.venue === 'kalshi' ? prediction.kalshi?.closesAt : prediction.market.closesAt;
+      if (!contractId || !closesAt) return [];
+      return [buildQuoteTrajectorySpreadObservation({
+        calculationAtMs, symbol: prediction.symbol, providerId: option.venue,
+        contractId, side: option.side, closesAt, underlyingSamples, quoteSamples: collectedQuoteSamples,
+      })];
+    });
+    // Alternate execution slices exist only on the process-local object used by the order builder. Keeping
+    // them non-enumerable prevents the signed dashboard and forecast persistence from duplicating raw choices.
+    Object.defineProperty(prediction, 'quoteTrajectorySpreads', {
+      value: quoteTrajectorySpreads, enumerable: false, configurable: false, writable: false,
+    });
+    const entry = bestEntry(prediction);
+    prediction.quoteTrajectorySpread = entry
+      ? quoteTrajectorySpreads.find((observation) => observation.providerId === entry.venue
+        && observation.side === entry.side) : undefined;
   }
   // Forecast and performance persistence belongs exclusively to the durable worker.
   const performance = stateless ? summarizePerformance([]) : await trackCalculations(predictions, MODEL_VERSION).catch((error) => {
@@ -481,7 +490,9 @@ function publicPolicyManifest(manifest: PolicyManifest): PolicyManifest {
 /** Removes every control/performance field from the unauthenticated server response. */
 export function publicDashboardData(dashboard: DashboardData): PublicDashboardData {
   const { tradingProviders: _providers, performance: _performance, policyManifest, ...publicData } = dashboard;
-  const predictions = publicData.predictions.map(({ quoteTrajectorySpread: _trajectory, ...prediction }) => prediction);
+  const predictions = publicData.predictions.map(({
+    quoteTrajectorySpread: _trajectory, quoteTrajectorySpreads: _trajectories, ...prediction
+  }) => prediction);
   return { ...publicData, predictions, policyManifest: publicPolicyManifest(policyManifest) };
 }
 

@@ -1,6 +1,7 @@
 # Window-consensus direction gate: data collection and evaluation plan
 
-> Status: **design draft, not approved, not implemented.** Nothing here authorizes a change to the forecast,
+> Status: **approved collection-only implementation, 2026-08-20.** The maintainer approved execution of
+> the data contract after the committed design review. Nothing here authorizes a change to the forecast,
 > entry rule, execution lane, or budget. This prescribes what to collect and how to evaluate a possible
 > future "buy only when the selected side has been rising over a window consensus" gate. It follows the
 > decision made on 2026-08-20 to (a) dig deeper into the 120/60/30/2 second windows plus 4/6/8/10 minutes,
@@ -42,6 +43,22 @@ made. Per decision:
 | `quoteAges` | per-window age of the oldest quote used in that move | quote cache timestamps |
 | `windowCoverage` | how many of the 8 windows had a fresh quote (`0..8`) | — |
 | `issuedAt` | decision time | — |
+
+The durable v2 representation uses numeric second keys (`2`, `30`, …, `600`) whose values are nullable.
+`venueMoves` is selected-side executable **ask** movement in cents. `underlyingMoves` is canonical Kraken
+price movement in percent and is not negated for DOWN. `quoteAges` is the age in seconds of the oldest venue
+quote used for each move. `null` means unavailable, never flat; `windowCoverage` counts non-null venue moves.
+The start is the latest contiguous source observation at or before the requested lookback boundary. It may
+lag that boundary by no more than the smaller of one requested window or one ordinary observation bucket.
+This prevents a normal 15-second point from being relabelled as a 2-second move while allowing honest
+boundary jitter on longer windows. The latest point retains v1's hard freshness and source-integrity checks.
+
+The v2 grid is copied once to top-level `PaperOrder.quoteTrajectorySpread` before any venue request or fill
+result. The order builder chooses from private in-memory provider/side slices and requires exact provider,
+contract, side, and close-time identity. Filled, unfilled, refused, rejected, and later requalified episodes
+therefore retain the snapshot attached to their own decision; legacy rows remain absent. The ledger envelope
+advances additively to v7. Forecast evidence continues to stamp only the production-selected slice. No raw
+path or alternate-provider slice enters the public/stateless projection.
 
 Why the underlying is separate: a venue dip is the maker fill mechanism (adverse-move fills arrive when the
 price comes to us); an underlying dip is asset momentum. The exploration's regime flip (08-20 vs pooled) is

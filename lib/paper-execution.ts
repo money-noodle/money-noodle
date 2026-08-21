@@ -94,7 +94,7 @@ import { selectPortfolio, cryptoExposureGroup, DEFAULT_PORTFOLIO_CONSTRAINTS, pa
 import { PORTFOLIO_CHOICE_SET_VERSION, type PortfolioChoiceSetRecord } from './portfolio-choice-set';
 import { maintainPortfolioChoiceSets, recordPortfolioChoiceSet } from './portfolio-choice-set-store';
 import { bestEntry, bestVenueEntry, BUY_POLICY_VERSION, edgeStrength, MAX_ENTRY_PRICE, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, qualifiesAsBuyEdge, qualifiesVenueBuyEdge, sideProbability, venueFeeRate } from './prediction-policy';
-import { cloneQuoteTrajectorySpreadObservation } from './quote-trajectory-spread';
+import { quoteTrajectoryForDecision } from './quote-trajectory-spread';
 import { getKalshiReconciliationStatus, serializedReconciliation, setKalshiReconciliationStatus, type KalshiReconciliationStatus } from './reconciliation-state';
 import { getRegimeGateStatus, updateRegimeGate, type RegimeGateStatus, type RegimeSentinelCandidate } from './regime-gate-store';
 import { advanceSignalPersistence, evaluateSignalPersistence, evaluateSignalPersistenceIgnoringSpike, productionSignalPersistence, signalPersistenceAfter, type SignalEligibility, type SignalPersistenceState } from './signal-persistence';
@@ -149,13 +149,13 @@ interface PaperBudget {
   reconciliationCorrections?: BankrollCorrection[];
 }
 export const MAX_PAPER_BANKROLL_CENTS = 1_000_000;
-interface Ledger { version: 6; paperBudget: PaperBudget; orders: PaperOrder[]; signalPersistence: Record<string, SignalPersistenceState>; portfolioDecisions: Record<string, PortfolioDecisionView>; switchPersistence: Record<string, SwitchPersistenceState>; lastLiveSkip?: { reason: string; at: string } }
+interface Ledger { version: 7; paperBudget: PaperBudget; orders: PaperOrder[]; signalPersistence: Record<string, SignalPersistenceState>; portfolioDecisions: Record<string, PortfolioDecisionView>; switchPersistence: Record<string, SwitchPersistenceState>; lastLiveSkip?: { reason: string; at: string } }
 
 async function readLedger(): Promise<Ledger> {
   try {
     const raw = JSON.parse(await readFile(LEDGER_FILE, 'utf8')) as Partial<Ledger> & { orders?: PaperOrder[] };
     return {
-      version: 6,
+      version: 7,
       paperBudget: raw.paperBudget ?? { startingCents: DEFAULT_PAPER_BANKROLL_CENTS, availableCents: DEFAULT_PAPER_BANKROLL_CENTS, realizedPnlCents: 0 },
       orders: (raw.orders ?? []).map((order) => ({ ...order, executionMode: order.executionMode ?? 'paper' })),
       // Persistence is side-specific. Legacy UP-only streaks are discarded rather than reused
@@ -167,7 +167,7 @@ async function readLedger(): Promise<Ledger> {
     };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { version: 6, paperBudget: { startingCents: DEFAULT_PAPER_BANKROLL_CENTS, availableCents: DEFAULT_PAPER_BANKROLL_CENTS, realizedPnlCents: 0 }, orders: [], signalPersistence: {}, portfolioDecisions: {}, switchPersistence: {} };
+      return { version: 7, paperBudget: { startingCents: DEFAULT_PAPER_BANKROLL_CENTS, availableCents: DEFAULT_PAPER_BANKROLL_CENTS, realizedPnlCents: 0 }, orders: [], signalPersistence: {}, portfolioDecisions: {}, switchPersistence: {} };
     }
     throw error;
   }
@@ -619,8 +619,6 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
       edgeSpike: eligibility.edgeSpike,
       basis: prediction.basis ? { ...prediction.basis } : undefined,
       cycleRegime: prediction.cycleRegime ? { ...prediction.cycleRegime } : undefined,
-      quoteTrajectorySpread: prediction.quoteTrajectorySpread
-        ? cloneQuoteTrajectorySpreadObservation(prediction.quoteTrajectorySpread) : undefined,
       calibrationReplay: prediction.calibrationReplay ? {
         ...prediction.calibrationReplay,
         basisInput: prediction.calibrationReplay.basisInput ? { ...prediction.calibrationReplay.basisInput } : undefined,
@@ -629,6 +627,13 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
       settlementAverageEstimate: prediction.settlementAverageEstimate ? { ...prediction.settlementAverageEstimate } : undefined,
       factors: prediction.factors.map((factor) => ({ ...factor })),
     },
+    // Top-level decision evidence is serialized with the order before any venue request or fill result.
+    // Exact identity matching prevents a best-entry observation from leaking across providers/contracts.
+    quoteTrajectorySpread: quoteTrajectoryForDecision(
+      prediction.quoteTrajectorySpreads ?? prediction.quoteTrajectorySpread, {
+      providerId: selected.venue, contractId: contractId(prediction, selected.venue),
+      side, closesAt: selected.quote.closesAt,
+    }),
     // Calibrated here rather than at forecast time: the estimate that predicts a fill is what
     // comparable attempts did, and only this path has the ledger to read them from.
     makerFillEstimate: (() => {

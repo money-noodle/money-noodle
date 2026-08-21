@@ -75,6 +75,33 @@ or open-position observations already captured by the execution engine. Values o
 calculation window are visibly stale. This adds no venue request, polling loop, ledger field, or path back into
 pricing and execution.
 
+### Eight-window decision trajectory collection implemented, 2026-08-20
+
+`quote-trajectory-spread-observation-v2` retains the v1 trailing-60-second and cycle-to-date features and
+adds nullable 2/30/60/120/240/360/480/600-second grids for selected-side ask movement in cents, canonical
+Kraken movement in percent, oldest-quote age in seconds, and a 0–8 venue coverage count. The boundary
+selection refuses to call an ordinary 15-second sample a 2-second move. Dashboard calculation derives exact
+provider/side slices only from already-fetched source-timestamped paths; the public projection strips all of
+them.
+
+Ledger envelope v7 writes one exact provider/contract/side/close-time clone to top-level
+`PaperOrder.quoteTrajectorySpread` when each edge order is built, before any placement or fill. The same
+builder owns paper, live, and post-miss requalified episodes, so filled, unfilled, refused, rejected, and
+requalified decisions retain their own issuance evidence without duplicating it inside the entry snapshot.
+Legacy rows remain absent. No policy, ranking, gate, sizing, execution, fill, exit, reconciliation, budget,
+or promotion path reads the grid. Design and forward review contract:
+[docs/edge-window-consensus-evaluation-design.md](docs/edge-window-consensus-evaluation-design.md).
+
+Typecheck, lint (0 errors / 37 inherited warnings), 118 test files / 988 tests, and the production build
+passed. The restart precheck unexpectedly found automation active again with zero positions; it was
+immediately pause/drained and was not resumed. The built runtime started at 2026-08-21T00:31Z, startup
+reconciliation completed READY at `2026-08-21T00:32:14.166Z` with zero local or venue-managed positions,
+and the desk remains operator-paused, quiescent, and restart-safe. Ledger v7 then recorded its first v2 row:
+one BTC paper decision at 2026-08-21T00:32:45.826Z with exact matching identity and no nested duplicate. Its
+coverage was 0/8 because it fired before even the 30-second boundary existed; this verifies prospective
+persistence, not signal economics. A subsequent live-cache read produced valid 30-second venue and
+underlying moves while leaving the unavailable 2-second and not-yet-covered longer windows null.
+
 ### Quote trajectory and spread collection deployed and running, 2026-08-20
 
 The collection-only generation in

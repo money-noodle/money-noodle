@@ -180,6 +180,12 @@ derivations only and cannot become gates without a later versioned threshold.
 
 Observation version: `quote-trajectory-spread-observation-v1`.
 
+**Additive extension approved 2026-08-20:** new observations use
+`quote-trajectory-spread-observation-v2`, retaining both v1 horizons and adding the eight-window
+decision grid defined by `docs/edge-window-consensus-evaluation-design.md` §2. V1 rows remain readable and
+are never backfilled. New order writes place the v2 observation once on the owning `PaperOrder` rather than
+duplicating it inside `EntryDecisionSnapshot`; the exact decision semantics remain unchanged.
+
 The conceptual snapshot contains:
 
 - version and calculation timestamp;
