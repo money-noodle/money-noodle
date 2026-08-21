@@ -581,8 +581,17 @@ evidence.** The launch marks are fixed until forward evidence over independent s
 otherwise, and any change is a versioned, recorded, manual act. The recording in §11 exists so that when
 the marks are revisited, the evidence is forward-collected rather than re-derived.
 
-First review at **60 resolved round-trip attempts**, reporting touch rate against the 12.5% break-even,
-clustered by settlement window, split by entry generation and by regime label.
+The launch rule opened a first review at **60 resolved round-trip attempts**, reporting touch rate against
+the 12.5% break-even, clustered by settlement window, split by entry generation and by regime label.
+
+**Active-v2 review amendment, 2026-08-21.** The operator committed
+`long-shot-round-trip-buy12-sell97-win600-v2` through the stricter `long-shot-hold-v2` boundary of **60
+independent settlement windows**. The execution report's existing 60-attempt indicator remains a diagnostic
+and cannot open or end that review. Marks, entry window, trailing rule, sizing, and cohort identity remain
+fixed; no interim economic result tunes or stops collection, and live arming remains false. Ordinary safety
+controls retain authority to halt execution. At commitment the cohort had 30 resolved attempts across 13
+windows, one hold win, zero target exits, and −763¢ exact realized P&L on 1,135¢ staked; the −59.1% ±40.9pp
+clustered standard error was broad enough that completion is evidence collection, not endorsement.
 
 ## 14a. First parameter sweep, 2026-08-16 — no configuration clears break-even
 

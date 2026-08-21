@@ -23,6 +23,22 @@ A second policy runs on the same market — the long-shot round trip, §2 below.
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
 | Operational safety | Collision-resistant bounded live IDs, exact reconciliation ownership, quiescent drain, account reconciliation, kill switch, and budget/risk ceilings are implemented; current state is paused, READY, and restart-safe |
 
+### Long-shot v2 will complete its untouched 60-window paper cohort, 2026-08-21
+
+The operator chose continued prospective collection rather than resource-based suspension. The authoritative
+review boundary is 60 independent settlement windows under `long-shot-hold-v2`, not the execution report's
+legacy 60-attempt indicator. Until then, `long-shot-round-trip-buy12-sell97-win600-v2` remains unchanged at
+12¢ entry, 97¢ exit, and at least 600 seconds remaining: no mark, trailing, sizing, gate, or cohort-identity
+change; no interim promotion, tuning, or economic stop; and long-shot live arming remains false. Ordinary
+safety controls retain authority to halt execution.
+
+The authenticated worker read at `2026-08-21T05:35:31.983Z` had 30 resolved paper attempts across 13
+independent windows, one hold win, zero target exits, and −763¢ exact realized P&L on 1,135¢ staked. Hold
+and round-trip were both −59.1% ±40.9pp clustered standard error because the exit had never fired. The
+interval remains broad, so this is not formal refutation; continuing collection records the agreed evidence
+boundary and is not an endorsement of the strategy. Paper equity was 1,482¢ with no reservation, while the
+separately gated live lane had zero v2 attempts and remained disarmed.
+
 ### Terminal no-fill history labels no longer imply an active trade, 2026-08-21
 
 Trade history now reserves `pending` P&L for `open`, `pending_reservation`, and `uncertain` orders. Terminal
@@ -1605,10 +1621,12 @@ hold-sentinel capture gap must be closed first.
 **Revisit triggers.** The dense-path trigger has arrived: on 2026-08-19
 `npm run analyze:long-shot-fine-marks` covered 562 settled fine windows at a mean 266 samples each. Finer
 sampling raised touch rates but did not produce a promotable mark; the only displayed ratio above one had
-an interval spanning zero and trailed hold. The remaining first-review trigger is **60 resolved attempts at
-one policy version** (`LONG_SHOT_REVIEW_ATTEMPTS`). The 12¢→97¢ v1 execution cohort had 9 attempts in 5 windows at the repair read. It is superseded by the
-mandatory-trailing v2 policy; invalid hold-v1 records are excluded, and `long-shot-hold-v2` starts a fresh
-prospective 60-window review cohort paired only with order-policy v2.
+an interval spanning zero and trailed hold. The active first-review trigger is **60 independent settlement windows at one policy version** under
+`long-shot-hold-v2`. The execution report's legacy `LONG_SHOT_REVIEW_ATTEMPTS = 60` indicator is diagnostic
+only and cannot unlock the economic review. The 12¢→97¢ v1 execution cohort had 9 attempts in 5 windows at
+the repair read and remains superseded by mandatory-trailing v2; invalid hold-v1 records stay excluded. The
+2026-08-21 operator decision above commits the untouched order-policy-v2/hold-v2 cohort through its 60-window
+boundary without arming live or changing parameters on an interim result.
 
 **A proposed volatility-trading strategy was measured and does not work as described** (2026-08-18,
 [reports/maker-fill-adverse-selection-2026-08-18.md](/Users/raiphairow/code/money/reports/maker-fill-adverse-selection-2026-08-18.md),
