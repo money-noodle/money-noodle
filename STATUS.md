@@ -35,7 +35,9 @@ inherited `lib/walk-forward.test.ts:77` five-second boundary; its focused 14/14 
 rerun passed. The runtime precheck found active operator intent with zero positions and reservations, so the
 worker was pause/drained before activation. Startup reconciliation completed READY at
 `2026-08-21T04:54:29.709Z`; funded control remains operator-paused, quiescent, and restart-safe, and was not
-automatically resumed.
+automatically resumed. Commit `34b20a6` passed GitHub CI and Vercel production deployment
+`dpl_5AQTqMLibKe6xbjkorqzkRCDEqto` reached READY at `noodle.money`; a production-bundle smoke check found
+all three terminal labels.
 
 ### Repeated maker episode identity repaired and corrected, 2026-08-21
 
