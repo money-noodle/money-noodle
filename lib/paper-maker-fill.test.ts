@@ -6,6 +6,7 @@ import { applyPaperMakerSimulation, attachMatchedLiveFillShadow, resolveRestingP
 import { executionMirrorPairStamp } from './execution-mirror-pair';
 import { initialManagedMakerPrice, nextManagedMakerPrice, selectedManagedMakerQuote } from './managed-maker';
 import { applyTradePrintsToPaperQueue, simulateManagedPaperMaker, type PaperMakerQueueState } from './paper-maker-simulation';
+import { effectiveInitialQueueAhead, isPaperFillCalibration, PAPER_FILL_QUEUE_CLEAR_MAX, PAPER_FILL_CALIBRATION_VERSION } from './paper-fill-calibration';
 import type { BinaryOrderBook, DashboardData, PaperOrder } from './types';
 import type { KalshiTradePrint } from './kalshi-market-data';
 
@@ -209,5 +210,53 @@ describe('matched-live shadow', () => {
       liveOrderId: live.id, quantity: 4.08, fillPrice: 0.44, purchaseCents: 179.52,
     });
     expect(live.matchedPaperOrderId).toBe(paper.id);
+  });
+});
+
+describe('paper fill calibration', () => {
+  it('neutral fraction reproduces the exact displayed queue', () => {
+    expect(effectiveInitialQueueAhead(10, 0)).toBe(10);
+    expect(effectiveInitialQueueAhead(0.42, 0)).toBe(0.42); // neutral fraction exact upstream
+    expect(effectiveInitialQueueAhead(0.01, 0)).toBe(0.01);
+  });
+
+  it('reduces the initial queue with exact floor+1e-9 arithmetic and never negative', () => {
+    expect(effectiveInitialQueueAhead(10, 0.25)).toBe(7); // floor(10*0.75 + 1e-9) = 7.50.. floor = 7
+    expect(effectiveInitialQueueAhead(2, 0.5)).toBe(2); // 0.5 is at the capped bound: rejected -> fraction 0
+    expect(effectiveInitialQueueAhead(70, 0.3)).toBe(49); // floor(49.0000..)=49
+    expect(effectiveInitialQueueAhead(0, 0.4)).toBe(0);
+    expect(effectiveInitialQueueAhead(undefined, 0.25)).toBeUndefined();
+    expect(effectiveInitialQueueAhead(10, Number.NaN)).toBe(10); // unsafe fraction coerced to 0
+  });
+
+  it('bounds and validation reject out-of-range and malformed calibrations', () => {
+    expect(effectiveInitialQueueAhead(100, PAPER_FILL_QUEUE_CLEAR_MAX)).toBe(100); // at cap key == 0
+    expect(isPaperFillCalibration({
+      version: PAPER_FILL_CALIBRATION_VERSION, queueClearFraction: 0.2,
+      appliedToPaperExecution: 'v6', heldOutWindows: 30, adoptedAt: '2026-08-21T00:00:00Z', reason: 'held-out fit',
+    })).toBe(true);
+    expect(isPaperFillCalibration({
+      version: PAPER_FILL_CALIBRATION_VERSION, queueClearFraction: -0.1,
+    })).toBe(false);
+    expect(isPaperFillCalibration({
+      version: PAPER_FILL_CALIBRATION_VERSION, queueClearFraction: 0.9,
+    })).toBe(false);
+    expect(isPaperFillCalibration(null)).toBe(false);
+  });
+
+  it('a configured calibration reduces the simulated initial queue on the manager', async () => {
+    let now = 0;
+    const result = await simulateManagedPaperMaker({
+      side: 'UP', requestedCount: 4, maximumPrice: 0.47, requestedStart: 0.46,
+    }, {
+      now: () => now,
+      wait: async (milliseconds) => { now += milliseconds; },
+      quote: async () => ({ bid: 0.38, ask: 0.42, ranges, orderBook: book([[0.41, 10]]) }),
+      tradesSince: async () => now < 6_000 ? [] : [trade({ id: 'fill', at: new Date(5_000).toISOString(), count: 8, yesPrice: 0.41, takerSide: 'no' })],
+      calibration: { version: PAPER_FILL_CALIBRATION_VERSION, queueClearFraction: 0.3, appliedToPaperExecution: 'v6', heldOutWindows: 30, adoptedAt: 'now', reason: 'test' },
+      onInitialQuoteSettled: () => undefined,
+    });
+    // A calibrated 0.3 clear shrinks the 10 displayed ahead to 7; the 8-count taker consumes it and fills.
+    expect(result.filledCount).toBeGreaterThan(0);
   });
 });

@@ -29,6 +29,7 @@ function recordSwitchSkip(classification: LiveSkipClass, reason: string, incumbe
     .catch((error) => console.error('Live skip journal write failed:', error));
 }
 import { PAPER_MANAGED_MAKER_EXECUTION_VERSION, simulateManagedPaperMaker, type PaperMakerSimulationResult } from './paper-maker-simulation';
+import { getActivePaperFillCalibration } from './paper-fill-calibration-store';
 import { isFreshCalculationTimestamp } from './freshness';
 import { selectedSideDepth } from './order-book-depth';
 import { selectedManagedMakerQuote } from './managed-maker';
@@ -965,6 +966,11 @@ async function managePaperMakerOrder(order: PaperOrder, ledger: Ledger): Promise
   const managedRun = beginTaskCadenceRun('managed-maker');
   const quoteRun = beginTaskCadenceRun('exact-pre-submit-quote');
   try {
+    // The paper fill calibration is a versioned prior from held-out mirror evidence, read once at entry
+    // and never conditioned on a live order fill. A missing or neutral calibration reproduces exact
+    // v5 conservative behavior (queueClearFraction = 0).
+    const calibration = await getActivePaperFillCalibration();
+    order.paperFillCalibration = { version: calibration.version, queueClearFraction: calibration.queueClearFraction };
     const result = await simulateManagedPaperMaker({
       side: order.side, requestedCount: order.quantity,
       maximumPrice: order.approvedMaximumPrice ?? order.askPrice,
@@ -973,6 +979,7 @@ async function managePaperMakerOrder(order: PaperOrder, ledger: Ledger): Promise
       quote: () => fetchKalshiManagedMakerQuote(order.contractId, order.side),
       tradesSince: (sinceMs) => fetchKalshiTradePrintsSince(order.contractId, sinceMs),
       onInitialQuoteSettled: (error) => error === undefined ? quoteRun.succeed() : quoteRun.fail(error),
+      calibration,
     });
     managedRun.succeed();
     applyPaperMakerSimulation(order, result, ledger);

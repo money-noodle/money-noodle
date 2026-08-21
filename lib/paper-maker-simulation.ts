@@ -2,17 +2,18 @@ import { initialManagedMakerPrice, MAKER_MANAGEMENT_CHECKS, MAKER_MANAGEMENT_POL
 import { selectedSideDepth } from './order-book-depth';
 import type { EntryExecutionObservation, PositionSide } from './types';
 import type { KalshiTradePrint } from './kalshi-market-data';
+import { effectiveInitialQueueAhead, type PaperFillCalibration } from './paper-fill-calibration';
 
 /**
  * Durable identity stamped on paper edge-policy orders using this execution simulation.
  *
- * **v5 resets the paper execution cohort.** V4 added route-aware IOC simulation, but production-shaped
- * rows carried both the paper generation and shared live route generation; retry validation read the
- * latter and silently suppressed every paper episode after episode 1. V5 restores the approved three-
- * episode boundary without changing first-attempt fill arithmetic. V3/v4 rows remain immutable evidence
- * of their simulators and must not be pooled with v5.
+ * **v6 starts a fresh calibration cohort.** V5 added the requalify3 repair (restoring the approved
+ * three-episode boundary) and recorded bounded print/queue evidence, but kept a fully-conservative
+ * displayed-depth queue. v6 keeps every v5 fill arithmetic (queueClearFraction defaults to 0, which is
+ * exact v5 behavior until a recorded manual adoption sets it) and adds a versioned, bounded paper fill
+ * calibration. Existing v3/v4/v5 rows remain immutable evidence and are never pooled with v6 rows.
  */
-export const PAPER_MANAGED_MAKER_EXECUTION_VERSION = 'paper-managed-execution-route-ioc-requalify3-v5';
+export const PAPER_MANAGED_MAKER_EXECUTION_VERSION = 'paper-managed-execution-route-ioc-requalify3-calibrated-v6';
 
 export interface PaperMakerQueueState {
   side: PositionSide;
@@ -56,6 +57,8 @@ export interface PaperMakerSimulationDependencies {
   pollMs?: number;
   /** Synchronous observability hook for the on-demand quote; it must not perform I/O. */
   onInitialQuoteSettled?: (error?: unknown) => void;
+  /** Versioned calibration of the initial queue-clear fraction. Never read from a live fill. */
+  calibration?: PaperFillCalibration;
 }
 
 /**
@@ -134,6 +137,8 @@ export async function simulateManagedPaperMaker(input: {
   const submittedAt = new Date(acceptedAtMs).toISOString();
   const restingUntil = new Date(acceptedAtMs + checks * pollMs).toISOString();
   const initialDepth = selectedSideDepth(initialQuote.orderBook, input.side, initialQuote.bid, initialQuote.ask, initialPrice);
+  const queueClearFraction = dependencies.calibration?.queueClearFraction ?? 0;
+  const initialAhead = effectiveInitialQueueAhead(initialDepth.displayedAhead, queueClearFraction);
   const observations: EntryExecutionObservation[] = [{
     at: submittedAt, event: 'paper_submitted', selectedBid: initialQuote.bid, selectedAsk: initialQuote.ask,
     spread: initialQuote.ask - initialQuote.bid, limitPrice: initialPrice, remainingCount: input.requestedCount,
@@ -141,7 +146,7 @@ export async function simulateManagedPaperMaker(input: {
   }];
   const state: PaperMakerQueueState = {
     side: input.side, requestedCount: input.requestedCount, currentLimit: initialPrice,
-    queueAhead: initialDepth.displayedAhead, filledCount: 0, purchaseCents: 0, observedTradeIds: new Set(),
+    queueAhead: initialAhead, filledCount: 0, purchaseCents: 0, observedTradeIds: new Set(),
   };
   let latestQuote = initialQuote;
   let finalTradeReadSucceeded = false;

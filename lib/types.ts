@@ -1645,6 +1645,8 @@ export interface PaperOrder {
   clientOrderId?: string;
   /** Observation-only prospective join; no execution, budget, or reconciliation path may read it. */
   executionMirrorPair?: ExecutionMirrorPairStamp;
+  /** Versioned paper fill calibration under which this paper maker attempt was simulated. */
+  paperFillCalibration?: { version: string; queueClearFraction: number };
   /** Stable append-only correction that explains a historical row projection. */
   identityCorrectionId?: string;
   /** Venue order identifier, persisted as soon as Kalshi acknowledges an order. */

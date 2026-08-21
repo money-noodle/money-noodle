@@ -18,7 +18,7 @@ A second policy runs on the same market — the long-shot round trip, §2 below.
 | Dashboard and public paper track record | Functional locally and through optional Postgres projection |
 | Forecast and performance tracking | Functional; forecast summary storage verifies, but walk-forward checkpoint cohorts can drift after late resolution and require evaluator v3 |
 | Live execution | Kalshi live-capable and operator-paused; repeated-episode identity and known ledger damage are repaired under v6, but funded execution was not resumed automatically |
-| Paper execution | Continuous and independently accounted under v5; three-episode generation ownership is repaired, exact prospective four-cell pairing is collecting, and fills remain conservative pending exact queue calibration |
+| Paper execution | Continuous and independently accounted under v6; three-episode generation ownership is repaired, exact prospective four-cell pairing is collecting, and fills remain conservative pending an exact queue-calibration held-out fit |
 | Model evaluation | Automatic walk-forward scheduler continues monitoring; latest run retained baseline and evaluator v2 is explicitly barred from promotion |
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
 | Operational safety | Collision-resistant bounded live IDs, exact reconciliation ownership, quiescent drain, account reconciliation, kill switch, and budget/risk ceilings are implemented; current state is paused, READY, and restart-safe |
@@ -131,6 +131,35 @@ prospective cohort. Commit `5b7e258` passed GitHub CI and Vercel production depl
 `dpl_AXognWmXECmYaVBTE2Tfj3BXZ9JG` reached READY at `noodle.money`; smoke checks retained the expected
 200/401/503 stateless boundaries and exposed no pair identity publicly. No policy or funded execution
 changed, and live was not automatically resumed.
+
+### Versioned paper fill calibration ships under a v6 cohort, 2026-08-21
+
+A window-level reload of the v5 2026-08-21 mirror period found the paper maker fill model sinking on a
+structural queue mechanism: `applyTradePrintsToPaperQueue` treats the displayed public depth
+(`displayedAhead`) as the full real queue and depletes it only with aggressive opposite-taker prints,
+never modeling earlier orders cancelling or FIFO advancement. Over the recent edge cohort (intents since
+2026-08-21T02:17Z) paper realized **−419¢ over 26 filled** while live realized **+343¢ over 25 filled**.
+Of 12 live-filled slots paper did not fill, **11 were attempted by paper** — its own simulation refused
+the fill; the largest live-only winners (SOL +383¢, HYPE +231¢) are exactly those. Paper is a conservative
+lower bound, not live-equivalent.
+
+This change ships, under SPEC §12.5, a **versioned, bounded paper fill calibration** (`queueClearFraction`
+in `[0, 0.5)`) held in a new atomic durable store `data/paper-fill-calibration.json`, defaulting to **0** =
+exact current conservative semantics, plus a recorded, manual `adoptPaperFillCalibration` path that appends
+immutable history. It is **never read from a live fill**; paper P&L stays independent. Paper execution
+advances to `paper-managed-execution-route-ioc-requalify3-calibrated-v6`, so any future non-neutral adoption
+is a fresh cohort (v7) kept apart from v6.
+
+A read-only held-out review joins the prospective mirror pair intents and, on the second half of
+settlement windows, reports both/paper-only/live-only/neither agreement, capture, precision, and the
+live-only missed upper bound — without re-simulation, because the ledger's `paper_trade_evidence` is a
+per-read summary rather than a per-print stream, and the review refuses to pretend a candidate could be
+replayed from it. It never promotes.
+
+Typecheck, lint (0 errors / 37 inherited warnings), 123 test files / 1,025 tests, and the production build
+pass. No paper P&L changes (default queueClearFraction is 0) and live is not resumed. Design:
+[docs/paper-fill-calibration-design.md](docs/paper-fill-calibration-design.md); reproduce the review with
+`npm run analyze:paper-fill-calibration`.
 
 ### Authenticated edge order-book monitoring and stable signal transitions implemented, 2026-08-20
 
