@@ -100,7 +100,11 @@ and the desk remains operator-paused, quiescent, and restart-safe. Ledger v7 the
 one BTC paper decision at 2026-08-21T00:32:45.826Z with exact matching identity and no nested duplicate. Its
 coverage was 0/8 because it fired before even the 30-second boundary existed; this verifies prospective
 persistence, not signal economics. A subsequent live-cache read produced valid 30-second venue and
-underlying moves while leaving the unavailable 2-second and not-yet-covered longer windows null.
+underlying moves while leaving the unavailable 2-second and not-yet-covered longer windows null. Commit
+`f0bc265` passed GitHub CI and deployed as Vercel production deployment
+`dpl_5qSddRJUJftpS82thaw9bPUYz8Mg`, READY and aliased to `noodle.money`. Public smoke checks returned
+200/200 for home/dashboard, 401 for anonymous ladder access, and the expected authenticated stateless 503;
+no trajectory field appeared in the public dashboard payload.
 
 ### Quote trajectory and spread collection deployed and running, 2026-08-20
 
