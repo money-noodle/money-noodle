@@ -45,7 +45,9 @@ fill and remainder were both zero, so compatibility recognizes only that exact t
 making it a match. Typecheck, lint (0 errors / 37 inherited warnings), 120 test files / 1,002 tests, and the
 production build passed. Final v6 startup reconciliation completed READY at
 `2026-08-21T01:27:47.789Z` with zero local and venue-managed positions; automation remained operator-paused
-and restart-safe. Full design and evidence:
+and restart-safe. Commit `fa1bf7c` passed GitHub CI and Vercel production deployment
+`dpl_9YZhUMmEDRS8Yr16eG4evyvqUCZX` reached READY at `noodle.money`; public smoke checks showed v6 while
+retaining the expected 200/401/503 stateless boundaries. Full design and evidence:
 [docs/live-order-identity-correction-design.md](docs/live-order-identity-correction-design.md) and
 [reports/kalshi-order-size-and-fill-mechanics-2026-08-20.md](reports/kalshi-order-size-and-fill-mechanics-2026-08-20.md).
 
