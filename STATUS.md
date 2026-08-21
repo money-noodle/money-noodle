@@ -161,6 +161,12 @@ pass. No paper P&L changes (default queueClearFraction is 0) and live is not res
 [docs/paper-fill-calibration-design.md](docs/paper-fill-calibration-design.md); reproduce the review with
 `npm run analyze:paper-fill-calibration`.
 
+Deployed: the built local runtime restarted with startup reconciliation passing on a quiescent desk
+(zero local/venue positions, zero reserved, active/live, 2,203¢ available); new paper episodes stamp
+`paper-managed-execution-route-ioc-requalify3-calibrated-v6`. Commit `4c9dc91` passed GitHub CI; hosted
+deployment `dpl_Lgr9GKhcaNpQLrcPdbaoFKYtE5Vp` reached Ready and was aliased to `noodle.money`,
+where the expected root-200 / anonymous-401 stateless boundaries held and no calibration field is public.
+
 ### Authenticated edge order-book monitoring and stable signal transitions implemented, 2026-08-20
 
 Positive-edge cards now expose an on-demand selected-side Kalshi ladder with price, level quantity,
