@@ -23,6 +23,20 @@ A second policy runs on the same market — the long-shot round trip, §2 below.
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
 | Operational safety | Collision-resistant bounded live IDs, exact reconciliation ownership, quiescent drain, account reconciliation, kill switch, and budget/risk ceilings are implemented; current state is paused, READY, and restart-safe |
 
+### Terminal no-fill history labels no longer imply an active trade, 2026-08-21
+
+Trade history now reserves `pending` P&L for `open`, `pending_reservation`, and `uncertain` orders. Terminal
+`unfilled` and `rejected` rows display `no fill`; terminal settlement rows missing a realized value display
+`P&L unavailable`, and invalid rows display `no P&L`. Existing realized exact/whole-cent values retain their
+prior formatting and precedence. This is a pure display classification: no API, ledger, status, money,
+execution, reconciliation, or policy behavior changed. Typecheck, lint (0 errors / 37 inherited warnings),
+122 test files / 1,017 tests, and the production build passed. The first full test run timed out at the
+inherited `lib/walk-forward.test.ts:77` five-second boundary; its focused 14/14 rerun and the final full
+rerun passed. The runtime precheck found active operator intent with zero positions and reservations, so the
+worker was pause/drained before activation. Startup reconciliation completed READY at
+`2026-08-21T04:54:29.709Z`; funded control remains operator-paused, quiescent, and restart-safe, and was not
+automatically resumed.
+
 ### Repeated maker episode identity repaired and corrected, 2026-08-21
 
 The order-size investigation found one venue fill attributed to all three local HYPE UP episodes for the

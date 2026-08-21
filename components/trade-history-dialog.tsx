@@ -6,6 +6,7 @@ import { OrderDecisionDetails } from '@/components/order-decision-details';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { tradeHistoryPnlDisplay } from '@/lib/trade-history-pnl';
 import type { PaperOrder } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
@@ -65,11 +66,11 @@ function HistoryOrder({ order }: { order: PaperOrder }) {
   const selectedProbability = order.entryDecision?.selectedSideProbability ?? (order.side === 'UP' ? order.modelProbabilityUp : 1 - order.modelProbabilityUp);
   const feeRate = order.entryDecision?.feeRate ?? ((order.actualFeeCents ?? order.feeCents) / Math.max(1, order.potentialPayoutCents));
   const edge = order.entryDecision?.netEdge ?? selectedProbability - (order.issuanceAskPrice ?? order.askPrice) - feeRate;
-  const pnl = order.actualPnlCents ?? order.pnlCents;
+  const { pnl, label: pnlLabel } = tradeHistoryPnlDisplay(order);
   return <div className="rounded-lg border p-3">
     <div className="flex flex-wrap items-start justify-between gap-2">
       <div><div className="flex flex-wrap items-center gap-1.5"><span className="text-[11px] font-semibold">{order.symbol} {order.side}</span><Badge variant="outline" className={order.executionMode === 'live' ? 'border-live/30 text-live' : 'border-primary/25 text-primary'}>{order.executionMode}</Badge><Badge variant="outline">{order.status.replaceAll('_', ' ')}</Badge>{order.liquidityRole && <Badge variant="outline">{order.liquidityRole}</Badge>}</div><p className="mt-1 font-mono text-[8px] text-muted-foreground">{new Date(order.createdAt).toLocaleString()} · closes {new Date(order.closesAt).toLocaleString()} · {order.contractId}</p></div>
-      <div className="text-right"><p className="font-mono text-[10px]">P({order.side}) {(selectedProbability * 100).toFixed(1)}% · edge {edge >= 0 ? '+' : ''}{(edge * 100).toFixed(1)}pp</p><p className={cn('font-mono text-[10px]', (pnl ?? 0) > 0 ? 'text-gain' : (pnl ?? 0) < 0 ? 'text-loss' : 'text-muted-foreground')}>{pnl === undefined ? 'pending' : `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}¢ P&L`}</p></div>
+      <div className="text-right"><p className="font-mono text-[10px]">P({order.side}) {(selectedProbability * 100).toFixed(1)}% · edge {edge >= 0 ? '+' : ''}{(edge * 100).toFixed(1)}pp</p><p className={cn('font-mono text-[10px]', (pnl ?? 0) > 0 ? 'text-gain' : (pnl ?? 0) < 0 ? 'text-loss' : 'text-muted-foreground')}>{pnlLabel}</p></div>
     </div>
     <OrderDecisionDetails order={order}/>
   </div>;
