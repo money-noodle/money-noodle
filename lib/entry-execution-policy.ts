@@ -1,7 +1,7 @@
 import { DEFAULT_STRATEGY_ID, normalizeStrategyId } from './strategy-registry';
 import type { PaperOrder, PositionSide, StrategyId } from './types';
 
-export const ENTRY_EXECUTION_POLICY_VERSION = 'maker-high30-requalify3-fresh1c-v5';
+export const ENTRY_EXECUTION_POLICY_VERSION = 'maker-high30-requalify3-fresh1c-idv2-v6';
 export const HIGH_EDGE_TAKER_THRESHOLD = 0.30;
 export const MAX_ENTRY_EPISODES_PER_WINDOW = 3;
 export type EntryExecutionMode = 'maker' | 'adaptive' | 'taker';

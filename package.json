@@ -26,6 +26,7 @@
     "fund:long-shot": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/fund-long-shot.ts",
     "archive:local": "jiti scripts/archive-local-data.ts",
     "cleanup:stale-tmp": "jiti scripts/cleanup-stale-tmp.ts",
+    "correct:live-order-identity": "jiti scripts/correct-live-order-identity.ts",
     "generate:brand": "node scripts/generate-brand-assets.mjs",
     "analyze:edge-gates": "node --max-old-space-size=6144 scripts/analyze-edge-gates.mjs",
     "analyze:execution-value": "node --max-old-space-size=6144 scripts/analyze-execution-value.mjs",

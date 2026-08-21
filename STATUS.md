@@ -7,7 +7,7 @@
 
 Money Noodle is operational as a local research dashboard, continuous paper shadow trader, public paper-track-record publisher, and explicitly armed but currently operator-paused live Kalshi trader. Core UP/YES and DOWN/NO entry, managed maker execution, paper maker mirroring, signed Kalshi reconciliation, quiescent pause/drain, loss gates, budget epochs, provider permissions, contract provenance, target integrity, standalone reduce-only exits, protected switching, model evaluation, and immutable promotion accounting are implemented.
 
-A **repeated-episode order-identity defect was found on 2026-08-20**: acknowledgement-race client IDs truncate away the episode suffix, and reconciliation can attribute one later venue fill to multiple local episode rows. Position comparison should fail closed while exposure remains open, but settled ledger/budget attribution is not safe until the identity fix and an auditable correction land. Separately, current economic evidence does not justify stake expansion, unconditional taker execution, an automatic entry relaxation, queue-aware live gates, or adding a second live venue. The shared buy rule is **v22** — a 2026-08-20 operator narrowing to a +5pp edge floor and a 10–75¢ price band, not an evidence promotion; see below. Live execution identity remains `maker-high30-requalify3-fresh1c-v5`, but its repeated-episode create-retry path must not be treated as mechanically cleared.
+The **repeated-episode order-identity defect found on 2026-08-20 was mechanically repaired and its known ledger damage corrected on 2026-08-21**. New live episode IDs retain collision-resistant identity through every create retry; reconciliation no longer fuzzy-matches truncated legacy IDs and blocks one venue order from owning multiple local entries. Ledger v8 preserves the HYPE before/after correction and trading control preserves the +54¢ whole-cent audit event. Separately, current economic evidence does not justify stake expansion, unconditional taker execution, an automatic entry relaxation, queue-aware live gates, or adding a second live venue. The shared buy rule remains **v22** — a 2026-08-20 operator narrowing to a +5pp edge floor and a 10–75¢ price band, not an evidence promotion. Live execution identity is now `maker-high30-requalify3-fresh1c-idv2-v6`; episode policy, sizing, and routes are unchanged.
 
 A second policy runs on the same market — the long-shot round trip, §2 below. Its current 12¢→97¢/600s cohort is paper-only; live arming is false. The parameters were selected from a retrospective sweep and therefore define a new collection cohort rather than evidence-backed promotion. It relaxes none of the edge policy's constraints and changes no edge rule.
 
@@ -15,25 +15,38 @@ A second policy runs on the same market — the long-shot round trip, §2 below.
 | --- | --- |
 | Dashboard and public paper track record | Functional locally and through optional Postgres projection |
 | Forecast and performance tracking | Functional; forecast summary storage verifies, but walk-forward checkpoint cohorts can drift after late resolution and require evaluator v3 |
-| Live execution | Kalshi live-capable but operator-paused since the 2026-08-20 monitor deployment; repeated maker episodes have an unresolved client-ID/reconciliation collision, so execution was not resumed |
+| Live execution | Kalshi live-capable and operator-paused; repeated-episode identity and known ledger damage are repaired under v6, but funded execution was not resumed automatically |
 | Paper execution | Continuous and independently accounted; exact-contract managed repricing now uses public trade/queue evidence concurrently with live |
 | Model evaluation | Automatic walk-forward scheduler continues monitoring; latest run retained baseline and evaluator v2 is explicitly barred from promotion |
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
-| Operational safety | Position reconciliation should fail closed on duplicated open exposure, but one settled fill is currently duplicated across three local episode rows and needs auditable repair |
+| Operational safety | Collision-resistant bounded live IDs, exact reconciliation ownership, quiescent drain, account reconciliation, kill switch, and budget/risk ceilings are implemented; current state is paused, READY, and restart-safe |
 
-### Repeated maker episode client IDs collided, 2026-08-20
+### Repeated maker episode identity repaired and corrected, 2026-08-21
 
 The order-size investigation found one venue fill attributed to all three local HYPE UP episodes for the
 14:30Z window. `placeKalshiBuy` constructs post-only acknowledgement-race IDs from the first 30 characters
 of the episode client ID; episode suffixes occur after that prefix. `clientMatches` accepts the same
 truncated `-1`/`-2` forms for every local episode, so the later episode-3 venue order matched episodes 1
-and 2 despite both having terminal zero-fill observations. All three local rows now carry one venue order
-ID and the same 0.47-contract cost/P&L attribution.
+and 2 despite both having terminal zero-fill observations. Before correction, all three local rows carried
+one venue order ID and the same 0.47-contract cost/P&L attribution.
 
-This is a local matching defect, not a duplicate Kalshi fill. No order was submitted during the
-investigation. The required repair is collision-resistant bounded client identity plus exact matching, then
-an auditable ledger/budget correction rather than a hand edit. Full evidence and the separate Kalshi
-size/queue/partial-fill findings are in
+This was a local matching defect, not a duplicate Kalshi fill. It is now resolved by
+`maker-high30-requalify3-fresh1c-idv2-v6`: deterministic 40-character SHA-256-derived episode IDs retain
+exact `-1`/`-2` create-attempt suffixes without truncation; duplicate generated IDs stop before reservation;
+and reconciliation permits only exact v2 lost-response candidates, detects one-venue-to-many-local
+ownership before applying fills, and never grants canceled zero-fill legacy retry records fill authority.
+
+The idempotent correction advanced the ledger to v8, retained complete before/after snapshots, restored
+episodes 1 and 2 to their terminal observed zero-fills, and left episode 3 as the sole 0.47-contract loss.
+Exact reporting improved 53.58¢. Whole-cent control received an appended +54¢ `corrected` audit event,
+moving available/realized from 1,755¢/−245¢ to 1,809¢/−191¢. A second run changed nothing. The first
+strict startup exposed 40 historical canceled zero-fill create-race records; signed reads confirmed their
+fill and remainder were both zero, so compatibility recognizes only that exact terminal shape without
+making it a match. Typecheck, lint (0 errors / 37 inherited warnings), 120 test files / 1,002 tests, and the
+production build passed. Final v6 startup reconciliation completed READY at
+`2026-08-21T01:27:47.789Z` with zero local and venue-managed positions; automation remained operator-paused
+and restart-safe. Full design and evidence:
+[docs/live-order-identity-correction-design.md](docs/live-order-identity-correction-design.md) and
 [reports/kalshi-order-size-and-fill-mechanics-2026-08-20.md](reports/kalshi-order-size-and-fill-mechanics-2026-08-20.md).
 
 ### Authenticated edge order-book monitoring and stable signal transitions implemented, 2026-08-20
@@ -1317,9 +1330,8 @@ Interpretation: the newer exact ledger snapshot is slightly negative lifetime an
 ### Execution and Safety
 
 - Signed Kalshi balances, positions, orders, fills, cancellation, and v2 order submission.
-- Source policy `maker-high30-requalify3-fresh1c-v5` permits up to three separately requalified episodes: a managed post-only maker below 30pp issuance edge, or a capped fresh-quote IOC evaluation at 30pp+. After an authoritative maker zero-fill, the next episode requires two new post-completion snapshots over 15 seconds; no nonqualifying gap is required. Maker execution supports UP/YES and DOWN/NO with passive repricing, cancellation confirmation polling, fill/fee reconciliation, and exact sub-cent accounting. The funded worker is running v5 after a quiescent restart and authoritative startup
-reconciliation.
-- Paper execution mirrors live's relative `entry-sizing-reduce30-below-edge30-v1` sizing and v5 episode boundary while retaining independent fills under `paper-managed-maker-requalify3-v3`. A shared pure state machine chooses the refreshed initial passive limit and all progressive reprices. Paper polls independently every two seconds while live management runs concurrently, keeps live's issuance-sized quantity, and requires opposite-outcome public taker prints to consume displayed queue-ahead volume; ask touch alone is telemetry, not a fill. Incomplete terminal trade evidence is excluded rather than scored as a miss. Portfolio/correlation/funding limits and its separate bankroll remain unchanged.
+- Source policy `maker-high30-requalify3-fresh1c-idv2-v6` permits up to three separately requalified episodes: a managed post-only maker below 30pp issuance edge, or a capped fresh-quote IOC evaluation at 30pp+. After an authoritative maker zero-fill, the next episode requires two new post-completion snapshots over 15 seconds; no nonqualifying gap is required. Maker execution supports UP/YES and DOWN/NO with passive repricing, cancellation confirmation polling, fill/fee reconciliation, exact sub-cent accounting, collision-resistant bounded client IDs, and one-to-one reconciliation ownership. The funded worker is running v6 after a quiescent restart and authoritative startup reconciliation.
+- Paper execution mirrors live's relative `entry-sizing-reduce30-below-edge30-v1` sizing and episode boundary while retaining independent fills under `paper-managed-maker-requalify3-v3`. A shared pure state machine chooses the refreshed initial passive limit and all progressive reprices. Paper polls independently every two seconds while live management runs concurrently, keeps live's issuance-sized quantity, and requires opposite-outcome public taker prints to consume displayed queue-ahead volume; ask touch alone is telemetry, not a fill. Incomplete terminal trade evidence is excluded rather than scored as a miss. Portfolio/correlation/funding limits and its separate bankroll remain unchanged.
 - Contemporaneous paper intents receive a separate `matched-live-fill-shadow-v1` overlay when live fills authoritatively. It is capped at observed live and requested paper quantity and records exact live price/fee terms, but cannot alter the independent paper status, budget, P&L, or public track record. The maker report exposes matched, both-filled, and live-only counts without blending the lanes.
 - Explicit live arming, environment opt-in, kill switch, pause/resume, per-trade cap, order-rate cap, budget allocation, loss stops, and automatic safety suspension on ambiguous failures.
 - Pause is a quiescent drain: withdraw intent, serialize behind execution, cancel/confirm managed remainders, reconcile authoritatively, and report restart-safe only when no working or uncertain transaction remains.
@@ -1679,12 +1691,12 @@ Remaining work:
 - Measure independent-paper/live agreement and disagreements against the separately stored matched-live overlay; never substitute the selected live fill for the independent paper result.
 - Recalibrate maker fill probability only after enough prospective fills and no-fills exist under
   `paper-managed-maker-requalify3-v3`; keep the retired v2 cohort separate.
-- Current execution identity is `maker-high30-requalify3-fresh1c-v5` with
+- Current execution identity is `maker-high30-requalify3-fresh1c-idv2-v6` with
   `entry-sizing-reduce30-below-edge30-v1`. Below
   30pp each qualified episode is a reduced-size managed maker; at 30pp+ it is one full-base capped IOC only
   after the exact refreshed quote re-clears every absolute gate. A maker zero-fill may requalify up to the
   three-episode ceiling, but there is no taker fallback. Historical v3/v4 rows retain their execution stamps
-  and must not be pooled with v5.
+  and must not be pooled with v5 or v6; v6 retains v5 economics but changes live wire identity and reconciliation ownership.
 - The pre-decision shadow had shown no discrimination: over 618 stamped orders on 2026-08-18, 74 were
   taker-flagged but all executed maker; flagged and unflagged fill rates were 51% and 50%, and fill-selection
   gaps were −11.2pp and −13.1pp. That evidence did not authorize v4 or v5; both 2026-08-19 changes are

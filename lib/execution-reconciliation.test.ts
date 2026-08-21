@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { reconcileExecutionLedger } from './execution-reconciliation';
+import { liveEntryClientOrderId } from './live-order-identity';
 import type { KalshiReconciliationSnapshot } from './kalshi-reconciliation';
 import type { PaperOrder } from './types';
 
@@ -29,6 +30,53 @@ describe('Kalshi execution ledger reconciliation', () => {
     expect(result.recoveredFills).toBe(1);
     expect(result.targetReservedCents).toBe(9);
     expect(result.orders[0]).toMatchObject({ status: 'open', venueOrderId: 'venue-1', filledCount: 0.3, stakeCents: 9, actualStakeCents: 8.7 });
+  });
+
+  it('recovers a v2 create retry after the accepted response was lost', () => {
+    const clientOrderId = liveEntryClientOrderId(`live:BTC:${closesAt}:episode:2`);
+    const result = reconcileExecutionLedger([local({
+      id: `live:BTC:${closesAt}:episode:2`, clientOrderId, venueOrderId: undefined,
+    })], snapshot({
+      orders: [{ ...venueOrder, clientOrderId: `${clientOrderId}-2` }], fills: [venueFill],
+      positions: [{ ticker: 'KXBTC-TEST', quantity: 0.3, exposureDollars: 0.087 }],
+    }), now);
+    expect(result.issues).toEqual([]);
+    expect(result.orders[0]).toMatchObject({ status: 'open', venueOrderId: 'venue-1', filledCount: 0.3 });
+  });
+
+  it('does not fuzzy-match a legacy truncated create retry', () => {
+    const legacy = local({ venueOrderId: undefined });
+    const result = reconcileExecutionLedger([legacy], snapshot({
+      orders: [{ ...venueOrder, clientOrderId: `${legacy.clientOrderId!.slice(0, 30)}-2` }],
+    }), now);
+    expect(result.orders[0].status).toBe('rejected');
+    expect(result.issues.join(' ')).toContain('has no local ledger record');
+  });
+
+  it('recognizes a canceled zero-fill legacy create retry without granting it fill authority', () => {
+    const legacy = local({ venueOrderId: undefined });
+    const result = reconcileExecutionLedger([legacy], snapshot({
+      orders: [{
+        ...venueOrder, clientOrderId: `${legacy.clientOrderId!.slice(0, 30)}-1`,
+        status: 'canceled', fillCount: 0, remainingCount: 0,
+      }],
+    }), now);
+    expect(result.issues).toEqual([]);
+    expect(result.orders[0].status).toBe('rejected');
+    expect(result.recoveredFills).toBe(0);
+  });
+
+  it('blocks one venue order from repairing multiple local episode rows', () => {
+    const clientOrderId = liveEntryClientOrderId(`live:BTC:${closesAt}:episode:3`);
+    const first = local({ id: `${local().id}:episode:2`, clientOrderId, venueOrderId: 'venue-1' });
+    const second = local({ id: `${local().id}:episode:3`, clientOrderId, venueOrderId: 'venue-1' });
+    const result = reconcileExecutionLedger([first, second], snapshot({
+      orders: [{ ...venueOrder, clientOrderId }], fills: [venueFill],
+      positions: [{ ticker: 'KXBTC-TEST', quantity: 0.3, exposureDollars: 0.087 }],
+    }), now);
+    expect(result.issues.join(' ')).toContain('one Kalshi order matches multiple local entries');
+    expect(result.orders.every((order) => order.status !== 'open')).toBe(true);
+    expect(result.recoveredFills).toBe(0);
   });
 
   it('recovers signed DOWN entry fills using NO cost and negative venue quantity', () => {

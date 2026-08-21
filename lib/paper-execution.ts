@@ -89,6 +89,7 @@ import { fetchKalshiReconciliationSnapshot } from './kalshi-reconciliation';
 import { adaptiveEntryEpisodeDecision, entryAttemptsForLogicalOrder, entryEpisodeId, makerAttemptId, makerRetryDecision, maximumLiveMakerAttempts, type MakerRetryDecision } from './maker-retry-policy';
 import { evaluateLiveRisk } from './live-risk-policy';
 import { liveBlockers, liveTradingEnabled, maxLiveOrdersPerHour, maxLiveStakeCents, placeKalshiBuy, placeKalshiSell, placeKalshiTakerBuy } from './live-orders';
+import { assertUniqueLiveEntryClientOrderId, liveEntryClientOrderId } from './live-order-identity';
 import { countFilledLiveVenueOrders } from './order-rate-limit';
 import { selectPortfolio, cryptoExposureGroup, DEFAULT_PORTFOLIO_CONSTRAINTS, parseMaximumOpenPositions, type PortfolioConstraints } from './portfolio-policy';
 import { PORTFOLIO_CHOICE_SET_VERSION, type PortfolioChoiceSetRecord } from './portfolio-choice-set';
@@ -109,7 +110,7 @@ import { REQUIRED_SWITCH_SNAPSHOTS, REQUIRED_SWITCH_SPAN_MS, advanceSwitchPersis
 import { evaluateSwitchProbabilityGate, switchPolicySettings, valueSwitch } from './switch-policy';
 import { autoResumeTradingAfterReconciliation, getTradingControl, pauseTrading, reconcileTradingBudget, recordTradingReconciliationFailure, releaseTradingBudget, reserveTradingBudget, settleTradingBudget, stopTradingForLiveRisk, suspendTrading } from './trading-control';
 import { refreshedAskFitsTakerCap, takerQuoteCap } from './taker-quote-policy';
-import type { BinaryOrderBook, DashboardData, ExecutionMode, ExecutionSignalReadiness, ExecutionSummary, MarketFunding, MarketId, PaperOrder, PortfolioDecisionView, PositionLifecycleObservation, PositionSide, Prediction, ProviderBudgetConfiguration, PublicPaperBudget, PublicPaperExecutionRecord, StrategyId, TradingControlData, TradingProviderId } from './types';
+import type { BinaryOrderBook, DashboardData, ExecutionMode, ExecutionSignalReadiness, ExecutionSummary, LiveLedgerCorrection, MarketFunding, MarketId, PaperOrder, PortfolioDecisionView, PositionLifecycleObservation, PositionSide, Prediction, ProviderBudgetConfiguration, PublicPaperBudget, PublicPaperExecutionRecord, StrategyId, TradingControlData, TradingProviderId } from './types';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const LEDGER_FILE = path.join(DATA_DIR, 'paper-orders.json');
@@ -149,13 +150,13 @@ interface PaperBudget {
   reconciliationCorrections?: BankrollCorrection[];
 }
 export const MAX_PAPER_BANKROLL_CENTS = 1_000_000;
-interface Ledger { version: 7; paperBudget: PaperBudget; orders: PaperOrder[]; signalPersistence: Record<string, SignalPersistenceState>; portfolioDecisions: Record<string, PortfolioDecisionView>; switchPersistence: Record<string, SwitchPersistenceState>; lastLiveSkip?: { reason: string; at: string } }
+interface Ledger { version: 8; paperBudget: PaperBudget; orders: PaperOrder[]; signalPersistence: Record<string, SignalPersistenceState>; portfolioDecisions: Record<string, PortfolioDecisionView>; switchPersistence: Record<string, SwitchPersistenceState>; liveCorrections: LiveLedgerCorrection[]; lastLiveSkip?: { reason: string; at: string } }
 
 async function readLedger(): Promise<Ledger> {
   try {
     const raw = JSON.parse(await readFile(LEDGER_FILE, 'utf8')) as Partial<Ledger> & { orders?: PaperOrder[] };
     return {
-      version: 7,
+      version: 8,
       paperBudget: raw.paperBudget ?? { startingCents: DEFAULT_PAPER_BANKROLL_CENTS, availableCents: DEFAULT_PAPER_BANKROLL_CENTS, realizedPnlCents: 0 },
       orders: (raw.orders ?? []).map((order) => ({ ...order, executionMode: order.executionMode ?? 'paper' })),
       // Persistence is side-specific. Legacy UP-only streaks are discarded rather than reused
@@ -163,11 +164,12 @@ async function readLedger(): Promise<Ledger> {
       signalPersistence: Object.fromEntries(Object.entries(raw.signalPersistence ?? {}).filter(([, state]) => state.side === 'UP' || state.side === 'DOWN')),
       portfolioDecisions: raw.portfolioDecisions ?? {},
       switchPersistence: raw.switchPersistence ?? {},
+      liveCorrections: raw.liveCorrections ?? [],
       lastLiveSkip: raw.lastLiveSkip,
     };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { version: 7, paperBudget: { startingCents: DEFAULT_PAPER_BANKROLL_CENTS, availableCents: DEFAULT_PAPER_BANKROLL_CENTS, realizedPnlCents: 0 }, orders: [], signalPersistence: {}, portfolioDecisions: {}, switchPersistence: {} };
+      return { version: 8, paperBudget: { startingCents: DEFAULT_PAPER_BANKROLL_CENTS, availableCents: DEFAULT_PAPER_BANKROLL_CENTS, realizedPnlCents: 0 }, orders: [], signalPersistence: {}, portfolioDecisions: {}, switchPersistence: {}, liveCorrections: [] };
     }
     throw error;
   }
@@ -2092,7 +2094,16 @@ async function runLive(
     built.order.id = entryExecutionSettings().mode === 'adaptive'
       ? entryEpisodeId(logicalId, retry.attemptNumber)
       : makerAttemptId(logicalId, retry.attemptNumber);
-    built.order.clientOrderId = built.order.id;
+    built.order.clientOrderId = liveEntryClientOrderId(built.order.id);
+    // A deterministic hash collision or accidental reuse is impossible to repair after submission. Stop
+    // before reservation or any signed venue request rather than allowing two local intents to share it.
+    try {
+      assertUniqueLiveEntryClientOrderId(ledger.orders, built.order);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'Live client order identity is ambiguous.';
+      await suspendTrading(`Live client order identity blocked: ${reason}`);
+      return skip('reconciliation', reason, { symbol: candidate.symbol, side });
+    }
     built.order.entryExecutionDecision = entryExecutionDecision(candidate, side, built.order, ledger, attempt);
     if (built.order.entryExecutionDecision.executedStyle === 'taker') {
       const reserveFailure = applyTakerQuoteMovementReserve(built.order, built.order.entrySizingDecision?.stakeLimitCents ?? liveStakeCeiling);

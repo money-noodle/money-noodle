@@ -81,8 +81,8 @@ describe('the recorded observations are isolated from anything that can move mon
   it('writes the v2 grid once before execution and advances the additive ledger envelope', () => {
     const source = readFileSync(path.join(process.cwd(), 'lib', 'paper-execution.ts'), 'utf8');
     expect(source.match(/quoteTrajectorySpread: quoteTrajectoryForDecision/g)).toHaveLength(1);
-    expect(source).toContain('interface Ledger { version: 7;');
-    expect(source).not.toContain('interface Ledger { version: 6;');
+    expect(source).toContain('interface Ledger { version: 8;');
+    expect(source).not.toContain('interface Ledger { version: 7;');
     expect(source).toContain('const candidate = buildOrder(prediction, side,');
     expect(source).toContain('candidate.order.entryEpisode = episode.attemptNumber');
   });

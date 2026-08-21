@@ -1437,7 +1437,7 @@ export interface AdaptiveRegimeGateStatus {
 export interface BudgetAuditEvent {
   id: string;
   timestamp: string;
-  type: 'configured' | 'venues_updated' | 'paused' | 'risk_stopped' | 'resumed' | 'reserved' | 'released' | 'settled' | 'depleted' | 'rejected' | 'reconciled';
+  type: 'configured' | 'venues_updated' | 'paused' | 'risk_stopped' | 'resumed' | 'reserved' | 'released' | 'settled' | 'depleted' | 'rejected' | 'reconciled' | 'corrected';
   reason: string;
   previousState: AutomationState;
   newState: AutomationState;
@@ -1461,6 +1461,41 @@ export interface TradingVenueReadiness {
 
 export type PaperOrderStatus = 'pending_reservation' | 'uncertain' | 'open' | 'sold' | 'won' | 'lost' | 'invalid' | 'unfilled' | 'rejected';
 export type ExecutionMode = 'paper' | 'live';
+
+export interface LiveOrderCorrectionSnapshot {
+  orderId: string;
+  status: PaperOrderStatus;
+  venueOrderId?: string;
+  filledCount?: number;
+  quantity: number;
+  stakeCents: number;
+  potentialPayoutCents: number;
+  actualPurchaseCents?: number;
+  actualFeeCents?: number;
+  actualStakeCents?: number;
+  outcome?: PositionSide;
+  payoutCents?: number;
+  pnlCents?: number;
+  actualPnlCents?: number;
+  settledAt?: string;
+}
+
+/** Append-only explanation for a dedicated correction projected onto historical live order rows. */
+export interface LiveLedgerCorrection {
+  id: string;
+  version: 'live-order-identity-correction-v1';
+  at: string;
+  reason: string;
+  canonicalOrderId: string;
+  canonicalVenueOrderId: string;
+  canonicalVenueClientOrderId: string;
+  affectedOrderIds: string[];
+  exactPnlDeltaCents: number;
+  controlAvailableDeltaCents: number;
+  controlRealizedPnlDeltaCents: number;
+  before: LiveOrderCorrectionSnapshot[];
+  after: LiveOrderCorrectionSnapshot[];
+}
 
 /**
  * Immutable issuance-time evidence explaining why an order cleared the binary edge-buy gates.
@@ -1593,6 +1628,8 @@ export interface PaperOrder {
   requalifiedAfterOrderId?: string;
   /** Deterministic id submitted to the venue; retained even when the HTTP response is lost. */
   clientOrderId?: string;
+  /** Stable append-only correction that explains a historical row projection. */
+  identityCorrectionId?: string;
   /** Venue order identifier, persisted as soon as Kalshi acknowledges an order. */
   venueOrderId?: string;
   filledCount?: number;

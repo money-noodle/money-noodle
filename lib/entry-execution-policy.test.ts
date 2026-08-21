@@ -14,7 +14,7 @@ const base = {
 
 describe('high-edge maker/taker entry policy v5', () => {
   it('records the new policy identity and episode ceiling', () => {
-    expect(ENTRY_EXECUTION_POLICY_VERSION).toBe('maker-high30-requalify3-fresh1c-v5');
+    expect(ENTRY_EXECUTION_POLICY_VERSION).toBe('maker-high30-requalify3-fresh1c-idv2-v6');
     expect(MAX_ENTRY_EPISODES_PER_WINDOW).toBe(3);
   });
 

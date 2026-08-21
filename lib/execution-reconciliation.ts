@@ -1,4 +1,5 @@
 import type { KalshiFillRecord, KalshiOrderRecord, KalshiReconciliationSnapshot } from './kalshi-reconciliation';
+import { expectedVenueClientOrderIds, isV2LiveEntryClientOrderId } from './live-order-identity';
 import type { PaperOrder } from './types';
 
 export interface RecoveredSettlement { stakeCents: number; payoutCents: number; relatedId: string }
@@ -15,14 +16,26 @@ export interface ExecutionReconciliationResult {
 export const UNCERTAIN_VISIBILITY_GRACE_MS = 30_000;
 
 function clientMatches(localId: string, venueClientId: string): boolean {
-  if (venueClientId === localId) return true;
-  const retryPrefix = localId.slice(0, 30);
-  return venueClientId === `${retryPrefix}-1` || venueClientId === `${retryPrefix}-2`;
+  return expectedVenueClientOrderIds(localId).includes(venueClientId);
 }
 
-function matchedOrders(order: PaperOrder, venueOrders: KalshiOrderRecord[]): KalshiOrderRecord[] {
-  return venueOrders.filter((venue) => venue.orderId === order.venueOrderId
-    || clientMatches(order.clientOrderId ?? order.id, venue.clientOrderId));
+function matchedOrders(
+  order: PaperOrder, venueOrders: KalshiOrderRecord[], ambiguousVenueIds: ReadonlySet<string> = new Set(),
+): KalshiOrderRecord[] {
+  return venueOrders.filter((venue) => !ambiguousVenueIds.has(venue.orderId)
+    && (venue.orderId === order.venueOrderId
+      || clientMatches(order.clientOrderId ?? order.id, venue.clientOrderId)));
+}
+
+/** Historical post-only races remain in Kalshi history as canceled zero-fill records. Recognize them as
+ * owned noise only; they never enter `matchedOrders` and therefore can never supply fill authority. */
+function isTerminalLegacyCreateRejection(venue: KalshiOrderRecord, localOrders: PaperOrder[]): boolean {
+  if (isV2LiveEntryClientOrderId(venue.clientOrderId) || venue.status !== 'canceled'
+    || Math.abs(venue.fillCount) > 1e-8 || Math.abs(venue.remainingCount) > 1e-8) return false;
+  const match = /^(.*)-[12]$/.exec(venue.clientOrderId);
+  if (!match || match[1].length !== 30) return false;
+  return localOrders.some((local) => !isV2LiveEntryClientOrderId(local.clientOrderId ?? local.id)
+    && (local.clientOrderId ?? local.id).slice(0, 30) === match[1]);
 }
 
 function fillTotals(fills: KalshiFillRecord[], side: PaperOrder['side']): { count: number; purchaseCents: number; feeCents: number; averagePriceCents: number } {
@@ -64,7 +77,26 @@ export function reconcileExecutionLedger(localOrders: PaperOrder[], snapshot: Ka
   const settlements: RecoveredSettlement[] = [];
   const retryableIssues: string[] = [];
   let recoveredFills = 0;
-  const localLive = orders.filter((order) => order.executionMode === 'live' && order.venue === 'kalshi');
+  const localLive = orders.filter((order) => order.executionMode === 'live' && order.venue === 'kalshi'
+    && !order.id.includes(':exit:'));
+  // One local intent may own an amendment chain, but one venue order may never repair multiple local
+  // rows. Detect ownership globally before applying any fill so iteration order cannot choose a winner.
+  const ownersByVenueOrderId = new Map<string, Set<string>>();
+  for (const venue of snapshot.orders) {
+    for (const local of localLive) {
+      if (venue.orderId !== local.venueOrderId
+        && !clientMatches(local.clientOrderId ?? local.id, venue.clientOrderId)) continue;
+      const owners = ownersByVenueOrderId.get(venue.orderId) ?? new Set<string>();
+      owners.add(local.id);
+      ownersByVenueOrderId.set(venue.orderId, owners);
+    }
+  }
+  const ambiguousVenueIds = new Set([...ownersByVenueOrderId.entries()]
+    .filter(([, owners]) => owners.size > 1).map(([venueOrderId]) => venueOrderId));
+  for (const venueOrderId of ambiguousVenueIds) {
+    const owners = [...(ownersByVenueOrderId.get(venueOrderId) ?? [])].sort();
+    issues.push(`${venueOrderId}: one Kalshi order matches multiple local entries (${owners.join(', ')}).`);
+  }
 
   for (const order of localLive) {
     order.clientOrderId ??= order.id;
@@ -72,9 +104,9 @@ export function reconcileExecutionLedger(localOrders: PaperOrder[], snapshot: Ka
     order.issuanceBidPrice ??= order.entryDecision?.actionableBid ?? order.bidPrice;
     order.issuanceSpread ??= order.entryDecision?.spread ?? order.spread;
     order.approvedMaximumPrice ??= order.entryDecision?.actionableAsk ?? order.askPrice;
-    const venueOrders = matchedOrders(order, snapshot.orders);
+    const venueOrders = matchedOrders(order, snapshot.orders, ambiguousVenueIds);
     const venueIds = new Set(venueOrders.map((item) => item.orderId));
-    if (order.venueOrderId) venueIds.add(order.venueOrderId);
+    if (order.venueOrderId && !ambiguousVenueIds.has(order.venueOrderId)) venueIds.add(order.venueOrderId);
     const entryAction = order.side === 'UP' ? 'buy' : 'sell';
     const buyFills = snapshot.fills.filter((fill) => venueIds.has(fill.orderId) && fill.action === entryAction);
     const totals = fillTotals(buyFills, order.side);
@@ -211,6 +243,7 @@ export function reconcileExecutionLedger(localOrders: PaperOrder[], snapshot: Ka
 
   // A managed venue order without any local durable intent cannot be reconstructed safely.
   for (const venue of snapshot.orders.filter((item) => item.clientOrderId.startsWith('live:'))) {
+    if (ambiguousVenueIds.has(venue.orderId) || isTerminalLegacyCreateRejection(venue, localLive)) continue;
     if (!localLive.some((local) => matchedOrders(local, [venue]).length > 0)) issues.push(`${venue.orderId}: managed Kalshi order ${venue.clientOrderId} has no local ledger record.`);
   }
   for (const resting of snapshot.restingOrders) issues.push(`${resting.orderId}: unrelated resting Kalshi order (${resting.clientOrderId || 'no client id'}) must be reviewed before automation resumes.`);

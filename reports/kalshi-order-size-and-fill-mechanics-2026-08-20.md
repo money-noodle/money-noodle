@@ -1,9 +1,9 @@
 # How order size affects fills on Kalshi — 2026-08-20
 
-> **No production policy change. Action required on execution identity (§6).** This investigation answers
-> whether displayed offer size and the desk's own order size matter, whether splitting an order helps, and
-> how partial fills work. It also found a live reconciliation collision in repeated maker episodes. That
-> defect must be fixed before repeated episodes can be considered mechanically safe.
+> **No size or fill policy change. Execution-identity repair completed 2026-08-21 (§6.1).** This
+> investigation answers whether displayed offer size and the desk's own order size matter, whether splitting
+> an order helps, and how partial fills work. It also found a live reconciliation collision in repeated maker
+> episodes; the repair and auditable correction are recorded below.
 
 ## Inputs, method, and caveats
 
@@ -205,6 +205,26 @@ needs two parts agreed before code:
 
 Until that lands, repeated maker episodes are not mechanically safe merely because their base IDs differ.
 
+### 6.1 Resolution, 2026-08-21
+
+The approved repair in `docs/live-order-identity-correction-design.md` landed as live execution generation
+`maker-high30-requalify3-fresh1c-idv2-v6`:
+
+- new episode client IDs are deterministic 40-character `live:v2:<128-bit SHA-256 prefix>` values and create
+  retries append exact `-1`/`-2` suffixes without truncation;
+- reconciliation removed legacy fuzzy fill matching, permits exact v2 lost-response candidates only, and
+  blocks one venue order from owning multiple local entries before applying fills;
+- canceled zero-fill historical create-race records are recognized only as non-authoritative legacy noise;
+  any filled, working, or unmatched managed record still blocks; and
+- ledger v8 correction `live-order-identity-correction:hype-up:2026-08-20T14:30:00Z` preserved before/after
+  snapshots, restored episodes 1 and 2 to their observed zero-fills, retained episode 3 as the sole 0.47 fill,
+  and appended the matching trading-control audit event.
+
+The correction improved exact order-record P&L by **53.58¢** and whole-cent live budget control by **54¢**,
+from 1,755¢ available / −245¢ realized to 1,809¢ / −191¢. The difference is the required exact-versus-control
+view, not unexplained drift. A second correction run made no change. Startup reconciliation then completed
+READY with zero local or venue-managed positions. Funded automation remained operator-paused.
+
 ## 7. Direct answers
 
 1. **Is offer size important?** Yes. For a taker, displayed offer size is the quantity available at that
@@ -221,7 +241,7 @@ Until that lands, repeated maker episodes are not mechanically safe merely becau
 
 ## Decision status
 
-No size, retry, price, or fill policy changes are authorized. The next execution work should fix the client-ID
-collision before adding queue polling or changing attempts. After that, exact `queue_position_fp` collection
-would be the cleanest prospective instrument for separating queue-ahead effects from own-size completion.
-Nothing here is financial advice.
+No size, retry, price, or fill policy changes are authorized. The client-ID collision is mechanically
+repaired and its known ledger damage is corrected; exact `queue_position_fp` collection would now be the
+cleanest prospective instrument for separating queue-ahead effects from own-size completion. Nothing here is
+financial advice.

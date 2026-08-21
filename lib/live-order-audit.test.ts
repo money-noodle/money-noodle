@@ -13,6 +13,7 @@ vi.mock('./kalshi-depth', () => ({ observeKalshiOrderBook: () => ({
   noBids: [{ price: 0.58, quantity: 11 }],
 }) }));
 
+import { liveEntryClientOrderId } from './live-order-identity';
 import { placeKalshiBuy } from './live-orders';
 import type { EntryExecutionObservation } from './types';
 
@@ -53,7 +54,7 @@ describe('managed maker execution audit', () => {
     const durable: EntryExecutionObservation[] = [];
     const pending = placeKalshiBuy({
       ticker: 'TEST', positionSide: 'UP', priceCents: 45, startPriceCents: 40,
-      count: 0.2, clientOrderId: 'live:test',
+      count: 0.2, clientOrderId: liveEntryClientOrderId('live:test'),
       onObservation: async (observation) => { durable.push(observation); },
     });
     await vi.advanceTimersByTimeAsync(4_000);

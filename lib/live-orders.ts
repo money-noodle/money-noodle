@@ -1,6 +1,7 @@
 import 'server-only';
 import { kalshiConfigured, kalshiEnvironment, kalshiRequest } from './kalshi-api';
 import { observeKalshiOrderBook } from './kalshi-depth';
+import { kalshiMakerCreateClientOrderId } from './live-order-identity';
 import {
   MAKER_MANAGEMENT_CHECKS, MAKER_MANAGEMENT_POLL_MS, floorToValidKalshiPrice,
   initialManagedMakerPrice, nextManagedMakerPrice,
@@ -239,8 +240,9 @@ export async function placeKalshiBuy(input: {
           reduce_only: false,
           subaccount: 0,
           exchange_index: 0,
-          // A definitively rejected post-only request can safely use a new id on the next attempt.
-          client_order_id: createAttempt ? `${input.clientOrderId.slice(0, 30)}-${createAttempt}` : input.clientOrderId,
+          // A definitively rejected post-only request can safely use a new exact attempt id. The complete
+          // episode identity is retained; truncation would let later episodes alias earlier ones.
+          client_order_id: kalshiMakerCreateClientOrderId(input.clientOrderId, createAttempt),
         },
       });
     } catch (error) {
