@@ -30,6 +30,23 @@ A second policy runs on the same market — the long-shot round trip, detailed i
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
 | Operational safety | Collision-resistant bounded live IDs, exact reconciliation ownership, quiescent drain, account reconciliation, kill switch, and budget/risk ceilings are implemented. Runtime readiness and operator state must be read from the live control surfaces named above, not inferred from this table. |
 
+### Noodle Land whimsical design direction locked; refinement precedes specification, 2026-08-22
+
+The product direction for Noodle Land and the Noodle Lab is agreed in
+[docs/whimsical-gamification-design.md](docs/whimsical-gamification-design.md): one noodle equals one cent;
+Noodle Land is an ambient visual layer with optional deeper immersion; the Paper Pot and Live Stove remain
+separate; Noodle Gain/Drain describe verified settled changes; Nomi is a simple vector mascot; and levels,
+titles, parties, and accomplishments reward exploration, null results, freshness, and evidence discipline
+rather than P&L, deposits, stake, live arming, order count, or trade frequency. Exact dollars and authoritative
+paper/live, money, safety, and contract labels remain visible, and no whimsical state may influence a forecast,
+policy, budget, order, or reconciliation path.
+
+This is intentionally **pre-specification and pre-implementation**. Bowl scaling, transition deduplication,
+progress ownership and persistence, exact unlock events, public/private scope, mascot production geometry,
+copy, motion, accessibility, and comprehension testing require another approved design pass before any
+`SPEC.md` decision or code change. No store, schema, route, component, animation, policy, or funded behavior is
+authorized by the current document.
+
 ### Execution ledger v9 activated; fixed UI reads are bounded, 2026-08-22
 
 The separately approved [v9 design](docs/execution-ledger-v9-design.md) is implemented and activated locally.
