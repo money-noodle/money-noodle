@@ -23,6 +23,28 @@ A second policy runs on the same market — the long-shot round trip, §2 below.
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
 | Operational safety | Collision-resistant bounded live IDs, exact reconciliation ownership, quiescent drain, account reconciliation, kill switch, and budget/risk ceilings are implemented; current state is paused, READY, and restart-safe |
 
+### Hourly crypto (strike) market designed and approved; implementation pending, 2026-08-21
+
+The plan for a second trading market — `crypto-1h`, Kalshi hourly crypto threshold contracts — is
+approved in design only (`docs/second-market-hourly-crypto-design.md`, SPEC §3.6 and the 2026-08-21
+decision log). No registry, budget, policy, or execution code changed; the 15m desk and long-shot
+cohort are untouched.
+
+API verification (2026-08-21) settled the product question: Kalshi has **no hourly or daily
+up/down-vs-open contract**. `KXBTC15M` is the only literal up/down series ("Bitcoin price up down");
+the hourly series resolves against absolute strikes (100 of 100 sampled `KXBTC` markets are `T` or `B`,
+series titled "Bitcoin range"); the daily series `BTC`/`BTCD`/`ETH`/`ETHD` are strike/range products
+("range"/"Above/below") and are dormant today; and no 45-minute crypto series exists (`KXBTC45` etc.
+404). Decisions locked: T (threshold) contracts only, band contracts deferred; 8pp edge floor as a
+collection-cohort number (1.6× the v22 5pp applied to a surface bearing no calibration history);
+per-market caps 3/2/1 rather than the 15m's measured 9/6/3; 60s evaluation cadence; cross-market
+exposure deliberately ignored (each market's caps bind within itself; 15m-UP + 1h-DOWN is permitted
+as different contracts); a strike-grid helper admits strikes within a measured ±N σ of spot, at most
+one strike per asset/window; all ten assets (BTC/ETH/SOL/XRP/DOGE/HYPE/BNB/TON/NEAR/ZEC) participate
+fully in paper. Settlement keys on the CF Benchmarks 60-second index average vs an absolute strike —
+new target-integrity work. Capability is market-data + paper first; Kalshi live on the hourly market
+stays off until a separate promotion under SPEC §12.5.
+
 ### Long-shot v2 will complete its untouched 60-window paper cohort, 2026-08-21
 
 The operator chose continued prospective collection rather than resource-based suspension. The authoritative
