@@ -6,9 +6,9 @@
 > **Operational-state warning:** this document records dated snapshots; it is not a live interlock or the
 > authority for whether funded execution is running. Before any operational action, read the authenticated
 > Automation surface and `data/trading-control.json`. At the latest operational snapshot, the control record
-> updated at 2026-08-22T20:04:12.990Z was operator-paused / `live`, revision 5,543, with 2,086¢ available,
-> 0¢ reserved, +86¢ current-epoch whole-cent P&L, and operator intent paused after a quiescent drain for the
-> reporting incident investigation. It has not been automatically resumed. That state may change after publication.
+> updated at 2026-08-22T23:13:04.788Z was active / `live`, revision 5,552, with 2,086¢ available,
+> 0¢ reserved, +86¢ current-epoch whole-cent P&L, and operator intent active after an explicit operator resume.
+> Periodic reconciliation last completed READY at 2026-08-22T23:20:18.907Z. That state may change after publication.
 
 ## Executive Summary
 
@@ -22,13 +22,34 @@ A second policy runs on the same market — the long-shot round trip, detailed i
 
 | Area | Status |
 | --- | --- |
-| Dashboard and public paper track record | Functional locally; bounded summary/full-report split implemented. Hosted projection remains unavailable until the managed Postgres transfer quota is restored and this revision is deployed. |
+| Dashboard and public paper track record | Functional locally and hosted; bounded summary/full-report split implemented. Managed Postgres access recovered and durable production projections returned 200 after the 2026-08-22 deployment. |
 | Forecast and performance tracking | Collection is implemented; the 2026-08-22 interleaved-writer corruption was repaired into checksum-valid, content-addressed v3 after restoring 88 qualified archived rows. Aggregate conclusions still require recalculation, and walk-forward checkpoints require evaluator v3. |
-| Live execution | Kalshi live-capable; repeated-episode identity and known ledger damage are repaired under v6. Runtime control was operator-paused, quiescent, and restart-safe for storage maintenance at the dated snapshot above and was not resumed. |
+| Live execution | Kalshi live-capable; repeated-episode identity and known ledger damage are repaired under v6. The operator explicitly resumed live after READY manual reconciliation; the latest dated snapshot above remained active with zero reservations and READY periodic reconciliation. |
 | Paper execution | Continuous and independently accounted under v6; three-episode generation ownership is repaired, exact prospective four-cell pairing is collecting, and fills remain conservative pending an exact queue-calibration held-out fit |
 | Model evaluation | Automatic walk-forward scheduler continues monitoring; the latest v2 run crossed its mechanical review threshold, but evaluator v2 is explicitly barred from promotion and production remains Blend 0.4 |
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
 | Operational safety | Collision-resistant bounded live IDs, exact reconciliation ownership, quiescent drain, account reconciliation, kill switch, and budget/risk ceilings are implemented. Runtime readiness and operator state must be read from the live control surfaces named above, not inferred from this table. |
+
+### Live resumed; paper settlement and mirror behavior monitored, 2026-08-22
+
+Production deployment `dpl_GcGwXaNANrHtY8uPYzGGfkHsJfSX` reached READY and was aliased to `noodle.money`.
+Managed Postgres access had recovered: root, paper budget, compact paper performance, and full paper performance
+returned durable 200 responses. After startup and a fresh manual account-wide reconciliation passed, the
+operator explicitly resumed live at `2026-08-22T22:53:16.472Z`. Three paired attempts in the next observed
+settlement window matched symbol, side, maker route, and requested quantity. Two paper/live pairs both rested
+without filling; one paper maker filled and lost 23¢ while live failed closed before placement after the guarded
+post-only retries. Every live reservation returned and subsequent periodic reconciliation remained READY with
+zero local/venue-managed positions.
+
+The current v6 held-out mirror cohort was 70 intents in 28 independent windows: both/paper-only/live-only/neither
+was 12/4/9/45, or 81.4% fill/no-fill agreement, 57.1% capture of live fills, and 75.0% paper-positive precision.
+A separate paper HYPE position issued while live was paused filled at 48¢, exited at 77¢ for +15.66¢ exact / +15¢
+control P&L, and later resolved DOWN; holding would have lost 28¢. That row validates its paper lifecycle but is
+not mirror evidence. The freshly recalculated broader report also found 15 current-policy live strict exits in
+12 windows, none beating authoritative hold and giving up 68.7974¢ in aggregate. This is a priority evaluation
+finding, not authority for a retroactive policy change. See
+[the dated monitor report](reports/live-paper-resume-monitor-2026-08-22.md) for methods, cohorts, caveats, and the
+priority-ordered findings. No forecast, policy, calibration, budget, or order rule changed.
 
 ### Noodle Land whimsical design direction locked; refinement precedes specification, 2026-08-22
 
