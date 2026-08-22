@@ -1,0 +1,127 @@
+# Venue Traffic, Rate Limits, and Throttle Recovery — Canonical Reference
+
+> Living reference · 2026-08-21. This is the single place that states, per venue, what traffic the
+> system produces, the worst case, and how a throttle is recovered. Every design that adds a subject
+> (a market, an asset, a cadence, a reader) must reconcile its numbers here before landing. It cites
+> code constants (`lib/freshness.ts`, `lib/task-cadence.ts`, `lib/kalshi-rate-limit.ts`,
+> `lib/kalshi-api.ts`, `lib/kalshi-quote-cache.ts`, `lib/cache.ts`) rather than restating behaviour
+> from memory.
+
+## 1. The load-bearing facts
+
+- **Kalshi is the only venue with purpose-built throttle machinery.** It has (a) a public-read
+  backoff/pause (`lib/kalshi-rate-limit.ts`), (b) separate signed read and signed write buckets each
+  with 3-attempt 429-only retry (`lib/kalshi-api.ts`), and (c) a per-ticker single-flight quote cache
+  (`lib/kalshi-quote-cache.ts`) so the entry path, manager, and reports deduplicate.
+- **Polymarket, Kraken, and CoinGecko have no 429 awareness at all.** Their failures are absorbed by
+  the generic `cached` wrapper (`lib/cache.ts`), which serves the previous value with a stale flag or,
+  on a cold cache, throws. A rate limit on these venues therefore presents as "stale data", not as a
+  controlled backoff. That is a capability gap, not just a different flavour.
+- **Kalshi's token budget** (from the venue's basic tier, as encoded): 200 tokens/s refill, 600-token
+  bucket, **10 tokens per request** ⇒ **20 requests/s sustained, 60 in a burst**. Public reads,
+  signed reads, and signed writes draw from the same token pool but the app tracks them as separate
+  backoff buckets.
+
+## 2. Per-venue request inventory (current, 15m-only, 7 assets)
+
+All counts are *upstream requests* (what the venue sees); the `cached`/`cachedKalshiRead` layers may
+suppress them between TTLs.
+
+| Venue | Endpoint | Cadence (TTL) | Requests / tick | Bound |
+| --- | --- | --- | --- | --- |
+| **Kalshi** public | `/markets?series_ticker=<series>&limit=10` | 12s (`kalshiCacheMs`) | **1 per asset** = 7 | N assets |
+| Kalshi public (on-demand) | order-book monitor ladder | 2s while one operator panel expanded | 1 | at most 1 expanded card |
+| Kalshi signed (exact pre-submit / manager) | exact-contract quote/depth/trade | on-demand / bounded | per-ticker, single-flight | depends on entries |
+| Kalshi signed (reconciliation) | cash, positions, orders, fills, resting | 5 min + startup/event | serialized, paginated | live-enabled only |
+| **Polymarket** | Gamma events (`?slug=`) | 12s (`polymarketCacheMs`) | **1 per asset** = 7 | N assets |
+| Polymarket | CLOB `/books` POST | same 12s pass | **1** (all tokenIds batched) | 1 |
+| **Kraken** | `/public/Ticker` | contractReference 10s | **1** (all pairs) | 1 |
+| Kraken | `/public/OHLC?interval=1` | contractReference 10s | **1 per asset** = 7 | N assets |
+| Kraken | `/public/OHLC?interval=10080` (weekly) | 24h (`seasonalCacheMs`) | **1 per asset** = 7 | N assets, 24h |
+| **CoinGecko** | `/coins/markets` (all ids) | 60s (`coinGeckoCacheMs`) | **1** | 1 |
+| CoinDesk RSS (news) | `/arc/outboundfeeds/rss` | 10 min (`newsCacheMs`) | **1** | 1 |
+
+## 3. Steady-state vs worst-case single cycle
+
+**Steady nominal** (the 15s collector tick, `dashboardPollMs`, with the sub-15s-TTL feeds refetching
+each tick):
+
+| Venue | Steady public reads / 15s | / min |
+| --- | --- | --- |
+| Kalshi | 7 | ~28 |
+| Polymarket | 8 (7 events + 1 CLOB) | ~32 |
+| Kraken | 8 (1 ticker + 7 OHLC) | ~32 |
+| CoinGecko | ~0.25 (1 per 60s) | 1 |
+| News | ~0.025 (1 per 10min) | ~0.15 |
+| **Total** | **~23.3** | **~93** |
+
+**Worst-case single cycle** — every TTL cold at once (process start, or every long feed firing in the
+same tick): Kalshi 7 + Poly 8 + Kraken 15 (8 fast + 7 weekly) + CoinGecko 1 + news 1 ≈ **32 requests
+in one 15s cycle ≈ 2.1/s average over that tick**. That is 3.5% of Kalshi's 20/s sustained and 3.5% of
+its 60/s burst for the Kalshi share (7); from the public-read capacity standpoint the quote loop is far
+from the binding constraint.
+
+**The real pressure points are signed Kalshi reads**, not the public quote loop. Startup and event
+reconciliation each do several signed reads (cash + positions + orders + fills + resting), paginated,
+serialized. Notifications of "read-limit backoff at startup" in STATUS trace to these signed reads
+sharing the same 10-token pool as public quotes while the signed buckets also carry exact pre-submit
+and manager reads. **This is where the 600-token burst matters.** A busy live desk adds: per managed
+maker 6 checks × (quote+depth+trade+fill) reads over 12s, per long-shot open position a target-exit
+read each poll, and per trailing entry its bounded fast-look budget.
+
+## 4. What the hourly plan adds
+
+The `crypto-1h` plan (docs/second-market-hourly-crypto-design.md) changes the table in three ways:
+
+1. **New public-read traffic (additive, distinct series).** The hourly market reads the same
+   endpoint shape but a **different series name** (`KXBTC` not `KXBTC15M`) and needs the **whole
+   grid** to locate the 2 threshold contracts — the current 15m read is `limit=10`, so the hourly
+   read pulls hundreds of contracts per series (the `B` family we defer) to find the `T` pair. That is a
+   **payload** increase far more than a requests/sec one: still 1 request per asset per cadence, but a
+   ~200–300-contract body instead of a 10-contract one.
+2. **60s cadence (locked).** At one read per asset per 60s: Kalshi hourly adds **10 assets × 1 = 10
+   requests/min ≈ 0.17/s**. Negligible against 20/s sustained. Request count stays near-flat against the
+   token budget; the load that matters is bandwidth on the grid fetch, which a min-60s cadence bounds.
+3. **`ASSETS` widening 7 → 10 adds per-raw reads to the *15m loop too*.**
+   - Kalshi 15m: 7 → 10 per 12s; Polymarket: 7 → 10 events per 12s; Kraken: 8 → 11 fast + 7 → 10 weekly.
+   - Steady public reads go from ~23.3/15s to ~**31/15s** (≈ 2.1 → **≈ 2.8/s**), worst-case single cycle
+     to ~**41**. Still ~5–7% of Kalshi 20/s sustained. The cost is real but not binding — it is the "all
+     ten assets" call the design made without counting, and this reference now prices it.
+
+**Net against Kalshi token budget:** public quote + hourly reads stay a small fraction of the 20/s
+sustained. The binding constraints remain (a) the signed-read burst during reconciliation/manager, and
+(b) the **grid-payload** cost of hourly reads, which must be bounded (prefer a `status`/type filter or
+series query that returns the threshold pair rather than the full band grid) before the hourly market
+ships.
+
+## 5. Throttle recovery matrix
+
+How each venue recovers when it says "slow down":
+
+| Venue | Mechanism in code | Recovery behaviour | Notes / gaps |
+| --- | --- | --- | --- |
+| Kalshi public | `kalshi-rate-limit.ts` backoff | exponential 250ms→8s, jittered, `pausedUntilMs`; any success clears the pause; a cached value may be served stale | solid |
+| Kalshi signed read/write | `kalshi-api.ts`, 3 attempts, `backoffMs` | 429-only retry; **write retries only on explicit 429** (a timeout/drop keeps the uncertain+reconcile path, because the order may exist) | correct and important |
+| Kalshi quote cache | `cachedKalshiRead` single-flight | failed load resolves `undefined`, dropped not cached, next caller retries; `allowStale` optional | solid |
+| Polymarket | none | `cached` serves previous value (stale) or throws on cold | **no 429 awareness/backoff** |
+| Kraken | none | `cached` stale fallback | no 429 awareness; Kraken is permissive but has no explicit backoff coded |
+| CoinGecko | none | `cached` stale fallback | no backoff; free-tier limits are the risk |
+| News (CoinDesk) | none | `cached` stale fallback | low volume; no backoff |
+
+**Gap to close (prospective, not this plan):** the non-Kalshi venues should grow the same "named
+throttle" treatment the Kalshi read already has — detect 429/too-many and back off inside `cached`
+rather than silently serving stale, so a throttle is visible as a controlled backoff instead of
+indistinguishable from a flaky upstream. That is separate work, out of scope for the hourly market.
+
+## 6. Worst-case arithmetic for future edits
+
+To keep this reference honest, state any new subject (asset, market, cadence, reader) as a delta here.
+Template: **Δ requests/s** = `N_subjects × requests_per_subject_per_tick / tick_seconds`. Check the
+result against Kalshi's 20/s sustained and the burst budget; report **request count** and **payload**
+separately, because the hourly case shows they diverge.
+
+## Change log
+
+- 2026-08-21 · Created as the canonical per-venue traffic/rate-limit/recovery reference to support the
+  `crypto-1h` plan. Quantified current 15m (7-asset) steady and worst-case, the hourly plan's added
+  public-read/grid-payload cost, and the readiness gap on the non-Kalshi venues.

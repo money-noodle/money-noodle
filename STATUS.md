@@ -45,6 +45,18 @@ fully in paper. Settlement keys on the CF Benchmarks 60-second index average vs 
 new target-integrity work. Capability is market-data + paper first; Kalshi live on the hourly market
 stays off until a separate promotion under SPEC §12.5.
 
+Two refinements landed in the design since the decision above. First, the candidate model was corrected:
+the threshold surface is an **up/down pair, not a strike grid** — measured against the live API, the
+nearest future window carries 188/300/75 contracts for BTC/ETH/HYPE but only **2 threshold (`T`) each**
+(the rest are the deferred band family), so the plan no longer builds a strike-grid helper and instead
+holds at most one T position per asset/window. A deep-wing-pair verification item was added. Second, a
+canonical per-venue traffic/rate-limit/recovery reference was added at
+`docs/venue-traffic-and-rate-limits.md`: steady public reads are ~23 per 15s today (Kalshi 7, Polymarket
+8, Kraken 8) rising to ~31 per 15s after `ASSETS` widens to ten, still well inside Kalshi's 20 req/s
+sustained; the binding constraints are the signed-read burst during reconciliation/manager and the
+hourly grid **payload** (not request count). Kalshi has full throttle machinery; Polymarket, Kraken, and
+CoinGecko currently have none and rely on generic stale fallback — a readiness gap noted for future work.
+
 ### Long-shot v2 will complete its untouched 60-window paper cohort, 2026-08-21
 
 The operator chose continued prospective collection rather than resource-based suspension. The authoritative

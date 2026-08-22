@@ -111,40 +111,55 @@ distinguish it. Recommend a **new strategy id**, e.g. `edge-binary-buy-1h-strike
 This gates every money aggregation (`lib/strategy-isolation.test.ts` re-narrows by `strategyId`), so
 the new strategy is added there and to every money path.
 
-### 3.2 Candidate model: strike-grid selection
+### 3.2 Candidate model: the threshold surface is an up/down pair, not a strike grid
 
-The 15m unit is one asset/window/contract. The hourly unit is one asset/window/**strike**. This
-inverts the search:
+The plan originally treated the hourly book as a dense strike grid and built a whole "strike-grid
+helper / evaluate every strike / at most one strike per asset/window" apparatus. **That assumed a book
+shape the threshold product does not have.** Measured 2026-08-21 against the live API in the nearest
+future window:
 
-- **Compute the probability curve once per asset/window** from the shared distribution, then evaluate
-  it at each strike in the admissible band — not re-fit per strike.
-- **Admissible strikes** sit inside the entry price band (provisionally the 15m 10–75¢ band) **and**
-  clear the side floor **and** clear the 8pp net-edge floor after fees.
-- A **strike-grid helper** emits the candidate strikes: strikes within a provisional ±N σ of current
-  spot, where N is measured from the first hourly book sample, not assumed.
-- **At most ONE strike per (asset, window)** may be selected. All strikes in a window settle on the
-  same final price — buying two strikes on the same side is the same economic bet at doubled size, and
-  buying opposite sides at two strikes is the double-buy the fail-closed default rejects. One per
-  asset/window preserves the mirror and the 15m portfolio invariant.
+| Hourly series (nearest future window) | Total contracts | T (threshold) | B (band) |
+| --- | --- | --- | --- |
+| `KXBTC` | 188 | **2** | 186 |
+| `KXETH` | 300 | **2** | 298 |
+| `KXHYPE` | 75 | **2** | 73 |
 
-### 3.3 Position and persistence identity must gain strike
+The **188-strike grid is the band (`B`) family**, which we deferred. The threshold (`T`) product
+we are actually trading is **one above-strike contract and one below-strike contract per asset/window**
+— an up/down pair. Candidate selection therefore aligns with the 15m, not with a grid:
 
-The single most important code seam:
+- **One T contract per side per asset/window** (above-strike = up, below-strike = down), the hourly
+  analog of the single 15m contract per asset/window.
+- Price the pair once per asset/window from the shared driftless log-normal:
+  `P(close > K_high)` and `P(close < K_low)`.
+- Admissible asks sit inside the entry band (provisionally 10–75¢), clear the side floor and the 8pp
+  net-edge floor after fees — same qualifications as the 15m, applied to the up/down pair.
+- The portfolio holds **at most one T position per (asset, window)** (one side of the pair), matching
+  the 15m one-position-per-window rule and avoiding a doubled economic bet.
 
-- Paper/live order identity keys on `symbol:side:closesAt` (`baseOrderId`, `persistenceKey` in
-  `paper-execution.ts`). Unique for 15m because one contract exists per asset/window.
-- Hourly **collides**: multiple strikes share a window. An order on `KXBTC:UP:20:00:80000` and another
-  on `...:82000` are different tickers but the persistence key and portfolio slot judge them the same
-  asset/window.
+**Open verification item (not a lock):** the two T strikes per window are not centered near spot in the
+sample — BTC showed above-$87,799 and below-$69,200 around an ~$80k spot, roughly $8k above and $11k
+below. If that asymmetry-to-spot persists, the threshold "up/down" is a **deep-wing pair** rather than
+a near-the-money one — cheap contracts in the documented longshot region — and must be measured from
+the first hourly book before any sizing or policy relies on it.
 
-Design: **order/portfolio/persistence identity gains strike**:
-`(marketId, strategyId, symbol, closesAt, strike, side)`. Local presentation groups by (asset, window)
-while durable order identity and reserve/settlement attribution key by the specific strike ticker.
+### 3.3 Position and persistence identity keys by strike ticker (not a grid)
 
-- `MarketQuote`/`VenueQuote` gains a `strike?: number`.
-- `PortfolioCandidate` gains `strike` (distinguish) while the same-asset/window rule still forbids two
-  strikes of the same asset+window — the economic double-buy guard.
-- `baseOrderId`, `persistenceKey`, and the spike-sentinel id all include the strike ticker.
+Paper/live order identity keys on `symbol:side:closesAt` (`baseOrderId`, `persistenceKey` in
+`paper-execution.ts`) plus the strike in the ticker. With the common threshold shape of **two contracts
+per window, one per side**, `side + window` alone usually distinguishes the pair — but durable identity
+must still key by the **exact strike ticker**, because a window can list more than one strike on a side,
+and because reserve/settlement attribution is per ticker.
+
+Design: **order/portfolio/persistence identity = `(marketId, strategyId, symbol, closesAt, ticker,
+side)`** where `ticker` already encodes the strike (`MarketQuote.n` / `VenueQuote.ticker`). Local
+presentation groups by (asset, window) while durable identity and reserve/settlement key by the exact
+ticker.
+
+- `MarketQuote`/`VenueQuote` already carries the ticker; expose the parsed strike for labelling.
+- The same-asset/window portfolio rule forbids a *second* position in the same (asset, window) on any
+  side — the double-buy guard. One T position per asset/window.
+- `baseOrderId`, `persistenceKey`, and the spike-sentinel id include the ticker.
 
 ## 4. Cross-market position rule
 
@@ -219,6 +234,25 @@ design if measurement shows the correlation is material.
   (different autocorrelation in the few-decision-per-hour world). Exact persistence/warm-up values
   remain implementation detail pending the first hourly cohort, but the boundary points — no warm-up
   copy, longer persistence, 60s cadence, no entry in the final minutes of an hour — are locked.
+
+### 7.1 Request budget (see the canonical traffic reference)
+
+The per-venue request inventory, worst-case single-cycle numbers, Kalshi token budget, and throttle
+recovery matrix live once in `docs/venue-traffic-and-rate-limits.md`. This section only states the
+hourly plan's delta and points there.
+
+- At the locked 60s cadence the hourly market adds **one Kalshi public read per asset per 60s** = 10
+  requests/min ≈ 0.17/s, negligible against Kalshi's 20/s sustained (10 tokens/request).
+- The real hourly cost is **payload, not request count**: the hourly series needs the full strike grid
+  (hundreds of contracts, dominated by the deferred `B` family) to locate the two threshold contracts,
+  where the 15m read is `limit=10`. Bound this with a series/status/type filter that returns the
+  threshold pair rather than the whole grid before the hourly market ships.
+- `ASSETS` widening 7 → 10 also adds per-asset public reads to the **15m loop** (Kalshi, Polymarket,
+  Kraken), roughly +8 requests per 15s tick. Combined steady public reads rise from ~23 to ~31 per 15s
+  (~5–7% of Kalshi sustained) — real but not the binding constraint. The binding constraints remain (a)
+  the signed-read burst during reconciliation/manager and (b) the hourly grid payload.
+
+See `docs/venue-traffic-and-rate-limits.md` §4 for the worked deltas.
 - 15-second polling would waste the shared Kalshi read-limit budget on a book that cannot act that
   fast.
 
@@ -266,3 +300,8 @@ All six open decisions are resolved; nothing remains un-decided.
 - 2026-08-21 · Decisions locked after operator review: T-only (band deferred); 8pp edge floor;
   3/2/1 caps per market; 60s cadence; cross-market exposure explicitly ignored; strike-grid helper.
   The threshold-vs-band site-tile distinction and the daily-range scope note were added.
+- 2026-08-21 · **Corrected the candidate model**: the threshold surface is an up/down pair, not a
+  strike grid (measured 188/300/75 contracts per window, only 2 T each for BTC/ETH/HYPE). Removed the
+  over-built strike-grid helper; the portfolio rule is now one T position per (asset, window). Added
+  an open verification item on the deep-wing pair. Also added §7.1 request-budget delta pointing at
+  the new canonical `docs/venue-traffic-and-rate-limits.md`.
