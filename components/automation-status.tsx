@@ -5,11 +5,14 @@ import { AlertTriangle, ChevronDown, FlaskConical, Pause, Radio, ShieldAlert } f
 import { OrderDecisionDetails } from '@/components/order-decision-details';
 import { TradeHistoryDialog } from '@/components/trade-history-dialog';
 import { Badge } from '@/components/ui/badge';
-import { usePublicPaperBudget, usePublicPaperPerformance } from '@/components/use-public-paper';
+import { usePublicPaperBudget } from '@/components/use-public-paper';
 import { DATA_FRESHNESS } from '@/lib/freshness';
 import { fundingOpenedLabel, fundingScopeLine, fundingScopeTitle } from '@/lib/funding-label';
 import { latestOpenOrderVenueQuote } from '@/lib/open-order-quote';
-import type { ExecutionSummary, PaperOrder, PaperOrderStatus, PublicPaperExecutionRecord, TradingControlData } from '@/lib/types';
+import type {
+  ExecutionSummary, PaperOrder, PaperOrderStatus, PublicPaperExecutionRecord,
+  PublicPaperPerformanceSummary, TradingControlData,
+} from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
@@ -253,13 +256,23 @@ const DESK_ELSEWHERE = 'You are signed in, but this host keeps no ledger, so it 
  * to report, no venue arming state, and no controls, so the panel says so rather than leaving a visitor
  * to assume the empty half is a real-money result.
  */
-export function PublicAutomationStatus({ deskElsewhere = false }: { deskElsewhere?: boolean } = {}) {
-  const { budget } = usePublicPaperBudget();
-  const { performance } = usePublicPaperPerformance();
+export function PublicAutomationStatus({
+  deskElsewhere = false, performance, performanceError,
+}: {
+  deskElsewhere?: boolean;
+  performance: PublicPaperPerformanceSummary | null;
+  performanceError: string | null;
+}) {
+  const { budget, error: budgetError } = usePublicPaperBudget();
 
-  // Never silently absent for a signed-in reader: an empty space is the symptom this panel is here to
-  // fix, and "no projection yet" has to be said rather than shown as nothing.
-  if (!budget) return deskElsewhere ? <section className="mb-6 rounded-xl border bg-card/60 px-4 py-3 text-[10px] text-muted-foreground">{DESK_ELSEWHERE}</section> : null;
+  // An absent projection is not an empty bankroll. Say unavailable instead of rendering zeros or a gap.
+  if (!budget) return <section className="mb-6 rounded-xl border border-warn/25 bg-warn/[.04] px-4 py-3 text-[10px] text-muted-foreground">
+    <div className="flex items-start gap-2"><AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warn"/><div>
+      <p className="font-medium text-foreground">Published paper budget unavailable</p>
+      <p className="mt-1">{budgetError ?? 'The dashboard has not received a verified paper-budget projection. No zero balance is being inferred.'}</p>
+      {deskElsewhere && <p className="mt-1">{DESK_ELSEWHERE}</p>}
+    </div></div>
+  </section>;
   const openStatuses = new Set<PaperOrderStatus>(['pending_reservation', 'uncertain', 'open']);
   const openRecords = budget.recentExecutions.filter((record) => openStatuses.has(record.status));
   // Outcome counts come from the paper track record; without it the W/L cluster is omitted rather than
@@ -291,7 +304,7 @@ export function PublicAutomationStatus({ deskElsewhere = false }: { deskElsewher
     <div className="flex flex-col gap-3 p-3">
       <TrackPanel track={track} title="Paper" subtitle="Simulated shadow · always on" equityLabel="Shadow bankroll"/>
       {deskElsewhere && <p className="px-1 text-[9px] leading-relaxed text-muted-foreground">{DESK_ELSEWHERE}</p>}
-      {!budget.durable && <p className="px-1 text-[9px] leading-relaxed text-muted-foreground">This hosted dashboard is stateless, so it cannot report the continuously collected paper ledger. Figures appear once the persistent worker publishes its projection.</p>}
+      {(budgetError || performanceError) && <p className="flex items-start gap-1.5 px-1 text-[9px] leading-relaxed text-warn"><AlertTriangle className="mt-0.5 size-3 shrink-0"/>The last verified paper record is retained, but its latest refresh failed.</p>}
     </div>
     <details className="group border-t">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-2.5 marker:content-none hover:bg-secondary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">

@@ -1,9 +1,10 @@
 import 'server-only';
+import { createHash } from 'node:crypto';
 import { readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
-  FORECAST_STORAGE_VERSION, buildForecastStoragePlan, writeForecastStoragePlan,
-  type ForecastStorageIndex,
+  FORECAST_STORAGE_VERSION, buildForecastStoragePlan, cleanupForecastStorageArtifacts,
+  verifyForecastStoragePlan, writeForecastStoragePlan, type ForecastStorageIndex,
 } from './forecast-storage';
 import {
   FORECAST_ROLLUP_VERSION, LEGACY_FORECAST_ROLLUP_VERSION,
@@ -31,7 +32,7 @@ const DATA_DIR = path.resolve(process.cwd(), 'data');
 const SHARD_DIR = path.join(DATA_DIR, 'forecast-history-shards');
 const JOURNAL_FILE = path.join(DATA_DIR, 'forecast-history.journal.jsonl');
 const INDEX_FILE = path.join(SHARD_DIR, 'index.json');
-const OPEN_FILE = path.join(SHARD_DIR, 'open.json');
+const sha256 = (content: string) => createHash('sha256').update(content).digest('hex');
 
 async function readJson<T>(file: string): Promise<T | undefined> {
   try {
@@ -48,8 +49,19 @@ export async function readForecastStorageIndex(): Promise<ForecastStorageIndex |
   return index?.version === FORECAST_STORAGE_VERSION ? index : undefined;
 }
 
+async function readCheckedJson<T>(file: string, expectedSha256: string): Promise<T> {
+  const raw = await readFile(file, 'utf8');
+  const actual = sha256(raw);
+  if (actual !== expectedSha256) throw new Error(`Forecast artifact ${path.basename(file)} checksum ${actual} did not match index ${expectedSha256}.`);
+  return JSON.parse(raw) as T;
+}
+
 export async function readOpenSet(): Promise<TrackedForecast[]> {
-  return (await readJson<TrackedForecast[]>(OPEN_FILE)) ?? [];
+  const index = await readForecastStorageIndex();
+  if (!index) return [];
+  const rows = await readCheckedJson<TrackedForecast[]>(path.join(SHARD_DIR, index.openFile), index.openSha256);
+  if (rows.length !== index.openRows) throw new Error(`Forecast open artifact held ${rows.length} rows; index says ${index.openRows}.`);
+  return rows;
 }
 
 /**
@@ -63,13 +75,16 @@ export async function readShardRollups(): Promise<ForecastSummaryRollup[]> {
   if (!index) return [];
   const rollups: ForecastSummaryRollup[] = [];
   for (const entry of index.shards) {
-    const rollup = await readJson<ForecastSummaryRollup>(path.join(SHARD_DIR, entry.rollupFile));
+    let rollup: ForecastSummaryRollup;
+    try {
+      rollup = await readCheckedJson<ForecastSummaryRollup>(path.join(SHARD_DIR, entry.rollupFile), entry.rollupSha256);
+    } catch {
+      continue;
+    }
     // A missing or unknown rollup is reported by the caller as degraded rather than silently treated as
     // an empty shard. V1 remains readable because only its unscoped counterfactual column is unsafe; the
     // merge excludes that column while preserving every policy-independent lifetime statistic.
-    if (rollup && (rollup.version === FORECAST_ROLLUP_VERSION || rollup.version === LEGACY_FORECAST_ROLLUP_VERSION)) {
-      rollups.push(rollup);
-    }
+    if (rollup.version === FORECAST_ROLLUP_VERSION || rollup.version === LEGACY_FORECAST_ROLLUP_VERSION) rollups.push(rollup);
   }
   return rollups;
 }
@@ -78,7 +93,9 @@ export async function readShardRows(shardId: string): Promise<TrackedForecast[]>
   const index = await readForecastStorageIndex();
   const entry = index?.shards.find((shard) => shard.shardId === shardId);
   if (!entry) return [];
-  return (await readJson<TrackedForecast[]>(path.join(SHARD_DIR, entry.file))) ?? [];
+  const rows = await readCheckedJson<TrackedForecast[]>(path.join(SHARD_DIR, entry.file), entry.sha256);
+  if (rows.length !== entry.rowCount) throw new Error(`Forecast shard ${entry.shardId} held ${rows.length} rows; index says ${entry.rowCount}.`);
+  return rows;
 }
 
 /**
@@ -91,10 +108,8 @@ export async function readAllShardRows(): Promise<TrackedForecast[]> {
   const index = await readForecastStorageIndex();
   if (!index) return [];
   const rows: TrackedForecast[] = [];
-  for (const entry of index.shards) {
-    const shard = await readJson<TrackedForecast[]>(path.join(SHARD_DIR, entry.file));
-    if (shard) rows.push(...shard);
-  }
+  for (const entry of index.shards) rows.push(...await readShardRows(entry.shardId));
+  if (rows.length !== index.terminalRows) throw new Error(`Forecast shards held ${rows.length} terminal rows; index says ${index.terminalRows}.`);
   return rows;
 }
 
@@ -137,10 +152,17 @@ export async function summarizeFromStorage(openRows: TrackedForecast[]): Promise
  * put rows in the journal that the open set does not contain.
  */
 export async function sealForecastStorage(forecasts: TrackedForecast[]): Promise<ForecastStorageIndex> {
-  const plan = buildForecastStoragePlan(forecasts);
+  const journalRaw = await readFile(JOURNAL_FILE, 'utf8').catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return '';
+    throw error;
+  });
+  const plan = buildForecastStoragePlan(forecasts, new Date().toISOString(), sha256(journalRaw));
+  const verification = verifyForecastStoragePlan(forecasts, plan);
+  if (!verification.ok) throw new Error(`Forecast storage plan failed verification: ${verification.errors.join(' ')}`);
   await writeForecastStoragePlan(SHARD_DIR, plan);
   const temporary = `${JOURNAL_FILE}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
   await writeFile(temporary, '');
   await rename(temporary, JOURNAL_FILE);
+  await cleanupForecastStorageArtifacts(SHARD_DIR, plan.index);
   return plan.index;
 }

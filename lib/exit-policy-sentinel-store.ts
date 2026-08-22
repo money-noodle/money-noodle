@@ -7,7 +7,7 @@ import {
   type ExitPolicySentinel, type ExitPolicySentinelReport, type ExitSentinelObservation,
 } from './exit-policy-sentinel';
 import { ENTRY_EXECUTION_POLICY_VERSION } from './entry-execution-policy';
-import { PAPER_MANAGED_MAKER_EXECUTION_VERSION } from './paper-maker-simulation';
+import { getActivePaperFillCalibration } from './paper-fill-calibration-store';
 import { BUY_POLICY_VERSION } from './prediction-policy';
 import type { PaperOrder, PositionLifecycleObservation, PositionSide } from './types';
 
@@ -343,9 +343,10 @@ export function getExitPolicySentinels(): Promise<{ startedAt: string; sentinels
 export function getExitPolicySentinelReport(orders: PaperOrder[]): Promise<ExitPolicySentinelReport> {
   return serialized(async () => {
     const store = await ensureStore(new Date().toISOString());
+    const calibration = await getActivePaperFillCalibration();
     return buildExitPolicySentinelReport({
       startedAt: store.startedAt, buyPolicyVersion: BUY_POLICY_VERSION,
-      executionPolicyVersions: { live: ENTRY_EXECUTION_POLICY_VERSION, paper: PAPER_MANAGED_MAKER_EXECUTION_VERSION },
+      executionPolicyVersions: { live: ENTRY_EXECUTION_POLICY_VERSION, paper: calibration.appliedToPaperExecution },
       sentinels: store.sentinels, orders,
     });
   });

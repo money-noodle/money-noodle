@@ -3,7 +3,7 @@ import { buildExecutionMirrorPairReport } from './execution-mirror-pair';
 import { normalizeMarketId } from './market-registry';
 import { EDGE_BINARY_BUY, normalizeStrategyId } from './strategy-registry';
 import { BUY_POLICY_VERSION } from './prediction-policy';
-import type { ExecutionMode, MakerExecutionSegment, MakerFillReport, MarketId, PaperOrder, ProviderTradeRecord, SegmentGroup, SegmentStat, StrategyId, TrackedForecast, TradeTrackRecord, TradingProviderId } from './types';
+import type { ExecutionMode, MakerExecutionSegment, MakerFillReport, MarketId, PaperOrder, ProviderTradeRecord, SegmentGroup, SegmentStat, StrategyId, TrackedForecast, TradeTrackRecord, TradeTrackSummary, TradingProviderId } from './types';
 
 const settledStatuses = new Set(['won', 'lost', 'invalid', 'sold']);
 
@@ -356,6 +356,29 @@ export function buildProviderTradeRecords(orders: PaperOrder[], mode: ExecutionM
   return [...groups.values()]
     .map((group) => ({ providerId: group.providerId, marketId: group.marketId, record: buildTradeRecord(group.orders, mode, strategyId) }))
     .sort((a, b) => b.record.settled - a.record.settled || a.providerId.localeCompare(b.providerId));
+}
+
+/** Bounded dashboard figures without constructing segments or action counterfactuals. */
+export function buildTradeTrackSummary(
+  orders: PaperOrder[], mode: ExecutionMode, strategyId: StrategyId = EDGE_BINARY_BUY,
+): TradeTrackSummary {
+  const mine = strategyOrders(orders, strategyId).filter((order) => order.executionMode === mode);
+  const settled = mine.filter((order) => settledStatuses.has(order.status));
+  const staked = settled.reduce((sum, order) => sum + actualStake(order), 0);
+  const returned = settled.reduce((sum, order) => sum + (order.payoutCents ?? 0), 0);
+  const overall = settled.length ? segmentStat('all', settled) : null;
+  return {
+    mode,
+    settled: settled.length,
+    windows: new Set(settled.map((order) => order.closesAt)).size,
+    wins: mine.filter((order) => order.status === 'won').length,
+    losses: mine.filter((order) => order.status === 'lost').length,
+    realizedPnlCents: returned - staked,
+    roi: staked ? (returned - staked) / staked : null,
+    winRate: overall?.winRate ?? null,
+    meanPredictedEdge: overall?.meanPredictedEdge ?? null,
+    meanRealizedReturn: overall?.meanRealizedReturn ?? null,
+  };
 }
 
 /**

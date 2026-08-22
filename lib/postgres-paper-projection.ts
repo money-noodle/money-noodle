@@ -1,7 +1,11 @@
 import 'server-only';
 
 import postgres, { type JSONValue, type Sql } from 'postgres';
-import type { PublicPaperBudget, PublicPaperExecutionRecord, PublicPaperPerformance } from './types';
+import { compactPublicPaperPerformance } from './performance-read-model';
+import type {
+  PublicPaperBudget, PublicPaperExecutionRecord, PublicPaperPerformance,
+  PublicPaperPerformanceSummary,
+} from './types';
 
 const DATABASE_URL = 'MONEY_NOODLE_DATABASE_URL';
 
@@ -118,6 +122,12 @@ interface PerformanceRow {
   source_updated_at: Date | string;
 }
 
+interface PerformanceSummaryRow {
+  summary: unknown;
+  paper_record: unknown;
+  generated_at: Date | string;
+}
+
 /**
  * Vercel reads this projection to serve the public paper track record. The payload is stored as one
  * document, so `durable` and `generatedAt` are re-derived here from the replication timestamp rather
@@ -134,7 +144,7 @@ export async function readPublicPaperPerformanceFromPostgres(): Promise<PublicPa
       limit 1
     `;
     if (!row?.payload || typeof row.payload !== 'object') return null;
-    const payload = row.payload as Partial<PublicPaperPerformance>;
+    const payload = row.payload as Partial<PublicPaperPerformance> & { fullGeneratedAt?: unknown };
     // A projection missing its scored halves is a failed or partial replication, not an empty record.
     if (!payload.summary || !payload.paperRecord) return null;
     // Rebuilt field by field, never spread. A stored snapshot is whatever an older worker published, so
@@ -142,7 +152,9 @@ export async function readPublicPaperPerformanceFromPostgres(): Promise<PublicPa
     // surface — the withdrawal would silently depend on the worker having replicated since.
     return {
       durable: true,
-      generatedAt: timestamp(row.source_updated_at),
+      generatedAt: typeof payload.fullGeneratedAt === 'string'
+        ? payload.fullGeneratedAt
+        : timestamp(row.source_updated_at),
       summary: payload.summary,
       paperRecord: payload.paperRecord,
       paperProviderRecords: payload.paperProviderRecords ?? [],
@@ -157,6 +169,80 @@ export async function readPublicPaperPerformanceFromPostgres(): Promise<PublicPa
 }
 
 /**
+ * Bounded homepage query. It never selects the complete JSONB document across the database connection.
+ * `homepage` is present after the first current-worker publish; the reconstruction keeps an older worker's
+ * document readable until that happens.
+ */
+export async function readPublicPaperPerformanceSummaryFromPostgres(): Promise<PublicPaperPerformanceSummary | null> {
+  const connection = sql();
+  if (!connection) return null;
+  try {
+    const [row] = await connection<PerformanceSummaryRow[]>`
+      select
+        coalesce(
+          payload #> '{homepage,summary}',
+          jsonb_build_object(
+            'issued', payload #> '{summary,issued}',
+            'cycles', payload #> '{summary,cycles}',
+            'resolved', payload #> '{summary,resolved}',
+            'resolvedCycles', payload #> '{summary,resolvedCycles}',
+            'accuracy', payload #> '{summary,accuracy}',
+            'cycleBalancedAccuracy', payload #> '{summary,cycleBalancedAccuracy}',
+            'brierScore', payload #> '{summary,brierScore}',
+            'currentCycleStreak', payload #> '{summary,currentCycleStreak}',
+            'calibrationWindows', payload #> '{summary,calibrationWindows}',
+            'calibrationMinimum', payload #> '{summary,calibrationMinimum}',
+            'calibrationProgress', payload #> '{summary,calibrationProgress}',
+            'calibrationReady', payload #> '{summary,calibrationReady}',
+            'recent', coalesce(payload #> '{summary,recent}', '[]'::jsonb)
+          )
+        ) as summary,
+        coalesce(
+          payload #> '{homepage,paperRecord}',
+          jsonb_build_object(
+            'mode', payload #> '{paperRecord,mode}',
+            'settled', payload #> '{paperRecord,settled}',
+            'windows', payload #> '{paperRecord,windows}',
+            'wins', payload #> '{paperRecord,wins}',
+            'losses', payload #> '{paperRecord,losses}',
+            'winRate', payload #> '{paperRecord,winRate}',
+            'roi', payload #> '{paperRecord,roi}',
+            'realizedPnlCents', payload #> '{paperRecord,realizedPnlCents}',
+            'meanPredictedEdge', payload #> '{paperRecord,meanPredictedEdge}',
+            'meanRealizedReturn', payload #> '{paperRecord,meanRealizedReturn}'
+          )
+        ) as paper_record,
+        coalesce(payload #>> '{homepage,generatedAt}', source_updated_at::text) as generated_at
+      from money_noodle_public_paper_performance
+      where singleton = true
+      limit 1
+    `;
+    if (!row?.summary || typeof row.summary !== 'object'
+      || !row.paper_record || typeof row.paper_record !== 'object') return null;
+    const summary = row.summary as PublicPaperPerformanceSummary['summary'];
+    const paperRecord = row.paper_record as PublicPaperPerformanceSummary['paperRecord'];
+    const finite = (value: unknown) => typeof value === 'number' && Number.isFinite(value);
+    const nullableFinite = (value: unknown) => value === null || finite(value);
+    if (![summary.issued, summary.cycles, summary.resolved, summary.resolvedCycles,
+      summary.currentCycleStreak, summary.calibrationWindows, summary.calibrationMinimum,
+      summary.calibrationProgress, paperRecord.settled, paperRecord.windows, paperRecord.wins,
+      paperRecord.losses, paperRecord.realizedPnlCents].every(finite)
+      || ![summary.accuracy, summary.cycleBalancedAccuracy, summary.brierScore, paperRecord.winRate,
+        paperRecord.roi, paperRecord.meanPredictedEdge, paperRecord.meanRealizedReturn].every(nullableFinite)
+      || typeof summary.calibrationReady !== 'boolean' || paperRecord.mode !== 'paper') return null;
+    return {
+      durable: true,
+      generatedAt: timestamp(row.generated_at),
+      summary: { ...summary, recent: Array.isArray(summary.recent) ? summary.recent.slice(0, 4) : [] },
+      paperRecord,
+    };
+  } catch (error) {
+    console.error('Postgres public paper performance summary read failed:', error);
+    return null;
+  }
+}
+
+/**
  * Replicates the public track record. Throttled because scoring the whole forecast log is far more
  * expensive than the budget aggregate, and a ledger write can happen every few seconds.
  */
@@ -165,9 +251,11 @@ export async function syncPublicPaperPerformanceToPostgres(payload: Omit<PublicP
   const connection = sql();
   if (!connection) return;
   const now = new Date().toISOString();
+  const full: PublicPaperPerformance = { durable: true, generatedAt: now, ...payload };
+  const homepage = compactPublicPaperPerformance(full, now);
   // The driver's JSONValue demands index signatures a precise interface cannot satisfy; the payload is
   // plain serializable JSON by construction, having just been assembled from scored numbers and strings.
-  const document = payload as unknown as JSONValue;
+  const document = { ...payload, homepage, fullGeneratedAt: now } as unknown as JSONValue;
   await connection`
     insert into money_noodle_public_paper_performance (singleton, payload, source_updated_at)
     -- json() and not JSON.stringify(): the driver serializes parameters itself, so passing pre-encoded
@@ -176,6 +264,23 @@ export async function syncPublicPaperPerformanceToPostgres(payload: Omit<PublicP
     on conflict (singleton) do update set
       payload = excluded.payload,
       source_updated_at = excluded.source_updated_at
+  `;
+}
+
+/** Updates only the bounded homepage member between complete 15-minute analytical publishes. */
+export async function syncPublicPaperPerformanceSummaryToPostgres(
+  payload: Omit<PublicPaperPerformanceSummary, 'durable' | 'generatedAt'>,
+): Promise<void> {
+  if (!postgresPaperProjectionSyncEnabled()) return;
+  const connection = sql();
+  if (!connection) return;
+  const now = new Date().toISOString();
+  const homepage = { ...payload, generatedAt: now } as unknown as JSONValue;
+  await connection`
+    update money_noodle_public_paper_performance
+    set payload = jsonb_set(payload, '{homepage}', ${connection.json(homepage)}, true),
+        source_updated_at = ${now}
+    where singleton = true
   `;
 }
 

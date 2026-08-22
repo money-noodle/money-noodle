@@ -6,7 +6,7 @@ import {
   makerRestrictionSentinelFromOrder, type MakerRestrictionSentinel, type MakerRestrictionSentinelReport,
 } from './maker-restriction-sentinel';
 import { ENTRY_EXECUTION_POLICY_VERSION } from './entry-execution-policy';
-import { PAPER_MANAGED_MAKER_EXECUTION_VERSION } from './paper-maker-simulation';
+import { getActivePaperFillCalibration } from './paper-fill-calibration-store';
 import { BUY_POLICY_VERSION } from './prediction-policy';
 import type { PaperOrder, PositionSide } from './types';
 
@@ -228,9 +228,10 @@ export function getMakerRestrictionSentinels(): Promise<{ startedAt: string; sen
 export function getMakerRestrictionSentinelReport(orders: PaperOrder[]): Promise<MakerRestrictionSentinelReport> {
   return serialized(async () => {
     const store = await ensureStore(new Date().toISOString());
+    const calibration = await getActivePaperFillCalibration();
     return buildMakerRestrictionSentinelReport({
       startedAt: store.startedAt, buyPolicyVersion: BUY_POLICY_VERSION,
-      executionPolicyVersions: { live: ENTRY_EXECUTION_POLICY_VERSION, paper: PAPER_MANAGED_MAKER_EXECUTION_VERSION },
+      executionPolicyVersions: { live: ENTRY_EXECUTION_POLICY_VERSION, paper: calibration.appliedToPaperExecution },
       sentinels: store.sentinels, orders,
     });
   });

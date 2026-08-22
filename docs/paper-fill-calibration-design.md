@@ -88,18 +88,17 @@ Advance `PAPER_MANAGED_MAKER_EXECUTION_VERSION` from
 `paper-managed-execution-route-ioc-requalify3-v5` to
 `paper-managed-execution-route-ioc-requalify3-calibrated-v6`.
 
-- v6 is a **fresh cohort**. Existing v5 rows are immutable; no fill or P&L changes retroactively.
-- The **current-running neutral model** (`queueClearFraction: 0`) under v6 fills/produces the
-  correct result. A *an adopted* non-zero calibration changes the version? **No** — a calibration has
-  its own version record. **Changing queueClearFraction does not re-bump the cohort if the execution
-  version already differs**; but for audit nights and to keep adoption visible, each adoption of a
-  non-zero queueClearFraction is a new `PAPER_FILL_CALIBRATION_VERSION` record in an immutable log.
+- v6 is a **fresh, neutral cohort**. Existing v5 rows are immutable; no fill or P&L changes retroactively.
+- `queueClearFraction: 0` with no adoption is always stamped as v6.
+- **Every manual adoption starts another paper execution cohort.** The store owns a monotonic generation:
+  the first adoption stamps v7, the next v8, and so on, including a later rollback to zero. A changed fill
+  assumption can therefore never share an execution-policy identity with an earlier assumption.
+- The calibration is read before paper intent creation and its complete immutable record is copied onto the
+  order. Management consumes that issuance-time copy rather than rereading mutable active state.
 
-`PAPER_FILL_CALIBRATION_VERSION = 'paper-fill-calibration-v1'` marks the calibration schema.
-
-- The version idents the *set of validated constants*, not the queue-CFR value. Adoption writes a
-  new record to `data/paper-fill-calibration.json` with `version` = a monotonic scheme and held-out
-  evidence. Read at entry.
+`PAPER_FILL_CALIBRATION_VERSION = 'paper-fill-calibration-v1'` marks the calibration-record schema; the
+paper execution suffix (`v6`, `v7`, …) identifies the economic cohort. Adoption writes the generated paper
+execution identity and held-out evidence to `data/paper-fill-calibration.json`.
 
 ## 5. Store
 
@@ -108,14 +107,17 @@ Advance `PAPER_MANAGED_MAKER_EXECUTION_VERSION` from
 ```ts
 interface PaperFillCalibrationStore {
   version: 1;
-  active: PaperFillCalibration;      // queueClearFraction (default 0), + heldOut provenance once set
-  history: Array<{ at: string; queueClearFraction: number; fitWindows: number; reason: string }>;
+  active: PaperFillCalibration;      // neutral v6 or the latest adopted generation
+  history: PaperFillCalibration[];   // complete, append-only adoption records
 }
 ```
 
-- worker loads `getActivePaperFillCalibration()` when entering a paper maker order;
-- promotion (if any) is a **manual**, explicit `adoptPaperFillCalibration` call that bumps history,
-  enforces `0 <= qcf < 0.5`, and is recorded in the immutable audit. No auto-adoption.
+- the worker loads `getActivePaperFillCalibration()` before creating a paper intent, stamps its complete
+  calibration and generated execution cohort, and uses that same stamp during management;
+- promotion (if any) is a **manual**, explicit `adoptPaperFillCalibration` call that generates the next
+  cohort, enforces `0 <= qcf < 0.5`, requires positive held-out windows and a reason, and appends the full
+  provenance without truncation. No auto-adoption;
+- malformed or discontinuous store history fails closed rather than silently reverting to neutral.
 
 ## 6. Re-evaluation (`npm run analyze:paper-fill-calibration`)
 
@@ -132,8 +134,10 @@ It reports instead:
   and precision on the **second half of settlement windows**;
 - the **structural upper bound** of any queue-shortening recovery: the live-only filled rows paper's
   model refused, summed realized P&L;
+- the evaluator selects exactly the active paper execution cohort before creating its held-out split and
+  reports the selected identity; it never pools v5, neutral v6, or an adopted v7+ generation;
 - no candidate is promoted — SPEC §12.5 requires the adopting cohort to have retained per-read/print
-evidence for an honest validation split, and the adoption is a manual act into a new cohort (v7).
+  evidence for an honest validation split, and adoption is a manual act into a new cohort (v7 first).
 
 No grid is fit here, because a candidate `queueClearFraction` cannot be faithfully re-simulated from
 these per-read summaries; the two bullets above are the honest measurement available from the durable
@@ -177,7 +181,8 @@ Always consumed by paper-only. Ask the maintainer to confirm:
 1. Ship the machinery with `queueClearFraction: 0` and a fresh v6 cohort;
 2. run the held-out evaluator; if no candidate clears the band, the report is a null result,
    and the v6 cohort keeps collecting;
-3. no auto-promotion; any future adoption is a version bump (v7) + recorded manual `adopt`.
+3. no auto-promotion; every future adoption receives the next paper execution generation (v7, v8, …)
+   plus a complete recorded manual `adopt` entry.
 
 ## D. Explicit non-goals (unchanged)
 

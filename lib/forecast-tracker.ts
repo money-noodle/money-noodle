@@ -6,9 +6,12 @@ import { getContractProvenanceRegistry, recordContractProvenance } from './contr
 import { bestEntry, directionalLikelihood, qualifiesAsBuyEdge, venueEntryOptions, BUY_POLICY_VERSION } from './prediction-policy';
 import { summarizePerformance } from './performance';
 import {
-  readAllShardRows, readForecastStorageIndex, readOpenSet, sealForecastStorage, summarizeFromStorage,
+  readAllShardRows, readForecastStorageIndex, readOpenSet, readShardRows, sealForecastStorage, summarizeFromStorage,
 } from './forecast-store';
+import { collectRecentForecastHistory } from './forecast-recent-history';
+import { forecastJournalAlreadyCompacted } from './forecast-storage';
 import { DATA_FRESHNESS } from './freshness';
+import { serializeForecastMutation } from './forecast-write-lock';
 import { calculationObservationId, signalObservationId, TRACKING_POLICY_VERSION } from './observation-window';
 import { cloneQuoteTrajectorySpreadObservation } from './quote-trajectory-spread';
 import type { ContractProvenanceRecord, PerformanceSummary, Prediction, TrackedForecast, TradingVenue, VenueOutcomeRecord } from './types';
@@ -38,9 +41,9 @@ const RESOLUTION_ABANDON_AFTER_MS = 6 * 60 * 60_000;
  * retries, so waiting longer only delayed work that had already missed its window.
  */
 const RESOLUTION_TIMEOUT_MS = 3_000;
-let resolutionInFlight = false;
-let operationQueue: Promise<void> = Promise.resolve();
-let forecastCache: Promise<TrackedForecast[]> | undefined;
+const resolutionRuntimeKey = Symbol.for('money-noodle.forecast-resolution');
+const resolutionRoot = globalThis as typeof globalThis & { [resolutionRuntimeKey]?: { inFlight: boolean } };
+const resolutionRuntime = () => (resolutionRoot[resolutionRuntimeKey] ??= { inFlight: false });
 let performanceCache: { generatedAt: number; summary: PerformanceSummary } | undefined;
 // Full segment/calibration/timeline aggregation is expensive and settlement-driven; live predictions
 // remain 15-second fresh while historical metrics may intentionally lag by at most one minute.
@@ -165,6 +168,8 @@ async function readJournalEvents(): Promise<ForecastJournalEvent[]> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
+  const activeIndex = await readForecastStorageIndex().catch(() => undefined);
+  if (activeIndex && forecastJournalAlreadyCompacted(activeIndex, raw)) return [];
   const validLines: string[] = [];
   const events: ForecastJournalEvent[] = [];
   for (const line of raw.split('\n')) {
@@ -228,13 +233,9 @@ async function loadOpenForecasts(): Promise<TrackedForecast[]> {
 }
 
 async function readForecasts(): Promise<TrackedForecast[]> {
-  forecastCache ??= usingShardedLayout().then((sharded) => (sharded ? loadOpenForecasts() : loadForecasts()));
-  try {
-    return await forecastCache;
-  } catch (error) {
-    forecastCache = undefined;
-    throw error;
-  }
+  // Next.js may bundle this module once per server entrypoint. A module-local cache would then never see
+  // another bundle's journal appends, so the small hot set is reloaded on every read.
+  return await usingShardedLayout().then((sharded) => (sharded ? loadOpenForecasts() : loadForecasts()));
 }
 
 /**
@@ -244,10 +245,14 @@ async function readForecasts(): Promise<TrackedForecast[]> {
 export async function readFullForecastHistory(): Promise<TrackedForecast[]> {
   if (!(await usingShardedLayout())) return readForecasts();
   const [sealed, open] = await Promise.all([readAllShardRows(), readForecasts()]);
-  const openIds = new Set(open.map((forecast) => forecast.id));
-  // The open set wins on collision: a row can be sealed and then patched by the journal before the next
-  // seal, and the journal is the newer statement.
-  return [...sealed.filter((forecast) => !openIds.has(forecast.id)), ...open];
+  const records = new Map(sealed.map((forecast) => [forecast.id, forecast]));
+  for (const forecast of open) {
+    const existing = records.get(forecast.id);
+    // A terminal row is immutable. A pending duplicate can only be a stale writer's pre-resolution view.
+    if (existing && terminalForecast(existing) && !terminalForecast(forecast)) continue;
+    records.set(forecast.id, forecast);
+  }
+  return [...records.values()];
 }
 
 function resolutionPatch(forecast: TrackedForecast): Partial<TrackedForecast> {
@@ -261,8 +266,10 @@ function resolutionPatch(forecast: TrackedForecast): Partial<TrackedForecast> {
   };
 }
 
+const terminalForecast = (forecast: TrackedForecast) => forecast.status === 'resolved' || forecast.status === 'invalid';
+
 async function persistForecastChanges(
-  upserts: TrackedForecast[], patches: TrackedForecast[], deletedIds: string[], retained: TrackedForecast[],
+  upserts: TrackedForecast[], patches: TrackedForecast[], deletedIds: string[],
 ): Promise<void> {
   const known = await knownProvenanceIds();
   const events: ForecastJournalEvent[] = [
@@ -276,19 +283,13 @@ async function persistForecastChanges(
   const journalSize = await stat(JOURNAL_FILE).then((value) => value.size).catch(() => 0);
   if (journalSize < JOURNAL_COMPACTION_BYTES) return;
   if (await usingShardedLayout()) {
-    // Compaction under the sharded layout is a seal: terminal rows move into their day's shard, the open
-    // set is rewritten, and the journal is cleared. This is the one place on the write path that touches
-    // whole history, and it releases it immediately.
-    //
-    // `retained` is passed rather than re-read because the cache still holds the pre-commit state here,
-    // and re-reading would seal a set missing the rows this very call just appended.
-    const sealed = await readAllShardRows();
-    const openIds = new Set(retained.map((forecast) => forecast.id));
-    await sealForecastStorage(pruned([...sealed.filter((forecast) => !openIds.has(forecast.id)), ...retained]));
+    // Reconstruct under the process-lifetime writer lease from the published generation plus the shared
+    // journal. A caller's cache is never a compaction source.
+    await sealForecastStorage(pruneForecastRetention(await readFullForecastHistory()));
     return;
   }
   // Snapshot first, then clear the journal. A crash between these steps only replays idempotent events.
-  await writeForecastSnapshot(retained);
+  await writeForecastSnapshot(pruneForecastRetention(await loadForecasts()));
   await atomicWrite(JOURNAL_FILE, '');
 }
 
@@ -482,19 +483,12 @@ function scoreResolution(forecast: TrackedForecast, outcome: 'UP' | 'DOWN', venu
 async function commitForecastChanges(
   forecasts: TrackedForecast[], newForecastIds: Set<string>, patchedForecastIds: Set<string>,
 ): Promise<TrackedForecast[]> {
-  const retained = pruned(forecasts);
+  const retained = pruneForecastRetention(forecasts);
   const retainedIds = new Set(retained.map((forecast) => forecast.id));
   const deletedIds = forecasts.filter((forecast) => !retainedIds.has(forecast.id)).map((forecast) => forecast.id);
   const upserts = retained.filter((forecast) => newForecastIds.has(forecast.id));
   const patches = retained.filter((forecast) => patchedForecastIds.has(forecast.id) && !newForecastIds.has(forecast.id));
-  try {
-    await persistForecastChanges(upserts, patches, deletedIds, retained);
-    forecastCache = Promise.resolve(retained);
-  } catch (error) {
-    // Discard mutated memory so a failed append cannot make an undurable observation appear committed.
-    forecastCache = undefined;
-    throw error;
-  }
+  await persistForecastChanges(upserts, patches, deletedIds);
   return retained;
 }
 
@@ -522,7 +516,7 @@ async function updateTracking(predictions: Prediction[], modelVersion: string): 
   return await cachedPerformanceSummary(await commitForecastChanges(forecasts, newForecastIds, new Set()));
 }
 
-function pruned(forecasts: TrackedForecast[]): TrackedForecast[] {
+export function pruneForecastRetention(forecasts: TrackedForecast[]): TrackedForecast[] {
   const unqualified = forecasts.filter((forecast) => forecast.qualified === false);
   if (unqualified.length <= UNQUALIFIED_RETENTION) return forecasts;
   const keep = new Set(unqualified
@@ -531,10 +525,9 @@ function pruned(forecasts: TrackedForecast[]): TrackedForecast[] {
   return forecasts.filter((forecast) => forecast.qualified !== false || keep.has(forecast.id));
 }
 
-export function trackCalculations(predictions: Prediction[], modelVersion: string): Promise<PerformanceSummary> {
-  const operation = operationQueue.then(() => updateTracking(predictions, modelVersion));
-  operationQueue = operation.then(() => undefined, () => undefined);
-  return operation;
+/** Mutation authority for the durable collector. Request handlers must use read-only summary APIs. */
+export function recordCollectorCalculations(predictions: Prediction[], modelVersion: string): Promise<PerformanceSummary> {
+  return serializeForecastMutation(() => updateTracking(predictions, modelVersion));
 }
 
 /**
@@ -625,8 +618,9 @@ function applyCycleOutcomes(cycleForecasts: TrackedForecast[], resolvedByContrac
  * phase holds no lock, and only the short apply phase is serialized against other writers.
  */
 export async function resolveDueForecasts(): Promise<{ cycles: number; resolved: number }> {
-  if (resolutionInFlight) return { cycles: 0, resolved: 0 };
-  resolutionInFlight = true;
+  const state = resolutionRuntime();
+  if (state.inFlight) return { cycles: 0, resolved: 0 };
+  state.inFlight = true;
   try {
     const now = Date.now();
     const due = (await readForecasts()).filter((forecast) => resolutionDue(forecast, now));
@@ -645,24 +639,28 @@ export async function resolveDueForecasts(): Promise<{ cycles: number; resolved:
       outcomes: await fetchCycleOutcomes(cycleForecasts).catch(() => new Map<string, VenueOutcomeRecord>()),
     })));
 
-    const apply = operationQueue.then(async () => {
+    return await serializeForecastMutation(async () => {
+      const current = await readForecasts();
+      const byId = new Map(current.map((forecast) => [forecast.id, forecast]));
       const checkedAt = new Date().toISOString();
       const patchedForecastIds = new Set<string>();
       let resolved = 0;
       for (const { cycleForecasts, outcomes } of fetched) {
-        for (const forecast of cycleForecasts) {
+        const durableCycle = cycleForecasts.flatMap((forecast) => {
+          const durable = byId.get(forecast.id);
+          return durable ? [durable] : [];
+        });
+        for (const forecast of durableCycle) {
           forecast.lastResolutionCheckAt = checkedAt;
           patchedForecastIds.add(forecast.id);
         }
-        if (applyCycleOutcomes(cycleForecasts, outcomes)) resolved += 1;
+        if (applyCycleOutcomes(durableCycle, outcomes)) resolved += 1;
       }
-      await commitForecastChanges(await readForecasts(), new Set(), patchedForecastIds);
+      await commitForecastChanges(current, new Set(), patchedForecastIds);
       return { cycles: selected.length, resolved };
     });
-    operationQueue = apply.then(() => undefined, () => undefined);
-    return await apply;
   } finally {
-    resolutionInFlight = false;
+    state.inFlight = false;
   }
 }
 
@@ -704,19 +702,41 @@ export async function getForecastStorageHealth(): Promise<ForecastStorageHealth>
     };
   }
   const index = await readForecastStorageIndex();
-  const source = await summarizeFromStorage(await readForecasts());
-  const degraded = source.missingRollups > 0;
-  return {
-    layout: 'sharded',
-    openRows: source.openRows,
-    sealedRows: index?.terminalRows ?? 0,
-    shards: index?.shards.length ?? 0,
-    missingRollups: source.missingRollups,
-    degraded,
-    reason: degraded
-      ? `${source.missingRollups} shard rollup(s) could not be read; lifetime figures are missing those rows.`
-      : `${source.shardRollups} shard rollup(s) cover ${index?.terminalRows ?? 0} sealed rows beside ${source.openRows} open rows.`,
-  };
+  try {
+    const source = await summarizeFromStorage(await readForecasts());
+    const degraded = source.missingRollups > 0;
+    return {
+      layout: 'sharded',
+      openRows: source.openRows,
+      sealedRows: index?.terminalRows ?? 0,
+      shards: index?.shards.length ?? 0,
+      missingRollups: source.missingRollups,
+      degraded,
+      reason: degraded
+        ? `${source.missingRollups} shard rollup(s) failed validation; lifetime figures are missing those rows.`
+        : `${source.shardRollups} checksum-valid shard rollup(s) cover ${index?.terminalRows ?? 0} sealed rows beside ${source.openRows} checksum-valid open rows.`,
+    };
+  } catch (error) {
+    return {
+      layout: 'sharded', openRows: 0, sealedRows: index?.terminalRows ?? 0, shards: index?.shards.length ?? 0,
+      missingRollups: index?.shards.length ?? 0, degraded: true,
+      reason: `Forecast storage integrity check failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+export async function getRecentForecastHistory(limit = 500, qualifiedOnly = false): Promise<TrackedForecast[]> {
+  const matches = qualifiedOnly ? (forecast: TrackedForecast) => forecast.qualified !== false : undefined;
+  if (!(await usingShardedLayout())) {
+    return (await readForecasts()).filter((forecast) => matches?.(forecast) ?? true)
+      .sort((a, b) => Date.parse(b.issuedAt) - Date.parse(a.issuedAt) || a.id.localeCompare(b.id)).slice(0, limit);
+  }
+  const index = await readForecastStorageIndex();
+  if (!index) return [];
+  return collectRecentForecastHistory({
+    index, openRows: await readForecasts(), limit, matches,
+    readShard: readShardRows,
+  });
 }
 
 export async function getForecastHistory(): Promise<TrackedForecast[]> {

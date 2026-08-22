@@ -13,8 +13,9 @@
  * enough per-read evidence to replay, and SPEC §12.5's manual-promotion rule.
  *
  * Biases: pairing conditions on both lanes issuing, excluding paper operation while live was paused;
- * public depth/prints cannot reveal cancellations or exact FIFO rank; the cohort is the current v6
- * mirror. Read-only over data/paper-orders.json; writes nothing and places no order.
+ * public depth/prints cannot reveal cancellations or exact FIFO rank. The active calibration's exact
+ * paper execution generation is selected before the held-out split; generations are never pooled.
+ * Read-only over data/paper-orders.json and the calibration store; writes nothing and places no order.
  *
  * Reproduce: npm run analyze:paper-fill-calibration
  */
@@ -23,10 +24,55 @@ import path from 'node:path';
 
 const DATA = path.resolve(process.cwd(), 'data');
 const EDGE = 'edge-binary-buy';
+const NEUTRAL_PAPER_EXECUTION = 'paper-managed-execution-route-ioc-requalify3-calibrated-v6';
+const calibrationDirectory = process.env.MONEY_NOODLE_PAPER_FILL_CALIBRATION_PATH?.trim() || DATA;
 
+const executionGeneration = (version) => {
+  const match = /^paper-managed-execution-route-ioc-requalify3-calibrated-v(\d+)$/.exec(version ?? '');
+  const generation = Number(match?.[1]);
+  return Number.isSafeInteger(generation) && generation >= 6 ? generation : null;
+};
+const validCalibration = (calibration) => {
+  const generation = executionGeneration(calibration?.appliedToPaperExecution);
+  if (calibration?.version !== 'paper-fill-calibration-v1'
+    || !Number.isFinite(calibration?.queueClearFraction)
+    || calibration.queueClearFraction < 0 || calibration.queueClearFraction >= 0.5
+    || !Number.isSafeInteger(calibration?.heldOutWindows) || calibration.heldOutWindows < 0
+    || typeof calibration?.adoptedAt !== 'string'
+    || typeof calibration?.reason !== 'string' || !calibration.reason.trim()
+    || generation === null) return false;
+  return generation === 6
+    ? calibration.queueClearFraction === 0 && calibration.heldOutWindows === 0 && calibration.adoptedAt === ''
+    : calibration.heldOutWindows > 0 && Number.isFinite(Date.parse(calibration.adoptedAt));
+};
+const sameCalibration = (left, right) => left && right
+  && ['version', 'queueClearFraction', 'appliedToPaperExecution', 'heldOutWindows', 'adoptedAt', 'reason']
+    .every((field) => left[field] === right[field]);
+
+async function activePaperExecutionVersion() {
+  try {
+    const store = JSON.parse(await readFile(path.join(calibrationDirectory, 'paper-fill-calibration.json'), 'utf8'));
+    const history = store?.history;
+    if (store?.version !== 1 || !validCalibration(store.active) || !Array.isArray(history)
+      || !history.every((item, index) => validCalibration(item)
+        && executionGeneration(item.appliedToPaperExecution) === index + 7)
+      || (history.length === 0
+        ? store.active.appliedToPaperExecution !== NEUTRAL_PAPER_EXECUTION
+        : !sameCalibration(store.active, history.at(-1)))) {
+      throw new Error('Paper fill calibration store is malformed or has discontinuous cohort history.');
+    }
+    return store.active.appliedToPaperExecution;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return NEUTRAL_PAPER_EXECUTION;
+    throw error;
+  }
+}
+
+const selectedPaperExecution = await activePaperExecutionVersion();
 const ledger = JSON.parse(await readFile(path.join(DATA, 'paper-orders.json'), 'utf8'));
 const orders = ledger.orders ?? [];
 const entries = orders.filter((order) => !order.id.includes(':exit:') && (order.strategyId ?? EDGE) === EDGE);
+const executionVersion = (order) => order.entryDecision?.executionPolicyVersion ?? order.executionPolicyVersion;
 const filled = (order) => (order.filledCount ?? 0) > 1e-8;
 const terminal = (order) => !['pending_reservation', 'uncertain'].includes(order.status);
 
@@ -38,7 +84,8 @@ for (const order of entries) {
 }
 const pairs = [];
 for (const rows of grouped.values()) {
-  const paper = rows.filter((order) => order.executionMode === 'paper');
+  const paper = rows.filter((order) => order.executionMode === 'paper'
+    && executionVersion(order) === selectedPaperExecution);
   const live = rows.filter((order) => order.executionMode === 'live');
   if (paper.length !== 1 || live.length !== 1) continue;
   if (terminal(paper[0]) && terminal(live[0])) pairs.push({ paper: paper[0], live: live[0] });
@@ -65,7 +112,8 @@ const capture = liveFills ? both / liveFills : null;
 const percent = (value) => value === null ? '—' : `${(value * 100).toFixed(1)}%`;
 
 console.log(`# Paper fill calibration held-out review — ${new Date().toISOString()}`);
-console.log(`ledger rows ${orders.length} | paired terminal intents ${pairs.length} in ${windows.length} settlement windows`);
+console.log(`paper execution cohort: ${selectedPaperExecution}`);
+console.log(`ledger rows ${orders.length} | cohort-paired terminal intents ${pairs.length} in ${windows.length} settlement windows`);
 console.log(`held-out windows evaluated: ${heldOut.size}`);
 console.log(`cells both / paper-only / live-only / neither: ${both} / ${paperOnly} / ${liveOnly} / ${neither}`);
 console.log(`agreement ${percent(agreement)} | paper capture of live fills ${percent(capture)} | paper-positive precision ${percent(both / (both + paperOnly))}`);
@@ -77,4 +125,4 @@ console.log('They bound any queue-clear recovery but are NOT a calibration predi
 console.log('per-print streams, and a honest adoption requires holding those prints for a validation split.');
 
 console.log('\nNo promotion: per SPEC §12.5 a queueClearFraction is adopted only as a recorded manual act');
-console.log('into a new paper cohort (v7), never from this retrospective, read-only review.');
+console.log('into the next generated paper cohort, never from this retrospective, read-only review.');

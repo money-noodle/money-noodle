@@ -1,4 +1,4 @@
-import { mkdir, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { groupBy } from './group';
@@ -6,7 +6,7 @@ import { buildSummaryRollup, summarizeFromRollups, type ForecastSummaryRollup } 
 import { summarizePerformance } from './performance';
 import type { PerformanceSummary, TrackedForecast } from './types';
 
-export const FORECAST_STORAGE_VERSION = 'forecast-storage-v2';
+export const FORECAST_STORAGE_VERSION = 'forecast-storage-v3';
 
 export interface ForecastShardIndexEntry {
   shardId: string;
@@ -21,9 +21,15 @@ export interface ForecastShardIndexEntry {
 
 export interface ForecastStorageIndex {
   version: typeof FORECAST_STORAGE_VERSION;
+  /** Identifies one complete publication; artifact filenames are independently content-addressed. */
+  generation: string;
   generatedAt: string;
   totalRows: number;
   openRows: number;
+  openFile: string;
+  openSha256: string;
+  /** Exact journal content incorporated by this generation; if still present after a crash, replay skips it. */
+  compactedJournalSha256: string;
   terminalRows: number;
   shards: ForecastShardIndexEntry[];
 }
@@ -46,6 +52,9 @@ export interface ForecastStorageVerification {
 const terminal = (forecast: TrackedForecast) => forecast.status === 'resolved' || forecast.status === 'invalid';
 const json = (value: unknown) => `${JSON.stringify(value)}\n`;
 const sha256 = (content: string) => createHash('sha256').update(content).digest('hex');
+export function forecastJournalAlreadyCompacted(index: ForecastStorageIndex, journalRaw: string): boolean {
+  return index.compactedJournalSha256 === sha256(journalRaw);
+}
 function shardId(forecast: TrackedForecast): string {
   const timestamp = Date.parse(forecast.issuedAt);
   if (!Number.isFinite(timestamp)) return 'undated';
@@ -57,8 +66,12 @@ function timeBounds(rows: TrackedForecast[]): { firstIssuedAt?: string; lastIssu
   return { firstIssuedAt: issued[0], lastIssuedAt: issued.at(-1) };
 }
 
-export function buildForecastStoragePlan(forecasts: TrackedForecast[], generatedAt = new Date().toISOString()): ForecastStoragePlan {
-  const open = forecasts.filter((forecast) => !terminal(forecast));
+export function buildForecastStoragePlan(
+  forecasts: TrackedForecast[], generatedAt = new Date().toISOString(), compactedJournalSha256 = sha256(''),
+): ForecastStoragePlan {
+  const open = forecasts.filter((forecast) => !terminal(forecast))
+    .sort((a, b) => a.issuedAt.localeCompare(b.issuedAt) || a.id.localeCompare(b.id));
+  const openSha256 = sha256(json(open));
   // One bucket per day over the whole history is the coarse shape that makes copy-on-append quadratic;
   // grouping in place is what keeps the migration from reintroducing the stall it exists to remove.
   const terminalByShard = groupBy(forecasts.filter(terminal), shardId);
@@ -66,29 +79,40 @@ export function buildForecastStoragePlan(forecasts: TrackedForecast[], generated
   const shards = [...terminalByShard.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([id, rows]) => {
     const orderedRows = [...rows].sort((a, b) => a.issuedAt.localeCompare(b.issuedAt) || a.id.localeCompare(b.id));
     const content = json(orderedRows);
+    const contentSha256 = sha256(content);
     const summaryRollup = buildSummaryRollup(id, orderedRows);
+    const rollupContent = json(summaryRollup);
+    const rollupSha256 = sha256(rollupContent);
     const entry: ForecastShardIndexEntry = {
       shardId: id,
-      file: `${id}.json`,
-      rollupFile: `${id}.rollup.json`,
+      file: `${id}.${contentSha256}.json`,
+      rollupFile: `${id}.rollup.${rollupSha256}.json`,
       rowCount: orderedRows.length,
-      sha256: sha256(content),
-      rollupSha256: sha256(json(summaryRollup)),
+      sha256: contentSha256,
+      rollupSha256,
       ...timeBounds(orderedRows),
     };
     return { entry, rows: orderedRows, rollup: summaryRollup };
   });
+  const generation = sha256(json({
+    generatedAt, openSha256, compactedJournalSha256,
+    shards: shards.map(({ entry }) => ({ shardId: entry.shardId, sha256: entry.sha256, rollupSha256: entry.rollupSha256 })),
+  })).slice(0, 24);
 
   return {
     index: {
       version: FORECAST_STORAGE_VERSION,
+      generation,
       generatedAt,
       totalRows: forecasts.length,
       openRows: open.length,
+      openFile: `open.${openSha256}.json`,
+      openSha256,
+      compactedJournalSha256,
       terminalRows: forecasts.length - open.length,
       shards: shards.map((shard) => shard.entry),
     },
-    open: [...open].sort((a, b) => a.issuedAt.localeCompare(b.issuedAt) || a.id.localeCompare(b.id)),
+    open,
     shards,
   };
 }
@@ -165,6 +189,8 @@ export function verifyForecastStoragePlan(original: TrackedForecast[], plan: For
   if (planned.length !== original.length) errors.push(`Planned rows ${planned.length} did not match original rows ${original.length}.`);
   if (plan.index.totalRows !== original.length) errors.push(`Index totalRows ${plan.index.totalRows} did not match original rows ${original.length}.`);
   if (plan.index.openRows !== plan.open.length) errors.push(`Index openRows ${plan.index.openRows} did not match open rows ${plan.open.length}.`);
+  if (plan.index.openSha256 !== sha256(json(plan.open))) errors.push('Open row checksum did not match its content.');
+  if (plan.index.openFile !== `open.${plan.index.openSha256}.json`) errors.push('Open filename was not content-addressed by its indexed checksum.');
   if (plan.index.terminalRows !== plan.shards.reduce((sum, shard) => sum + shard.rows.length, 0)) errors.push('Index terminalRows did not match shard row counts.');
   if (plan.index.shards.length !== plan.shards.length) errors.push(`Index listed ${plan.index.shards.length} shards but the plan contained ${plan.shards.length}.`);
   for (const shard of plan.shards) {
@@ -213,12 +239,43 @@ async function atomicWrite(file: string, content: string): Promise<void> {
   await rename(temporary, file);
 }
 
-export async function writeForecastStoragePlan(root: string, plan: ForecastStoragePlan): Promise<void> {
-  await mkdir(root, { recursive: true });
-  await atomicWrite(path.join(root, 'open.json'), json(plan.open));
-  for (const shard of plan.shards) {
-    await atomicWrite(path.join(root, shard.entry.file), json(shard.rows));
-    await atomicWrite(path.join(root, shard.entry.rollupFile), json(shard.rollup));
+async function writeImmutable(file: string, content: string, expectedSha256: string): Promise<void> {
+  try {
+    const existing = await readFile(file, 'utf8');
+    if (sha256(existing) !== expectedSha256) throw new Error(`Immutable forecast artifact ${file} did not match its content-addressed checksum.`);
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
+  await atomicWrite(file, content);
+  const stored = await readFile(file, 'utf8');
+  if (sha256(stored) !== expectedSha256) throw new Error(`Forecast artifact ${file} failed its post-write checksum.`);
+}
+
+export interface ForecastStorageWriteOptions {
+  /** Test/repair hook. Throwing here proves the prior index still references immutable prior artifacts. */
+  beforePublish?: () => void | Promise<void>;
+}
+
+/** Writes immutable artifacts first and publishes the sole mutable pointer, index.json, last. */
+export async function writeForecastStoragePlan(
+  root: string, plan: ForecastStoragePlan, options: ForecastStorageWriteOptions = {},
+): Promise<void> {
+  await mkdir(root, { recursive: true });
+  await writeImmutable(path.join(root, plan.index.openFile), json(plan.open), plan.index.openSha256);
+  for (const shard of plan.shards) {
+    await writeImmutable(path.join(root, shard.entry.file), json(shard.rows), shard.entry.sha256);
+    await writeImmutable(path.join(root, shard.entry.rollupFile), json(shard.rollup), shard.entry.rollupSha256);
+  }
+  await options.beforePublish?.();
   await atomicWrite(path.join(root, 'index.json'), json(plan.index));
+}
+
+/** Removes only orphaned v3 content-addressed artifacts after a successful index publication. */
+export async function cleanupForecastStorageArtifacts(root: string, index: ForecastStorageIndex): Promise<void> {
+  const referenced = new Set([index.openFile, ...index.shards.flatMap((entry) => [entry.file, entry.rollupFile])]);
+  const artifact = /^(?:open|\d{4}-\d{2}-\d{2})(?:\.rollup)?\.[a-f0-9]{64}\.json$/;
+  for (const file of await readdir(root).catch(() => [] as string[])) {
+    if (artifact.test(file) && !referenced.has(file)) await unlink(path.join(root, file)).catch(() => undefined);
+  }
 }

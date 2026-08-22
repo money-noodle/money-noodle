@@ -6,7 +6,7 @@ import { collectorStatus } from './collector-state';
 import { recordCyclePathObservations } from './cycle-path-store';
 import { fetchCoinSnapshots, fetchCryptoNews, fetchKalshiQuotes, fetchPolymarketQuotes, fetchPriceSeries, fetchSeasonalHistory, type ContractReference, type CoinSnapshot, type PriceSeries } from './feeds';
 import { DATA_FRESHNESS } from './freshness';
-import { trackCalculations } from './forecast-tracker';
+import { getPerformanceSummary } from './forecast-tracker';
 import { estimateMakerTouch } from './maker-fill-model';
 import { readPromotionLedger } from './model-promotion-store';
 import { summarizePerformance } from './performance';
@@ -448,9 +448,10 @@ async function buildDashboard(force = false, liveOnly = false): Promise<Dashboar
       ? quoteTrajectorySpreads.find((observation) => observation.providerId === entry.venue
         && observation.side === entry.side) : undefined;
   }
-  // Forecast and performance persistence belongs exclusively to the durable worker.
-  const performance = stateless ? summarizePerformance([]) : await trackCalculations(predictions, MODEL_VERSION).catch((error) => {
-    console.error('Forecast tracking failed:', error);
+  // Request-triggered dashboard builds are read-only for forecast evidence. Only the durable collector
+  // records this completed calculation; Next.js bundles request and instrumentation entrypoints separately.
+  const performance = stateless ? summarizePerformance([]) : await getPerformanceSummary().catch((error) => {
+    console.error('Forecast performance read failed:', error);
     return summarizePerformance([]);
   });
   const generatedAt = new Date(calculationAtMs);

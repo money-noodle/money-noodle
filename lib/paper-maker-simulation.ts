@@ -2,7 +2,9 @@ import { initialManagedMakerPrice, MAKER_MANAGEMENT_CHECKS, MAKER_MANAGEMENT_POL
 import { selectedSideDepth } from './order-book-depth';
 import type { EntryExecutionObservation, PositionSide } from './types';
 import type { KalshiTradePrint } from './kalshi-market-data';
-import { effectiveInitialQueueAhead, type PaperFillCalibration } from './paper-fill-calibration';
+import {
+  PAPER_NEUTRAL_EXECUTION_VERSION, effectiveInitialQueueAhead, type PaperFillCalibration,
+} from './paper-fill-calibration';
 
 /**
  * Durable identity stamped on paper edge-policy orders using this execution simulation.
@@ -13,7 +15,7 @@ import { effectiveInitialQueueAhead, type PaperFillCalibration } from './paper-f
  * exact v5 behavior until a recorded manual adoption sets it) and adds a versioned, bounded paper fill
  * calibration. Existing v3/v4/v5 rows remain immutable evidence and are never pooled with v6 rows.
  */
-export const PAPER_MANAGED_MAKER_EXECUTION_VERSION = 'paper-managed-execution-route-ioc-requalify3-calibrated-v6';
+export const PAPER_MANAGED_MAKER_EXECUTION_VERSION = PAPER_NEUTRAL_EXECUTION_VERSION;
 
 export interface PaperMakerQueueState {
   side: PositionSide;

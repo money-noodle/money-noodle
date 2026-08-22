@@ -26,7 +26,7 @@ import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AutomationStatus, PublicAutomationStatus } from '@/components/automation-status';
-import { usePublicPaperPerformance } from '@/components/use-public-paper';
+import { usePublicPaperPerformanceSummary } from '@/components/use-public-paper';
 import { DATA_FRESHNESS, isFreshCalculationTimestamp } from '@/lib/freshness';
 import { cn } from '@/lib/utils';
 import { bestEntry, edgeStrength, hasTradableEdge, MAX_ENTRY_PRICE, MAX_NET_EDGE, MIN_ENTRY_PRICE, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, MIN_SELECTED_SIDE_PROBABILITY, qualifiesAsBuyEdge, sideProbability, venueEntryOptions } from '@/lib/prediction-policy';
@@ -36,7 +36,10 @@ import {
   reconcileRetainedSignals, signalDisplayKey, signalDisplayPhase, signalRemovalAtMs,
   type RetainedSignal,
 } from '@/lib/signal-display-lifecycle';
-import type { DashboardData, DashboardViewData, Direction, ExecutionSignalReadiness, Factor, PerformanceSummary, Prediction, TradeTrackRecord } from '@/lib/types';
+import type {
+  DashboardData, DashboardViewData, Direction, ExecutionSignalReadiness, Factor, PerformanceSummary,
+  Prediction, PublicPaperPerformanceSummary, TradeTrackRecord, TradeTrackSummary,
+} from '@/lib/types';
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 const compactMoney = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 1 });
@@ -353,7 +356,7 @@ function PositiveEdgeBuys({ predictions, updatedAt, publicView = false, onRefres
  * One row per execution track. Signal quality above measures the forecast; these measure the money,
  * and the two modes are reported separately because they trade different bankrolls at different sizes.
  */
-function TradeRecordRow({ record, label }: { record: TradeTrackRecord | undefined; label: string }) {
+function TradeRecordRow({ record, label }: { record: TradeTrackRecord | TradeTrackSummary | undefined; label: string }) {
   const isLive = label === 'Live';
   const cash = (cents: number) => `${cents >= 0 ? '+' : '−'}$${Math.abs(cents / 100).toFixed(2)}`;
   const settled = record?.settled ?? 0;
@@ -403,9 +406,10 @@ function CalibrationEvidence({ signal }: { signal: SignalFigures }) {
  * paper track alone: the live record is never fetched, so a visitor cannot mistake a shadow result for
  * real money. The full-history dialog is offered too, in its paper-only mode.
  */
-function PublicPaperPerformancePanel() {
-  const { performance } = usePublicPaperPerformance();
-  if (!performance) return null;
+function PublicPaperPerformancePanel({
+  performance, error,
+}: { performance: PublicPaperPerformanceSummary | null; error: string | null }) {
+  if (!performance) return <section className="mb-8 rounded-xl border border-warn/25 bg-warn/[.04] p-4 text-[10px] text-muted-foreground"><div className="flex items-start gap-2"><ShieldAlert className="mt-0.5 size-3.5 shrink-0 text-warn"/><div><p className="font-medium text-foreground">Published paper track unavailable</p><p className="mt-1">{error ?? 'No verified paper-performance projection is available. No empty track record is being inferred.'}</p></div></div></section>;
   return <section className="mb-8 rounded-xl border bg-card/60 p-4">
     <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
       <div className="flex min-w-52 items-center gap-3"><div className="grid size-9 place-items-center rounded-lg bg-secondary text-muted-foreground"><Target className="size-4"/></div><div><h2 className="text-xs font-semibold">Positive-edge track record</h2><p className="mt-0.5 text-[9px] text-muted-foreground">Signal quality below; executed money is the simulated paper track only</p></div></div>
@@ -417,7 +421,7 @@ function PublicPaperPerformancePanel() {
     <div className="mt-3 space-y-2 border-t pt-3">
       <p className="text-[9px] uppercase tracking-wider text-muted-foreground">Executed trades · simulated fills and fees against the paper bankroll</p>
       <TradeRecordRow record={performance.paperRecord} label="Paper"/>
-      {!performance.durable && <p className="text-[9px] leading-relaxed text-muted-foreground">The paper track record is scored on the persistent worker and replicated here for reading; this dashboard has not received a snapshot yet.</p>}
+      {error && <p className="flex items-start gap-1.5 text-[9px] leading-relaxed text-warn"><ShieldAlert className="mt-0.5 size-3 shrink-0"/>The last verified paper track is retained, but its latest refresh failed.</p>}
     </div>
     <div className="mt-4 grid gap-4 border-t pt-4 lg:grid-cols-[1fr_auto] lg:items-center">
       <CalibrationEvidence signal={performance.summary}/>
@@ -427,15 +431,15 @@ function PublicPaperPerformancePanel() {
 }
 
 function PerformancePanel({ performance }: { performance: DashboardData['performance'] }) {
-  const [records, setRecords] = useState<{ paperRecord?: TradeTrackRecord; liveRecord?: TradeTrackRecord }>({});
+  const [records, setRecords] = useState<{ paperRecord?: TradeTrackSummary; liveRecord?: TradeTrackSummary }>({});
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
-        const response = await fetch('/api/performance', { cache: 'no-store' });
+        const response = await fetch('/api/performance/summary', { cache: 'no-store' });
         if (!response.ok) return;
-        const body = await response.json() as { paperRecord?: TradeTrackRecord; liveRecord?: TradeTrackRecord };
+        const body = await response.json() as { paperRecord?: TradeTrackSummary; liveRecord?: TradeTrackSummary };
         if (!cancelled) setRecords({ paperRecord: body.paperRecord, liveRecord: body.liveRecord });
       } catch { /* Keep the previous figures rather than blanking the panel. */ }
     }
@@ -479,6 +483,8 @@ export function Dashboard({ initialData, authenticated, deskAvailable, stateless
   const [isPending, startTransition] = useTransition();
   const [query, setQuery] = useState('');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  // One owner for both public panels: two independent hooks previously doubled every database read.
+  const publicPaper = usePublicPaperPerformanceSummary(!deskAvailable);
 
   useEffect(() => {
     if (data) return;
@@ -560,11 +566,11 @@ export function Dashboard({ initialData, authenticated, deskAvailable, stateless
         </div>
       </section>
 
-      {deskAvailable ? <AutomationStatus/> : <PublicAutomationStatus deskElsewhere={authenticated}/>}
+      {deskAvailable ? <AutomationStatus/> : <PublicAutomationStatus deskElsewhere={authenticated} performance={publicPaper.performance} performanceError={publicPaper.error}/>}
       {data && <PositiveEdgeBuys predictions={data.predictions} updatedAt={data.generatedAt} publicView={!authenticated} onRefresh={refresh} refreshing={isPending}/>}
       {authenticated && deskAvailable
         ? data?.performance && <PerformancePanel performance={data.performance}/>
-        : <PublicPaperPerformancePanel/>}
+        : <PublicPaperPerformancePanel performance={publicPaper.performance} error={publicPaper.error}/>}
 
       <section>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">

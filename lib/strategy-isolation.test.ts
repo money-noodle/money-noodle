@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-import { buildProviderTradeRecords, buildTradeRecord, orderStrategyId, strategyOrders } from './execution-report';
+import { buildProviderTradeRecords, buildTradeRecord, buildTradeTrackSummary, orderStrategyId, strategyOrders } from './execution-report';
+import { buildPositiveEdgeFundingReport } from './performance-read-model';
 import { makerCohortEvidence } from './entry-execution-policy';
 import { currentEpochAttribution, evaluateLiveRisk, lifetimeLiveRealizedPnlCents } from './live-risk-policy';
 import { countFilledLiveVenueOrders } from './order-rate-limit';
@@ -152,6 +153,17 @@ describe('a published track record describes one strategy', () => {
     expect(record.realizedPnlCents).toBe(300);
   });
 
+  it('keeps the bounded dashboard row exactly equal to the corresponding full-record fields', () => {
+    const full = buildTradeRecord(orders, 'paper');
+    expect(buildTradeTrackSummary(orders, 'paper')).toEqual({
+      mode: full.mode, settled: full.settled, windows: full.windows,
+      wins: full.wins, losses: full.losses, winRate: full.winRate, roi: full.roi,
+      realizedPnlCents: full.realizedPnlCents,
+      meanPredictedEdge: full.meanPredictedEdge,
+      meanRealizedReturn: full.meanRealizedReturn,
+    });
+  });
+
   it('attributes an unstamped record to the edge policy, as the registry does', () => {
     expect(buildTradeRecord([settled('edge-legacy', undefined, 50)], 'paper').settled).toBe(1);
   });
@@ -166,6 +178,23 @@ describe('a published track record describes one strategy', () => {
     const rows = buildProviderTradeRecords(orders, 'paper');
     expect(rows).toHaveLength(1);
     expect(rows[0].record.realizedPnlCents).toBe(300);
+  });
+
+  it('keeps funding epochs and lifetime totals on the positive-edge strategy', () => {
+    const liveEdge = { ...settled('live-edge', EDGE_BINARY_BUY, 80), executionMode: 'live', budgetEpochId: 'epoch-current', pnlCents: 80 } as PaperOrder;
+    const liveShot = { ...settled('live-shot', LONG_SHOT_ROUND_TRIP, 700), executionMode: 'live', budgetEpochId: 'epoch-current', pnlCents: 700 } as PaperOrder;
+    const paperEdge = { ...settled('paper-edge', EDGE_BINARY_BUY, 250), pnlCents: 250 } as PaperOrder;
+    const paperShot = { ...settled('paper-shot', LONG_SHOT_ROUND_TRIP, -900), pnlCents: -900 } as PaperOrder;
+    const report = buildPositiveEdgeFundingReport(
+      [liveEdge, liveShot, paperEdge, paperShot],
+      'epoch-current',
+      { fundingId: 'paper-original', correctionCents: 706 },
+    );
+    expect(report.liveEpochs).toMatchObject([{ settled: 1, realizedPnlCents: 80, budgetPnlCents: 80 }]);
+    expect(report.liveLifetimePnlCents).toBe(80);
+    expect(report.paperEpochs).toMatchObject([{ settled: 1, realizedPnlCents: 250, budgetPnlCents: 956 }]);
+    expect(report.paperLifetimePnlCents).toBe(250);
+    expect(report.edgeOrders.map((row) => row.id).sort()).toEqual(['live-edge', 'paper-edge']);
   });
 });
 

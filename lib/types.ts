@@ -1645,8 +1645,15 @@ export interface PaperOrder {
   clientOrderId?: string;
   /** Observation-only prospective join; no execution, budget, or reconciliation path may read it. */
   executionMirrorPair?: ExecutionMirrorPairStamp;
-  /** Versioned paper fill calibration under which this paper maker attempt was simulated. */
-  paperFillCalibration?: { version: string; queueClearFraction: number };
+  /** Complete issuance-time paper fill calibration and cohort provenance used by this simulation. */
+  paperFillCalibration?: {
+    version: string;
+    queueClearFraction: number;
+    appliedToPaperExecution: string;
+    heldOutWindows: number;
+    adoptedAt: string;
+    reason: string;
+  };
   /** Stable append-only correction that explains a historical row projection. */
   identityCorrectionId?: string;
   /** Venue order identifier, persisted as soon as Kalshi acknowledges an order. */
@@ -2080,6 +2087,25 @@ export interface PublicPaperBudget {
  * summary carries entire forecast records there, including factor weights and contract provenance.
  */
 export type PublicPerformanceSummary = Omit<PerformanceSummary, 'recent'> & { recent: ForecastHistoryRow[] };
+
+/** The bounded trade fields rendered by a dashboard row. Detailed segments and counterfactuals are on demand. */
+export type TradeTrackSummary = Pick<TradeTrackRecord,
+  'mode' | 'settled' | 'windows' | 'wins' | 'losses' | 'winRate' | 'roi'
+  | 'realizedPnlCents' | 'meanPredictedEdge' | 'meanRealizedReturn'>;
+
+/** Signal fields rendered without opening the complete analytical report. */
+export type PerformanceSignalSummary = Pick<PerformanceSummary,
+  'issued' | 'cycles' | 'resolved' | 'resolvedCycles' | 'accuracy' | 'cycleBalancedAccuracy'
+  | 'brierScore' | 'currentCycleStreak' | 'calibrationWindows' | 'calibrationMinimum'
+  | 'calibrationProgress' | 'calibrationReady'> & { recent: ForecastHistoryRow[] };
+
+/** Bounded public homepage record. The 500-row history and analytical breakdowns stay on demand. */
+export interface PublicPaperPerformanceSummary {
+  durable: true;
+  generatedAt: string;
+  summary: PerformanceSignalSummary;
+  paperRecord: TradeTrackSummary;
+}
 
 /**
  * Paper-only track record exposed without a signed dashboard session. This is the signed performance

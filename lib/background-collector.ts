@@ -1,7 +1,7 @@
 import 'server-only';
 import { collectorRuntime } from './collector-state';
-import { getDashboard } from './dashboard';
-import { resolveDueForecasts } from './forecast-tracker';
+import { getDashboard, MODEL_VERSION } from './dashboard';
+import { recordCollectorCalculations, resolveDueForecasts } from './forecast-tracker';
 import { processPaperTradingCycle } from './paper-execution';
 import { maybeRunPeriodicReconciliation } from './periodic-reconciliation';
 import { maybeRunWalkForwardEvaluation } from './model-evaluation-store';
@@ -16,6 +16,14 @@ async function collect(): Promise<void> {
   try {
     // Regular cache policy is intentional: market TTLs are shorter than this loop, while slower inputs retain theirs.
     const dashboard = await getDashboard(false, false);
+    // Forecast mutation authority belongs to this durable collector, never to request-triggered builds.
+    // A persistence failure is advisory to execution: historical storage does not enter predictions,
+    // policy, sizing, budgets, or orders.
+    dashboard.performance = await recordCollectorCalculations(dashboard.predictions, MODEL_VERSION)
+      .catch((error) => {
+        console.error('Forecast tracking failed:', error);
+        return dashboard.performance;
+      });
     await processPaperTradingCycle(dashboard);
     // Settlement of already-closed windows is deliberately not awaited by the calculation above: it is
     // bookkeeping about the past, and letting it block the present is what made every cycle late.

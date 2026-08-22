@@ -12,6 +12,21 @@ import 'server-only';
  */
 export const PAPER_FILL_CALIBRATION_VERSION = 'paper-fill-calibration-v1' as const;
 
+const PAPER_EXECUTION_VERSION_PREFIX = 'paper-managed-execution-route-ioc-requalify3-calibrated-v';
+export const PAPER_NEUTRAL_EXECUTION_VERSION = `${PAPER_EXECUTION_VERSION_PREFIX}6` as const;
+
+/** Every adopted calibration receives a new execution generation; v6 is reserved for neutral/no-adoption. */
+export function paperExecutionVersion(generation: number): string {
+  if (!Number.isSafeInteger(generation) || generation < 6) throw new Error('Paper execution generation must be an integer at or above 6.');
+  return `${PAPER_EXECUTION_VERSION_PREFIX}${generation}`;
+}
+
+export function paperExecutionGeneration(version: string): number | undefined {
+  if (!version.startsWith(PAPER_EXECUTION_VERSION_PREFIX)) return undefined;
+  const generation = Number(version.slice(PAPER_EXECUTION_VERSION_PREFIX.length));
+  return Number.isSafeInteger(generation) && generation >= 6 ? generation : undefined;
+}
+
 export interface PaperFillCalibration {
   version: typeof PAPER_FILL_CALIBRATION_VERSION;
   /** Fraction of the initial displayed queue ahead treated as cancelled / FIFO-advanced. [0, 0.5) */
@@ -29,21 +44,28 @@ export const PAPER_FILL_QUEUE_CLEAR_MAX = 0.5;
 export function isPaperFillCalibration(input: unknown): input is PaperFillCalibration {
   if (!input || typeof input !== 'object') return false;
   const candidate = input as Partial<PaperFillCalibration>;
-  const optional = (
-    typeof candidate.appliedToPaperExecution === 'string' || typeof candidate.appliedToPaperExecution === 'undefined'
-  ) && (
-    typeof candidate.heldOutWindows === 'number' || typeof candidate.heldOutWindows === 'undefined'
-  ) && (
-    typeof candidate.adoptedAt === 'string' || typeof candidate.adoptedAt === 'undefined'
-  ) && (
-    typeof candidate.reason === 'string' || typeof candidate.reason === 'undefined'
-  );
-  return candidate.version === PAPER_FILL_CALIBRATION_VERSION
-    && typeof candidate.queueClearFraction === 'number'
-    && Number.isFinite(candidate.queueClearFraction)
-    && candidate.queueClearFraction >= 0
-    && candidate.queueClearFraction < PAPER_FILL_QUEUE_CLEAR_MAX
-    && optional;
+  const generation = typeof candidate.appliedToPaperExecution === 'string'
+    ? paperExecutionGeneration(candidate.appliedToPaperExecution) : undefined;
+  if (candidate.version !== PAPER_FILL_CALIBRATION_VERSION
+    || typeof candidate.queueClearFraction !== 'number'
+    || !Number.isFinite(candidate.queueClearFraction)
+    || candidate.queueClearFraction < 0
+    || candidate.queueClearFraction >= PAPER_FILL_QUEUE_CLEAR_MAX
+    || generation === undefined
+    || !Number.isSafeInteger(candidate.heldOutWindows)
+    || (candidate.heldOutWindows ?? -1) < 0
+    || typeof candidate.adoptedAt !== 'string'
+    || typeof candidate.reason !== 'string'
+    || candidate.reason.trim().length === 0) return false;
+
+  // V6 is the never-adopted neutral baseline. Every adopted generation requires complete held-out
+  // provenance, including a rollback to zero, so it cannot pool with that baseline.
+  if (generation === 6) {
+    return candidate.queueClearFraction === 0
+      && candidate.heldOutWindows === 0
+      && candidate.adoptedAt === '';
+  }
+  return (candidate.heldOutWindows ?? 0) > 0 && Number.isFinite(Date.parse(candidate.adoptedAt));
 }
 
 /**

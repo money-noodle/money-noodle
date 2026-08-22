@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
@@ -10,7 +10,9 @@ const cyclePaths = vi.fn();
 const walkForward = vi.fn();
 const syncEnabled = vi.fn(() => false);
 const readProjection = vi.fn();
+const readSummaryProjection = vi.fn();
 const writeProjection = vi.fn();
+const writeSummaryProjection = vi.fn();
 
 vi.mock('./runtime-environment', () => ({
   isStatelessDeployment: () => stateless(),
@@ -18,10 +20,10 @@ vi.mock('./runtime-environment', () => ({
 }));
 vi.mock('./forecast-tracker', () => ({
   getPerformanceSummary: () => performanceSummary(),
-  getForecastHistory: () => forecastHistory(),
+  getRecentForecastHistory: () => forecastHistory(),
 }));
 vi.mock('./paper-execution', () => ({
-  getExecutionOrders: () => executionOrders(),
+  getExecutionOrders: (filter?: unknown) => executionOrders(filter),
   getPaperBankrollFunding: () => ({ fundingId: 'paper-original', fundingSequence: 1, resets: 0, correctionCents: 0 }),
 }));
 vi.mock('./cycle-path-store', () => ({ getCyclePathReport: () => cyclePaths() }));
@@ -29,12 +31,19 @@ vi.mock('./model-evaluation-store', () => ({ getWalkForwardEvaluationHistory: ()
 vi.mock('./postgres-paper-projection', () => ({
   postgresPaperProjectionSyncEnabled: () => syncEnabled(),
   readPublicPaperPerformanceFromPostgres: () => readProjection(),
+  readPublicPaperPerformanceSummaryFromPostgres: () => readSummaryProjection(),
   syncPublicPaperPerformanceToPostgres: (payload: unknown) => writeProjection(payload),
+  syncPublicPaperPerformanceSummaryToPostgres: (payload: unknown) => writeSummaryProjection(payload),
 }));
 
-import { getPublicPaperPerformance, replicatePublicPaperPerformance } from './public-paper-performance';
+import {
+  getPublicPaperPerformance as maybePublicPaperPerformance, getPublicPaperPerformanceSummary,
+  replicatePublicPaperPerformance,
+} from './public-paper-performance';
 import { summarizePerformance } from './performance';
 import type { PaperOrder, TrackedForecast } from './types';
+
+afterEach(() => vi.useRealTimers());
 
 function forecast(id: string, overrides: Partial<TrackedForecast> = {}): TrackedForecast {
   return {
@@ -63,6 +72,12 @@ function order(id: string, executionMode: PaperOrder['executionMode'], pnlCents:
 
 const EVALUATIONS = { policyVersion: 'test', activationWindows: 100, checkpointEveryWindows: 25, currentWindows: 9, nextCheckpointWindows: 25, runs: [] };
 const PATHS = { policyVersion: 'test', totalCycles: 4, completedCycles: 3, totalPoints: 40, latestByAsset: [] };
+
+async function getPublicPaperPerformance() {
+  const projection = await maybePublicPaperPerformance();
+  if (!projection) throw new Error('Expected a public paper projection.');
+  return projection;
+}
 
 describe('public paper performance projection', () => {
   beforeEach(() => {
@@ -145,6 +160,23 @@ describe('public paper performance projection', () => {
     expect(paperEpochs![0].settled).toBe(1);
   });
 
+  it('requests only the paper edge-policy ledger cohort from the shared runtime', async () => {
+    await getPublicPaperPerformance();
+    expect(executionOrders).toHaveBeenCalledWith({ executionMode: 'paper', strategyId: 'edge-binary-buy' });
+  });
+
+  it('builds the polling summary without reading history shards or cycle paths', async () => {
+    executionOrders.mockResolvedValue([order('paper-win', 'paper', 250)]);
+    const summary = await getPublicPaperPerformanceSummary();
+    expect(summary).toMatchObject({
+      durable: true,
+      paperRecord: { mode: 'paper', settled: 1, realizedPnlCents: 250 },
+    });
+    expect(summary!.summary.recent).toHaveLength(2);
+    expect(forecastHistory).not.toHaveBeenCalled();
+    expect(cyclePaths).not.toHaveBeenCalled();
+  });
+
   it('scores paper orders only, so a live result can never reach a public reader', async () => {
     executionOrders.mockResolvedValue([
       { ...order('paper-win', 'paper', 250), executionMirrorPair: {
@@ -169,14 +201,12 @@ describe('public paper performance projection', () => {
     expect(executionOrders).not.toHaveBeenCalled();
   });
 
-  it('reports a hosted dashboard with no snapshot as non-durable instead of inventing figures', async () => {
+  it('reports a hosted dashboard with no snapshot as unavailable instead of inventing figures', async () => {
     stateless.mockReturnValue(true);
     readProjection.mockResolvedValue(null);
-    const projection = await getPublicPaperPerformance();
-    expect(projection.durable).toBe(false);
-    expect(projection.summary.issued).toBe(0);
-    expect(projection.paperRecord.settled).toBe(0);
-    expect(projection.forecasts).toEqual([]);
+    readSummaryProjection.mockResolvedValue(null);
+    expect(await maybePublicPaperPerformance()).toBeNull();
+    expect(await getPublicPaperPerformanceSummary()).toBeNull();
   });
 });
 
@@ -214,6 +244,43 @@ describe('public paper performance replication', () => {
     await replicate();
     await replicate();
     expect(writeProjection).toHaveBeenCalledTimes(1);
+  });
+
+  it('publishes only the compact homepage member between full-report intervals', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-22T00:00:00Z'));
+    const replicate = await freshReplicate();
+    await replicate();
+    expect(writeProjection).toHaveBeenCalledTimes(1);
+    expect(writeSummaryProjection).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await replicate();
+    expect(writeProjection).toHaveBeenCalledTimes(1);
+    expect(writeSummaryProjection).toHaveBeenCalledTimes(1);
+    expect(forecastHistory).toHaveBeenCalledTimes(1);
+    const compact = writeSummaryProjection.mock.calls[0][0] as Record<string, unknown>;
+    expect(compact).toHaveProperty('summary');
+    expect(compact).toHaveProperty('paperRecord');
+    expect(compact).not.toHaveProperty('forecasts');
+    vi.useRealTimers();
+  });
+
+  it('backs off exponentially after a database failure before rebuilding the payload', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-22T00:00:00Z'));
+    writeProjection.mockRejectedValueOnce(new Error('quota exceeded')).mockResolvedValueOnce(undefined);
+    const replicate = await freshReplicate();
+    await expect(replicate()).rejects.toThrow('quota exceeded');
+    expect(performanceSummary).toHaveBeenCalledTimes(1);
+
+    await replicate();
+    expect(performanceSummary).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    await replicate();
+    expect(performanceSummary).toHaveBeenCalledTimes(2);
+    expect(writeProjection).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
   });
 
   it('does nothing at all when replication is not configured', async () => {

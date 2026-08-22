@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { SUMMARY_FLOAT_TOLERANCE, buildForecastStoragePlan, compareSummaries, verifyForecastStoragePlan, writeForecastStoragePlan } from './forecast-storage';
+import { SUMMARY_FLOAT_TOLERANCE, buildForecastStoragePlan, compareSummaries, forecastJournalAlreadyCompacted, verifyForecastStoragePlan, writeForecastStoragePlan } from './forecast-storage';
 import { summarizePerformance } from './performance';
 import type { PerformanceSummary, TrackedForecast } from './types';
 
@@ -39,13 +39,25 @@ describe('forecast storage layout planning', () => {
     ];
     const plan = buildForecastStoragePlan(rows, '2026-08-14T12:00:00Z');
     expect(plan.open.map((item) => item.id)).toEqual(['pending']);
-    expect(plan.index).toMatchObject({ totalRows: 4, openRows: 1, terminalRows: 3 });
+    expect(plan.index).toMatchObject({
+      totalRows: 4, openRows: 1, terminalRows: 3,
+      compactedJournalSha256: createHash('sha256').update('').digest('hex'),
+    });
     expect(plan.shards.map((shard) => shard.entry.shardId)).toEqual(['2026-08-13', '2026-08-14']);
     expect(plan.shards.find((shard) => shard.entry.shardId === '2026-08-14')?.rollup).toMatchObject({
       version: 'forecast-rollup-v2', shardId: '2026-08-14', resolved: 1, invalid: 1, pending: 0,
     });
     expect(plan.index.shards[1].rollupSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(verifyForecastStoragePlan(rows, plan)).toMatchObject({ ok: true, errors: [] });
+  });
+
+  it('records the exact journal incorporated by a generation so a post-publication crash cannot replay it', () => {
+    const journal = '{"op":"upsert","forecast":{"id":"pending"}}\n';
+    const digest = createHash('sha256').update(journal).digest('hex');
+    const plan = buildForecastStoragePlan([forecast({ id: 'pending' })], '2026-08-14T12:00:00Z', digest);
+    expect(plan.index.compactedJournalSha256).toBe(digest);
+    expect(forecastJournalAlreadyCompacted(plan.index, journal)).toBe(true);
+    expect(forecastJournalAlreadyCompacted(plan.index, `${journal}\n`)).toBe(false);
   });
 
   it('reproduces the order-dependent statistics when rows are relaid out', () => {
@@ -140,19 +152,46 @@ describe('forecast storage layout planning', () => {
       const plan = buildForecastStoragePlan(rows, '2026-08-14T12:00:00Z');
       await writeForecastStoragePlan(root, plan);
       const index = JSON.parse(await readFile(path.join(root, 'index.json'), 'utf8'));
-      const open = JSON.parse(await readFile(path.join(root, 'open.json'), 'utf8'));
-      const shardRaw = await readFile(path.join(root, '2026-08-14.json'), 'utf8');
-      const rollupRaw = await readFile(path.join(root, '2026-08-14.rollup.json'), 'utf8');
+      const openRaw = await readFile(path.join(root, index.openFile), 'utf8');
+      const open = JSON.parse(openRaw);
+      const shardRaw = await readFile(path.join(root, index.shards[0].file), 'utf8');
+      const rollupRaw = await readFile(path.join(root, index.shards[0].rollupFile), 'utf8');
       const shard = JSON.parse(shardRaw);
       const rollup = JSON.parse(rollupRaw);
-      expect(index).toMatchObject({ version: 'forecast-storage-v2' });
+      expect(index).toMatchObject({ version: 'forecast-storage-v3' });
       expect(index.shards).toHaveLength(1);
+      expect(index.openSha256).toBe(createHash('sha256').update(openRaw).digest('hex'));
       expect(index.shards[0].sha256).toBe(createHash('sha256').update(shardRaw).digest('hex'));
       expect(index.shards[0].rollupSha256).toBe(createHash('sha256').update(rollupRaw).digest('hex'));
       expect(open.map((item: TrackedForecast) => item.id)).toEqual(['pending']);
       expect(shard.map((item: TrackedForecast) => item.id)).toEqual(['resolved']);
       expect(rollup).toMatchObject({ version: 'forecast-rollup-v2', shardId: '2026-08-14', resolved: 1 });
       expect(rollup.timeline).toHaveLength(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves the prior generation fully readable when publication fails after new artifacts are written', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'money-noodle-forecast-storage-crash-'));
+    try {
+      const first = buildForecastStoragePlan([
+        forecast({ id: 'pending-a' }),
+        forecast({ id: 'resolved-a', status: 'resolved', correct: true, outcome: 'UP' }),
+      ], '2026-08-14T12:00:00Z');
+      await writeForecastStoragePlan(root, first);
+      const priorIndex = await readFile(path.join(root, 'index.json'), 'utf8');
+
+      const second = buildForecastStoragePlan([
+        ...first.open, ...first.shards.flatMap((shard) => shard.rows),
+        forecast({ id: 'pending-b', issuedAt: '2026-08-14T12:01:00Z' }),
+      ], '2026-08-14T12:01:00Z');
+      await expect(writeForecastStoragePlan(root, second, { beforePublish: () => { throw new Error('simulated crash'); } }))
+        .rejects.toThrow('simulated crash');
+
+      expect(await readFile(path.join(root, 'index.json'), 'utf8')).toBe(priorIndex);
+      expect(JSON.parse(await readFile(path.join(root, first.index.openFile), 'utf8')).map((row: TrackedForecast) => row.id)).toEqual(['pending-a']);
+      expect(JSON.parse(await readFile(path.join(root, first.index.shards[0].file), 'utf8')).map((row: TrackedForecast) => row.id)).toEqual(['resolved-a']);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

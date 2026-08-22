@@ -1,27 +1,78 @@
 # Money Noodle - Implementation Status
 
-> Living status document. Updated 2026-08-21.
+> Living status document. Updated 2026-08-22.
 > Product requirements and architecture decisions live in [SPEC.md](SPEC.md).
+>
+> **Operational-state warning:** this document records dated snapshots; it is not a live interlock or the
+> authority for whether funded execution is running. Before any operational action, read the authenticated
+> Automation surface and `data/trading-control.json`. At the latest operational snapshot, the control record
+> updated at 2026-08-22T16:50:58.956Z was operator-paused / `live`, revision 5,532, with 2,086¢ available,
+> 0¢ reserved, +86¢ current-epoch whole-cent P&L, and operator intent paused after a quiescent drain for the
+> reporting incident investigation. It has not been automatically resumed. That state may change after publication.
 
 ## Executive Summary
 
-Money Noodle is operational as a local research dashboard, continuous paper shadow trader, public paper-track-record publisher, and explicitly armed but currently operator-paused live Kalshi trader. Core UP/YES and DOWN/NO entry, managed maker execution, paper maker mirroring, signed Kalshi reconciliation, quiescent pause/drain, loss gates, budget epochs, provider permissions, contract provenance, target integrity, standalone reduce-only exits, protected switching, model evaluation, and immutable promotion accounting are implemented.
+Money Noodle is operational as a local research dashboard, continuous paper shadow trader, public paper-track-record publisher, and environment-gated, explicitly armable live Kalshi trader. Core UP/YES and DOWN/NO entry, managed maker execution, paper maker mirroring, signed Kalshi reconciliation, quiescent pause/drain, loss gates, budget epochs, provider permissions, contract provenance, target integrity, standalone reduce-only exits, protected switching, model evaluation, and immutable promotion accounting are implemented.
 
 The **repeated-episode order-identity defect found on 2026-08-20 was mechanically repaired and its known ledger damage corrected on 2026-08-21**. New live episode IDs retain collision-resistant identity through every create retry; reconciliation no longer fuzzy-matches truncated legacy IDs and blocks one venue order from owning multiple local entries. Ledger v8 preserves the HYPE before/after correction and trading control preserves the +54¢ whole-cent audit event. Separately, current economic evidence does not justify stake expansion, unconditional taker execution, an automatic entry relaxation, queue-aware live gates, or adding a second live venue. The shared buy rule remains **v22** — a 2026-08-20 operator narrowing to a +5pp edge floor and a 10–75¢ price band, not an evidence promotion. Live execution identity is now `maker-high30-requalify3-fresh1c-idv2-v6`; episode policy, sizing, and routes are unchanged.
 
-A 2026-08-21 mirror review found that paper v4 first attempts were useful but its generation check suppressed every episode after episode 1. The defect is repaired under `paper-managed-execution-route-ioc-requalify3-v5`, with exact prospective four-cell pairing and bounded public trade/queue evidence. The closed v4 sample matched route and quantity 69/69 and fill/no-fill 79.7%, but captured only 62.5% of fills among 61 accepted paired live makers; v5 starts a separate collection cohort and does not rewrite that history. Paper does not feed funded execution, so no live order rule changed.
+A 2026-08-21 mirror review found that paper v4 first attempts were useful but its generation check suppressed every episode after episode 1. The defect was repaired under `paper-managed-execution-route-ioc-requalify3-v5`, with exact prospective four-cell pairing and bounded public trade/queue evidence; neutral calibration then advanced current paper execution to `paper-managed-execution-route-ioc-requalify3-calibrated-v6`. The closed v4 sample matched route and quantity 69/69 and fill/no-fill 79.7%, but captured only 62.5% of fills among 61 accepted paired live makers. Each generation remains separate and no history was rewritten. Paper does not feed funded execution, so no live order rule changed.
 
-A second policy runs on the same market — the long-shot round trip, §2 below. Its current 12¢→97¢/600s cohort is paper-only; live arming is false. The parameters were selected from a retrospective sweep and therefore define a new collection cohort rather than evidence-backed promotion. It relaxes none of the edge policy's constraints and changes no edge rule.
+A second policy runs on the same market — the long-shot round trip, detailed in the roadmap below. Its current 12¢→97¢/600s cohort is paper-only; live arming is false. The parameters were selected from a retrospective sweep and therefore define a new collection cohort rather than evidence-backed promotion. It relaxes none of the edge policy's constraints and changes no edge rule.
 
 | Area | Status |
 | --- | --- |
-| Dashboard and public paper track record | Functional locally and through optional Postgres projection |
-| Forecast and performance tracking | Functional; forecast summary storage verifies, but walk-forward checkpoint cohorts can drift after late resolution and require evaluator v3 |
-| Live execution | Kalshi live-capable and operator-paused; repeated-episode identity and known ledger damage are repaired under v6, but funded execution was not resumed automatically |
+| Dashboard and public paper track record | Functional locally; bounded summary/full-report split implemented. Hosted projection remains unavailable until the managed Postgres transfer quota is restored and this revision is deployed. |
+| Forecast and performance tracking | Collection is implemented; the 2026-08-22 interleaved-writer corruption was repaired into checksum-valid, content-addressed v3 after restoring 88 qualified archived rows. Aggregate conclusions still require recalculation, and walk-forward checkpoints require evaluator v3. |
+| Live execution | Kalshi live-capable; repeated-episode identity and known ledger damage are repaired under v6. Runtime control was operator-paused, quiescent, and restart-safe for storage maintenance at the dated snapshot above and was not resumed. |
 | Paper execution | Continuous and independently accounted under v6; three-episode generation ownership is repaired, exact prospective four-cell pairing is collecting, and fills remain conservative pending an exact queue-calibration held-out fit |
-| Model evaluation | Automatic walk-forward scheduler continues monitoring; latest run retained baseline and evaluator v2 is explicitly barred from promotion |
+| Model evaluation | Automatic walk-forward scheduler continues monitoring; the latest v2 run crossed its mechanical review threshold, but evaluator v2 is explicitly barred from promotion and production remains Blend 0.4 |
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
-| Operational safety | Collision-resistant bounded live IDs, exact reconciliation ownership, quiescent drain, account reconciliation, kill switch, and budget/risk ceilings are implemented; current state is paused, READY, and restart-safe |
+| Operational safety | Collision-resistant bounded live IDs, exact reconciliation ownership, quiescent drain, account reconciliation, kill switch, and budget/risk ceilings are implemented. Runtime readiness and operator state must be read from the live control surfaces named above, not inferred from this table. |
+
+### Dashboard reporting read path bounded; hosted database quota still blocked, 2026-08-22
+
+The 2026-08-22 investigation found no new forecast corruption: the current v3 verifier passed direct-versus-rollup
+comparison over 75,378 rows. It found two independent reporting failures. First, the signed homepage polled the
+complete `/api/performance` report every 15 seconds; a cold request took 6.323 seconds and returned about 970 KB
+because it loaded lifetime forecast rows and every analytical report merely to render two trade rows. Second,
+the public automation and performance panels independently polled the same approximately 311 KB Postgres JSON
+record every minute, about 622 KB/minute or 896 MB/day for one continuously open tab before any other reader.
+The managed provider now rejects reads with Postgres error 53000, “project has exceeded the data transfer quota.”
+The Vercel deployment itself remained Ready; hosted paper/performance data remain unavailable until quota access
+returns. No database upgrade/reset was attempted in this change.
+
+The approved repair in [docs/reporting-read-path-design.md](docs/reporting-read-path-design.md) separates bounded
+homepage summaries from on-demand full reports. The signed poll now reads a 517-byte execution summary with no
+forecast import; direct current-process measurements at 2026-08-22T17:20Z were 408 ms cold / 166 ms warm over
+3,649 edge-policy orders. The public summary was 2,062 bytes with four recent rows, 890 ms cold / 238 ms warm;
+its remaining warm cost was the advancing forecast journal replay, not a shard scan. These are direct module
+measurements rather than production-build HTTP timings, which is the main caveat. The public page owns one shared
+summary hook, successful identity-free reads carry bounded shared-cache directives, and first-load failures render
+an explicit unavailable state. Public budget and performance routes return 503 instead of inventing a zero record.
+
+The existing JSONB row requires no migration. A `homepage` member updates once per minute while the complete
+approximately 310 KB report updates at most once per 15 minutes; compact SQL selects only bounded fields across
+the database connection, with compatibility reconstruction for older documents. The full report remains available
+only when its dialog opens. Current local verification at 2026-08-22T17:20Z found 1,140 edge-paper settlements,
+−3,349.004¢ exact order P&L and −2,792¢ corrected whole-cent funding P&L. Signed and public paper funding history
+now agree on that edge-only cohort; the previous signed epoch blended 124 long-shot settlements and violated
+strategy isolation. Live and paper records, provider rows, epochs, lifetime totals, maker reports, sentinels, and
+stake-expansion evidence are all narrowed back to `edge-binary-buy` for this report without splitting the shared
+account ledger or changing reconciliation.
+
+The 50 MB forecast-journal compaction threshold did not change. The design records the checksum/generation,
+process-global ownership, clone, crash-window, and grid-test gates required before implementing an incremental
+hot-state cache; repeatedly resealing history was not assumed to be cheaper than replay. Live remained
+operator-paused throughout and no execution or policy behavior changed.
+
+Typecheck, 132 test files / 1,064 tests, and the production build passed. The local production server restarted
+from the built revision; startup reconciliation completed READY at `2026-08-22T17:30:11.435Z` with zero local
+or venue-managed positions and zero reservations. Control remained operator-paused at revision 5,533 with
+2,086¢ available and +86¢ current-epoch whole-cent P&L. Vercel production deployment
+`dpl_AjHfJMjBGvRUhBvPXp3EE7a4HzBQ` reached Ready and was aliased to `noodle.money`. Hosted root/dashboard smoke
+checks returned 200; paper budget and compact/full paper-performance reads returned their expected explicit 503
+projection-unavailable responses rather than zero records because the provider quota remains exhausted.
 
 ### Hourly crypto (strike) market designed and approved; implementation pending, 2026-08-21
 
@@ -181,14 +232,14 @@ This change ships, under SPEC §12.5, a **versioned, bounded paper fill calibrat
 in `[0, 0.5)`) held in a new atomic durable store `data/paper-fill-calibration.json`, defaulting to **0** =
 exact current conservative semantics, plus a recorded, manual `adoptPaperFillCalibration` path that appends
 immutable history. It is **never read from a live fill**; paper P&L stays independent. Paper execution
-advances to `paper-managed-execution-route-ioc-requalify3-calibrated-v6`, so any future non-neutral adoption
-is a fresh cohort (v7) kept apart from v6.
+advances to `paper-managed-execution-route-ioc-requalify3-calibrated-v6`; every future manual adoption gets
+the next generated paper execution cohort (v7 first, then v8, and so on), including a rollback to zero.
 
-A read-only held-out review joins the prospective mirror pair intents and, on the second half of
-settlement windows, reports both/paper-only/live-only/neither agreement, capture, precision, and the
-live-only missed upper bound — without re-simulation, because the ledger's `paper_trade_evidence` is a
-per-read summary rather than a per-print stream, and the review refuses to pretend a candidate could be
-replayed from it. It never promotes.
+A read-only held-out review joins the prospective mirror pair intents for exactly the active paper execution
+cohort and, on the second half of that cohort's settlement windows, reports
+both/paper-only/live-only/neither agreement, capture, precision, and the live-only missed upper bound —
+without re-simulation, because the ledger's `paper_trade_evidence` is a per-read summary rather than a
+per-print stream, and the review refuses to pretend a candidate could be replayed from it. It never promotes.
 
 Typecheck, lint (0 errors / 37 inherited warnings), 123 test files / 1,025 tests, and the production build
 pass. No paper P&L changes (default queueClearFraction is 0) and live is not resumed. Design:
@@ -200,6 +251,29 @@ Deployed: the built local runtime restarted with startup reconciliation passing 
 `paper-managed-execution-route-ioc-requalify3-calibrated-v6`. Commit `4c9dc91` passed GitHub CI; hosted
 deployment `dpl_Lgr9GKhcaNpQLrcPdbaoFKYtE5Vp` reached Ready and was aliased to `noodle.money`,
 where the expected root-200 / anonymous-401 stateless boundaries held and no calibration field is public.
+
+### Paper calibration cohort and provenance boundary enforced, 2026-08-22
+
+A follow-up audit found that the first store implementation did not mechanically deliver two promises above:
+a non-neutral adoption could keep stamping paper v6, and its append-only history omitted the applicable
+execution identity and held-out window count. The held-out analyzer also selected all prospective pair IDs
+without filtering paper execution generation, so its purported current-v6 split contained some v5 rows.
+No calibration had been adopted and `data/paper-fill-calibration.json` was absent, so all affected runtime
+orders used the neutral zero fraction; no paper fill, P&L, funded path, or historical row required correction.
+
+The boundary now fails closed. The store generates monotonic execution cohorts starting at v7, preserves the
+complete calibration record on every history entry without truncation, requires positive held-out windows and
+a reason, validates continuous generation history, and rejects malformed state rather than silently reverting;
+a paper-store failure withholds paper entry without crossing the shared orchestrator into funded live.
+Paper reads the calibration before intent creation, stamps its full provenance and execution identity, and
+manages the order from that issuance-time copy. A mid-order adoption therefore cannot alter the fill assumption.
+The held-out analyzer selects the active execution identity before forming its window split and prints that
+identity. Active sentinel reports use the same store-owned identity. The neutral no-store path remains exact
+v6 behavior. Design: [docs/paper-fill-calibration-design.md](docs/paper-fill-calibration-design.md).
+
+Typecheck, lint (0 errors / 37 inherited warnings), 123 test files / 1,026 tests, and the production build
+passed. The first full test run timed out at the inherited `lib/walk-forward.test.ts:77` five-second boundary;
+its focused 14/14 rerun and the final full rerun passed. No runtime restart or funded-control action was taken.
 
 ### Authenticated edge order-book monitoring and stable signal transitions implemented, 2026-08-20
 
@@ -314,18 +388,66 @@ published v22 with +5pp edge and 10–75¢ ask bounds over seven predictions, om
 `quoteTrajectorySpread`, and reported its stateless collector disabled. Hosted therefore exposes the policy
 and sanitized dashboard without acquiring collection, storage, reconciliation, or execution authority.
 
-## Current Measured State
+## Current Verified Snapshot — 2026-08-22
 
-Snapshot from local durable files at 2026-08-19T01:44:04Z. Full method, cohorts, corrections, and caveats in [reports/open-experiment-status-2026-08-19.md](reports/open-experiment-status-2026-08-19.md).
+Read interval: economic totals `2026-08-22T05:31:47Z..05:32:51Z`; operational control through
+`2026-08-22T07:17:00.533Z`; repaired storage reverified live after the storage restart at approximately 06:31Z;
+residency observations continued through 07:22Z. This remains a bounded
+multi-file snapshot rather than an atomic account image. Exact reporting and whole-cent control remain
+separate views. Dated findings elsewhere in this document are history and must not be substituted for this
+snapshot.
 
-- Forecast storage index: 58,360 rows, 632 open and 57,728 sealed across 12 shards. Collection and settlement journals were advancing.
-- Edge ledger lifetime, exact reporting view: live −124.14c on 28,855.67c over 567 settled entries and 367 settlement windows; paper −2,242.36c on 47,984c over 945 settled entries and 485 windows. These are not the whole-cent budget view.
-- Long-shot ledger lifetime, exact reporting view: live −28.26c on 55.19c over three manual mechanism tests in one window; paper −709.27c on 895c over 41 settled attempts and 27 windows.
-- Live budget control, whole-cent view: active live mode, 2,000c starting budget, 1,610c available, 0c reserved, and −390c current-epoch realized P&L. No entry was open, pending-reservation, or uncertain.
-- v21 had run for about one hour. A policy-aware reconstruction found 43 admitted decisions, 35 satisfying 2-over-15 persistence, 15 matched live orders and 6 fills. The ledger held 18 live v21 orders: 13 labelled taker with 4 fills, and 5 labelled maker with 2 fills. This is operational attribution, not an economic sample.
-- The active local long-shot cohort is `long-shot-round-trip-buy12-sell97-win600-v1`, paper only: 8 resolved attempts in 4 windows, all losses, −402c on 402c, no mark exits, and 0 current-policy hold-sentinel records.
-- Latest walk-forward run: `walk-forward:1000:fnv1a-503b1e2c`, generated 2026-08-20T12:16:10Z. Candidate mean window return was 11.07% against baseline 9.77% over 500 test windows; it was positive 5/5 folds but beat baseline only 2/5, so the evaluator retained baseline. All evaluator-v2 runs are now monitoring-only regardless of their numerical result. The preceding 975-window run and its reproducibility failure were reviewed in `reports/walk-forward-model-candidate-review-2026-08-20.md`.
-- The current Next development server occupied about 3.7 GB RSS. RSS is not retained heap and dev mode carries compiler/cache overhead, but this materially disagrees with the prior 70 MB post-sharding RSS measurement and needs a like-for-like profile.
+- **Funded control:** operator-paused / `live`, operator intent `paused`, 2,285¢ available, 0¢ reserved, and
+  +285¢ current-epoch whole-cent P&L on a 2,000¢ start. The pause withdrew intent, drained the serialized
+  queue, and passed authoritative Kalshi reconciliation with zero working transactions; the process was
+  restart-safe before it stopped at `2026-08-22T06:04:01Z`. Rebuilt workers passed startup reconciliation,
+  including the latest start at approximately 07:16Z, and funded automation has not been resumed.
+- **Forecast storage is repaired and structurally verified.** The failed v2 layout contained 11,247 stale
+  pending copies of terminal rows and had been sealed by independently bundled module-local writers. The
+  owning repair restored 88 qualified archived rows, canonicalized 2,892 same-ID terminal payload copies,
+  applied the existing unqualified retention once, and installed content-addressed v3. After the restored
+  pending rows resolved, an owning-compactor pass exercised the final incorporated-journal watermark and
+  installed generation `55b4a6c63a3c20cc208617be`. A fresh verifier passed with zero errors over 70,837
+  rows: 70,802 terminal, 35 open, 15 shards, and zero journal events; all 50,837 qualified rows were
+  resolved. The corrupt v2 directory and journal remain quarantined. The unrecoverable-risk interval
+  between the archived 03:58Z journal tail and surviving 05:22Z journal head
+  means aggregate conclusions must be recalculated rather than inherited. See
+  [the incident report](reports/forecast-storage-integrity-repair-2026-08-22.md).
+- **Edge ledger lifetime, exact reporting view:** live −631.44¢ on 35,416.85¢ over 716 settled entries and
+  469 settlement windows; paper −3,402.12¢ on 57,107¢ over 1,118 entries and 602 windows. The separate edge
+  paper bankroll control was 7,158¢ available / −2,842¢ realized on a 10,000¢ start; corrections and
+  whole-cent control boundaries mean it must not be presented as the exact order-sum view.
+- **Long-shot v2 paper cohort:** 50 resolved attempts across 26 independent windows, −114.64¢ exact P&L on
+  1,902¢ staked. Execution recorded two `won` settlements and four target sales; the paired hold sentinels
+  recorded six in-the-money settlements and four paths touching 97¢. It remains only 26/60 through its
+  authoritative review boundary, and retrospective parameter selection remains the dominant caveat.
+  Long-shot v2 has no live attempts and its live arming remains false.
+- **Current identities:** buy policy v22; live execution
+  `maker-high30-requalify3-fresh1c-idv2-v6`; paper execution
+  `paper-managed-execution-route-ioc-requalify3-calibrated-v6`; long-shot
+  `long-shot-round-trip-buy12-sell97-win600-v2`. No paper calibration store existed, so paper remained on
+  neutral `queueClearFraction = 0`.
+- **Latest stored walk-forward checkpoint:** `walk-forward:1150:fnv1a-8edd29bb`, generated
+  `2026-08-22T03:31:28.252Z`. Its candidate returned 14.27% against baseline 12.11% over 575 test windows,
+  was positive 5/5 folds and beat baseline 3/5. The stored evaluator called that a passed review threshold,
+  but evaluator v2 is monitoring-only, its cohort can drift after late resolution, and production remained
+  Blend 0.4 with no promotion.
+- **Prospective portfolio choice sets are collecting:** the fresh analyzer replayed 410 records across 152
+  resolved windows with zero integrity failures and no missing post-boundary live edge order. All 410 chose
+  the same contract as production, so the required 20 differing-choice windows remain at zero and no
+  ranking claim is available.
+- **Process residency is improved but not closed.** The bounded forecast reader, projection backoff, and
+  process-global provenance/cycle caches removed confirmed full-history churn. The funded-path follow-up now
+  gives at least seven emitted execution bundles one process-global serializer and one committed ledger
+  snapshot; mutations use isolated clones, atomic rename remains authoritative, failures invalidate/reload,
+  pause/drain waits globally, and the one-second long-shot precheck reads only open long-shot rows. Compact
+  encoding reduced the unchanged 3,606-order ledger from 48.0 MB to 33.6 MB. A post-deployment native sample
+  was idle 72.9% of the time versus the earlier sustained parse/GC load, but RSS still peaked at 3.37 GiB and
+  `vmmap` later reported 1.3 GiB physical / 3.9 GiB peak, mostly V8 anonymous memory. Further reduction needs
+  attribution of the remaining observational-journal parses and a separately approved terminal-order
+  archive/current-state schema; weakening the global queue or mutation clone is not an option. See
+  [the profile](reports/forecast-residency-profile-2026-08-22.md) and
+  [the ownership design](docs/execution-ledger-runtime-design.md).
 
 ### Repository-health review recorded, 2026-08-20
 
@@ -846,7 +968,7 @@ reconstructed because failed dashboard observations and `portfolioDecisions` wer
 a future ranking claim requires prospective committed choice sets. Full correction:
 [reports/edge-buy-opportunities-2026-08-19.md](reports/edge-buy-opportunities-2026-08-19.md) §8.
 
-### Prospective portfolio choice sets: implemented, collection not started
+### Prospective portfolio choice sets: implemented and collecting
 
 `portfolio-choice-set-v1` replaces favourable historical reconstruction with one immutable record after
 each durable positive-edge live intent. It stamps the production candidate set, persistence/retry/cooldown
@@ -857,9 +979,11 @@ plus 20 differing-choice windows before any differing-choice claim. No result ca
 promote a policy. Design: [docs/portfolio-choice-set-journal-design.md](docs/portfolio-choice-set-journal-design.md).
 Run `npm run analyze:portfolio-choice-sets`.
 
-The current read is **0 records / 0 windows** because the running process has not initialized the new store.
-No historical order is backfilled. Collection begins only after a build and restart/deploy; none was done
-for this change.
+The initial deployment boundary was **0 records / 0 windows** and no historical order was backfilled.
+At the fresh 2026-08-22T05:32Z replay, collection held 410 records across 152 resolved windows, with zero
+integrity failures and zero missing post-boundary live edge orders. Production and replay selected the same
+contract in all 410 records, so the 20-differing-window review remains locked. This is a null ranking sample,
+not evidence that the journal can discriminate choices.
 
 ### Edge policy v17, reviewed 2026-08-17
 
@@ -1483,7 +1607,7 @@ Interpretation: the newer exact ledger snapshot is slightly negative lifetime an
 
 - Signed Kalshi balances, positions, orders, fills, cancellation, and v2 order submission.
 - Source policy `maker-high30-requalify3-fresh1c-idv2-v6` permits up to three separately requalified episodes: a managed post-only maker below 30pp issuance edge, or a capped fresh-quote IOC evaluation at 30pp+. After an authoritative maker zero-fill, the next episode requires two new post-completion snapshots over 15 seconds; no nonqualifying gap is required. Maker execution supports UP/YES and DOWN/NO with passive repricing, cancellation confirmation polling, fill/fee reconciliation, exact sub-cent accounting, collision-resistant bounded client IDs, and one-to-one reconciliation ownership. The funded worker is running v6 after a quiescent restart and authoritative startup reconciliation.
-- Paper execution uses `paper-managed-execution-route-ioc-requalify3-v5` for the same route decision, repaired three-episode boundary, and relative `entry-sizing-reduce30-below-edge30-v1` sizing while retaining independent fills. A shared pure state machine chooses the refreshed initial passive limit and all progressive reprices. Paper polls independently every two seconds while live management runs concurrently, keeps live's issuance-sized quantity, and requires opposite-outcome public taker prints to consume displayed queue-ahead volume; ask touch alone is telemetry, not a fill. Incomplete terminal trade evidence is excluded rather than scored as a miss. Exact prospective pair IDs and bounded queue-consumption evidence are reporting-only. Portfolio/correlation/funding limits and its separate bankroll remain unchanged.
+- Paper execution uses `paper-managed-execution-route-ioc-requalify3-calibrated-v6` for the same route decision, repaired three-episode boundary, neutral queue calibration, and relative `entry-sizing-reduce30-below-edge30-v1` sizing while retaining independent fills. A shared pure state machine chooses the refreshed initial passive limit and all progressive reprices. Paper polls independently every two seconds while live management runs concurrently, keeps live's issuance-sized quantity, and requires opposite-outcome public taker prints to consume displayed queue-ahead volume; ask touch alone is telemetry, not a fill. Incomplete terminal trade evidence is excluded rather than scored as a miss. Exact prospective pair IDs and bounded queue-consumption evidence are reporting-only. Portfolio/correlation/funding limits and its separate bankroll remain unchanged.
 - Contemporaneous paper intents receive a separate `matched-live-fill-shadow-v1` overlay when live fills authoritatively. It is capped at observed live and requested paper quantity and records exact live price/fee terms, but cannot alter the independent paper status, budget, P&L, or public track record. The maker report exposes matched, both-filled, and live-only counts without blending the lanes.
 - Explicit live arming, environment opt-in, kill switch, pause/resume, per-trade cap, order-rate cap, budget allocation, loss stops, and automatic safety suspension on ambiguous failures.
 - Pause is a quiescent drain: withdraw intent, serialize behind execution, cancel/confirm managed remainders, reconcile authoritatively, and report restart-safe only when no working or uncertain transaction remains.
@@ -1495,7 +1619,7 @@ Interpretation: the newer exact ledger snapshot is slightly negative lifetime an
 ### Data, Public Projection, and Policy Identity
 
 - Atomic JSON writes for cache, forecast history, provider settings, budget control, execution ledger, promotion ledger, and evaluation history.
-- Forecast history is sharded: a hot open set the cycle reads and writes, immutable daily shards, and per-shard rollups that reproduce the lifetime summary without loading a sealed row. The legacy snapshot is retained during coexistence and is no longer on any read path.
+- Forecast history is sharded under v3: a journal-backed hot open set, immutable content-addressed daily shards and rollups, and one index published last. Only the collector mutates it under a process-global queue and process-lifetime filesystem lease. The legacy and corrupt v2 snapshots are retained and are no longer on any read path.
 - A local-only Scaleway Object Storage archive is enabled against private bucket `money-noodle-archive-857bea21`. A detached nice-priority worker runs every 24 hours, stores gzip-compressed content-addressed blobs, verifies every new upload by full read-back SHA-256 and byte count, and writes an immutable manifest only after the set passes. The first verified archive covered 31 files and 471,687,329 source bytes, uploading 43,128,615 compressed bytes. This first phase performs no local deletion and never runs on Vercel.
 - Optional Postgres public paper projection is implemented with migrations:
   - [001_public_paper_projection.sql](/Users/raiphairow/code/money/db/migrations/001_public_paper_projection.sql)
@@ -1508,11 +1632,34 @@ Interpretation: the newer exact ledger snapshot is slightly negative lifetime an
 - Active policy manifest and read-only Policy view expose current forecast, buy, execution, exit, switch, regime, and provider-variant versions.
 - Immutable model promotion/rollback ledger and authenticated `/api/model/promotion` write route are implemented. The route records decisions only while authenticated, same-origin, paused, quiescent, restart-safe, and with zero reserved budget. It cannot change compile-time model parameters.
 
-## Prioritized Plan
+## Current Priorities
 
-### 1. Reduce Forecast Storage Residency
+1. **Monitor v3 through its first automatic threshold seal and perform an independent archive restore.** A
+   paused owning-compactor pass verifies now; do not cite new aggregate conclusions until they are recalculated, and do not
+   retire the frozen legacy/corrupt evidence during this observation period.
+2. **Attribute the remaining steady physical footprint before another storage change.** Global execution
+   ownership and the bounded one-second precheck are complete. Profile calendar/exit/portfolio/maker journals
+   versus the execution clone; any terminal-order archive/current-state split is a new schema and
+   reconciliation design, not an automatic continuation of this repair.
+3. **Design evaluator v3 before any model promotion.** Freeze cohorts and replay the complete policy and
+   execution boundary; evaluator v2 remains monitoring-only.
+4. **Complete the untouched long-shot v2 60-window paper cohort.** No interim tuning or live arming.
+5. **Accumulate exact v6 paper/live mirror evidence.** Keep every execution/calibration generation separate.
+6. **Continue prospective exit and first-organic-switch verification.** Preserve reduce-only semantics.
+7. **Then address provider visibility, alerts, restore testing, dependency pinning, and auth hardening.**
 
-Why this is first: the process holds ~396 MB of retained heap to serve a working set of 135 rows, and adds ~40 MB a day. Extrapolated, the heap passes 1 GB in about two weeks and the default Node ceiling shortly after. Startup already costs 6-11 s to first useful response and grows linearly.
+## Detailed Roadmap and Historical Delivery Record
+
+### Forecast storage — v3 repaired; first-seal and residency follow-up open
+
+The original migration trigger was ~396 MB retained heap, roughly 40 MB/day growth, and 6–11 second startup.
+The migration met its clean-start target on 2026-08-16. On 2026-08-22, independently bundled dashboard
+writers were proven to have separate module-local queues and caches; their interleaved seals corrupted v2 and
+lost at least 88 qualified rows from local artifacts. The archive-backed owning repair installed
+content-addressed v3 and the verifier is green again. The subsequent 2.43 GiB observation led to a native
+profile and bounded public-history repair, then process-global provenance/cycle-path caches. Those changes
+removed confirmed churn but production still peaked near 3 GiB; the shared execution ledger is the next
+measured whole-file path and requires a separate money-path ownership design.
 
 This section previously read "a 15-second system cannot keep full-history parse/stringify in the request or collector path." That premise was wrong and is worth recording as wrong, because it is what turned this into a fire drill. The parse costs ~1.2 s once per process; the ~10 s blocks were quadratic grouping in `summarizePerformance`. Sharding is still the right answer, but for memory rather than for blocking.
 
@@ -1523,6 +1670,7 @@ Started 2026-08-14:
 - The gate compares the whole summary field by field, not eight counters: exact for anything countable, and a `1e-12 × max(1, |left|, |right|)` combined absolute/relative tolerance for float aggregates, because IEEE addition is not associative and a different row order legitimately moves the last digits. The absolute floor prevents last-bit noise near zero from becoming a false relative failure. Byte-identical output is not an achievable bar.
 - Passing the gate required giving every reported ordering and tie-sensitive selection a total order by `id`. Ties are the ordinary case here, so `timeline`, both streaks, the per-cycle representative row, `recent`, grouped sorts, and the missed-buy selections previously could depend on durable row order. The missed-buy gate now uses the compact persisted provenance reference directly and covers an asset/window split across shards, including a globally nearest snapshot that contributes no candidate.
 - A verified `--write` run over 49,703 live rows emitted `forecast-storage-v2`: 79 open rows, 49,624 terminal rows across 8 shards, and 6.6 MB of sufficient-statistic rollups standing in for roughly 190 MB of history. Both shard rows and rollups have indexed SHA-256 checksums, and the verification path now consumes the exact rollup objects that are written rather than rebuilding them invisibly from rows. The older 14 MB / 3,082-row open artifact was a symptom of event-loop starvation; resolution has caught up.
+- **V3 incident repair, 2026-08-22.** V2's caller-held lock was module-local, while Next produced three writer copies; a stale seal could omit another copy's journal events and truncate them. V2 also overwrote active filenames before publishing its index, so a crash could invalidate the prior generation. V3 permits only `background-collector` to import calculation mutation, shares a process-global queue, holds a process-lifetime filesystem lease, compacts from reloaded durable state, uses immutable content-addressed artifacts, verifies them after write, and publishes `index.json` last. The repair restored 88 archived qualified rows and moved every corrupt source to `.corrupt-*`; the first v3 gate passed over 70,837 rows with zero errors. The dominant caveat is an evidence gap whose losing-writer-only rows cannot be enumerated. See the dated incident report rather than treating 88 as a complete loss count.
 - Off-machine archive phase 1 is active: dedicated one-year Scaleway application credentials have object read/write and bucket read permissions but no object-delete or bucket-write permission. The app archives daily from the persistent worker; rolling local deletion remains deliberately disabled until repeated manifests and an independent restore test pass.
 
 Plan:
@@ -1537,14 +1685,36 @@ Rollups must come before sharding, not after. Every cycle `updateTracking` reads
 
 The worker boundary previously listed here is deferred indefinitely. It relocates work without reducing residency, which is not what binds. See [docs/forecast-storage-design.md](/Users/raiphairow/code/money/docs/forecast-storage-design.md) §5.
 
-Done means: retained heap and startup time measurably drop, forecast scoring matches pre-migration output under the gate, 15-second collection remains fresh through restart, and the dashboard can report degraded rollup state explicitly. **All four met as of 2026-08-16.** `/api/performance` carries `forecastStorage`, and the signed Performance dialog shows an explicit incomplete-figures notice when a shard rollup cannot be read — a missing rollup still produces a summary, just from fewer shards, so silently under-reporting a lifetime figure is the failure this guards against.
+The migration's done criteria were: retained heap and startup time measurably drop, forecast scoring match
+pre-migration output under the gate, 15-second collection remain fresh through restart, and the dashboard
+report degraded rollup state explicitly. All four had met as of 2026-08-16. The 2026-08-22 integrity failure
+reopens the scoring/health gate; it does not rewrite the earlier clean-start measurement.
+`/api/performance` carries `forecastStorage`, and the signed Performance dialog shows an explicit
+incomplete-figures notice when a shard rollup cannot be read.
 
-Two follow-ups remain, neither of which is residency:
+Current follow-ups:
 
-- **Payload split** (design §7 item 2, agreed separately): the freshness badge should judge only market data, so no future slow subsystem can blank the trading view.
-- **Retire the legacy snapshot.** `data/forecast-history.json` is 207 MB, frozen since the seal, and on no read path — it is the coexistence copy. Deleting it is what makes the switch irreversible, so it should wait until the sharded layout has run through several seals and an evaluator pass.
+- **Observe the first v3 seal and independently restore its archive.** V3 publishes immutable
+  content-addressed open/shard/rollup artifacts before its index, holds one process-lifetime filesystem
+  lease, reloads durable state before compaction, and keeps request builds read-only for forecast evidence.
+  The corrupt v2 artifacts and frozen legacy snapshot remain preserved. Design:
+  [docs/forecast-storage-generation-repair-design.md](docs/forecast-storage-generation-repair-design.md);
+  incident and exact recovery totals:
+  [reports/forecast-storage-integrity-repair-2026-08-22.md](reports/forecast-storage-integrity-repair-2026-08-22.md).
+- **Execution-ledger ownership is complete; residency remains open.** Seven emitted execution bundles now
+  share one serializer and committed snapshot; mutation clones, commit-boundary publication, failed-write
+  invalidation, detached scoped reads, and a global pause barrier are tested. The one-second long-shot poll
+  no longer parses all orders, and compact JSON reduced the file to 33.6 MB. Profile the remaining evidence
+  journals and execution clone before proposing a terminal-order archive. Current measurements and caveats:
+  [reports/forecast-residency-profile-2026-08-22.md](reports/forecast-residency-profile-2026-08-22.md);
+  design: [docs/execution-ledger-runtime-design.md](docs/execution-ledger-runtime-design.md).
+- **Payload split** (design §7 item 2, agreed separately): the freshness badge should judge only market data,
+  so no future slow subsystem can blank the trading view.
+- **Do not retire the legacy snapshot while verification fails.** `data/forecast-history.json` is the frozen
+  coexistence copy and must remain untouched until the sharded layout verifies again and an independent
+  restore/evaluator pass succeeds.
 
-### 2. Build the Long-Shot Round-Trip Policy
+### Long-shot round trip — implementation complete; v2 evidence collection open
 
 Started 2026-08-14. A second policy on `crypto-15m`, running beside the edge policy. The launch cohort
 bought a side whose executable ask reached 10¢ with at least ten minutes left and sold through a one-second
@@ -1554,11 +1724,9 @@ cohort and is not evidence-backed promotion. Design and launch arithmetic are in
 [docs/long-shot-policy-design.md](/Users/raiphairow/code/money/docs/long-shot-policy-design.md);
 SPEC §12.10 and the 2026-08-14 decision-log entries carry the decisions.
 
-This is a new trading feature, which the guidance above deprioritizes relative to storage and evidence. It
-is being built anyway as an explicit operator decision, under a bounded learning budget: 30% of the
-`crypto-15m` cap, a 20¢ opening ticket, and a derived halt at 300¢ of policy equity. Roughly $7–12 buys the
-~60 resolved attempts needed to separate "real" from "hopeless," which is the only question that sample size
-can answer.
+Implementation is complete under an explicit operator decision and bounded learning budget: 30% of the
+`crypto-15m` cap, a 20¢ opening ticket, and a derived halt at 300¢ of policy equity. Economic review is now
+locked to 60 independent settlement windows under hold-v2; attempt count is diagnostic only.
 
 What the screening does and does not support is recorded honestly. Buy-and-hold on this trigger has no edge:
 20.2% ± 3.7pp over 119 candidates against a 22.2% break-even, so the cheap side wins about exactly what it
@@ -1610,16 +1778,13 @@ drain, and the shared hourly filled-order ceiling.
 Funded at 30% of the Kalshi `crypto-15m` cap: 600¢, a 20¢ ticket, halting below 300¢. `npm run fund:long-shot`
 reports and re-applies it, refusing unless automation is paused with nothing reserved or open.
 
-Current state, read 2026-08-19: the paper lane is running and **the long-shot live lane is blocked by its own
-per-strategy arming flag** — `liveEnabled` is false because `MONEY_NOODLE_LONG_SHOT_LIVE_ENABLED` is unset.
-At the capture-repair read, the 12¢→97¢ v1 cohort had 9 resolved paper attempts in 5 windows, −447¢ on
-447¢ with no mark exit. It is now historical: deterministic mandatory trailing advances the order policy to
-v2. Its v1 hold records are invalid for pairing; the hold-v2/order-policy-v2 60-window review cohort starts
-prospectively at zero and does not backfill those orders.
-It is *not* blocked by the desk controls, which are `state: active`, `mode: live`: the desk is armed for
-the edge policy. Distinguishing the two is the whole point of the separate flag, and conflating them is
-what placed three unintended live long-shot orders on 2026-08-15. No breaker is involved either way — the
-edge policy's loss gate is clear. Contract paths are accumulating across all seven assets.
+Current state at `2026-08-22T05:32:51Z`: paper v2 had 50 resolved attempts across 26 independent windows,
+−114.64¢ exact P&L on 1,902¢ staked, two `won` settlements and four target sales. Hold-v2 had 50 paired
+resolved sentinels in the same 26 windows, six in-the-money settlements and four paths touching 97¢. This
+is progress toward the locked 60-window review, not an interim decision. **The long-shot live lane remains
+blocked by its own per-strategy arming flag** because `MONEY_NOODLE_LONG_SHOT_LIVE_ENABLED` is unset; it has
+zero v2 live attempts even though the account-wide edge desk was active/live at the snapshot. Distinguishing
+those controls is what prevents a paper research policy from inheriting funded authority.
 
 **Historical launch cohort as of 2026-08-17:** 25 resolved paper attempts under
 `long-shot-round-trip-buy10-sell90-win600-v1`, of which 1 sold at the mark, against the 60
@@ -1784,11 +1949,10 @@ configurations ever evaluated is displayed as the multiple-comparison denominato
 
 Remaining: the report surface, and the durable stores' retention policy once the journal starts growing.
 
-Done means: the policy trades paper and live under the mirror invariant, the edge policy's behaviour is
-byte-for-byte unchanged, exposure caps and the shared kill switch/reconciliation/drain still bind across
-both, and 60 resolved attempts are reportable against the 12.5% break-even clustered by settlement window.
+Implementation is done; economic review means 60 independent settlement windows—not 60 attempts—are
+reportable for one untouched hold-v2/order-policy-v2 cohort, clustered by settlement window.
 
-### 3. Harden Walk-Forward Review Before Any Model Promotion
+### Walk-forward model review — evaluator v3 required
 
 The evaluator and promotion ledger exist, but promotion criteria still need to become decision-grade.
 
@@ -1815,13 +1979,13 @@ Design evaluator v3 before coding it:
 Until that implementation exists, v2 continues to collect and report monitoring checkpoints but
 `evaluatePromotionEligibility` refuses its evaluator generation before considering its numerical gates.
 
-Current stance: Blend 0.4 retained. The reviewed 975-window candidate was +11.38% against +8.24%, but
-promotion eligibility failed at 3/5 folds beating baseline; paired return on its current reconstruction was
-+2.93pp ±1.56pp SE and the checkpoint fingerprint changed. The subsequent 1,000-window checkpoint retained
-baseline at only 2/5 folds beating it. No promotion can be recorded under evaluator v2 even if a later
-overlapping checkpoint crosses its mechanical gates.
+Current stance: Blend 0.4 retained. The stored 1,150-window checkpoint generated
+`2026-08-22T03:31:28.252Z` crossed evaluator v2's mechanical review threshold: candidate 14.27% against
+baseline 12.11% over 575 test windows, positive 5/5 folds and better in 3/5. It still cannot promote: v2
+inherits an incomplete policy/execution boundary, the cohort fingerprint can move after late resolution,
+and overlapping checkpoints are repeated looks. No production parameter or promotion ledger changed.
 
-### 4. Decide the Profit-Reversal Exit Policy From Prospective Evidence
+### Profit-reversal exit policy — prospective evidence open
 
 Strict value exits and the 75% profit-reversal lock are measured separately. Strict value remains executable. `profit-reversal-75-v1` is already withheld from execution by default on its own negative evidence; arming and high-water observations continue so the counterfactual remains prospective. The local environment explicitly keeps it disabled.
 
@@ -1834,7 +1998,7 @@ Remaining work:
 
 The small historical live cohort supports conservative withholding, not permanent refutation or a replacement rule.
 
-### 5. Accumulate and Evaluate Maker Queue/Depth Evidence
+### Maker queue/depth evidence — collection open
 
 Instrumentation and the queue-aware paper simulator are implemented; the next step is held-out evidence, not live execution changes. Before this deployment, same-signal paper/live maker agreement was only 29.7% across 37 paired attempts (19 live-only fills and 7 paper-only fills), which is the baseline the new independent and matched-live lanes must improve on prospectively. The first post-deployment review has only 2 matched intents.
 
@@ -1843,9 +2007,9 @@ Remaining work:
 - Segment fill and return by displayed-ahead proxy, imbalance, repricing path, resting duration, profit state, probability deterioration, asset, side, and time remaining.
 - Compare accepted filled orders with accepted no-fills by settlement window.
 - Measure independent-paper/live agreement and disagreements against the separately stored matched-live overlay; never substitute the selected live fill for the independent paper result.
-- Keep v2/v3/v4 paper cohorts separate from repaired
-  `paper-managed-execution-route-ioc-requalify3-v5`; recalibrate only after enough complete prospective
-  `entry-execution-mirror-pair-v1` live/paper pairs exist under v5.
+- Keep v2/v3/v4/v5 paper cohorts separate from neutral
+  `paper-managed-execution-route-ioc-requalify3-calibrated-v6`; recalibrate only after enough complete
+  prospective `entry-execution-mirror-pair-v1` live/paper pairs exist in one exact execution generation.
 - Current execution identity is `maker-high30-requalify3-fresh1c-idv2-v6` with
   `entry-sizing-reduce30-below-edge30-v1`. Below
   30pp each qualified episode is a reduced-size managed maker; at 30pp+ it is one full-base capped IOC only
@@ -1864,7 +2028,7 @@ without fresh post-completion persistence, rearming after any fill or taker resu
 maker miss, direction-based production cancellation, bypassing any fresh high-edge gate, or queue-aware live
 gates.
 
-### 6. Verify First Organic Live Switch and Continue Exit Verification
+### Organic live switch and exit verification — open
 
 The switch engine, reconciliation matcher, partial-exit handling, replacement withholding, and switch-versus-hold accounting are implemented and tested. A real organic switch has still not been economically verified end to end.
 
@@ -1878,7 +2042,7 @@ When it occurs naturally, verify:
 
 Never force a live switch just to exercise the path.
 
-### 7. Provider Variant and Policy Visibility Follow-Through
+### Provider variant and policy visibility — open
 
 The provider registry foundation is in place. The next useful work is observability and clean attribution before new execution adapters.
 
@@ -1890,7 +2054,7 @@ Remaining work:
 - Defer candidate-set funding/ranking changes until there is a second live-capable provider, because it cannot change behavior before then.
 - Add any new provider read/paper-first behind official API verification, operator eligibility, and explicit capabilities. No scraping path may imply live capability.
 
-### 8. Secondary Work After Safety and Evidence
+### Secondary work after safety and evidence
 
 These are useful, but lower priority than storage, evaluation, exits, and maker evidence:
 

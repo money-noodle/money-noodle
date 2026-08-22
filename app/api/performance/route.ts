@@ -6,7 +6,7 @@ import { getContractProvenanceRegistry } from '@/lib/contract-provenance-store';
 import { buildContractComparabilityReport } from '@/lib/contract-comparability';
 import { getCalendarEvaluationReport } from '@/lib/calendar-evaluation-store';
 import { buildMakerFillReport, buildProviderTradeRecords, buildTradeRecord } from '@/lib/execution-report';
-import { epochResults, lifetimeRealizedPnlCents } from '@/lib/budget-epoch';
+import { buildPositiveEdgeFundingReport } from '@/lib/performance-read-model';
 import { evaluateStakeExpansion } from '@/lib/stake-expansion-policy';
 import { buildMakerShadow } from '@/lib/maker-shadow';
 import { evaluatePromotionEligibility } from '@/lib/model-promotion';
@@ -37,8 +37,10 @@ export async function GET(request: Request) {
       getContractProvenanceRegistry(), getTradingControl(), getPersistenceCandidateReport(BUY_POLICY_VERSION),
       getCalendarEvaluationReport(BUY_POLICY_VERSION),
     ]);
-    const [paperFunding, makerRestrictionSentinel, exitPolicySentinel] = await Promise.all([
-      getPaperBankrollFunding(), getMakerRestrictionSentinelReport(orders), getExitPolicySentinelReport(orders),
+    const paperFunding = await getPaperBankrollFunding();
+    const funding = buildPositiveEdgeFundingReport(orders, control.control.epochId, paperFunding);
+    const [makerRestrictionSentinel, exitPolicySentinel] = await Promise.all([
+      getMakerRestrictionSentinelReport(funding.edgeOrders), getExitPolicySentinelReport(funding.edgeOrders),
     ]);
     // Whether the lifetime figures above were computed from complete shard statistics.
     const forecastStorage = await getForecastStorageHealth();
@@ -55,26 +57,24 @@ export async function GET(request: Request) {
         confidence: forecast.confidence, outcome: forecast.outcome,
         status: forecast.status, correct: forecast.correct,
       })),
-      paperRecord: buildTradeRecord(orders, 'paper'),
-      liveRecord: buildTradeRecord(orders, 'live'),
-      // Same orders split per provider, so fills, unfilled maker attempts, and rejections stay separable.
-      paperProviderRecords: buildProviderTradeRecords(orders, 'paper'),
-      liveProviderRecords: buildProviderTradeRecords(orders, 'live'),
-      // Per-epoch results plus a lifetime total, so reconfiguring the budget restarts current-epoch P&L
-      // without erasing what earlier epochs actually did.
-      liveEpochs: epochResults(orders, 'live', control.control.epochId),
-      liveLifetimePnlCents: lifetimeRealizedPnlCents(orders, 'live'),
-      // Paper's equivalent. Its generations are opened by a bankroll reset rather than by reconfiguring
-      // the control, so the identity is its own and never live's. See docs/paper-bankroll-fundings-design.md.
-      paperEpochs: epochResults(orders, 'paper', paperFunding.fundingId),
-      paperLifetimePnlCents: lifetimeRealizedPnlCents(orders, 'paper'),
+      paperRecord: buildTradeRecord(funding.edgeOrders, 'paper'),
+      liveRecord: buildTradeRecord(funding.edgeOrders, 'live'),
+      // Same positive-edge orders split per provider, so fills, unfilled maker attempts, and rejections stay separable.
+      paperProviderRecords: buildProviderTradeRecords(funding.edgeOrders, 'paper'),
+      liveProviderRecords: buildProviderTradeRecords(funding.edgeOrders, 'live'),
+      // Per-funding results plus lifetime totals, all re-narrowed to the strategy this report names.
+      liveEpochs: funding.liveEpochs,
+      liveLifetimePnlCents: funding.liveLifetimePnlCents,
+      // Paper applies its durable whole-cent corrections to the current funding only. Exact order P&L stays separate.
+      paperEpochs: funding.paperEpochs,
+      paperLifetimePnlCents: funding.paperLifetimePnlCents,
       paperFunding,
       // Evaluation only. Raising the cap stays a manual, audited act; this states whether the stated
       // criteria are met and what a qualifying expansion would be.
-      stakeExpansion: evaluateStakeExpansion(control.control, orders),
+      stakeExpansion: evaluateStakeExpansion(control.control, funding.edgeOrders),
       // Observation only: what paper would have returned under maker execution instead of its
       // immediate-ask fill, separating price improvement from fill risk.
-      paperMakerShadow: buildMakerShadow(orders, 'paper'),
+      paperMakerShadow: buildMakerShadow(funding.edgeOrders, 'paper'),
       // Promotion stays manual. This reports whether the newest run may be cited, and the immutable
       // record of what has actually been promoted or rolled back.
       promotionEligibility: evaluatePromotionEligibility(modelEvaluations.runs.at(-1)),
@@ -82,7 +82,7 @@ export async function GET(request: Request) {
       cyclePaths,
       forecastStorage,
       contractComparability: buildContractComparabilityReport(forecasts, cyclePathRecords, provenance.records),
-      makerFillReport: buildMakerFillReport(orders, forecasts),
+      makerFillReport: buildMakerFillReport(funding.edgeOrders, forecasts),
       // Prospective evaluation only. Both reports are track-separated and have no production mutation path.
       makerRestrictionSentinel,
       exitPolicySentinel,

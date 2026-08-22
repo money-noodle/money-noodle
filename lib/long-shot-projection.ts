@@ -25,7 +25,7 @@ import { buildNearMoneySentinelReport } from './near-money-sentinel';
 export async function buildLongShotPayload(): Promise<Record<string, unknown>> {
   const settings = longShotSettings();
   const [orders, control, budgets, hold, paths, paperBankrollCents] = await Promise.all([
-    getExecutionOrders(), getTradingControl(), getProviderBudgets(),
+    getExecutionOrders({ strategyId: LONG_SHOT_ROUND_TRIP }), getTradingControl(), getProviderBudgets(),
     getHoldSentinelReport(longShotPolicyVersion(settings), longShotExitFeeCents),
     getContractPathRollups(200),
     getPaperBankrollStartingCents(),

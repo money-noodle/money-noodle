@@ -1,7 +1,10 @@
 # Forecast storage redesign — sharding and rollups
 
-> Design · 2026-08-14 · **partly implemented, re-scoped after measurement**
+> Design · 2026-08-14 · **implemented, with publication/ownership superseded by v3 on 2026-08-22**
 > Companion to [`SPEC.md`](../SPEC.md) §6 Storage. Nothing here changes the model, execution, or any gate.
+> The sharding and rollup algebra below remain authoritative; writer ownership, content-addressed generations,
+> crash publication, and archive-backed incident repair are superseded by
+> [`forecast-storage-generation-repair-design.md`](forecast-storage-generation-repair-design.md).
 >
 > The stall this document was written to fix turned out not to be a storage problem, and is already
 > fixed (§1.1). What survives is a memory-residency problem that sharding genuinely solves (§5.1). The

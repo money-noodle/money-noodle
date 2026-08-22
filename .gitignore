@@ -14,6 +14,7 @@ data/forecast-history-shards/
 npm-debug.log*
 data/archive/
 data/.archive-upload.lock/
+data/forecast-history.write.lock/
 data/*.corrupt-*
 # Quarantined by a schema bump; the file is derived and rebuilt, never evidence.
 data/*.superseded-*

@@ -8,7 +8,7 @@ import { BUY_POLICY_VERSION } from '../lib/prediction-policy';
 import {
   FORECAST_STORAGE_VERSION,
   buildForecastStoragePlan,
-  compareSummaries,
+  compareSummaries, forecastJournalAlreadyCompacted,
   verifyForecastStoragePlan,
   writeForecastStoragePlan,
   type ForecastStorageIndex,
@@ -96,7 +96,11 @@ async function verifyActive(index: ForecastStorageIndex, journal: ForecastJourna
     rollupBytes += Buffer.byteLength(rollupRaw);
   }
 
-  const sealedOpen = await readJsonFile<TrackedForecast[]>(path.join(SHARD_DIR, 'open.json'), []);
+  let openRaw = '';
+  try { openRaw = await readFile(path.join(SHARD_DIR, index.openFile), 'utf8'); }
+  catch (error) { errors.push(`Open artifact ${index.openFile} could not be read: ${String(error)}`); }
+  if (openRaw && sha256(openRaw) !== index.openSha256) errors.push('Open artifact checksum did not match the index.');
+  const sealedOpen = openRaw ? JSON.parse(openRaw) as TrackedForecast[] : [];
   if (sealed.length !== index.terminalRows) errors.push(`Indexed terminal rows ${index.terminalRows}; shard files held ${sealed.length}.`);
   if (sealedOpen.length !== index.openRows) errors.push(`Indexed open rows ${index.openRows}; open file held ${sealedOpen.length}.`);
   if (sealed.length + sealedOpen.length !== index.totalRows) errors.push(`Indexed total rows ${index.totalRows}; artifacts held ${sealed.length + sealedOpen.length}.`);
@@ -160,10 +164,15 @@ async function verifyLegacy(journal: ForecastJournalEvent[], write: boolean) {
 async function main() {
   const write = process.argv.includes('--write');
   const journal = await readJournal();
+  const journalRaw = await readFile(JOURNAL_FILE, 'utf8').catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return '';
+    throw error;
+  });
   const index = await readJsonFile<ForecastStorageIndex | null>(path.join(SHARD_DIR, 'index.json'), null);
   const active = index?.version === FORECAST_STORAGE_VERSION;
   if (active && write) throw new Error('Refusing --write against an active sharded layout; only sealForecastStorage under the forecast write lock may write it.');
-  const result = active ? await verifyActive(index, journal) : await verifyLegacy(journal, write);
+  const replayableJournal = active && forecastJournalAlreadyCompacted(index, journalRaw) ? [] : journal;
+  const result = active ? await verifyActive(index, replayableJournal) : await verifyLegacy(journal, write);
   console.log(JSON.stringify(result, null, 2));
   if (!result.ok) process.exitCode = 1;
 }

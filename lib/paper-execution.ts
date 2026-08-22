@@ -29,6 +29,7 @@ function recordSwitchSkip(classification: LiveSkipClass, reason: string, incumbe
     .catch((error) => console.error('Live skip journal write failed:', error));
 }
 import { PAPER_MANAGED_MAKER_EXECUTION_VERSION, simulateManagedPaperMaker, type PaperMakerSimulationResult } from './paper-maker-simulation';
+import { isPaperFillCalibration, type PaperFillCalibration } from './paper-fill-calibration';
 import { getActivePaperFillCalibration } from './paper-fill-calibration-store';
 import { isFreshCalculationTimestamp } from './freshness';
 import { selectedSideDepth } from './order-book-depth';
@@ -85,6 +86,7 @@ import { cycleRegimeFor } from './cycle-path-store';
 import { DEFAULT_MARKET_ID } from './market-registry';
 import { marketFunding } from './provider-budget-policy';
 import { getProviderBudgets, providerBudget } from './provider-budget-store';
+import { getExecutionLedgerRuntime, serializeExecutionLedgerOperation, waitForExecutionLedger, type ExecutionLedgerMutation } from './execution-ledger-runtime';
 import { isStatelessDeployment } from './runtime-environment';
 import { postgresPaperProjectionSyncEnabled, readPublicPaperBudgetFromPostgres, syncPublicPaperBudgetToPostgres } from './postgres-paper-projection';
 import { fetchKalshiReconciliationSnapshot } from './kalshi-reconciliation';
@@ -125,7 +127,6 @@ const DEFAULT_PAPER_BANKROLL_CENTS = 10_000;
  * Raise only after realized edge is measured as positive over a meaningful sample.
  */
 const DEFAULT_MAX_PAPER_STAKE_CENTS = 200;
-let engineQueue: Promise<void> = Promise.resolve();
 let automaticReconciliationRequested = false;
 
 /**
@@ -154,7 +155,9 @@ interface PaperBudget {
 export const MAX_PAPER_BANKROLL_CENTS = 1_000_000;
 interface Ledger { version: 8; paperBudget: PaperBudget; orders: PaperOrder[]; signalPersistence: Record<string, SignalPersistenceState>; portfolioDecisions: Record<string, PortfolioDecisionView>; switchPersistence: Record<string, SwitchPersistenceState>; liveCorrections: LiveLedgerCorrection[]; lastLiveSkip?: { reason: string; at: string } }
 
-async function readLedger(): Promise<Ledger> {
+const ledgerRuntime = getExecutionLedgerRuntime<Ledger>();
+
+async function loadLedgerFromDisk(): Promise<Ledger> {
   try {
     const raw = JSON.parse(await readFile(LEDGER_FILE, 'utf8')) as Partial<Ledger> & { orders?: PaperOrder[] };
     return {
@@ -177,11 +180,64 @@ async function readLedger(): Promise<Ledger> {
   }
 }
 
+async function committedLedger(): Promise<Ledger> {
+  if (ledgerRuntime.committed) return ledgerRuntime.committed;
+  if (!ledgerRuntime.loading) {
+    ledgerRuntime.loading = loadLedgerFromDisk().then((ledger) => {
+      ledgerRuntime.committed = ledger;
+      return ledger;
+    }).finally(() => { ledgerRuntime.loading = undefined; });
+  }
+  return ledgerRuntime.loading;
+}
+
+async function mutableLedger(): Promise<Ledger> {
+  const mutation = ledgerRuntime.activeMutation;
+  if (!mutation) throw new Error('Execution ledger mutation attempted outside the process-global serializer.');
+  mutation.working ??= structuredClone(await committedLedger());
+  return mutation.working;
+}
+
+async function readLedgerView<Result>(derive: (ledger: Ledger) => Result): Promise<Result> {
+  return serializeExecutionLedgerOperation(async () => structuredClone(derive(await committedLedger())));
+}
+
+function serializeLedgerMutation<Result>(operation: () => Promise<Result>): Promise<Result> {
+  return serializeExecutionLedgerOperation(async () => {
+    if (ledgerRuntime.activeMutation) throw new Error('Nested execution ledger mutation is not permitted.');
+    const mutation: ExecutionLedgerMutation<Ledger> = { successfulWrites: 0, writeFailed: false };
+    ledgerRuntime.activeMutation = mutation;
+    try {
+      const result = await operation();
+      if (mutation.successfulWrites > 0 && !mutation.writeFailed && mutation.working) {
+        ledgerRuntime.committed = mutation.working;
+      }
+      return result;
+    } catch (error) {
+      if (mutation.successfulWrites > 0 || mutation.writeFailed) ledgerRuntime.committed = undefined;
+      throw error;
+    } finally {
+      ledgerRuntime.activeMutation = undefined;
+    }
+  });
+}
+
 async function writeLedger(ledger: Ledger): Promise<void> {
+  const mutation = ledgerRuntime.activeMutation;
+  if (!mutation || mutation.working !== ledger) {
+    throw new Error('Execution ledger write refused outside its active process-global mutation.');
+  }
   await mkdir(DATA_DIR, { recursive: true });
   const temporary = `${LEDGER_FILE}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
-  await writeFile(temporary, JSON.stringify(ledger, null, 2));
-  await rename(temporary, LEDGER_FILE);
+  try {
+    await writeFile(temporary, JSON.stringify(ledger));
+    await rename(temporary, LEDGER_FILE);
+    mutation.successfulWrites += 1;
+  } catch (error) {
+    mutation.writeFailed = true;
+    ledgerRuntime.committed = undefined;
+    throw error;
+  }
   // JSON remains authoritative during the replication phase; never make execution depend on Postgres.
   if (postgresPaperProjectionSyncEnabled()) {
     void syncPublicPaperBudgetToPostgres(publicPaperBudgetFromLedger(ledger))
@@ -548,7 +604,7 @@ function venueQuote(prediction: Prediction, venue: 'polymarket' | 'kalshi', side
  * Builds a candidate order for one mode, applying every deterministic risk check. Returns the reason
  * when it declines, because a silently skipped order is indistinguishable from a broken engine.
  */
-function buildOrder(prediction: Prediction, side: PositionSide, status: TradingControlData, ledger: Ledger, calculationAt: string, modelVersion: string, mode: ExecutionMode, stakeLimitCents: number, venueFilter?: 'kalshi', eligibilityOverride?: SignalEligibility): { order: PaperOrder } | { reason: string } {
+function buildOrder(prediction: Prediction, side: PositionSide, status: TradingControlData, ledger: Ledger, calculationAt: string, modelVersion: string, mode: ExecutionMode, stakeLimitCents: number, venueFilter?: 'kalshi', eligibilityOverride?: SignalEligibility, paperExecutionPolicyVersion: string = PAPER_MANAGED_MAKER_EXECUTION_VERSION): { order: PaperOrder } | { reason: string } {
   if (stakeLimitCents <= 0) return { reason: 'Stake sizing produces zero cents. Raise the budget or purchase percentage.' };
   const rejections: string[] = [];
   const candidates = status.venues.flatMap((readiness) => {
@@ -608,7 +664,7 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
       providerId: selected.venue,
       providerVariantId: status.tradingProviders?.find((provider) => provider.id === selected.venue)?.selectedVariantId,
       forecastModelVersion: modelVersion,
-      executionPolicyVersion: mode === 'live' ? ENTRY_EXECUTION_POLICY_VERSION : PAPER_MANAGED_MAKER_EXECUTION_VERSION,
+      executionPolicyVersion: mode === 'live' ? ENTRY_EXECUTION_POLICY_VERSION : paperExecutionPolicyVersion,
       policyVersion: BUY_POLICY_VERSION, calculationAt, side,
       probabilityUp: prediction.modelProbabilityUp, probabilityDown: 1 - prediction.modelProbabilityUp,
       selectedSideProbability: sideProbability(prediction, side), confidence: prediction.confidence,
@@ -966,11 +1022,13 @@ async function managePaperMakerOrder(order: PaperOrder, ledger: Ledger): Promise
   const managedRun = beginTaskCadenceRun('managed-maker');
   const quoteRun = beginTaskCadenceRun('exact-pre-submit-quote');
   try {
-    // The paper fill calibration is a versioned prior from held-out mirror evidence, read once at entry
-    // and never conditioned on a live order fill. A missing or neutral calibration reproduces exact
-    // v5 conservative behavior (queueClearFraction = 0).
-    const calibration = await getActivePaperFillCalibration();
-    order.paperFillCalibration = { version: calibration.version, queueClearFraction: calibration.queueClearFraction };
+    // Use the complete calibration stamped before intent persistence. Rereading active state here could
+    // apply a newly adopted fill assumption to an order carrying the preceding cohort identity.
+    const calibration = order.paperFillCalibration;
+    if (!isPaperFillCalibration(calibration)
+      || calibration.appliedToPaperExecution !== order.entryDecision?.executionPolicyVersion) {
+      throw new Error('Paper fill calibration provenance does not match the issued execution cohort.');
+    }
     const result = await simulateManagedPaperMaker({
       side: order.side, requestedCount: order.quantity,
       maximumPrice: order.approvedMaximumPrice ?? order.askPrice,
@@ -1093,17 +1151,30 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
   const open = ledger.orders.filter((order) => order.executionMode === 'paper' && (order.status === 'open' || order.status === 'pending_reservation'));
   if (open.length >= maximumOpenPositions()) return false;
   if (!isFreshCalculationTimestamp(dashboard.generatedAt)) return false;
+  const qualifiedPredictions = dashboard.predictions
+    .filter((item) => qualifiesAsBuyEdge(item) && item.market.live && assetAdmitted(item.symbol));
+  if (!qualifiedPredictions.length) return false;
+  // Read once before intent construction. The generated execution identity and full provenance travel
+  // together on the order, so an adoption between creation and management cannot blend cohorts. A bad
+  // paper-only store withholds this lane without throwing across the shared orchestrator into funded live.
+  let paperCalibration: PaperFillCalibration;
+  try {
+    paperCalibration = await getActivePaperFillCalibration();
+  } catch (error) {
+    console.error('Paper fill calibration unavailable; paper entry withheld.', error);
+    return false;
+  }
+  const paperExecutionPolicyVersion = paperCalibration.appliedToPaperExecution;
   const equity = ledger.paperBudget.availableCents;
   const stakeLimit = Math.min(status.control.perTradeCents, maximumPaperStakeCents(), equity);
-  const candidates = dashboard.predictions
-    .filter((item) => qualifiesAsBuyEdge(item) && item.market.live && assetAdmitted(item.symbol))
+  const candidates = qualifiedPredictions
     .flatMap((prediction) => {
       const side = selectedSide(prediction);
       if (!side) return [];
       if (reentryCooldownRemainingMs(ledger, prediction, 'paper', side) > 0) return [];
       const logicalId = orderId(prediction, 'paper', side, ledger);
       const attempts = paperAttempts(ledger, prediction, side);
-      const episode = adaptiveEntryEpisodeDecision(attempts, PAPER_MANAGED_MAKER_EXECUTION_VERSION);
+      const episode = adaptiveEntryEpisodeDecision(attempts, paperExecutionPolicyVersion);
       if (!episode.allowed) return [];
       const parent = episode.retryOfOrderId ? attempts.find((attempt) => attempt.id === episode.retryOfOrderId) : undefined;
       const episodeState = ledger.signalPersistence[persistenceKey(prediction, side)];
@@ -1111,8 +1182,10 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
       if (!eligibility.eligible) return [];
       const candidate = buildOrder(prediction, side, {
         ...status, venues: status.venues.map((readiness) => ({ ...readiness, enabled: paperProviders.has(readiness.venue) })),
-      }, ledger, dashboard.generatedAt, dashboard.modelVersion, 'paper', stakeLimit, 'kalshi', eligibility);
+      }, ledger, dashboard.generatedAt, dashboard.modelVersion, 'paper', stakeLimit, 'kalshi', eligibility,
+      paperExecutionPolicyVersion);
       if ('reason' in candidate) return [];
+      candidate.order.paperFillCalibration = { ...paperCalibration };
       candidate.order.logicalOrderId = logicalId;
       candidate.order.attemptNumber = episode.attemptNumber;
       candidate.order.entryEpisode = episode.attemptNumber;
@@ -2167,7 +2240,7 @@ async function runLive(
 }
 
 async function processCycle(dashboard: DashboardData): Promise<void> {
-  const ledger = await readLedger();
+  const ledger = await mutableLedger();
   let changed = updateSignalPersistence(dashboard, ledger);
   changed = await settleDueOrders(ledger) || changed;
   changed = await updateSoldCounterfactuals(ledger) || changed;
@@ -2689,14 +2762,12 @@ async function longShotEntryTick(): Promise<void> {
     };
 
     const status = await getTradingControl();
-    const operation = engineQueue.then(async () => {
-      const ledger = await readLedger();
+    await serializeLedgerMutation(async () => {
+      const ledger = await mutableLedger();
       let changed = await runLongShot(priced, status, ledger, 'paper');
       changed = await runLongShot(priced, status, ledger, 'live') || changed;
       if (changed) await writeLedger(ledger);
     });
-    engineQueue = operation.then(() => undefined, () => undefined);
-    await operation;
   } catch (error) {
     taskRun.fail(error);
     console.error('Long-shot entry poll failed:', error);
@@ -2750,8 +2821,9 @@ async function longShotExitTick(): Promise<void> {
   const taskRun = beginTaskCadenceRun('long-shot-target-exit');
   try {
     if (getExecutionDrainStatus().phase === 'draining') return;
-    const ledger = await readLedger();
-    const open = [...openLongShotPositions(ledger.orders, 'paper'), ...openLongShotPositions(ledger.orders, 'live')];
+    const open = await readLedgerView((ledger) => [
+      ...openLongShotPositions(ledger.orders, 'paper'), ...openLongShotPositions(ledger.orders, 'live'),
+    ]);
     if (!open.length) return;
 
     // One read per distinct contract and side, not per position: paper and live hold the same contract.
@@ -2772,14 +2844,12 @@ async function longShotExitTick(): Promise<void> {
     }));
     if (!bids.size) return;
 
-    const operation = engineQueue.then(async () => {
-      const current = await readLedger();
+    await serializeLedgerMutation(async () => {
+      const current = await mutableLedger();
       if (await runLongShotExits((order) => bids.get(`${order.contractId}:${order.side}`), current)) {
         await writeLedger(current);
       }
     });
-    engineQueue = operation.then(() => undefined, () => undefined);
-    await operation;
   } catch (error) {
     taskRun.fail(error);
     console.error('Long-shot exit poll failed:', error);
@@ -2802,8 +2872,7 @@ export function processPaperTradingCycle(dashboard: DashboardData): Promise<void
   latestDashboard = dashboard;
   startLongShotExitPoller();
   startLongShotEntryPoller();
-  const operation = engineQueue.then(() => processCycle(dashboard));
-  engineQueue = operation.then(() => undefined, () => undefined);
+  const operation = serializeLedgerMutation(() => processCycle(dashboard));
   return operation.then(async () => {
     if (!automaticReconciliationRequested) return;
     automaticReconciliationRequested = false;
@@ -2819,17 +2888,14 @@ export function processPaperTradingCycle(dashboard: DashboardData): Promise<void
 export async function pauseAndDrainLiveExecution(reason = 'Paused by user · paper shadow continues'): Promise<void> {
   await pauseTrading(reason);
   startExecutionDrain('Pause accepted; draining the serialized execution queue.');
-  const barrier = engineQueue.then(() => undefined);
-  engineQueue = barrier.then(() => undefined, () => undefined);
   try {
-    await barrier;
+    await waitForExecutionLedger();
     const beforeReconciliation = getExecutionDrainStatus();
     if (beforeReconciliation.workingTransactions > 0) throw new Error(`${beforeReconciliation.workingTransactions} live transaction(s) remained after the execution queue drained.`);
     const reconciliation = await reconcileLiveExecution({ trigger: 'manual' });
     if (reconciliation.phase !== 'ready') throw new Error(`Authoritative drain reconciliation blocked: ${reconciliation.reason}`);
-    const ledger = await readLedger();
-    const unresolved = ledger.orders.filter((order) => order.executionMode === 'live'
-      && (order.status === 'pending_reservation' || order.status === 'uncertain' || order.exitPending));
+    const unresolved = await readLedgerView((ledger) => ledger.orders.filter((order) => order.executionMode === 'live'
+      && (order.status === 'pending_reservation' || order.status === 'uncertain' || order.exitPending)));
     const afterReconciliation = getExecutionDrainStatus();
     if (unresolved.length || afterReconciliation.workingTransactions > 0) {
       throw new Error(`Drain left ${unresolved.length} unresolved ledger intent(s) and ${afterReconciliation.workingTransactions} working transaction(s).`);
@@ -2850,9 +2916,9 @@ export function reconcileLiveExecution(options: { trigger?: 'startup' | 'manual'
     const startedAt = new Date().toISOString();
     const previousStatus = getKalshiReconciliationStatus();
     setKalshiReconciliationStatus({ ...previousStatus, phase: 'running', trigger, startedAt, completedAt: undefined, reason: `Running ${trigger} Kalshi reconciliation.` });
-    const operation = engineQueue.then(async () => {
+    const operation = serializeLedgerMutation(async () => {
       try {
-        const ledger = await readLedger();
+        const ledger = await mutableLedger();
         const trackedIds = ledger.orders.flatMap((order) => [order.venueOrderId, order.exitVenueOrderId]).filter((id): id is string => Boolean(id));
         const retryDelaysMs = [0, 2_000, 5_000, 10_000, 15_000];
         let snapshot: Awaited<ReturnType<typeof fetchKalshiReconciliationSnapshot>> | undefined;
@@ -2903,7 +2969,6 @@ export function reconcileLiveExecution(options: { trigger?: 'startup' | 'manual'
         return status;
       }
     });
-    engineQueue = operation.then(() => undefined, () => undefined);
     return operation;
   });
 }
@@ -2915,26 +2980,28 @@ export function reconcileLiveExecution(options: { trigger?: 'startup' | 'manual'
  */
 /** The bankroll funding currently backing the paper desk, for reports that group history by it. */
 export async function getPaperBankrollFunding(): Promise<{ fundingId: string; fundingSequence: number; startedAt?: string; resets: number; correctionCents: number }> {
-  const budget = (await readLedger()).paperBudget;
-  const since = budget.startedAt;
-  return {
-    fundingId: budget.fundingId ?? LEGACY_PAPER_BANKROLL_ID,
-    fundingSequence: budget.fundingSequence ?? 1,
-    startedAt: since,
-    resets: budget.resets ?? 0,
-    // Scoped exactly as `correctedPaperPnlCents` scopes it, so a history row and the budget panel cannot
-    // report different money for the same funding.
-    correctionCents: (budget.makerFeeCorrections ?? [])
-      .filter((entry) => !since || entry.at >= since)
-      .reduce((sum, entry) => sum + entry.realizedPnlCents, 0),
-  };
+  return readLedgerView((ledger) => {
+    const budget = ledger.paperBudget;
+    const since = budget.startedAt;
+    return {
+      fundingId: budget.fundingId ?? LEGACY_PAPER_BANKROLL_ID,
+      fundingSequence: budget.fundingSequence ?? 1,
+      startedAt: since,
+      resets: budget.resets ?? 0,
+      // Scoped exactly as `correctedPaperPnlCents` scopes it, so a history row and the budget panel cannot
+      // report different money for the same funding.
+      correctionCents: (budget.makerFeeCorrections ?? [])
+        .filter((entry) => !since || entry.at >= since)
+        .reduce((sum, entry) => sum + entry.realizedPnlCents, 0),
+    };
+  });
 }
 
 export function resetPaperBudget(bankrollCents: number): Promise<ExecutionSummary> {
-  const operation = engineQueue.then(async () => {
+  return serializeLedgerMutation(async () => {
     if (!Number.isSafeInteger(bankrollCents) || bankrollCents <= 0) throw new Error('Paper bankroll must be a positive dollar amount.');
     if (bankrollCents > MAX_PAPER_BANKROLL_CENTS) throw new Error('Paper bankroll is capped at $10,000.');
-    const ledger = await readLedger();
+    const ledger = await mutableLedger();
     if (ledger.orders.some((order) => order.executionMode === 'paper' && (order.status === 'open' || order.status === 'pending_reservation'))) {
       throw new Error('Wait for open paper positions to settle before resetting the bankroll.');
     }
@@ -2955,8 +3022,6 @@ export function resetPaperBudget(bankrollCents: number): Promise<ExecutionSummar
       proposedStakeCents: Math.min(Math.floor(bankrollCents / 100), maximumPaperStakeCents(), bankrollCents),
     }, ledger.paperBudget);
   });
-  engineQueue = operation.then(() => undefined, () => undefined);
-  return operation;
 }
 
 interface LedgerFigures { startingCents: number; availableCents: number; reservedCents: number; proposedStakeCents: number }
@@ -3106,14 +3171,16 @@ export function summarize(orders: PaperOrder[], mode: ExecutionMode, running: bo
   };
 }
 
-/** Raw order ledger for reporting. */
-export async function getExecutionOrders(): Promise<PaperOrder[]> {
-  return (await readLedger()).orders;
+/** Detached order-ledger rows for reporting; scheduled readers must request their narrow cohort. */
+export async function getExecutionOrders(filter: { executionMode?: ExecutionMode; strategyId?: StrategyId } = {}): Promise<PaperOrder[]> {
+  return readLedgerView((ledger) => ledger.orders.filter((order) =>
+    (!filter.executionMode || order.executionMode === filter.executionMode)
+    && (!filter.strategyId || orderStrategyId(order) === filter.strategyId)));
 }
 
 /** Funded paper bankroll. The paper track's strategy allocations are percentages of this, not of live cash. */
 export async function getPaperBankrollStartingCents(): Promise<number> {
-  return (await readLedger()).paperBudget.startingCents;
+  return readLedgerView((ledger) => ledger.paperBudget.startingCents);
 }
 
 function publicPaperExecution(order: PaperOrder): PublicPaperExecutionRecord {
@@ -3159,25 +3226,19 @@ function publicPaperBudgetFromLedger(ledger: Ledger): PublicPaperBudget {
 
 export async function syncCurrentPublicPaperBudgetProjection(): Promise<void> {
   if (!postgresPaperProjectionSyncEnabled()) return;
-  await syncPublicPaperBudgetToPostgres(publicPaperBudgetFromLedger(await readLedger()));
+  const payload = await readLedgerView(publicPaperBudgetFromLedger);
+  await syncPublicPaperBudgetToPostgres(payload);
 }
 
-export async function getPublicPaperBudget(): Promise<PublicPaperBudget> {
-  // A hosted dashboard reads the replicated projection; it never opens a local ledger.
-  if (isStatelessDeployment()) {
-    const replicated = await readPublicPaperBudgetFromPostgres();
-    if (replicated) return replicated;
-    return {
-      durable: false, startingCents: 0, availableCents: 0, equityCents: 0, reservedCents: 0,
-      proposedStakeCents: 0, running: false, depleted: false, openOrders: 0, settledOrders: 0,
-      realizedPnlCents: 0, bankrollResets: 0, recentExecutions: [],
-    };
-  }
-  return publicPaperBudgetFromLedger(await readLedger());
+export async function getPublicPaperBudget(): Promise<PublicPaperBudget | null> {
+  // A hosted dashboard reads the replicated projection; it never opens a local ledger. An unavailable
+  // projection is not a zero bankroll: the route reports 503 so readers cannot mistake outage for loss.
+  if (isStatelessDeployment()) return readPublicPaperBudgetFromPostgres();
+  return readLedgerView(publicPaperBudgetFromLedger);
 }
 
 export async function getExecutionSummaries(control: { state: string; mode: string; startingBudgetCents: number; workingEquityCents: number; availableBudgetCents: number; reservedBudgetCents: number; proposedStakeCents: number; perTradeCents: number; epochId?: string; epochStartedAt?: string }): Promise<{ paper: ExecutionSummary; live: ExecutionSummary; executionSignals: ExecutionSignalReadiness[]; liveAvailable: boolean; liveBlockers: string[]; maximumLiveEntryEpisodes: number; portfolioConstraints: Pick<PortfolioConstraints, 'maximumPositions' | 'maximumSameWindow' | 'maximumSameGroupPerWindow'>; regimeGate: RegimeGateStatus }> {
-  const [ledger, regimeGate] = await Promise.all([readLedger(), getRegimeGateStatus()]);
+  const [ledger, regimeGate] = await Promise.all([readLedgerView((value) => value), getRegimeGateStatus()]);
   const now = Date.now();
   const persistenceRequirements = productionSignalPersistence();
   const openPaper = ledger.orders.filter((order) => order.executionMode === 'paper' && (order.status === 'open' || order.status === 'pending_reservation')).reduce((sum, order) => sum + order.stakeCents, 0);

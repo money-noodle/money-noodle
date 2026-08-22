@@ -2,8 +2,8 @@ import 'server-only';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
-  PAPER_FILL_CALIBRATION_VERSION, PAPER_FILL_QUEUE_CLEAR_MAX,
-  isPaperFillCalibration, type PaperFillCalibration,
+  PAPER_FILL_CALIBRATION_VERSION, PAPER_FILL_QUEUE_CLEAR_MAX, PAPER_NEUTRAL_EXECUTION_VERSION,
+  isPaperFillCalibration, paperExecutionGeneration, paperExecutionVersion, type PaperFillCalibration,
 } from './paper-fill-calibration';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
@@ -13,46 +13,60 @@ function storeFile(): string {
 }
 let storeQueue: Promise<void> = Promise.resolve();
 
-interface PaperFillCalibrationHistoryEntry {
-  at: string;
-  queueClearFraction: number;
-  reason: string;
-}
-
-interface PaperFillCalibrationStore {
+export interface PaperFillCalibrationStore {
   version: 1;
   active: PaperFillCalibration;
-  history: PaperFillCalibrationHistoryEntry[];
+  /** Complete append-only adoption records. The neutral v6 baseline is implicit and never an adoption. */
+  history: PaperFillCalibration[];
   updatedAt: string;
 }
 
-function emptyStore(): PaperFillCalibrationStore {
+function neutralCalibration(): PaperFillCalibration {
   return {
-    version: 1,
-    active: {
-      version: PAPER_FILL_CALIBRATION_VERSION,
-      queueClearFraction: 0,
-      appliedToPaperExecution: '',
-      heldOutWindows: 0,
-      adoptedAt: '',
-      reason: 'Neutral conservative model: displayed queue is fully consumed by aggressive prints.',
-    },
-    history: [],
-    updatedAt: new Date().toISOString(),
+    version: PAPER_FILL_CALIBRATION_VERSION,
+    queueClearFraction: 0,
+    appliedToPaperExecution: PAPER_NEUTRAL_EXECUTION_VERSION,
+    heldOutWindows: 0,
+    adoptedAt: '',
+    reason: 'Neutral conservative model: displayed queue is fully consumed by aggressive prints.',
   };
+}
+
+function emptyStore(): PaperFillCalibrationStore {
+  return { version: 1, active: neutralCalibration(), history: [], updatedAt: new Date().toISOString() };
+}
+
+function sameCalibration(left: PaperFillCalibration, right: PaperFillCalibration): boolean {
+  return left.version === right.version
+    && left.queueClearFraction === right.queueClearFraction
+    && left.appliedToPaperExecution === right.appliedToPaperExecution
+    && left.heldOutWindows === right.heldOutWindows
+    && left.adoptedAt === right.adoptedAt
+    && left.reason === right.reason;
+}
+
+function isCalibrationStore(input: unknown): input is PaperFillCalibrationStore {
+  if (!input || typeof input !== 'object') return false;
+  const candidate = input as Partial<PaperFillCalibrationStore>;
+  if (candidate.version !== 1 || !isPaperFillCalibration(candidate.active)
+    || !Array.isArray(candidate.history) || !candidate.history.every(isPaperFillCalibration)
+    || typeof candidate.updatedAt !== 'string' || !Number.isFinite(Date.parse(candidate.updatedAt))) return false;
+
+  if (candidate.history.length === 0) {
+    return candidate.active.appliedToPaperExecution === PAPER_NEUTRAL_EXECUTION_VERSION
+      && candidate.active.queueClearFraction === 0;
+  }
+  for (let index = 0; index < candidate.history.length; index += 1) {
+    if (paperExecutionGeneration(candidate.history[index].appliedToPaperExecution) !== index + 7) return false;
+  }
+  return sameCalibration(candidate.active, candidate.history.at(-1)!);
 }
 
 async function readStore(): Promise<PaperFillCalibrationStore> {
   try {
-    const target = storeFile();
-    const raw = JSON.parse(await readFile(target, 'utf8')) as Partial<PaperFillCalibrationStore>;
-    const active = isPaperFillCalibration(raw.active) ? raw.active : emptyStore().active;
-    return {
-      version: 1,
-      active,
-      history: Array.isArray(raw.history) ? raw.history : [],
-      updatedAt: raw.updatedAt ?? new Date().toISOString(),
-    };
+    const raw = JSON.parse(await readFile(storeFile(), 'utf8')) as unknown;
+    if (!isCalibrationStore(raw)) throw new Error('Paper fill calibration store is malformed or has discontinuous cohort history.');
+    return raw;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyStore();
     throw error;
@@ -73,52 +87,51 @@ function serialized<T>(operation: () => Promise<T>): Promise<T> {
   return result;
 }
 
-/** Active calibration read at paper-maker entry. Never consults a live fill. */
+/** Active calibration read once before paper intent creation. Never consults a live fill. */
 export function getActivePaperFillCalibration(): Promise<PaperFillCalibration> {
-  return serialized(async () => {
-    const store = await readStore();
-    return { ...store.active, version: PAPER_FILL_CALIBRATION_VERSION };
-  });
+  return serialized(async () => ({ ...(await readStore()).active }));
 }
 
 /**
- * Manual, recorded adoption of a non-neutral queue-clear fraction. This is the only write path and is
- * never auto-invoked: a candidate calibration clears its held-out band, a human calls this, history is
- * appended immutably, and the paper execution cohort advances separately (v6 -> v7).
+ * Manual, recorded adoption. The store—not the caller—generates the next paper execution cohort, so a
+ * changed fill assumption (including a rollback to zero) cannot share an identity with older evidence.
  */
 export function adoptPaperFillCalibration(input: {
   queueClearFraction: number;
-  appliedToPaperExecution: string;
   heldOutWindows: number;
   reason: string;
 }): Promise<PaperFillCalibrationStore> {
   return serialized(async () => {
     if (!Number.isFinite(input.queueClearFraction)
       || input.queueClearFraction < 0 || input.queueClearFraction >= PAPER_FILL_QUEUE_CLEAR_MAX) {
-        throw new Error(`queueClearFraction must be in [0, ${PAPER_FILL_QUEUE_CLEAR_MAX}).`);
+      throw new Error(`queueClearFraction must be in [0, ${PAPER_FILL_QUEUE_CLEAR_MAX}).`);
     }
+    if (!Number.isSafeInteger(input.heldOutWindows) || input.heldOutWindows <= 0) {
+      throw new Error('heldOutWindows must be a positive safe integer.');
+    }
+    const reason = input.reason.trim();
+    if (!reason) throw new Error('A non-empty adoption reason is required.');
+
     const store = await readStore();
+    const generation = 7 + store.history.length;
+    const adoptedAt = new Date().toISOString();
     const adopted: PaperFillCalibration = {
       version: PAPER_FILL_CALIBRATION_VERSION,
       queueClearFraction: input.queueClearFraction,
-      appliedToPaperExecution: input.appliedToPaperExecution,
-      heldOutWindows: Math.max(0, Math.floor(input.heldOutWindows)),
-      adoptedAt: new Date().toISOString(),
-      reason: input.reason,
+      appliedToPaperExecution: paperExecutionVersion(generation),
+      heldOutWindows: input.heldOutWindows,
+      adoptedAt,
+      reason,
     };
-    store.history = [...store.history, {
-      at: adopted.adoptedAt,
-      queueClearFraction: adopted.queueClearFraction,
-      reason: adopted.reason,
-    }].slice(-200);
+    store.history = [...store.history, adopted];
     store.active = adopted;
-    store.updatedAt = adopted.adoptedAt;
+    store.updatedAt = adoptedAt;
     await writeStore(store);
     return store;
   });
 }
 
 /** Read-only status for the operator surface. */
-export async function getPaperFillCalibrationStatus(): Promise<PaperFillCalibrationStore> {
+export function getPaperFillCalibrationStatus(): Promise<PaperFillCalibrationStore> {
   return serialized(async () => await readStore());
 }

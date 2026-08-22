@@ -49,6 +49,11 @@ describe('hosted projection read', () => {
     expect(result!.generatedAt).toBe('2026-08-12T00:00:00.000Z');
   });
 
+  it('dates a throttled full report from its own generation rather than a newer homepage update', async () => {
+    const result = await read({ ...stored, fullGeneratedAt: '2026-08-12T00:00:00.000Z' }, '2026-08-12T00:09:00.000Z');
+    expect(result!.generatedAt).toBe('2026-08-12T00:00:00.000Z');
+  });
+
   it('treats a double-encoded payload as a failed replication', async () => {
     expect(await read(JSON.stringify(stored))).toBeNull();
   });
@@ -56,5 +61,32 @@ describe('hosted projection read', () => {
   it('treats a payload missing its scored halves as a failed replication', async () => {
     expect(await read({ forecasts: [], cyclePaths: {} })).toBeNull();
     expect(await read({ summary: { issued: 1 } })).toBeNull();
+  });
+
+  it('reads only a bounded homepage result and limits legacy recent rows to four', async () => {
+    vi.resetModules();
+    delete (globalThis as { __moneyNoodlePostgres?: unknown }).__moneyNoodlePostgres;
+    const query = () => Promise.resolve([{
+      summary: {
+        issued: 4, cycles: 2, resolved: 3, resolvedCycles: 2, accuracy: 0.5,
+        cycleBalancedAccuracy: 0.5, brierScore: 0.2, currentCycleStreak: 1,
+        calibrationWindows: 2, calibrationMinimum: 100, calibrationProgress: 0.02,
+        calibrationReady: false,
+        recent: Array.from({ length: 8 }, (_, index) => ({ id: `row-${index}` })),
+      },
+      paper_record: {
+        mode: 'paper', settled: 2, windows: 2, wins: 1, losses: 1, winRate: 0.5,
+        roi: -0.1, realizedPnlCents: -20, meanPredictedEdge: 0.1, meanRealizedReturn: -0.1,
+      },
+      generated_at: '2026-08-12T00:09:00.000Z',
+    }]);
+    const client = Object.assign(query, { json: (value: unknown) => value, unsafe: query, end: () => Promise.resolve() });
+    vi.doMock('postgres', () => ({ default: () => client }));
+    process.env.MONEY_NOODLE_DATABASE_URL = 'postgres://reader@example.test/db';
+    const { readPublicPaperPerformanceSummaryFromPostgres } = await import('./postgres-paper-projection');
+    const result = await readPublicPaperPerformanceSummaryFromPostgres();
+    expect(result).toMatchObject({ durable: true, generatedAt: '2026-08-12T00:09:00.000Z' });
+    expect(result!.summary.recent.map((row) => row.id)).toEqual(['row-0', 'row-1', 'row-2', 'row-3']);
+    expect(result).not.toHaveProperty('forecasts');
   });
 });

@@ -10,12 +10,20 @@ const CYCLE_PATH_FILE = path.join(DATA_DIR, 'cycle-paths.json');
 const CYCLE_DURATION_MS = 15 * 60_000;
 const MAX_CYCLES = 1_200;
 export const CYCLE_PATH_POLICY_VERSION = 'aligned-15s-observation-only-v1';
-let pathQueue: Promise<void> = Promise.resolve();
 
 interface CyclePathStore { version: 1; policyVersion: string; cycles: CyclePathRecord[] }
 interface UnderlyingObservation { time: number; prices: Record<string, number> }
+interface CyclePathRuntime {
+  queue: Promise<void>;
+  store?: CyclePathStore;
+  loading?: Promise<CyclePathStore>;
+}
 
-async function readStore(): Promise<CyclePathStore> {
+const runtimeKey = Symbol.for('money-noodle.cycle-path-store');
+const globals = globalThis as typeof globalThis & { [runtimeKey]?: CyclePathRuntime };
+const runtime = globals[runtimeKey] ??= { queue: Promise.resolve() };
+
+async function loadStore(): Promise<CyclePathStore> {
   try {
     const parsed = JSON.parse(await readFile(CYCLE_PATH_FILE, 'utf8')) as Partial<CyclePathStore>;
     return { version: 1, policyVersion: CYCLE_PATH_POLICY_VERSION, cycles: Array.isArray(parsed.cycles) ? parsed.cycles : [] };
@@ -25,10 +33,21 @@ async function readStore(): Promise<CyclePathStore> {
   }
 }
 
+async function readStore(): Promise<CyclePathStore> {
+  if (runtime.store) return runtime.store;
+  if (!runtime.loading) {
+    runtime.loading = loadStore().then((store) => {
+      runtime.store = store;
+      return store;
+    }).finally(() => { runtime.loading = undefined; });
+  }
+  return runtime.loading;
+}
+
 async function writeStore(store: CyclePathStore): Promise<void> {
   await mkdir(DATA_DIR, { recursive: true });
   const temporary = `${CYCLE_PATH_FILE}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
-  await writeFile(temporary, JSON.stringify(store, null, 2));
+  await writeFile(temporary, JSON.stringify(store));
   await rename(temporary, CYCLE_PATH_FILE);
 }
 
@@ -76,19 +95,27 @@ async function updateCyclePaths(predictions: Prediction[], history: UnderlyingOb
   }
   if (changed) {
     const cycles = [...byId.values()].sort((a, b) => Date.parse(b.closesAt) - Date.parse(a.closesAt)).slice(0, MAX_CYCLES);
-    await writeStore({ version: 1, policyVersion: CYCLE_PATH_POLICY_VERSION, cycles });
+    const next = { version: 1 as const, policyVersion: CYCLE_PATH_POLICY_VERSION, cycles };
+    try {
+      await writeStore(next);
+      runtime.store = next;
+    } catch (error) {
+      // The rename is the commit boundary. Reload durable state after any ambiguous failed write.
+      runtime.store = undefined;
+      throw error;
+    }
   }
   return result;
 }
 
 export function recordCyclePathObservations(predictions: Prediction[], history: UnderlyingObservation[], observedAt = Date.now()): Promise<Record<string, CycleRegimeFeatures>> {
-  const operation = pathQueue.then(() => updateCyclePaths(predictions, history, observedAt));
-  pathQueue = operation.then(() => undefined, () => undefined);
+  const operation = runtime.queue.then(() => updateCyclePaths(predictions, history, observedAt));
+  runtime.queue = operation.then(() => undefined, () => undefined);
   return operation;
 }
 
 export async function getCyclePathReport(nowMs = Date.now()): Promise<CyclePathReport> {
-  await pathQueue;
+  await runtime.queue;
   const store = await readStore();
   const latest = new Map<string, CyclePathRecord>();
   for (const cycle of [...store.cycles].sort((a, b) => Date.parse(b.closesAt) - Date.parse(a.closesAt))) if (!latest.has(cycle.symbol)) latest.set(cycle.symbol, cycle);
@@ -112,6 +139,6 @@ export async function cycleRegimeFor(symbol: string, closesAt: string): Promise<
 }
 
 export async function getCyclePaths(): Promise<CyclePathRecord[]> {
-  await pathQueue;
+  await runtime.queue;
   return (await readStore()).cycles;
 }
