@@ -31,13 +31,14 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createJiti } from 'jiti';
 import { readForecastHistory } from './lib/forecast-history.mjs';
+import { readExecutionLedger } from './lib/read-execution-ledger.mjs';
 
 const DATA = path.resolve(process.cwd(), 'data');
 const jiti = createJiti(import.meta.url);
 const { analyzeContractSelection, clusterSnapshotPairs } = await jiti.import('../lib/contract-selection-analysis.ts');
 
 const forecasts = await readForecastHistory(DATA);
-const ledger = JSON.parse(await readFile(path.join(DATA, 'paper-orders.json'), 'utf8'));
+const ledger = await readExecutionLedger(DATA);
 let transitions = [];
 try {
   const regime = JSON.parse(await readFile(path.join(DATA, 'regime-gate.json'), 'utf8'));

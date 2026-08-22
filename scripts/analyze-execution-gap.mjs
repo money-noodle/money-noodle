@@ -27,9 +27,9 @@
  *   - Settlement is not needed here: this is about conversion, not profit.
  *   - Read-only. Places no order and writes nothing.
  */
-import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { readForecastHistory } from './lib/forecast-history.mjs';
+import { readExecutionLedger } from './lib/read-execution-ledger.mjs';
 
 const DATA = path.resolve(process.cwd(), 'data');
 const HOURS = Number(process.argv[2] ?? 24);
@@ -88,7 +88,7 @@ for (const row of await readForecastHistory(DATA)) {
   }
 }
 
-const ledger = JSON.parse(await readFile(path.join(DATA, 'paper-orders.json'), 'utf8'));
+const ledger = await readExecutionLedger(DATA);
 const orders = (ledger.orders ?? []).filter((o) => o.strategyId !== 'long-shot-round-trip' && !o.id.includes(':exit:'));
 const orderKeys = new Map();
 for (const o of orders) {

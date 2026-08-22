@@ -1,6 +1,6 @@
 # Process-global execution-ledger ownership
 
-**Status:** approved for implementation, 2026-08-22
+**Status:** implemented 2026-08-22; extended by [execution-ledger v9](execution-ledger-v9-design.md)
 **Scope:** runtime ownership and storage cost only; no policy, execution, sizing, budget, reconciliation, or order semantic change
 
 ## 1. Problem
@@ -77,6 +77,19 @@ memory. The next queued operation reloads disk. Restart naturally discards memor
 No mtime polling is needed because running correction scripts against the active worker is unsupported; an
 owner tool must stop or exclude the worker before changing this funded ledger.
 
+### 2.6 Polling and detail projections
+
+The authenticated dashboard polling resource is an aggregate/open-intent projection, not an order-history
+resource. It derives paper/live counters, current execution signals, and the small set of genuinely open or
+uncertain orders while it holds the serialized committed view; `structuredClone` receives only that result.
+It must never return 30 terminal orders merely so a component can filter them out in the browser.
+
+The trading-control dialog may explicitly request its bounded recent terminal detail when opened. That
+on-demand response can be larger, but it still derives inside `readLedgerView` and clones only the resulting
+summary rows rather than the complete ledger. The dashboard owns one polling request and passes the same
+response to the automation and execution-signal panels; independently polling the same funded read model from
+two components is prohibited.
+
 ## 3. Fail-closed boundaries
 
 - A mutation outside the global serializer is an error.
@@ -104,7 +117,8 @@ Implementation is gated by:
 
 ## 5. Explicit non-goals
 
-This change does not prune or rewrite order history, split the ledger by strategy, introduce a terminal-order
-archive, change JSON fields, alter public payload meaning, or change any execution decision. A sharded
-terminal-order archive could reduce the retained committed snapshot further, but it is a separate schema and
-reconciliation design that requires its own evidence and approval.
+This ownership change did not prune or rewrite order history, split the ledger by strategy, introduce a
+terminal-order archive, change JSON fields, alter public payload meaning, or change any execution decision.
+The separately approved [v9 design](execution-ledger-v9-design.md) later added immutable terminal evidence
+batches while retaining every control/money row in this same account ledger. It does not weaken any ownership,
+clone, serialization, atomic-publication, or failure-invalidation invariant defined here.

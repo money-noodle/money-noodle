@@ -21,6 +21,7 @@
  */
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { readExecutionLedger } from './lib/read-execution-ledger.mjs';
 
 const DATA = path.resolve(process.cwd(), 'data');
 const EDGE = 'edge-binary-buy';
@@ -69,7 +70,7 @@ async function activePaperExecutionVersion() {
 }
 
 const selectedPaperExecution = await activePaperExecutionVersion();
-const ledger = JSON.parse(await readFile(path.join(DATA, 'paper-orders.json'), 'utf8'));
+const ledger = await readExecutionLedger(DATA);
 const orders = ledger.orders ?? [];
 const entries = orders.filter((order) => !order.id.includes(':exit:') && (order.strategyId ?? EDGE) === EDGE);
 const executionVersion = (order) => order.entryDecision?.executionPolicyVersion ?? order.executionPolicyVersion;

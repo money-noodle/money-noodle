@@ -18,15 +18,15 @@
  *
  * Reproduce: npm run analyze:paper-live-mirror
  */
-import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { readExecutionLedger } from './lib/read-execution-ledger.mjs';
 
 const DATA = path.resolve(process.cwd(), 'data');
 const PAPER_VERSION = 'paper-managed-execution-route-ioc-v4';
 const PAPER_EXIT_VERSION = 'paper-ioc-exit-depth-v1';
 const EDGE = 'edge-binary-buy';
 
-const ledger = JSON.parse(await readFile(path.join(DATA, 'paper-orders.json'), 'utf8'));
+const ledger = await readExecutionLedger(DATA);
 const entries = (ledger.orders ?? []).filter((order) => !order.id.includes(':exit:')
   && (order.strategyId ?? EDGE) === EDGE);
 const paper = entries.filter((order) => order.executionMode === 'paper'

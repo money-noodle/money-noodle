@@ -1,8 +1,8 @@
 // Buy-and-hold versus buy-plus-exit, split by exit policy. Reads the order ledger only; changes nothing.
 // Run: npm run analyze:exit-counterfactuals > reports/exit-counterfactual-analysis-<date>.md
-import fs from 'node:fs';
+import { readExecutionLedgerSync } from './lib/read-execution-ledger.mjs';
 
-const orders = JSON.parse(fs.readFileSync(`${process.cwd()}/data/paper-orders.json`, 'utf8')).orders;
+const orders = readExecutionLedgerSync().orders;
 const stakeOf = (o) => o.actualStakeCents ?? o.stakeCents;
 const pnlOf = (o) => o.actualPnlCents ?? o.pnlCents ?? 0;
 const mean = (a) => a.length ? a.reduce((s, x) => s + x, 0) / a.length : null;

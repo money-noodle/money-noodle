@@ -77,6 +77,14 @@ describe('execution ledger commit cache', () => {
     expect(tick).not.toContain('getExecutionOrders');
   });
 
+  it('derives scheduled control summaries inside the committed view instead of cloning the ledger', () => {
+    const source = readFileSync(new URL('./paper-execution.ts', import.meta.url), 'utf8');
+    const start = source.indexOf('export async function getExecutionSummaries');
+    const summary = source.slice(start);
+    expect(summary).toContain('readLedgerView((ledger) => deriveExecutionSummaries');
+    expect(summary).not.toContain('readLedgerView((value) => value)');
+  });
+
   it('returns detached filtered order rows rather than the committed objects', async () => {
     io.readFile.mockResolvedValue(JSON.stringify({
       ...emptyLedger,

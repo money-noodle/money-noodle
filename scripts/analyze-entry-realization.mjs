@@ -37,6 +37,7 @@
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { readExecutionLedger } from './lib/read-execution-ledger.mjs';
 
 const DATA = path.resolve(process.cwd(), 'data');
 const SHARDS = path.join(DATA, 'forecast-history-shards');
@@ -77,7 +78,7 @@ if (existsSync(path.join(SHARDS, 'open.json'))) take(JSON.parse(await readFile(p
 
 const admitted = rows.filter((r) => admits(r) && Date.parse(r.closesAt) >= POLICY_ACTIVE_FROM);
 
-const allOrders = JSON.parse(await readFile(path.join(DATA, 'paper-orders.json'), 'utf8')).orders
+const allOrders = (await readExecutionLedger(DATA)).orders
   .filter((o) => !o.id.includes(':exit:') && o.strategyId !== 'long-shot-round-trip')
   .filter((o) => o.entryDecision?.policyVersion === POLICY);
 

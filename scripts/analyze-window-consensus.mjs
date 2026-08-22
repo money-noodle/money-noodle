@@ -2,6 +2,7 @@
 // Reads durable data only. Run: npm run analyze:window-consensus [days]
 // Rerun every ~500 resolved windows per docs/edge-window-consensus-evaluation-design.md §6.
 import fs from 'node:fs';
+import { readExecutionLedgerSync } from './lib/read-execution-ledger.mjs';
 const fk = new Map();
 function addRows(rows) {
   for (const r of rows) {
@@ -27,7 +28,7 @@ function forecastAsk(rows, side, tMs) {
   }
   return best;
 }
-const book = JSON.parse(fs.readFileSync('data/paper-orders.json', 'utf8'));
+const book = readExecutionLedgerSync();
 const orders = book.orders.filter(x => x.executionMode === 'live' && !x.id.includes(':exit:'));
 const isWin = x => x.status === 'won' || (x.status === 'sold' && x.counterfactualHoldOutcome === x.side);
 const holdView = x => x.counterfactualHoldPnlCents ?? (x.actualPnlCents ?? x.pnlCents ?? 0);

@@ -27,6 +27,8 @@
     "verify:forecast-storage": "jiti scripts/verify-forecast-storage.ts",
     "repair:forecast-storage": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/repair-forecast-storage.ts",
     "compact:forecast-storage": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/compact-forecast-storage.ts",
+    "verify:execution-ledger": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/verify-execution-ledger.ts",
+    "compact:execution-ledger": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/compact-execution-ledger.ts",
     "fund:long-shot": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/fund-long-shot.ts",
     "archive:local": "jiti scripts/archive-local-data.ts",
     "cleanup:stale-tmp": "jiti scripts/cleanup-stale-tmp.ts",

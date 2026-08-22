@@ -1603,6 +1603,23 @@ export interface PositionLifecycleObservation {
 
 export interface PaperOrder {
   id: string;
+  /**
+   * V9 pointer to immutable heavy audit evidence. Identity, control, reconciliation, and money fields
+   * remain on this row; full readers hydrate the archived fields on demand.
+   */
+  archivedEvidence?: {
+    version: 'execution-order-evidence-ref-v1';
+    file: string;
+    sha256: string;
+    /** Stable per-row key; historical ledgers contain a small number of duplicate logical order IDs. */
+    rowKey: string;
+    summary: {
+      /** Required by bounded trade summaries when the complete decision snapshot is archived. */
+      entryDecisionNetEdge?: number;
+      /** Required by historical maker-cohort telemetry; it has no order authority. */
+      entryExecutionStyle?: 'maker' | 'taker';
+    };
+  };
   /** Paper runs continuously as a shadow; live only runs while automation is active in live mode. */
   executionMode: ExecutionMode;
   /** Absent on records written before markets were explicit; those belong to `crypto-15m`. */

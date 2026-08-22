@@ -48,10 +48,10 @@
  *     stayed qualified rather than by opportunity, and would not be comparable to the order stages.
  *   - Read-only. Places no order, writes nothing, and promotes nothing (AGENTS §5.5).
  */
-import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { readForecastHistory } from './lib/forecast-history.mjs';
+import { readExecutionLedger } from './lib/read-execution-ledger.mjs';
 
 const DATA = path.resolve(process.cwd(), 'data');
 const SHARDS = path.join(DATA, 'forecast-history-shards');
@@ -92,7 +92,7 @@ function take(list) {
 // was trading it, because `open.json` was hours stale and resolution arrives as a journal patch.
 take(await readForecastHistory(DATA));
 
-const allOrders = JSON.parse(await readFile(path.join(DATA, 'paper-orders.json'), 'utf8')).orders
+const allOrders = (await readExecutionLedger(DATA)).orders
   .filter((o) => !o.id.includes(':exit:') && o.strategyId !== 'long-shot-round-trip');
 
 const wasFilled = (o) => ['won', 'lost', 'sold', 'open'].includes(o.status);

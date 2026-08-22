@@ -17,7 +17,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: STATELESS_WORKER_MESSAGE }, { status: 503 });
   }
   try {
-    const orders = await getExecutionOrders({ strategyId: EDGE_BINARY_BUY });
+    const orders = await getExecutionOrders({ strategyId: EDGE_BINARY_BUY, includeArchivedEvidence: false });
     return NextResponse.json({
       paperRecord: buildTradeTrackSummary(orders, 'paper'),
       liveRecord: buildTradeTrackSummary(orders, 'live'),

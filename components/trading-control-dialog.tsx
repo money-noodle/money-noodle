@@ -35,7 +35,7 @@ export function TradingControlDialog() {
   async function load() {
     setLoading(true); setError('');
     try {
-      const response = await fetch('/api/trading/control', { cache: 'no-store' });
+      const response = await fetch('/api/trading/control?details=1', { cache: 'no-store' });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error || 'Unable to load trading controls');
       setData(body);

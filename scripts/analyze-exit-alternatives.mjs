@@ -26,12 +26,12 @@
  * And this script tests many rules against one small sample — see the multiple-comparison note at the
  * end, which is not decoration: with this many candidates the best-looking one is expected to look good.
  */
-import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { readExecutionLedger } from './lib/read-execution-ledger.mjs';
 
 const DATA = path.resolve(process.cwd(), 'data');
 
-const ledger = JSON.parse(await readFile(path.join(DATA, 'paper-orders.json'), 'utf8'));
+const ledger = await readExecutionLedger(DATA);
 const orders = (Array.isArray(ledger) ? ledger : Object.values(ledger).find(Array.isArray))
   .filter((o) => o.strategyId !== 'long-shot-round-trip' && !o.id.includes(':exit:'));
 

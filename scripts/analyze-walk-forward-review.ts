@@ -11,9 +11,10 @@
  */
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { readHydratedExecutionOrders } from '../lib/execution-ledger-storage';
 import { getForecastHistory } from '../lib/forecast-tracker';
 import { evaluatePromotionEligibility } from '../lib/model-promotion';
-import type { PaperOrder, WalkForwardEvaluationHistory, WalkForwardParameters } from '../lib/types';
+import type { WalkForwardEvaluationHistory, WalkForwardParameters } from '../lib/types';
 import {
   PRODUCTION_BASELINE_PARAMETERS, WALK_FORWARD_CANDIDATES, WALK_FORWARD_FOLDS,
   buildWalkForwardDataset, candidateProbability, runWalkForwardEvaluation, selectedTrade,
@@ -21,7 +22,6 @@ import {
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const HISTORY_FILE = path.join(DATA_DIR, 'model-evaluations.json');
-const ORDER_FILE = path.join(DATA_DIR, 'paper-orders.json');
 
 interface WindowReview {
   closesAt: string;
@@ -129,9 +129,9 @@ const returnDifferenceBySelection = Object.fromEntries(categoryNames.map((catego
   return [category, { windows: differences.length, totalDifference: differences.reduce((sum, value) => sum + value, 0), meanDifference: mean(differences) }];
 }));
 
-const orderLedger = JSON.parse(await readFile(ORDER_FILE, 'utf8')) as { orders: PaperOrder[] };
+const executionOrders = await readHydratedExecutionOrders(DATA_DIR);
 const orderKeys = new Map<'live' | 'paper', Set<string>>([['live', new Set()], ['paper', new Set()]]);
-for (const order of orderLedger.orders) {
+for (const order of executionOrders) {
   if (order.strategyId !== 'edge-binary-buy') continue;
   orderKeys.get(order.executionMode)!.add(`${order.symbol}|${new Date(order.closesAt).toISOString()}|${order.side}`);
 }

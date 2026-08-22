@@ -82,6 +82,28 @@ describe('the P&L that reconciles with the budget beside it', () => {
       .toBe('2026-08-15T08:15:43.046Z');
   });
 
+  it('keeps scheduled control detail to open intents instead of terminal history', () => {
+    const orders = [
+      order({ id: 'terminal', createdAt: '2026-08-17T00:00:00Z', status: 'won', pnlCents: 10, budgetEpochId: EPOCH }),
+      order({ id: 'open', createdAt: '2026-08-17T00:01:00Z', status: 'open', pnlCents: undefined, budgetEpochId: EPOCH }),
+    ];
+    const summary = summarize(orders, 'live', true, 2152, figures, undefined, 'edge-binary-buy',
+      { epochId: EPOCH }, 'open');
+    expect(summary.recentOrders.map((row) => row.id)).toEqual(['open']);
+    expect(summary.openOrders).toBe(1);
+    expect(summary.settledOrders).toBe(1);
+  });
+
+  it('does not expose internal v9 evidence references in recent order presentation', () => {
+    const archivedEvidence = {
+      version: 'execution-order-evidence-ref-v1' as const,
+      file: `batch.${'a'.repeat(64)}.json`, sha256: 'a'.repeat(64), rowKey: 'b'.repeat(64), summary: {},
+    };
+    const summary = live([order({ id: 'archived', createdAt: '2026-08-17T00:00:00Z', status: 'won', archivedEvidence })], {});
+    expect(summary.recentOrders[0].id).toBe('archived');
+    expect(summary.recentOrders[0].archivedEvidence).toBeUndefined();
+  });
+
   it('leaves paper narrowed to its own strategy, whose bankroll is not shared', () => {
     const orders = [
       order({ executionMode: 'paper', status: 'won', pnlCents: 100 }),

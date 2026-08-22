@@ -16,6 +16,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { readResolvedForecasts } from './lib/forecast-history.mjs';
+import { readExecutionLedger } from './lib/read-execution-ledger.mjs';
 
 const DATA = path.resolve(process.cwd(), 'data');
 const BUY_POLICY = 'buy-binary-edge-netminus5-nocap-quality50-owned55-price5to97-late30-persist2of15-v21';
@@ -28,7 +29,7 @@ const CANDIDATES = [
   { id: 'maker-spike-max2pp-v1', admits: (row) => Number.isFinite(row.edgeSpike) && row.edgeSpike + 1e-12 < 0.02 },
 ];
 
-const ledger = JSON.parse(await readFile(path.join(DATA, 'paper-orders.json'), 'utf8'));
+const ledger = await readExecutionLedger(DATA);
 const orders = ledger.orders ?? ledger;
 const forecasts = await readResolvedForecasts(DATA);
 const outcomesByContract = new Map();

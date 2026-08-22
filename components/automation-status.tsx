@@ -1,6 +1,5 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { AlertTriangle, ChevronDown, FlaskConical, Pause, Radio, ShieldAlert } from 'lucide-react';
 import { OrderDecisionDetails } from '@/components/order-decision-details';
 import { TradeHistoryDialog } from '@/components/trade-history-dialog';
@@ -170,24 +169,7 @@ function OpenOrdersPanel({ live, paper }: { live?: ExecutionSummary; paper?: Exe
  * Makes the automation state unmistakable on the main page: whether orders are being placed at all,
  * whether they are simulated or real, and which venues are actually armed.
  */
-export function AutomationStatus() {
-  const [data, setData] = useState<TradingControlData | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      try {
-        const response = await fetch('/api/trading/control', { cache: 'no-store' });
-        if (!response.ok) return;
-        const body = await response.json() as TradingControlData;
-        if (!cancelled) setData(body);
-      } catch { /* Transient failures keep the previous state rather than implying a stop. */ }
-    }
-    void load();
-    const timer = window.setInterval(() => void load(), DATA_FRESHNESS.dashboardPollMs);
-    return () => { cancelled = true; window.clearInterval(timer); };
-  }, []);
-
+export function AutomationStatus({ data }: { data: TradingControlData | null }) {
   if (!data) return null;
   const { control } = data;
   const active = control.state === 'active';

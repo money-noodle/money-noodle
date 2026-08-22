@@ -32,6 +32,7 @@ interface Order {
 }
 
 interface Ledger {
+  version?: number;
   paperBudget: { availableCents: number; realizedPnlCents: number; strategyLeakCorrections?: Correction[] };
   orders: Order[];
 }
@@ -39,6 +40,7 @@ interface Ledger {
 async function main(): Promise<void> {
   const write = process.argv.includes('--write');
   const ledger = JSON.parse(await readFile(LEDGER_FILE, 'utf8')) as Ledger;
+  if (ledger.version === 9) throw new Error('This historical correction refuses execution-ledger v9. Restore a verified monolith through compact:execution-ledger -- --write --restore-monolith first.');
   const alreadyCorrected = new Set((ledger.paperBudget.strategyLeakCorrections ?? []).flatMap((entry) => entry.orderIds));
 
   // A paper position belonging to another strategy, closed by the edge policy's own exit machinery. Those

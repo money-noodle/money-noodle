@@ -1,3 +1,4 @@
+import { makerExecutionStyle } from './execution-order-evidence';
 import { DEFAULT_STRATEGY_ID, normalizeStrategyId } from './strategy-registry';
 import type { PaperOrder, PositionSide, StrategyId } from './types';
 
@@ -57,7 +58,7 @@ export function makerCohortEvidence(orders: PaperOrder[], price: number, spread:
   const label = `${priceBand(price)} · ${spreadBand(spread)}`;
   const comparable = orders.filter((order) => order.executionMode === 'live' && order.venue === 'kalshi'
     && normalizeStrategyId(order.strategyId) === strategyId
-    && !order.id.includes(':exit:') && order.entryExecutionDecision?.executedStyle !== 'taker'
+    && !order.id.includes(':exit:') && makerExecutionStyle(order) !== 'taker'
     && order.liquidityRole !== 'taker' && Boolean(order.venueOrderId)
     && priceBand(order.askPrice) === priceBand(price) && spreadBand(order.spread) === spreadBand(spread));
   const fills = comparable.filter((order) => (order.filledCount ?? 0) > 0).length;

@@ -61,7 +61,7 @@ export async function getPublicPaperPerformanceSummary(): Promise<PublicPaperPer
   if (isStatelessDeployment()) return readPublicPaperPerformanceSummaryFromPostgres();
   const [summary, orders] = await Promise.all([
     getPerformanceSummary(),
-    getExecutionOrders({ executionMode: 'paper', strategyId: EDGE_BINARY_BUY }),
+    getExecutionOrders({ executionMode: 'paper', strategyId: EDGE_BINARY_BUY, includeArchivedEvidence: false }),
   ]);
   return {
     durable: true,
@@ -85,18 +85,24 @@ export async function replicatePublicPaperPerformance(): Promise<void> {
 
   const operation = (async () => {
     try {
+      // Probe availability with the bounded homepage projection first. A database outage must fail before
+      // the worker hydrates terminal execution evidence and builds a full analytical document that cannot
+      // be published. On a healthy full interval this small write also keeps the homepage current while
+      // the larger report is assembled.
+      const summary = await getPublicPaperPerformanceSummary();
+      if (!summary) return;
+      const { durable: _summaryDurable, generatedAt: _summaryGeneratedAt, ...summaryPayload } = summary;
+      await syncPublicPaperPerformanceSummaryToPostgres(summaryPayload);
+
       if (startedAt >= nextFullReplicationAt) {
+        // Bound attempts as well as successful writes. A full-payload-specific failure may not force the
+        // archive to hydrate again every minute while the compact projection remains healthy.
+        nextFullReplicationAt = Date.now() + FULL_REPLICATION_INTERVAL_MS;
         const full = await getPublicPaperPerformance();
         // Only a locally scored payload is worth publishing; never echo a projection back into itself.
         if (!full) return;
         const { durable: _durable, generatedAt: _generatedAt, ...payload } = full;
         await syncPublicPaperPerformanceToPostgres(payload);
-        nextFullReplicationAt = Date.now() + FULL_REPLICATION_INTERVAL_MS;
-      } else {
-        const summary = await getPublicPaperPerformanceSummary();
-        if (!summary) return;
-        const { durable: _durable, generatedAt: _generatedAt, ...payload } = summary;
-        await syncPublicPaperPerformanceSummaryToPostgres(payload);
       }
       consecutiveReplicationFailures = 0;
       nextSummaryReplicationAt = Date.now() + SUMMARY_REPLICATION_INTERVAL_MS;

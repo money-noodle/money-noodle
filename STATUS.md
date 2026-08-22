@@ -6,7 +6,7 @@
 > **Operational-state warning:** this document records dated snapshots; it is not a live interlock or the
 > authority for whether funded execution is running. Before any operational action, read the authenticated
 > Automation surface and `data/trading-control.json`. At the latest operational snapshot, the control record
-> updated at 2026-08-22T16:50:58.956Z was operator-paused / `live`, revision 5,532, with 2,086¢ available,
+> updated at 2026-08-22T20:04:12.990Z was operator-paused / `live`, revision 5,543, with 2,086¢ available,
 > 0¢ reserved, +86¢ current-epoch whole-cent P&L, and operator intent paused after a quiescent drain for the
 > reporting incident investigation. It has not been automatically resumed. That state may change after publication.
 
@@ -14,7 +14,7 @@
 
 Money Noodle is operational as a local research dashboard, continuous paper shadow trader, public paper-track-record publisher, and environment-gated, explicitly armable live Kalshi trader. Core UP/YES and DOWN/NO entry, managed maker execution, paper maker mirroring, signed Kalshi reconciliation, quiescent pause/drain, loss gates, budget epochs, provider permissions, contract provenance, target integrity, standalone reduce-only exits, protected switching, model evaluation, and immutable promotion accounting are implemented.
 
-The **repeated-episode order-identity defect found on 2026-08-20 was mechanically repaired and its known ledger damage corrected on 2026-08-21**. New live episode IDs retain collision-resistant identity through every create retry; reconciliation no longer fuzzy-matches truncated legacy IDs and blocks one venue order from owning multiple local entries. Ledger v8 preserves the HYPE before/after correction and trading control preserves the +54¢ whole-cent audit event. Separately, current economic evidence does not justify stake expansion, unconditional taker execution, an automatic entry relaxation, queue-aware live gates, or adding a second live venue. The shared buy rule remains **v22** — a 2026-08-20 operator narrowing to a +5pp edge floor and a 10–75¢ price band, not an evidence promotion. Live execution identity is now `maker-high30-requalify3-fresh1c-idv2-v6`; episode policy, sizing, and routes are unchanged.
+The **repeated-episode order-identity defect found on 2026-08-20 was mechanically repaired and its known ledger damage corrected on 2026-08-21**. New live episode IDs retain collision-resistant identity through every create retry; reconciliation no longer fuzzy-matches truncated legacy IDs and blocks one venue order from owning multiple local entries. Ledger v9 preserves the HYPE before/after correction and trading control preserves the +54¢ whole-cent audit event. V9 retains every identity/control/money row in the shared account ledger while hydrating heavy immutable terminal evidence from verified content-addressed batches on demand. Separately, current economic evidence does not justify stake expansion, unconditional taker execution, an automatic entry relaxation, queue-aware live gates, or adding a second live venue. The shared buy rule remains **v22** — a 2026-08-20 operator narrowing to a +5pp edge floor and a 10–75¢ price band, not an evidence promotion. Live execution identity is now `maker-high30-requalify3-fresh1c-idv2-v6`; episode policy, sizing, and routes are unchanged.
 
 A 2026-08-21 mirror review found that paper v4 first attempts were useful but its generation check suppressed every episode after episode 1. The defect was repaired under `paper-managed-execution-route-ioc-requalify3-v5`, with exact prospective four-cell pairing and bounded public trade/queue evidence; neutral calibration then advanced current paper execution to `paper-managed-execution-route-ioc-requalify3-calibrated-v6`. The closed v4 sample matched route and quantity 69/69 and fill/no-fill 79.7%, but captured only 62.5% of fills among 61 accepted paired live makers. Each generation remains separate and no history was rewritten. Paper does not feed funded execution, so no live order rule changed.
 
@@ -29,6 +29,43 @@ A second policy runs on the same market — the long-shot round trip, detailed i
 | Model evaluation | Automatic walk-forward scheduler continues monitoring; the latest v2 run crossed its mechanical review threshold, but evaluator v2 is explicitly barred from promotion and production remains Blend 0.4 |
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
 | Operational safety | Collision-resistant bounded live IDs, exact reconciliation ownership, quiescent drain, account reconciliation, kill switch, and budget/risk ceilings are implemented. Runtime readiness and operator state must be read from the live control surfaces named above, not inferred from this table. |
+
+### Execution ledger v9 activated; fixed UI reads are bounded, 2026-08-22
+
+The separately approved [v9 design](docs/execution-ledger-v9-design.md) is implemented and activated locally.
+The stopped-worker migration retained all 3,794 order rows, reduced the funded hot ledger from 36,347,633 bytes
+to 6,261,288 bytes, and moved heavy immutable fields for 3,548 seal-safe rows into 30 SHA-256-addressed batches.
+A frozen v8 input remains content-addressed under `data/execution-ledger-legacy/`; rollback hydrates the current
+generation rather than copying that stale input over newer orders. Five legacy logical IDs have duplicate rows,
+so references use a per-row content key and preserve array position rather than deduplicating history.
+
+The migration gate rehydrated and compared every field, then compared compact paper/live strategy summaries,
+funding epochs, lifetime whole-cent P&L, maker cohorts over a grid, hourly rate counts, long-shot funding, and daily
+loss. `npm run verify:execution-ledger`, both MJS/TypeScript compatibility readers, typecheck, 133 test files /
+1,073 tests, lint with zero errors / 37 inherited warnings, and the production build passed. The migration activation startup reconciliation completed READY at `2026-08-22T19:16:53.876Z` with zero
+local/venue-managed positions, no recovered fills or resting remainders, and zero reservations. A later final-code
+restart encountered transient full-history Kalshi timeouts and correctly remained blocked/paused; after stopping
+the retry pressure and making one clean restart, periodic reconciliation completed READY at
+`2026-08-22T20:10:26.842Z` with the same zero-position/zero-reservation result. Control stayed operator-paused;
+no policy or money semantic changed.
+
+Five-request production observations after warm-up measured dashboard responses at 4.4–19.9 ms normally,
+control summaries at 101.7–116.6 ms normally for about 19 KB, signed performance summaries at 30.5–42.7 ms,
+paper budget at 7.8–13.3 ms, and 50-row trade history at 41.2–48.4 ms. One dashboard sample took 658.3 ms and one
+control sample 327.5 ms under collector contention. These are bounded local observations, not latency
+distributions. Fixed readers use compact rows; full reports and analyses hydrate evidence explicitly.
+
+Residency improved but is not closed. A four-minute RSS sample was commonly 290–850 MB with spikes to 1.55 GB.
+A later 30-second native sample was 78.0% idle and found structured clone in only 19/24,888 main-thread samples
+(0.08%), down from 128/4,117 in the pre-v9 profile, but JSON parse remained 1,528/24,888 (6.14%) and physical
+footprint still reached 2.8 GB / 3.1 GB peak. Append-only contract-path, calendar, and exit-sentinel journals were
+approximately 15.5/12.5/8.8 MB and remain separate owning-store work; none was truncated or casually cached.
+See the [migration report](reports/execution-ledger-v9-migration-2026-08-22.md) for method and caveats.
+Automatic v9 evidence compaction remains disabled pending longer observation and an independent archive restore.
+
+Public replication now probes unavailable Postgres with the compact summary before constructing a full report;
+the exhausted quota therefore cannot repeatedly force execution-evidence hydration for a payload it will reject.
+Hosted projection availability itself remains blocked on the external quota.
 
 ### Dashboard reporting read path bounded; hosted database quota still blocked, 2026-08-22
 
@@ -437,16 +474,15 @@ snapshot.
   the same contract as production, so the required 20 differing-choice windows remain at zero and no
   ranking claim is available.
 - **Process residency is improved but not closed.** The bounded forecast reader, projection backoff, and
-  process-global provenance/cycle caches removed confirmed full-history churn. The funded-path follow-up now
-  gives at least seven emitted execution bundles one process-global serializer and one committed ledger
-  snapshot; mutations use isolated clones, atomic rename remains authoritative, failures invalidate/reload,
-  pause/drain waits globally, and the one-second long-shot precheck reads only open long-shot rows. Compact
-  encoding reduced the unchanged 3,606-order ledger from 48.0 MB to 33.6 MB. A post-deployment native sample
-  was idle 72.9% of the time versus the earlier sustained parse/GC load, but RSS still peaked at 3.37 GiB and
-  `vmmap` later reported 1.3 GiB physical / 3.9 GiB peak, mostly V8 anonymous memory. Further reduction needs
-  attribution of the remaining observational-journal parses and a separately approved terminal-order
-  archive/current-state schema; weakening the global queue or mutation clone is not an option. See
-  [the profile](reports/forecast-residency-profile-2026-08-22.md) and
+  process-global provenance/cycle caches removed confirmed full-history churn. At least seven emitted execution
+  bundles share one serializer and committed snapshot; isolated mutation clones and the atomic commit boundary
+  remain. The approved v9 migration then retained every control/money row while moving heavy immutable evidence
+  for 3,548 of 3,794 rows into content-addressed batches, reducing the hot ledger from 36.35 MB to 6.26 MB.
+  Fixed route latency is now bounded and native structured-clone samples fell from 3.11% pre-v9 to 0.08% in the
+  measured v9 interval. Physical footprint still reached 2.8 GiB / 3.1 GiB peak while JSON parse occupied 6.14%
+  of main-thread samples; large append-only observational journals remain the measured next source and cannot
+  be hand-truncated. See [the v9 report](reports/execution-ledger-v9-migration-2026-08-22.md),
+  [the v9 design](docs/execution-ledger-v9-design.md), and
   [the ownership design](docs/execution-ledger-runtime-design.md).
 
 ### Repository-health review recorded, 2026-08-20
@@ -1637,10 +1673,12 @@ Interpretation: the newer exact ledger snapshot is slightly negative lifetime an
 1. **Monitor v3 through its first automatic threshold seal and perform an independent archive restore.** A
    paused owning-compactor pass verifies now; do not cite new aggregate conclusions until they are recalculated, and do not
    retire the frozen legacy/corrupt evidence during this observation period.
-2. **Attribute the remaining steady physical footprint before another storage change.** Global execution
-   ownership and the bounded one-second precheck are complete. Profile calendar/exit/portfolio/maker journals
-   versus the execution clone; any terminal-order archive/current-state split is a new schema and
-   reconciliation design, not an automatic continuation of this repair.
+2. **Observe execution-ledger v9 and design observational-journal compaction separately.** The measured
+   terminal-ledger clone is removed: the hot account ledger retains all control/money rows and immutable heavy
+   evidence hydrates on demand. Automatic evidence compaction remains off until longer observation and an
+   independent archive restore. Native v9 sampling still finds substantial JSON parsing in the contract-path,
+   calendar, exit, portfolio, and maker journals; each needs its own checksum/generation/concurrency/crash-window
+   design before changing its owning store.
 3. **Design evaluator v3 before any model promotion.** Freeze cohorts and replay the complete policy and
    execution boundary; evaluator v2 remains monitoring-only.
 4. **Complete the untouched long-shot v2 60-window paper cohort.** No interim tuning or live arming.
@@ -1701,13 +1739,15 @@ Current follow-ups:
   [docs/forecast-storage-generation-repair-design.md](docs/forecast-storage-generation-repair-design.md);
   incident and exact recovery totals:
   [reports/forecast-storage-integrity-repair-2026-08-22.md](reports/forecast-storage-integrity-repair-2026-08-22.md).
-- **Execution-ledger ownership is complete; residency remains open.** Seven emitted execution bundles now
+- **Execution-ledger v9 is active; observational residency remains open.** Seven emitted execution bundles
   share one serializer and committed snapshot; mutation clones, commit-boundary publication, failed-write
-  invalidation, detached scoped reads, and a global pause barrier are tested. The one-second long-shot poll
-  no longer parses all orders, and compact JSON reduced the file to 33.6 MB. Profile the remaining evidence
-  journals and execution clone before proposing a terminal-order archive. Current measurements and caveats:
-  [reports/forecast-residency-profile-2026-08-22.md](reports/forecast-residency-profile-2026-08-22.md);
-  design: [docs/execution-ledger-runtime-design.md](docs/execution-ledger-runtime-design.md).
+  invalidation, detached scoped reads, and a global pause barrier remain tested. V9 reduced the 3,794-row hot
+  ledger from 36.35 MB to 6.26 MB without deleting evidence, and fixed polling no longer hydrates immutable
+  batches. Structured-clone samples fell materially, while large append-only observational journals still
+  produce parse/GC spikes and require separate owning-store designs. Measurements and caveats:
+  [reports/execution-ledger-v9-migration-2026-08-22.md](reports/execution-ledger-v9-migration-2026-08-22.md);
+  designs: [docs/execution-ledger-runtime-design.md](docs/execution-ledger-runtime-design.md) and
+  [docs/execution-ledger-v9-design.md](docs/execution-ledger-v9-design.md).
 - **Payload split** (design §7 item 2, agreed separately): the freshness badge should judge only market data,
   so no future slow subsystem can blank the trading view.
 - **Do not retire the legacy snapshot while verification fails.** `data/forecast-history.json` is the frozen

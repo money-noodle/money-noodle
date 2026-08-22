@@ -1,6 +1,6 @@
 # Bounded dashboard and public-projection read paths
 
-> **Status: approved for implementation.** Agreed 2026-08-22 after the local performance and hosted
+> **Status: implemented.** Agreed 2026-08-22 after the local performance and hosted
 > projection incident. This is a reporting/read-model change only. It changes no forecast, entry rule,
 > execution route, fill, sizing, budget control, reconciliation, or live authority.
 
@@ -55,8 +55,12 @@ The document gains two internal fields that are rebuilt rather than exposed by s
 - `homepage`: the compact public contract plus its own generation timestamp;
 - `fullGeneratedAt`: the timestamp at which the complete analytical document was replaced.
 
-The worker publishes a complete document on process start and at most once per 15 minutes. Between full
-publishes it updates only `homepage` once per minute with `jsonb_set`. This preserves minute-level homepage
+The worker attempts a complete document on process start and at most once per 15 minutes. Every replication
+first builds and writes the bounded `homepage` member; only after that availability probe succeeds may a due
+full report hydrate immutable execution evidence and build the analytical document. A quota outage therefore
+fails before expensive local history construction, and a full-payload-specific failure cannot force another
+full attempt until the 15-minute interval. Between full publishes it updates only `homepage` once per minute
+with `jsonb_set`. This preserves minute-level homepage
 freshness without sending the 311 KB history document from worker to database every minute. A worker or stored
 document from before this change remains readable: the compact SQL query derives the required fields from the
 full payload when `homepage` is absent, and the full reader falls back to `source_updated_at` when

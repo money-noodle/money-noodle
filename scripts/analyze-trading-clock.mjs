@@ -27,6 +27,7 @@
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { readExecutionLedger } from './lib/read-execution-ledger.mjs';
 
 const DATA = path.resolve(process.cwd(), 'data');
 const SHARDS = path.join(DATA, 'forecast-history-shards');
@@ -219,7 +220,7 @@ if (usable.length > 1) {
 }
 
 // --- the real ledger, where the sample is small and the money is not hypothetical -------------------
-const ledger = JSON.parse(await readFile(path.join(DATA, 'paper-orders.json'), 'utf8'));
+const ledger = await readExecutionLedger(DATA);
 const orders = (Array.isArray(ledger) ? ledger : Object.values(ledger).find(Array.isArray))
   .filter((o) => o.strategyId !== 'long-shot-round-trip' && !o.id.includes(':exit:')
     && ['won', 'lost', 'sold'].includes(o.status));

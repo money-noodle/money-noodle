@@ -14,9 +14,9 @@
  * cohort. The directional taker arm assumes the refreshed ask fills and is therefore an optimistic bound,
  * not executable evidence. All candidates are retrospective and this script is read-only.
  */
-import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { readResolvedForecasts } from './lib/forecast-history.mjs';
+import { readExecutionLedger } from './lib/read-execution-ledger.mjs';
 
 const DATA = path.resolve(process.cwd(), 'data');
 const BUY_POLICY = 'buy-binary-edge-netminus5-nocap-quality50-owned55-price5to97-late30-persist2of15-v21';
@@ -28,7 +28,7 @@ const EDGE_BANDS = [
 ];
 const DIRECTION_TICK = 0.01;
 
-const ledger = JSON.parse(await readFile(path.join(DATA, 'paper-orders.json'), 'utf8'));
+const ledger = await readExecutionLedger(DATA);
 const orders = ledger.orders ?? ledger;
 const forecasts = await readResolvedForecasts(DATA);
 const outcomesByContract = new Map();

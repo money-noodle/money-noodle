@@ -11,6 +11,7 @@
  */
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { readExecutionLedgerFile } from '../lib/execution-ledger-storage';
 import { getProviderBudgets, providerBudget, updateProviderBudget } from '../lib/provider-budget-store';
 import { strategyStartingCents } from '../lib/strategy-budget-policy';
 import { EDGE_BINARY_BUY, LONG_SHOT_ROUND_TRIP } from '../lib/strategy-registry';
@@ -30,7 +31,7 @@ async function main(): Promise<void> {
   const write = process.argv.includes('--write');
 
   const { control } = await readJson<{ control: Record<string, number | string> }>('trading-control.json');
-  const { orders } = await readJson<{ orders: PaperOrder[] }>('paper-orders.json');
+  const { orders } = await readExecutionLedgerFile() as { orders: PaperOrder[] };
   const openLive = orders.filter((order) => order.executionMode === 'live'
     && ['open', 'pending_reservation', 'uncertain'].includes(order.status));
 

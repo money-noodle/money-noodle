@@ -46,6 +46,7 @@ interface Order {
 }
 
 interface Ledger {
+  version?: number;
   paperBudget: {
     startingCents: number;
     availableCents: number;
@@ -60,6 +61,7 @@ const feeOf = (order: Order): number => order.actualFeeCents ?? order.feeCents ?
 async function main(): Promise<void> {
   const write = process.argv.includes('--write');
   const ledger = JSON.parse(await readFile(LEDGER_FILE, 'utf8')) as Ledger;
+  if (ledger.version === 9) throw new Error('This historical correction refuses execution-ledger v9. Restore a verified monolith through compact:execution-ledger -- --write --restore-monolith first.');
   const budget = ledger.paperBudget;
   const alreadyCorrected = new Set((budget.makerFeeCorrections ?? []).flatMap((entry) => entry.orderIds));
 

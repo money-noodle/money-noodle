@@ -4,7 +4,7 @@
 // Run: node scripts/analyze-unfilled-entries.mjs [hours] [end-iso]
 // Deciding correction: means and selected-side-minus-UP differences cluster by settlement window. Biggest
 // bias: a maker miss is selected by price moving away from its bid, so its hold return is not a capturable fill.
-import fs from 'node:fs';
+import { readExecutionLedgerSync } from './lib/read-execution-ledger.mjs';
 
 const HOURS = Number(process.argv[2] ?? 18);
 const endMs = process.argv[3] ? Date.parse(process.argv[3]) : Date.now();
@@ -12,7 +12,7 @@ if (!Number.isFinite(HOURS) || HOURS <= 0 || !Number.isFinite(endMs)) throw new 
 const cutoff = endMs - HOURS * 3_600_000;
 const iso = (value) => new Date(value).toISOString();
 
-const book = JSON.parse(fs.readFileSync(`${process.cwd()}/data/paper-orders.json`, 'utf8'));
+const book = readExecutionLedgerSync();
 const orders = book.orders;
 const live = orders.filter((row) => row.executionMode === 'live'
   && row.providerId === 'kalshi'

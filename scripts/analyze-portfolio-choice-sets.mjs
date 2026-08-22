@@ -11,6 +11,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createJiti } from 'jiti';
+import { readExecutionLedger } from './lib/read-execution-ledger.mjs';
 
 const DATA = path.resolve(process.cwd(), 'data');
 const SNAPSHOT = path.join(DATA, 'portfolio-choice-sets.json');
@@ -28,8 +29,10 @@ const journalRaw = await readOptional(JOURNAL);
 const events = journalRaw.split('\n').filter(Boolean).map((line) => JSON.parse(line));
 const records = replayPortfolioChoiceSetEvents(snapshot.records ?? [], events);
 const report = buildPortfolioChoiceSetReport(records);
-const ledgerRaw = await readOptional(path.join(DATA, 'paper-orders.json'));
-const ledger = ledgerRaw ? JSON.parse(ledgerRaw) : { orders: [] };
+const ledger = await readExecutionLedger(DATA).catch((error) => {
+  if (error?.code === 'ENOENT') return { orders: [] };
+  throw error;
+});
 const startedMs = Date.parse(snapshot.startedAt ?? '');
 const eligibleLedgerOrders = Number.isFinite(startedMs) ? (ledger.orders ?? []).filter((order) =>
   order.executionMode === 'live' && (order.strategyId ?? 'edge-binary-buy') === 'edge-binary-buy'

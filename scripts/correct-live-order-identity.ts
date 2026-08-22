@@ -38,6 +38,7 @@ async function main(): Promise<void> {
     readFile(LEDGER_FILE, 'utf8'), readFile(CONTROL_FILE, 'utf8'),
   ]);
   const ledger = JSON.parse(ledgerRaw) as CorrectableLiveLedger;
+  if (ledger.version === 9) throw new Error('This historical correction refuses execution-ledger v9. Restore a verified monolith through compact:execution-ledger -- --write --restore-monolith first.');
   const control = JSON.parse(controlRaw) as CorrectableTradingControl;
   const before = {
     ledgerVersion: ledger.version,

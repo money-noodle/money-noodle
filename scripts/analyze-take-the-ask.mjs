@@ -39,10 +39,10 @@
  *   - Settlement joined per window from the resolved forecast history.
  *   - Read-only; places no order and writes nothing. Nothing here promotes anything (AGENTS §5.5).
  */
-import { readFile } from 'node:fs/promises';
 import { readForecastHistory } from './lib/forecast-history.mjs';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { readExecutionLedger } from './lib/read-execution-ledger.mjs';
 
 const DATA = path.resolve(process.cwd(), 'data');
 const SHARDS = path.join(DATA, 'forecast-history-shards');
@@ -93,7 +93,7 @@ const absorb = (list) => {
 // a journal patch.
 absorb(await readForecastHistory(DATA));
 
-const allOrders = JSON.parse(await readFile(path.join(DATA, 'paper-orders.json'), 'utf8')).orders
+const allOrders = (await readExecutionLedger(DATA)).orders
   .filter((o) => !o.id.includes(':exit:') && o.strategyId !== 'long-shot-round-trip');
 
 const wasFilled = (o) => ['won', 'lost', 'sold', 'open'].includes(o.status);

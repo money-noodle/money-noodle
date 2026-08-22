@@ -1,11 +1,12 @@
 import 'server-only';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { beginLiveTransaction, blockExecutionDrain, completeExecutionDrain, endLiveTransaction, getExecutionDrainStatus, startExecutionDrain } from './execution-drain-state';
 import { CALENDAR_EVALUATION_VERSION, calendarFixedSnapshotDue, updateCalendarEvaluationStore, type CalendarEvaluationCycle } from './calendar-evaluation-store';
 import { reconcileExecutionLedger } from './execution-reconciliation';
 import { ENTRY_EXECUTION_POLICY_VERSION, MAX_ENTRY_EPISODES_PER_WINDOW, entrySideProbability, evaluateEntryExecutionPolicy, makerCohortEvidence, parseEntryExecutionMode, type EntryExecutionDecision } from './entry-execution-policy';
 import { executionMirrorPairStamp } from './execution-mirror-pair';
+import { hydrateExecutionOrders, readExecutionLedgerFile } from './execution-ledger-storage';
 import { observeEntryDirection } from './entry-direction-observation';
 import { evaluateEntrySizing } from './entry-sizing-policy';
 import { POST_EXIT_REENTRY_COOLDOWN_MS, evaluateExitPolicy } from './exit-policy';
@@ -153,15 +154,15 @@ interface PaperBudget {
   reconciliationCorrections?: BankrollCorrection[];
 }
 export const MAX_PAPER_BANKROLL_CENTS = 1_000_000;
-interface Ledger { version: 8; paperBudget: PaperBudget; orders: PaperOrder[]; signalPersistence: Record<string, SignalPersistenceState>; portfolioDecisions: Record<string, PortfolioDecisionView>; switchPersistence: Record<string, SwitchPersistenceState>; liveCorrections: LiveLedgerCorrection[]; lastLiveSkip?: { reason: string; at: string } }
+interface Ledger { version: 8 | 9; paperBudget: PaperBudget; orders: PaperOrder[]; signalPersistence: Record<string, SignalPersistenceState>; portfolioDecisions: Record<string, PortfolioDecisionView>; switchPersistence: Record<string, SwitchPersistenceState>; liveCorrections: LiveLedgerCorrection[]; lastLiveSkip?: { reason: string; at: string } }
 
 const ledgerRuntime = getExecutionLedgerRuntime<Ledger>();
 
 async function loadLedgerFromDisk(): Promise<Ledger> {
   try {
-    const raw = JSON.parse(await readFile(LEDGER_FILE, 'utf8')) as Partial<Ledger> & { orders?: PaperOrder[] };
+    const raw = await readExecutionLedgerFile(DATA_DIR) as Partial<Ledger> & { orders?: PaperOrder[] };
     return {
-      version: 8,
+      version: raw.version === 9 ? 9 : 8,
       paperBudget: raw.paperBudget ?? { startingCents: DEFAULT_PAPER_BANKROLL_CENTS, availableCents: DEFAULT_PAPER_BANKROLL_CENTS, realizedPnlCents: 0 },
       orders: (raw.orders ?? []).map((order) => ({ ...order, executionMode: order.executionMode ?? 'paper' })),
       // Persistence is side-specific. Legacy UP-only streaks are discarded rather than reused
@@ -174,7 +175,7 @@ async function loadLedgerFromDisk(): Promise<Ledger> {
     };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { version: 8, paperBudget: { startingCents: DEFAULT_PAPER_BANKROLL_CENTS, availableCents: DEFAULT_PAPER_BANKROLL_CENTS, realizedPnlCents: 0 }, orders: [], signalPersistence: {}, portfolioDecisions: {}, switchPersistence: {}, liveCorrections: [] };
+      return { version: 9, paperBudget: { startingCents: DEFAULT_PAPER_BANKROLL_CENTS, availableCents: DEFAULT_PAPER_BANKROLL_CENTS, realizedPnlCents: 0 }, orders: [], signalPersistence: {}, portfolioDecisions: {}, switchPersistence: {}, liveCorrections: [] };
     }
     throw error;
   }
@@ -3049,6 +3050,8 @@ export function groupedRecentOrders(orders: PaperOrder[]): PaperOrder[] {
   return [...groups.values()].map((attempts) => {
     attempts.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
     const latest = attempts.at(-1)!;
+    // Storage references are internal publication pointers, not order-history API fields.
+    const { archivedEvidence: _archivedEvidence, ...presented } = latest;
     const history = attempts.map((attempt, index) => ({
       id: attempt.id, attemptNumber: attempt.attemptNumber ?? index + 1, status: attempt.status,
       noFillReason: inferredNoFillReason(attempt), filledCount: attempt.filledCount, createdAt: attempt.createdAt,
@@ -3056,7 +3059,7 @@ export function groupedRecentOrders(orders: PaperOrder[]): PaperOrder[] {
     const recoveredAfterRetry = history.length > 1
       && history.slice(0, -1).some((attempt) => attempt.status === 'unfilled')
       && ((latest.filledCount ?? 0) > 0 || latest.status === 'open' || latest.status === 'won' || latest.status === 'lost');
-    return { ...latest, noFillReason: inferredNoFillReason(latest), attemptHistory: history, recoveredAfterRetry };
+    return { ...presented, noFillReason: inferredNoFillReason(latest), attemptHistory: history, recoveredAfterRetry };
   }).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 }
 
@@ -3107,7 +3110,7 @@ export function correctedPaperPnlCents(settled: PaperOrder[], budget?: PaperBudg
  */
 interface PnlScope { epochId?: string; startedAt?: string }
 
-export function summarize(orders: PaperOrder[], mode: ExecutionMode, running: boolean, equityCents: number, figures: LedgerFigures, budget?: PaperBudget, strategyId: StrategyId = EDGE_BINARY_BUY, scope: PnlScope = {}): ExecutionSummary {
+export function summarize(orders: PaperOrder[], mode: ExecutionMode, running: boolean, equityCents: number, figures: LedgerFigures, budget?: PaperBudget, strategyId: StrategyId = EDGE_BINARY_BUY, scope: PnlScope = {}, orderDetail: 'recent' | 'open' = 'recent'): ExecutionSummary {
   // Scoped by strategy as well as mode. The two strategies share one ledger because reconciliation is an
   // account-wide concern and a split file would leave real resting orders unmatched, so every money figure
   // read out of it has to re-narrow.
@@ -3116,7 +3119,8 @@ export function summarize(orders: PaperOrder[], mode: ExecutionMode, running: bo
   const settled = mine.filter(isSettled);
   /** Every strategy on this track. Only the money figures that mirror an account-wide counter use it. */
   const accountWide = orders.filter((order) => order.executionMode === mode && isSettled(order));
-  const openOrders = mine.filter((order) => order.status === 'open' || order.status === 'pending_reservation' || order.status === 'uncertain').length;
+  const open = mine.filter((order) => order.status === 'open' || order.status === 'pending_reservation' || order.status === 'uncertain');
+  const openOrders = open.length;
   // Scoped exactly as the headline P&L is scoped, per track: paper by the bankroll funding backing the
   // desk, live by the current budget epoch. An anchor drawn from a wider cohort would date the figures
   // beside it to a funding that never paid for them.
@@ -3167,15 +3171,25 @@ export function summarize(orders: PaperOrder[], mode: ExecutionMode, running: bo
      */
     ...(fundingFirstOrderAt ? { fundingFirstOrderAt } : {}),
     equityCents,
-    recentOrders: groupedRecentOrders(mine).slice(0, 30),
+    // Scheduled readers need current intents, not 30 terminal rows carrying large reporting evidence.
+    // The control dialog opts into bounded recent history only when it is actually opened.
+    recentOrders: groupedRecentOrders(orderDetail === 'recent' ? mine : open).slice(0, 30),
   };
 }
 
-/** Detached order-ledger rows for reporting; scheduled readers must request their narrow cohort. */
-export async function getExecutionOrders(filter: { executionMode?: ExecutionMode; strategyId?: StrategyId } = {}): Promise<PaperOrder[]> {
-  return readLedgerView((ledger) => ledger.orders.filter((order) =>
+/**
+ * Detached order-ledger rows for reporting. Full historical evidence is explicit and on-demand; fixed
+ * polling and funded control readers must pass `includeArchivedEvidence: false`.
+ */
+export async function getExecutionOrders(filter: {
+  executionMode?: ExecutionMode;
+  strategyId?: StrategyId;
+  includeArchivedEvidence?: boolean;
+} = {}): Promise<PaperOrder[]> {
+  const orders = await readLedgerView((ledger) => ledger.orders.filter((order) =>
     (!filter.executionMode || order.executionMode === filter.executionMode)
     && (!filter.strategyId || orderStrategyId(order) === filter.strategyId)));
+  return filter.includeArchivedEvidence === false ? orders : hydrateExecutionOrders(orders, DATA_DIR);
 }
 
 /** Funded paper bankroll. The paper track's strategy allocations are percentages of this, not of live cash. */
@@ -3237,8 +3251,20 @@ export async function getPublicPaperBudget(): Promise<PublicPaperBudget | null> 
   return readLedgerView(publicPaperBudgetFromLedger);
 }
 
-export async function getExecutionSummaries(control: { state: string; mode: string; startingBudgetCents: number; workingEquityCents: number; availableBudgetCents: number; reservedBudgetCents: number; proposedStakeCents: number; perTradeCents: number; epochId?: string; epochStartedAt?: string }): Promise<{ paper: ExecutionSummary; live: ExecutionSummary; executionSignals: ExecutionSignalReadiness[]; liveAvailable: boolean; liveBlockers: string[]; maximumLiveEntryEpisodes: number; portfolioConstraints: Pick<PortfolioConstraints, 'maximumPositions' | 'maximumSameWindow' | 'maximumSameGroupPerWindow'>; regimeGate: RegimeGateStatus }> {
-  const [ledger, regimeGate] = await Promise.all([readLedgerView((value) => value), getRegimeGateStatus()]);
+interface ExecutionSummaryControl {
+  state: string;
+  mode: string;
+  startingBudgetCents: number;
+  workingEquityCents: number;
+  availableBudgetCents: number;
+  reservedBudgetCents: number;
+  proposedStakeCents: number;
+  perTradeCents: number;
+  epochId?: string;
+  epochStartedAt?: string;
+}
+
+function deriveExecutionSummaries(ledger: Ledger, control: ExecutionSummaryControl, includeRecentOrders: boolean) {
   const now = Date.now();
   const persistenceRequirements = productionSignalPersistence();
   const openPaper = ledger.orders.filter((order) => order.executionMode === 'paper' && (order.status === 'open' || order.status === 'pending_reservation')).reduce((sum, order) => sum + order.stakeCents, 0);
@@ -3252,14 +3278,14 @@ export async function getExecutionSummaries(control: { state: string; mode: stri
       // Dated, but not epoch-scoped. `correctedPaperPnlCents` already counts from the bankroll funding, so
       // the opening moment belongs on the panel; passing an `epochId` as well would relabel the scope and
       // publish a lifetime figure identical to the headline, which reads as a discrepancy.
-    }, ledger.paperBudget, EDGE_BINARY_BUY, { startedAt: ledger.paperBudget.startedAt }),
+    }, ledger.paperBudget, EDGE_BINARY_BUY, { startedAt: ledger.paperBudget.startedAt }, includeRecentOrders ? 'recent' : 'open'),
     live: {
       ...summarize(ledger.orders, 'live', control.state === 'active' && control.mode === 'live' && liveTradingEnabled(), control.workingEquityCents, {
         startingCents: control.startingBudgetCents,
         availableCents: control.availableBudgetCents, reservedCents: control.reservedBudgetCents,
         proposedStakeCents: Math.min(control.proposedStakeCents, maxLiveStakeCents()),
         // Live's counter was re-funded, so only this epoch's orders tie to the equity shown beside them.
-      }, undefined, EDGE_BINARY_BUY, { epochId: control.epochId, startedAt: control.epochStartedAt }),
+      }, undefined, EDGE_BINARY_BUY, { epochId: control.epochId, startedAt: control.epochStartedAt }, includeRecentOrders ? 'recent' : 'open'),
       blockedReason: ledger.lastLiveSkip?.reason,
     },
     executionSignals: Object.values(ledger.signalPersistence)
@@ -3310,7 +3336,6 @@ export async function getExecutionSummaries(control: { state: string; mode: stri
     liveAvailable: liveTradingEnabled(),
     liveBlockers: liveBlockers(),
     maximumLiveEntryEpisodes: entryExecutionSettings().mode === 'adaptive' ? MAX_ENTRY_EPISODES_PER_WINDOW : maximumLiveMakerAttempts(),
-    regimeGate,
     portfolioConstraints: (() => {
       const constraints = portfolioConstraints();
       return {
@@ -3320,4 +3345,16 @@ export async function getExecutionSummaries(control: { state: string; mode: stri
       };
     })(),
   };
+}
+
+export async function getExecutionSummaries(
+  control: ExecutionSummaryControl,
+  options: { includeRecentOrders?: boolean } = {},
+): Promise<{ paper: ExecutionSummary; live: ExecutionSummary; executionSignals: ExecutionSignalReadiness[]; liveAvailable: boolean; liveBlockers: string[]; maximumLiveEntryEpisodes: number; portfolioConstraints: Pick<PortfolioConstraints, 'maximumPositions' | 'maximumSameWindow' | 'maximumSameGroupPerWindow'>; regimeGate: RegimeGateStatus }> {
+  const [execution, regimeGate] = await Promise.all([
+    // Derive while holding the committed ledger view; clone only this bounded result, never the 35 MB ledger.
+    readLedgerView((ledger) => deriveExecutionSummaries(ledger, control, options.includeRecentOrders === true)),
+    getRegimeGateStatus(),
+  ]);
+  return { ...execution, regimeGate };
 }

@@ -25,7 +25,7 @@ export const dynamic = 'force-dynamic';
  */
 async function blockers(): Promise<string[]> {
   const control = await getTradingControl();
-  const orders = await getExecutionOrders();
+  const orders = await getExecutionOrders({ includeArchivedEvidence: false });
   const open = orders.filter((order) => order.executionMode === 'live'
     && ['open', 'pending_reservation', 'uncertain'].includes(order.status));
   const found: string[] = [];

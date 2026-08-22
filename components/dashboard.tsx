@@ -38,7 +38,7 @@ import {
 } from '@/lib/signal-display-lifecycle';
 import type {
   DashboardData, DashboardViewData, Direction, ExecutionSignalReadiness, Factor, PerformanceSummary,
-  Prediction, PublicPaperPerformanceSummary, TradeTrackRecord, TradeTrackSummary,
+  Prediction, PublicPaperPerformanceSummary, TradeTrackRecord, TradeTrackSummary, TradingControlData,
 } from '@/lib/types';
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
@@ -205,30 +205,14 @@ function ProbabilityCell({ label, probabilityUp, model = false, approximate = fa
  * signed session, so `publicView` skips that fetch and omits the per-candidate execution badges rather
  * than leaving every card stuck on an indefinite "checking execution".
  */
-function PositiveEdgeBuys({ predictions, updatedAt, publicView = false, onRefresh, refreshing = false }: { predictions: Prediction[]; updatedAt: string; publicView?: boolean; onRefresh?: () => void; refreshing?: boolean }) {
+function PositiveEdgeBuys({ predictions, updatedAt, publicView = false, executionSignals = [], executionSignalsLoaded = false, onRefresh, refreshing = false }: { predictions: Prediction[]; updatedAt: string; publicView?: boolean; executionSignals?: ExecutionSignalReadiness[]; executionSignalsLoaded?: boolean; onRefresh?: () => void; refreshing?: boolean }) {
   const [now, setNow] = useState(() => Date.parse(updatedAt));
-  const [executionSignals, setExecutionSignals] = useState<ExecutionSignalReadiness[]>([]);
-  const [executionSignalsLoaded, setExecutionSignalsLoaded] = useState(false);
   const [showConfirmingSignals, setShowConfirmingSignals] = useState(true);
   const [expandedBookKey, setExpandedBookKey] = useState<string>();
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
   }, []);
-  useEffect(() => {
-    if (publicView) return;
-    let cancelled = false;
-    fetch('/api/trading/control', { cache: 'no-store' })
-      .then((response) => response.ok ? response.json() : null)
-      .then((body) => {
-        if (!cancelled && body?.executionSignals) {
-          setExecutionSignals(body.executionSignals);
-          setExecutionSignalsLoaded(true);
-        }
-      })
-      .catch(() => undefined);
-    return () => { cancelled = true; };
-  }, [updatedAt, publicView]);
   const calculatedAt = Date.parse(updatedAt);
   const freshnessNow = Number.isFinite(calculatedAt) ? Math.max(now, calculatedAt) : now;
   const calculationAgeMs = Number.isFinite(calculatedAt) ? freshnessNow - calculatedAt : Number.POSITIVE_INFINITY;
@@ -471,6 +455,28 @@ function LoadingState() {
   return <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{Array.from({ length: 7 }).map((_, index) => <Card key={index}><CardHeader><Skeleton className="h-8 w-28"/></CardHeader><CardContent><Skeleton className="h-10 w-32"/><Skeleton className="mt-6 h-16 w-full"/><Skeleton className="mt-5 h-10 w-full"/></CardContent></Card>)}</div>;
 }
 
+/** One funded read-model poll shared by automation status and per-candidate execution readiness. */
+function useTradingControlSummary(active: boolean): TradingControlData | null {
+  const [data, setData] = useState<TradingControlData | null>(null);
+  useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    async function load() {
+      try {
+        const response = await fetch('/api/trading/control', { cache: 'no-store' });
+        if (!response.ok) return;
+        const body = await response.json() as TradingControlData;
+        if (!cancelled) setData(body);
+      } catch { /* Keep the previous verified control projection. */ }
+      finally { if (!cancelled) timer = window.setTimeout(() => void load(), DATA_FRESHNESS.dashboardPollMs); }
+    }
+    void load();
+    return () => { cancelled = true; if (timer !== undefined) window.clearTimeout(timer); };
+  }, [active]);
+  return data;
+}
+
 /**
  * `deskAvailable` is not `authenticated`. A signed-in reader on a stateless host has every right to the
  * desk panel and no worker to serve it, so the two must be asked separately or the panel disappears.
@@ -483,8 +489,9 @@ export function Dashboard({ initialData, authenticated, deskAvailable, stateless
   const [isPending, startTransition] = useTransition();
   const [query, setQuery] = useState('');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  // One owner for both public panels: two independent hooks previously doubled every database read.
+  // One owner for each read model: duplicate component polls previously doubled ledger/database work.
   const publicPaper = usePublicPaperPerformanceSummary(!deskAvailable);
+  const tradingControl = useTradingControlSummary(deskAvailable);
 
   useEffect(() => {
     if (data) return;
@@ -566,8 +573,8 @@ export function Dashboard({ initialData, authenticated, deskAvailable, stateless
         </div>
       </section>
 
-      {deskAvailable ? <AutomationStatus/> : <PublicAutomationStatus deskElsewhere={authenticated} performance={publicPaper.performance} performanceError={publicPaper.error}/>}
-      {data && <PositiveEdgeBuys predictions={data.predictions} updatedAt={data.generatedAt} publicView={!authenticated} onRefresh={refresh} refreshing={isPending}/>}
+      {deskAvailable ? <AutomationStatus data={tradingControl}/> : <PublicAutomationStatus deskElsewhere={authenticated} performance={publicPaper.performance} performanceError={publicPaper.error}/>}
+      {data && <PositiveEdgeBuys predictions={data.predictions} updatedAt={data.generatedAt} publicView={!deskAvailable} executionSignals={tradingControl?.executionSignals} executionSignalsLoaded={Boolean(tradingControl)} onRefresh={refresh} refreshing={isPending}/>}
       {authenticated && deskAvailable
         ? data?.performance && <PerformancePanel performance={data.performance}/>
         : <PublicPaperPerformancePanel performance={publicPaper.performance} error={publicPaper.error}/>}

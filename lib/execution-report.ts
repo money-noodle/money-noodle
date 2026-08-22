@@ -1,5 +1,6 @@
 import { ACTION_COUNTERFACTUAL_VERSION, buildActionCounterfactuals, clusterByWindow } from './action-counterfactual';
 import { buildExecutionMirrorPairReport } from './execution-mirror-pair';
+import { entryDecisionNetEdge, makerExecutionStyle } from './execution-order-evidence';
 import { normalizeMarketId } from './market-registry';
 import { EDGE_BINARY_BUY, normalizeStrategyId } from './strategy-registry';
 import { BUY_POLICY_VERSION } from './prediction-policy';
@@ -16,7 +17,7 @@ function predictedEdge(order: PaperOrder): number {
   const fee = order.actualFeeCents ?? order.feeCents;
   const feeRate = order.potentialPayoutCents ? fee / order.potentialPayoutCents : 0;
   const probability = order.side === 'UP' ? order.modelProbabilityUp : 1 - order.modelProbabilityUp;
-  return order.entryDecision?.netEdge ?? probability - issuanceAsk(order) - feeRate;
+  return entryDecisionNetEdge(order) ?? probability - issuanceAsk(order) - feeRate;
 }
 
 /** Cash returned per $1 staked, which is the only definition of success that pays. */
@@ -110,7 +111,7 @@ export function buildMakerFillReport(orders: PaperOrder[], forecasts: TrackedFor
     ?? forecastOutcomes.get(makerOutcomeKey(order.symbol, order.closesAt));
   const makerEntries = orders.filter((order) => order.executionMode === 'live' && order.venue === 'kalshi'
     && !order.id.includes(':exit:') && order.liquidityRole !== 'taker'
-    && order.entryExecutionDecision?.executedStyle !== 'taker'
+    && makerExecutionStyle(order) !== 'taker'
     && (Boolean(order.makerFillEstimate) || order.liquidityRole === 'maker' || inferredPostOnlyRace(order)
       || (order.status === 'unfilled' && Boolean(order.venueOrderId)))
     && order.status !== 'pending_reservation' && order.status !== 'uncertain');

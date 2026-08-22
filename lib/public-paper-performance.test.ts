@@ -230,6 +230,7 @@ describe('public paper performance replication', () => {
 
   it('publishes a payload without the read-time durable and generatedAt fields', async () => {
     await (await freshReplicate())();
+    expect(writeSummaryProjection).toHaveBeenCalledTimes(1);
     expect(writeProjection).toHaveBeenCalledTimes(1);
     const payload = writeProjection.mock.calls[0][0] as Record<string, unknown>;
     expect(payload).not.toHaveProperty('durable');
@@ -252,14 +253,14 @@ describe('public paper performance replication', () => {
     const replicate = await freshReplicate();
     await replicate();
     expect(writeProjection).toHaveBeenCalledTimes(1);
-    expect(writeSummaryProjection).not.toHaveBeenCalled();
+    expect(writeSummaryProjection).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(60_000);
     await replicate();
     expect(writeProjection).toHaveBeenCalledTimes(1);
-    expect(writeSummaryProjection).toHaveBeenCalledTimes(1);
+    expect(writeSummaryProjection).toHaveBeenCalledTimes(2);
     expect(forecastHistory).toHaveBeenCalledTimes(1);
-    const compact = writeSummaryProjection.mock.calls[0][0] as Record<string, unknown>;
+    const compact = writeSummaryProjection.mock.calls[1][0] as Record<string, unknown>;
     expect(compact).toHaveProperty('summary');
     expect(compact).toHaveProperty('paperRecord');
     expect(compact).not.toHaveProperty('forecasts');
@@ -269,23 +270,27 @@ describe('public paper performance replication', () => {
   it('backs off exponentially after a database failure before rebuilding the payload', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-22T00:00:00Z'));
-    writeProjection.mockRejectedValueOnce(new Error('quota exceeded')).mockResolvedValueOnce(undefined);
+    writeSummaryProjection.mockRejectedValueOnce(new Error('quota exceeded')).mockResolvedValueOnce(undefined);
     const replicate = await freshReplicate();
     await expect(replicate()).rejects.toThrow('quota exceeded');
     expect(performanceSummary).toHaveBeenCalledTimes(1);
+    expect(forecastHistory).not.toHaveBeenCalled();
+    expect(writeProjection).not.toHaveBeenCalled();
 
     await replicate();
     expect(performanceSummary).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(2 * 60_000);
     await replicate();
-    expect(performanceSummary).toHaveBeenCalledTimes(2);
-    expect(writeProjection).toHaveBeenCalledTimes(2);
+    expect(performanceSummary).toHaveBeenCalledTimes(3);
+    expect(writeSummaryProjection).toHaveBeenCalledTimes(2);
+    expect(writeProjection).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
   });
 
   it('does nothing at all when replication is not configured', async () => {
     syncEnabled.mockReturnValue(false);
     await (await freshReplicate())();
+    expect(writeSummaryProjection).not.toHaveBeenCalled();
     expect(writeProjection).not.toHaveBeenCalled();
     expect(performanceSummary).not.toHaveBeenCalled();
   });

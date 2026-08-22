@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
     const mode: ExecutionMode | null = modeParam === 'live' || modeParam === 'paper' ? modeParam : null;
     const limit = Math.min(100, Math.max(10, Number(request.nextUrl.searchParams.get('limit')) || 50));
     const offset = Math.max(0, Number(request.nextUrl.searchParams.get('offset')) || 0);
-    const grouped = groupedRecentOrders(await getExecutionOrders()).filter((order) => {
+    const grouped = groupedRecentOrders(await getExecutionOrders({ includeArchivedEvidence: false })).filter((order) => {
       if (mode && order.executionMode !== mode) return false;
       if (stateParam === 'open' && !openStatuses.has(order.status)) return false;
       if (stateParam === 'settled' && !settledStatuses.has(order.status)) return false;
