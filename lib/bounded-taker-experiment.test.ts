@@ -171,6 +171,24 @@ describe('bounded taker safety ceilings', () => {
 });
 
 describe('bounded taker reporting', () => {
+  it('keeps a withheld maker submission out of the treatment IOC counters', () => {
+    const withheldIdentity = { ...identity('BTC'), closesAt: '2026-08-24T00:45:00Z' };
+    expect(boundedTakerArm(withheldIdentity)).toMatchObject({ arm: 'treatment-taker', hashBucket: 299 });
+    const withheld = order('withheld-treatment', {
+      symbol: 'BTC', closesAt: withheldIdentity.closesAt, venueOrderId: 'maker-venue-id',
+      entryExecutionObservations: [{ at: '2026-08-24T00:30:01Z', event: 'create_quote' }],
+      boundedTakerExperiment: stamp({
+        execution: 'treatment-withheld', withheldReason: 'hourly-cap',
+      }, withheldIdentity),
+    });
+    const report = buildBoundedTakerExperimentReport([withheld], Date.parse('2026-08-25T00:00:00Z'), true);
+    expect(report.tracks.live.treatment).toMatchObject({
+      assignments: 1, treatmentExecuted: 0, treatmentWithheld: 1,
+      submissionAttempts: 0, venueAcceptances: 0,
+      withheldMakerSubmissionAttempts: 1, withheldMakerVenueAcceptances: 1,
+    });
+  });
+
   it('scores the whole control sequence and never unlocks a promotion', () => {
     const controlIdentity = { ...identity('BTC'), closesAt: '2026-08-24T00:15:00Z' };
     const controlStamp = stamp({}, controlIdentity);

@@ -140,8 +140,9 @@ live/paper and includes:
 2. exact P&L per issuance authorization cent and treatment-minus-control clustered difference;
 3. fill rate and profitable-position rate per assigned intent;
 4. authoritative hold P&L as a secondary entry-only view;
-5. assignment, authorization, signed submission, acceptance, quote-refusal, IOC no-fill, partial-fill, and
-   reconciliation/safety-stop counts;
+5. assignment, authorization, intended-route submission, acceptance, quote-refusal, IOC no-fill, partial-fill,
+   and reconciliation/safety-stop counts; a treatment assignment withheld by a pilot ceiling reports its actual
+   maker submission/acceptance in separate fields and can never increment the treatment IOC counters;
 6. paper arms separately and identity-paired mirror rows where both exist;
 7. exact cash, whole-cent control, and normalized clustered views without smoothing disagreement.
 

@@ -242,6 +242,16 @@ remain zero. A follow-up durable-stamp identity check and explicit submission/ac
 the same full validation, then a final quiescent restart at 2026-08-24T19:02:47Z passed startup reconciliation in
 1.833 seconds; explicit Resume set revision 6,238 active with 2,167¢ available and 0¢ reserved.
 
+A 2026-08-24T20:49Z reporting audit found that the treatment arm's generic `submissionAttempts` counter included
+the maker submission from a treatment assignment withheld by the pilot's hourly ceiling. Assignment, P&L, and
+all execution controls were correct; only route attribution was wrong. The report now counts only the intended
+experimental IOC in treatment submission/acceptance fields and exposes withheld maker submissions/acceptances
+separately. At the deciding 13-live-assignment read, this changes treatment IOC submissions from one to zero and
+reports one withheld maker submission instead; the two authorized treatments remain pre-submit quote refusals.
+The reporting-only correction activated through another quiescent drain with zero reservations; the
+2026-08-24T20:50:31Z startup full reconciliation passed in 2.281 seconds and explicit Resume set revision 6,274
+active with 2,172¢ available and 0¢ reserved.
+
 ### Live resumed; paper settlement and mirror behavior monitored, 2026-08-22
 
 Production deployment `dpl_GcGwXaNANrHtY8uPYzGGfkHsJfSX` reached READY and was aliased to `noodle.money`.

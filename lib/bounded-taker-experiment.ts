@@ -250,8 +250,12 @@ export interface BoundedTakerArmReport {
   resolved: number;
   treatmentExecuted: number;
   treatmentWithheld: number;
+  /** Intended-arm route only: maker for control, experimental IOC for treatment. */
   submissionAttempts: number;
   venueAcceptances: number;
+  /** Maker activity caused by a treatment assignment that the experiment capacity ceiling withheld. */
+  withheldMakerSubmissionAttempts: number;
+  withheldMakerVenueAcceptances: number;
   preSubmitRefusals: number;
   iocNoFills: number;
   partialFills: number;
@@ -302,6 +306,12 @@ export function buildBoundedTakerExperimentReport(
       const resolved = !unresolved && nowMs >= Date.parse(assignment.closesAt);
       const exactPnlCents = resolved ? sequence.reduce((sum, order) => sum + exactOrderPnl(order), 0) : 0;
       const holdPnlCents = resolved ? sequenceHoldPnl(sequence) : 0;
+      const treatmentExecuted = ['treatment-taker', 'paper-treatment-simulation']
+        .includes(assignment.boundedTakerExperiment.execution);
+      const treatmentWithheld = assignment.boundedTakerExperiment.execution === 'treatment-withheld';
+      const intendedRouteExecuted = assignment.boundedTakerExperiment.arm === 'control-maker' || treatmentExecuted;
+      const createQuoteObserved = assignment.entryExecutionObservations
+        ?.some((observation) => observation.event === 'create_quote') ?? false;
       return {
         arm: assignment.boundedTakerExperiment.arm,
         closesAt: assignment.closesAt,
@@ -309,15 +319,17 @@ export function buildBoundedTakerExperimentReport(
         exactPnlCents,
         holdPnlCents,
         authorizationCents: assignment.boundedTakerExperiment.authorizationCapCents,
-        treatmentExecuted: ['treatment-taker', 'paper-treatment-simulation'].includes(assignment.boundedTakerExperiment.execution),
-        treatmentWithheld: assignment.boundedTakerExperiment.execution === 'treatment-withheld',
-        submissionAttempted: assignment.entryExecutionObservations?.some((observation) => observation.event === 'create_quote') ?? false,
-        venueAccepted: Boolean(assignment.venueOrderId),
-        preSubmitRefusal: assignment.noFillReason === 'pre_submit_quote_moved',
-        iocNoFill: assignment.noFillReason === 'ioc_no_fill',
-        partialFill: (assignment.filledCount ?? 0) > 0
+        treatmentExecuted,
+        treatmentWithheld,
+        submissionAttempted: intendedRouteExecuted && createQuoteObserved,
+        venueAccepted: intendedRouteExecuted && Boolean(assignment.venueOrderId),
+        withheldMakerSubmissionAttempted: treatmentWithheld && createQuoteObserved,
+        withheldMakerVenueAccepted: treatmentWithheld && Boolean(assignment.venueOrderId),
+        preSubmitRefusal: treatmentExecuted && assignment.noFillReason === 'pre_submit_quote_moved',
+        iocNoFill: treatmentExecuted && assignment.noFillReason === 'ioc_no_fill',
+        partialFill: intendedRouteExecuted && (assignment.filledCount ?? 0) > 0
           && (assignment.filledCount ?? 0) + 1e-8 < (assignment.requestedQuantity ?? assignment.quantity),
-        safetyStop: Boolean(assignment.boundedTakerExperiment.safetyStoppedAt),
+        safetyStop: treatmentExecuted && Boolean(assignment.boundedTakerExperiment.safetyStoppedAt),
         filled: sequence.some((order) => (order.filledCount ?? 0) > 0),
       };
     });
@@ -335,6 +347,8 @@ export function buildBoundedTakerExperimentReport(
         treatmentWithheld: selected.filter((row) => row.treatmentWithheld).length,
         submissionAttempts: selected.filter((row) => row.submissionAttempted).length,
         venueAcceptances: selected.filter((row) => row.venueAccepted).length,
+        withheldMakerSubmissionAttempts: selected.filter((row) => row.withheldMakerSubmissionAttempted).length,
+        withheldMakerVenueAcceptances: selected.filter((row) => row.withheldMakerVenueAccepted).length,
         preSubmitRefusals: selected.filter((row) => row.preSubmitRefusal).length,
         iocNoFills: selected.filter((row) => row.iocNoFill).length,
         partialFills: selected.filter((row) => row.partialFill).length,
