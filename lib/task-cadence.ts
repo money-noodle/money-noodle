@@ -123,9 +123,9 @@ export const TASK_CADENCE: readonly TaskCadenceDefinition[] = [
     id: 'reconciliation', task: 'Authoritative reconciliation', cadenceKind: 'periodic-and-event',
     cadenceMs: DEFAULT_RECONCILIATION_INTERVAL_MS,
     cadenceLabel: `${formatCadence(DEFAULT_RECONCILIATION_INTERVAL_MS)} plus startup, manual, and uncertainty events`,
-    activation: 'Startup barrier; then while live execution is enabled, or when requested by an operator or uncertain order state.',
-    purpose: 'Checks venue cash, positions, orders, fills, resting remainders, and local reservations before live execution remains ready.',
-    requestCost: 'Serialized signed account reads, paginated as needed; never shares the research calculation queue.',
+    activation: 'Full startup/manual/drain barrier; then an independent incremental timer while live is enabled, plus uncertain-order recovery.',
+    purpose: 'Checks venue cash, positions, order/fill deltas, exact pending transactions, resting remainders, and local reservations.',
+    requestCost: 'Bounded signed account/delta reads outside the ledger serializer; full current-tier pagination only at explicit barriers.',
     workerOnly: true,
   },
 ] as const;

@@ -32,7 +32,8 @@ suppress them between TTLs.
 | **Kalshi** public | `/markets?series_ticker=<series>&limit=10` | 12s (`kalshiCacheMs`) | **1 per asset** = 7 | N assets |
 | Kalshi public (on-demand) | order-book monitor ladder | 2s while one operator panel expanded | 1 | at most 1 expanded card |
 | Kalshi signed (exact pre-submit / manager) | exact-contract quote/depth/trade | on-demand / bounded | per-ticker, single-flight | depends on entries |
-| Kalshi signed (reconciliation) | cash, positions, orders, fills, resting | 5 min + startup/event | serialized, paginated | live-enabled only |
+| Kalshi signed (reconciliation) | cutoff, cash, nonzero positions, order/fill delta, resting twice, exact active order/fills | 5 min + event | 7 base reads + bounded active IDs | live-enabled only |
+| Kalshi signed (full reconciliation) | cash, nonzero positions, current-tier orders/fills, resting twice | startup/manual/drain | 6 base reads + current-tier pages/cancellation refresh | explicit barrier only |
 | **Polymarket** | Gamma events (`?slug=`) | 12s (`polymarketCacheMs`) | **1 per asset** = 7 | N assets |
 | Polymarket | CLOB `/books` POST | same 12s pass | **1** (all tokenIds batched) | 1 |
 | **Kraken** | `/public/Ticker` | contractReference 10s | **1** (all pairs) | 1 |
@@ -61,13 +62,16 @@ in one 15s cycle ≈ 2.1/s average over that tick**. That is 3.5% of Kalshi's 20
 its 60/s burst for the Kalshi share (7); from the public-read capacity standpoint the quote loop is far
 from the binding constraint.
 
-**The real pressure points are signed Kalshi reads**, not the public quote loop. Startup and event
-reconciliation each do several signed reads (cash + positions + orders + fills + resting), paginated,
-serialized. Notifications of "read-limit backoff at startup" in STATUS trace to these signed reads
-sharing the same 10-token pool as public quotes while the signed buckets also carry exact pre-submit
-and manager reads. **This is where the 600-token burst matters.** A busy live desk adds: per managed
-maker 6 checks × (quote+depth+trade+fill) reads over 12s, per long-shot open position a target-exit
-read each poll, and per trailing entry its bounded fast-look budget.
+**The real pressure points are signed Kalshi reads**, not the public quote loop. Full startup/manual/drain
+reconciliation reads cash, nonzero positions, current-live-tier orders/fills, and resting orders, paginated at
+1,000 rows; this remains a barrier but no longer runs every five minutes. Periodic/event reconciliation has
+seven base reads (historical cutoff, cash, nonzero positions, fixed-window orders, fixed-window fills, and
+resting before/after) plus exact order/fill reads bounded by locally active or uncertain IDs. Those venue reads
+run outside the execution-ledger serializer while reconciliation state fences new live exposure. Notifications
+of "read-limit backoff at startup" in STATUS trace to signed reads sharing the same 10-token pool as public
+quotes while the signed buckets also carry exact pre-submit and manager reads. **This is where the 600-token
+burst matters.** A busy live desk adds: per managed maker 6 checks × (quote+depth+trade+fill) reads over 12s,
+per long-shot open position a target-exit read each poll, and per trailing entry its bounded fast-look budget.
 
 ## 4. What the hourly plan adds
 
@@ -122,6 +126,8 @@ separately, because the hourly case shows they diverge.
 
 ## Change log
 
+- 2026-08-23 · Replaced five-minute full-live-tier pagination with seven-base-read incremental reconciliation
+  plus bounded exact active IDs; retained full current-tier pagination at startup/manual/drain barriers.
 - 2026-08-21 · Created as the canonical per-venue traffic/rate-limit/recovery reference to support the
   `crypto-1h` plan. Quantified current 15m (7-asset) steady and worst-case, the hourly plan's added
   public-read/grid-payload cost, and the readiness gap on the non-Kalshi venues.

@@ -1,13 +1,13 @@
 import { clusterByWindow } from './action-counterfactual';
-import { PAPER_MANAGED_MAKER_EXECUTION_VERSION } from './paper-maker-simulation';
+import { normalCdf } from './basis-model';
 import { EDGE_BINARY_BUY } from './strategy-registry';
 import type { ExecutionMode, PaperOrder, PositionLifecycleObservation, PositionSide, StrategyId } from './types';
 
-export const EXIT_POLICY_SENTINEL_VERSION = 'exit-policy-sentinel-v1';
+export const EXIT_POLICY_SENTINEL_VERSION = 'exit-policy-sentinel-v2';
 export const EXIT_POLICY_REVIEW_WINDOWS = 60;
 export const EXIT_POLICY_MINIMUM_DIVERGENT_WINDOWS = 20;
 export const EXIT_POLICY_MINIMUM_COVERAGE = 0.9;
-export const EXIT_SENTINEL_MAXIMUM_OBSERVATION_GAP_MS = 20_000;
+export const EXIT_SENTINEL_PRODUCTION_MATCH_MS = 20_000;
 
 export type ExitCandidateId =
   | 'strict-value-margin3c-v1'
@@ -15,12 +15,42 @@ export type ExitCandidateId =
   | 'strict-value-confirm2-v1'
   | 'trailing-50-35-v1';
 
+export interface ExitIocSimulation {
+  version: 'exit-ioc-depth-v1';
+  evidenceComplete: boolean;
+  filledCount: number;
+  averagePrice: number;
+  grossProceedsCents: number;
+  feeCents: number;
+  netProceedsCents: number;
+  remainingCount: number;
+}
+
+export function validExitIocSimulation(simulation: ExitIocSimulation, quantity: number): boolean {
+  const values = [quantity, simulation.filledCount, simulation.averagePrice, simulation.grossProceedsCents,
+    simulation.feeCents, simulation.netProceedsCents, simulation.remainingCount];
+  if (!values.every(Number.isFinite) || !(quantity > 0) || simulation.filledCount < 0
+    || simulation.remainingCount < 0 || simulation.grossProceedsCents < 0 || simulation.feeCents < 0
+    || simulation.filledCount > quantity + 1e-8
+    || Math.abs(simulation.filledCount * 100 - Math.round(simulation.filledCount * 100)) > 1e-8
+    || Math.abs(simulation.remainingCount * 100 - Math.round(simulation.remainingCount * 100)) > 1e-8
+    || Math.abs(simulation.filledCount + simulation.remainingCount - quantity) > 1e-8) return false;
+  if (simulation.filledCount <= 1e-8) {
+    return Math.abs(simulation.averagePrice) <= 1e-9 && Math.abs(simulation.grossProceedsCents) <= 1e-9
+      && Math.abs(simulation.feeCents) <= 1e-9 && Math.abs(simulation.netProceedsCents) <= 1e-9;
+  }
+  return simulation.averagePrice > 0 && simulation.averagePrice < 1
+    && Math.abs(simulation.grossProceedsCents - simulation.filledCount * simulation.averagePrice * 100) <= 1e-9
+    && Math.abs(simulation.netProceedsCents - (simulation.grossProceedsCents - simulation.feeCents)) <= 1e-9;
+}
+
 export interface ExitCandidateTrigger {
   at: string;
   netLiquidationCents: number;
   unrealizedPnlCents: number;
   optimisticHoldValueCents: number;
   source: 'production' | 'continuation';
+  exitIocSimulation?: ExitIocSimulation;
 }
 
 export interface ExitCandidateState {
@@ -33,6 +63,7 @@ export interface ExitCandidateState {
 
 export interface ExitSentinelObservation {
   at: string;
+  exitIocSimulation?: ExitIocSimulation;
   source: 'production' | 'continuation';
   selectedBid: number;
   selectedAsk: number;
@@ -45,6 +76,11 @@ export interface ExitSentinelObservation {
   confidence: number;
   optimisticHoldValueCents: number;
   secondsRemaining: number;
+}
+
+export interface ExitEvaluationCycle {
+  at: string;
+  classification: 'observed' | 'unavailable';
 }
 
 export interface ExitProductionAction {
@@ -73,6 +109,7 @@ export interface ExitPolicySentinel {
   buyPolicyVersion: string;
   executionPolicyVersion: string;
   observations: ExitSentinelObservation[];
+  evaluationCycles: ExitEvaluationCycle[];
   candidateStates: Record<ExitCandidateId, ExitCandidateState>;
   production: ExitProductionAction;
   outcome?: PositionSide;
@@ -132,23 +169,30 @@ export function exitSentinelObservation(
   observation: PositionLifecycleObservation,
   source: ExitSentinelObservation['source'],
 ): ExitSentinelObservation | null {
+  const simulation = observation.exitIocSimulation;
   const numeric = [
     observation.selectedBid, observation.selectedAsk, observation.spread, observation.netLiquidationCents,
     observation.exitFeeCents, observation.exactCostCents, observation.unrealizedPnlCents,
     observation.ownedSideProbability, observation.confidence, observation.secondsRemaining,
+    ...(simulation ? [simulation.filledCount, simulation.averagePrice, simulation.grossProceedsCents,
+      simulation.feeCents, simulation.netProceedsCents, simulation.remainingCount] : []),
   ];
   if (!Number.isFinite(Date.parse(observation.at)) || !numeric.every(Number.isFinite)
     || observation.selectedBid <= 0 || observation.selectedBid >= 1
     || observation.selectedAsk <= 0 || observation.selectedAsk > 1 || observation.selectedBid > observation.selectedAsk
     || observation.exactCostCents <= 0 || observation.exitFeeCents < 0
     || observation.ownedSideProbability < 0 || observation.ownedSideProbability > 1
-    || observation.confidence < 0 || observation.confidence > 1) return null;
+    || observation.confidence < 0 || observation.confidence > 1
+    || (simulation && (simulation.version !== 'exit-ioc-depth-v1' || simulation.filledCount < 0
+      || simulation.averagePrice < 0 || simulation.averagePrice >= 1 || simulation.grossProceedsCents < 0
+      || simulation.feeCents < 0 || simulation.remainingCount < 0))) return null;
   const quantity = observation.netLiquidationCents + observation.exitFeeCents;
   const payoutAtOne = quantity / observation.selectedBid;
   if (!Number.isFinite(payoutAtOne) || payoutAtOne <= 0) return null;
   return {
     at: observation.at,
     source,
+    exitIocSimulation: observation.exitIocSimulation,
     selectedBid: observation.selectedBid,
     selectedAsk: observation.selectedAsk,
     spread: observation.spread,
@@ -170,6 +214,7 @@ function trigger(observation: ExitSentinelObservation): ExitCandidateTrigger {
     unrealizedPnlCents: observation.unrealizedPnlCents,
     optimisticHoldValueCents: observation.optimisticHoldValueCents,
     source: observation.source,
+    exitIocSimulation: observation.exitIocSimulation,
   };
 }
 
@@ -210,20 +255,23 @@ export function advanceExitCandidateStates(
 }
 
 export function exitPolicySentinelFromOrder(
-  order: PaperOrder, observation: ExitSentinelObservation,
+  order: PaperOrder, recordedAt: string,
 ): ExitPolicySentinel | null {
   if (order.strategyId !== EDGE_BINARY_BUY || order.id.includes(':exit:') || order.entryDecision?.version !== 'entry-decision-v2') return null;
-  if (![order.createdAt, order.closesAt, observation.at].every((value) => Number.isFinite(Date.parse(value)))) return null;
-  if (!(order.quantity > 0) || !((order.filledCount ?? order.quantity) > 0)) return null;
+  if (![order.createdAt, order.closesAt, recordedAt].every((value) => Number.isFinite(Date.parse(value)))) return null;
+  const acquired = order.filledCount ?? (['open', 'sold', 'won', 'lost'].includes(order.status) ? order.quantity : 0);
+  if (!(order.quantity > 0) || !(acquired > 0)) return null;
   const exactCostCents = order.actualStakeCents ?? order.stakeCents;
-  if (!(exactCostCents > 0) || Math.abs(exactCostCents - observation.exactCostCents) > 1e-9) return null;
-  const states = advanceExitCandidateStates(initialStates(), observation);
+  const executionPolicyVersion = order.entryDecision.executionPolicyVersion;
+  const positionOpenedAt = order.makerCompletedAt ?? order.entryExecutionObservations?.at(-1)?.at ?? order.createdAt;
+  if (!(exactCostCents > 0) || !executionPolicyVersion || !Number.isFinite(Date.parse(positionOpenedAt))
+    || Date.parse(positionOpenedAt) > Date.parse(recordedAt)) return null;
   return {
     id: `${EXIT_POLICY_SENTINEL_VERSION}:${order.executionMode}:${order.id}`,
     sentinelVersion: EXIT_POLICY_SENTINEL_VERSION,
-    recordedAt: observation.at,
+    recordedAt,
     orderCreatedAt: order.createdAt,
-    positionOpenedAt: order.makerCompletedAt ?? order.entryExecutionObservations?.at(-1)?.at ?? order.createdAt,
+    positionOpenedAt,
     orderId: order.id,
     strategyId: order.strategyId,
     executionMode: order.executionMode,
@@ -234,10 +282,10 @@ export function exitPolicySentinelFromOrder(
     quantity: order.quantity,
     exactCostCents,
     buyPolicyVersion: order.entryDecision.policyVersion,
-    executionPolicyVersion: order.entryExecutionDecision?.policyVersion
-      ?? order.entryDecision.executionPolicyVersion ?? PAPER_MANAGED_MAKER_EXECUTION_VERSION,
-    observations: [observation],
-    candidateStates: states,
+    executionPolicyVersion,
+    observations: [],
+    evaluationCycles: [],
+    candidateStates: initialStates(),
     production: { status: 'open' },
   };
 }
@@ -255,19 +303,48 @@ export function appendExitSentinelObservation(
   };
 }
 
+export function appendExitEvaluationCycle(
+  sentinel: ExitPolicySentinel, cycle: ExitEvaluationCycle,
+): ExitPolicySentinel {
+  if (sentinel.resolvedAt || sentinel.invalidReason || sentinel.evaluationCycles.some((item) => item.at === cycle.at)) return sentinel;
+  const last = sentinel.evaluationCycles.at(-1);
+  if (last && Date.parse(cycle.at) < Date.parse(last.at)) return sentinel;
+  return { ...sentinel, evaluationCycles: [...sentinel.evaluationCycles, cycle] };
+}
+
 export function exitSentinelPathComplete(sentinel: ExitPolicySentinel): boolean {
-  if (!sentinel.resolvedAt || sentinel.invalidReason || !sentinel.observations.length) return false;
-  const observations = [...sentinel.observations].sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
-  const firstDelay = Date.parse(observations[0].at) - Date.parse(sentinel.positionOpenedAt);
-  if (!Number.isFinite(firstDelay) || firstDelay < -1e-9 || firstDelay > EXIT_SENTINEL_MAXIMUM_OBSERVATION_GAP_MS) return false;
-  for (let index = 1; index < observations.length; index += 1) {
-    if (Date.parse(observations[index].at) - Date.parse(observations[index - 1].at) > EXIT_SENTINEL_MAXIMUM_OBSERVATION_GAP_MS) return false;
+  if (!sentinel.resolvedAt || sentinel.invalidReason || !sentinel.evaluationCycles.length) return false;
+  const observedCycles = sentinel.evaluationCycles.filter((cycle) => cycle.classification === 'observed').length;
+  if (observedCycles / sentinel.evaluationCycles.length + 1e-12 < EXIT_POLICY_MINIMUM_COVERAGE) return false;
+  if (sentinel.executionMode === 'paper') {
+    for (const state of Object.values(sentinel.candidateStates)) {
+      if (state.trigger && !state.trigger.exitIocSimulation?.evidenceComplete) return false;
+    }
   }
-  return observations.at(-1)!.secondsRemaining <= EXIT_SENTINEL_MAXIMUM_OBSERVATION_GAP_MS / 1_000;
+  return true;
 }
 
 function actualPnl(order: PaperOrder): number {
   return order.actualPnlCents ?? order.pnlCents ?? 0;
+}
+
+/** One-sided clustered normal tests with Holm family-wise correction across the frozen four-arm family. */
+export function holmSignificantExitCandidates(candidates: ExitCandidateReport[]): Set<ExitCandidateId> {
+  const tests = candidates.map((candidate) => {
+    const mean = candidate.incrementalMeanReturn;
+    const standardError = candidate.incrementalStandardError;
+    const pValue = mean === null || standardError === null || mean <= 1e-12 ? 1
+      : standardError <= 1e-15 ? 0 : 1 - normalCdf(mean / standardError);
+    return { candidateId: candidate.candidateId as ExitCandidateId, pValue };
+  }).sort((left, right) => left.pValue - right.pValue);
+  const significant = new Set<ExitCandidateId>();
+  let earlierRejected = false;
+  for (let rank = 0; rank < tests.length; rank += 1) {
+    const test = tests[rank];
+    if (earlierRejected || test.pValue > 0.05 / (tests.length - rank)) earlierRejected = true;
+    else significant.add(test.candidateId);
+  }
+  return significant;
 }
 
 export function buildExitPolicySentinelReport(input: {
@@ -290,13 +367,20 @@ export function buildExitPolicySentinelReport(input: {
       const rows = scored.map(({ sentinel, actual }) => {
         const triggerValue = candidateId === 'production' || candidateId === 'hold'
           ? undefined : sentinel.candidateStates[candidateId].trigger;
+        const paperTriggerPnl = triggerValue?.exitIocSimulation && sentinel.outcome
+          ? triggerValue.exitIocSimulation.netProceedsCents
+            + (sentinel.outcome === sentinel.side ? triggerValue.exitIocSimulation.remainingCount * 100 : 0)
+            - sentinel.exactCostCents
+          : undefined;
         const pnl = candidateId === 'production' ? actual
           : candidateId === 'hold' ? sentinel.holdPnlCents!
-            : triggerValue ? triggerValue.netLiquidationCents - sentinel.exactCostCents : sentinel.holdPnlCents!;
-        const incremental = pnl - actual;
+            : triggerValue
+              ? mode === 'paper' ? paperTriggerPnl! : triggerValue.netLiquidationCents - sentinel.exactCostCents
+              : sentinel.holdPnlCents!;
+        const incremental = Math.abs(pnl - actual) <= 1e-9 ? 0 : pnl - actual;
         const productionSold = sentinel.production.status === 'strict-exit' || sentinel.production.status === 'other-exit';
         const triggerMatchesProduction = Boolean(triggerValue && sentinel.production.attemptedAt
-          && Math.abs(Date.parse(triggerValue.at) - Date.parse(sentinel.production.attemptedAt)) <= EXIT_SENTINEL_MAXIMUM_OBSERVATION_GAP_MS);
+          && Math.abs(Date.parse(triggerValue.at) - Date.parse(sentinel.production.attemptedAt)) <= EXIT_SENTINEL_PRODUCTION_MATCH_MS);
         const diverged = candidateId === 'hold'
           ? productionSold
           : candidateId === 'production' ? false
@@ -315,13 +399,21 @@ export function buildExitPolicySentinelReport(input: {
         incrementalCents: rows.reduce((sum, row) => sum + row.incremental, 0),
         incrementalMeanReturn: incremental.mean,
         incrementalStandardError: incremental.standardError,
-        reviewUnlocked: candidateId !== 'production' && candidateId !== 'hold'
-          && new Set(rows.map((row) => row.closesAt)).size >= EXIT_POLICY_REVIEW_WINDOWS
-          && divergentWindows >= EXIT_POLICY_MINIMUM_DIVERGENT_WINDOWS
-          && (resolved.length ? complete.length / resolved.length : 0) >= EXIT_POLICY_MINIMUM_COVERAGE,
+        // Filled after all four candidate reports exist, so the family can be Holm-corrected together.
+        reviewUnlocked: false,
       };
     };
     const coverage = resolved.length ? complete.length / resolved.length : 0;
+    const candidates = EXIT_CANDIDATE_IDS.map(arm);
+    const holmSignificant = holmSignificantExitCandidates(candidates);
+    for (const candidate of candidates) {
+      candidate.reviewUnlocked = candidate.windows >= EXIT_POLICY_REVIEW_WINDOWS
+        && candidate.divergentWindows >= EXIT_POLICY_MINIMUM_DIVERGENT_WINDOWS
+        && coverage + 1e-12 >= EXIT_POLICY_MINIMUM_COVERAGE
+        && candidate.incrementalCents > 1e-9
+        && (candidate.incrementalMeanReturn ?? 0) > 1e-12
+        && holmSignificant.has(candidate.candidateId as ExitCandidateId);
+    }
     return {
       fillAssumption: mode === 'paper' ? 'exact simulated execution' : 'optimistic executable-bid fill replay',
       positions: trackSentinels.length,
@@ -330,14 +422,23 @@ export function buildExitPolicySentinelReport(input: {
       coverage,
       production: arm('production'),
       hold: arm('hold'),
-      candidates: EXIT_CANDIDATE_IDS.map(arm),
+      candidates,
     };
   };
+  const tracks = { live: track('live'), paper: track('paper') };
+  for (const candidateId of EXIT_CANDIDATE_IDS) {
+    const live = tracks.live.candidates.find((candidate) => candidate.candidateId === candidateId)!;
+    const paper = tracks.paper.candidates.find((candidate) => candidate.candidateId === candidateId)!;
+    const jointlyUnlocked = live.reviewUnlocked && paper.reviewUnlocked
+      && (live.incrementalMeanReturn ?? 0) > 1e-12 && (paper.incrementalMeanReturn ?? 0) > 1e-12;
+    live.reviewUnlocked = jointlyUnlocked;
+    paper.reviewUnlocked = jointlyUnlocked;
+  }
   return {
     sentinelVersion: EXIT_POLICY_SENTINEL_VERSION,
     startedAt: input.startedAt,
     buyPolicyVersion: input.buyPolicyVersion,
     executionPolicyVersions: input.executionPolicyVersions,
-    tracks: { live: track('live'), paper: track('paper') },
+    tracks,
   };
 }

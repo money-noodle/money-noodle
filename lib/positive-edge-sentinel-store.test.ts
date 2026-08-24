@@ -23,11 +23,12 @@ const maker = (): MakerRestrictionSentinel => ({
 });
 
 const exit = (): ExitPolicySentinel => ({
-  id: 'exit:1', sentinelVersion: 'exit-policy-sentinel-v1', recordedAt: '2026-08-20T00:00:10Z',
+  id: 'exit:1', sentinelVersion: 'exit-policy-sentinel-v2', recordedAt: '2026-08-20T00:00:10Z',
   orderCreatedAt: '2026-08-20T00:00:00Z', positionOpenedAt: '2026-08-20T00:00:00Z',
   orderId: 'order', strategyId: EDGE_BINARY_BUY, executionMode: 'live',
   symbol: 'BTC', contractId: 'BTC-TEST', side: 'UP', closesAt: '2026-08-20T00:01:00Z', quantity: 1,
   exactCostCents: 60, buyPolicyVersion: 'v21', executionPolicyVersion: 'v3',
+  evaluationCycles: [],
   observations: [{
     at: '2026-08-20T00:00:10Z', source: 'production', selectedBid: 0.7, selectedAsk: 0.71, spread: 0.01,
     netLiquidationCents: 69, exitFeeCents: 1, exactCostCents: 60, unrealizedPnlCents: 9,
@@ -71,10 +72,13 @@ describe('append-only sentinel event replay', () => {
       { op: 'position', value: first },
       { op: 'observation', id: first.id, value: second },
       { op: 'observation', id: first.id, value: second },
+      { op: 'evaluation-cycle', id: first.id, value: { at: second.at, classification: 'observed' } },
+      { op: 'evaluation-cycle', id: first.id, value: { at: second.at, classification: 'observed' } },
       { op: 'state', value: state },
       { op: 'resolution', value: resolution },
     ]);
     expect(replayed[0].observations).toHaveLength(2);
+    expect(replayed[0].evaluationCycles).toEqual([{ at: second.at, classification: 'observed' }]);
     expect(replayed[0].candidateStates['strict-value-margin3c-v1'].trigger?.at).toBe('2026-08-20T00:00:10Z');
     expect(replayed[0]).toMatchObject({ production: { status: 'strict-exit' }, outcome: 'UP', holdPnlCents: 40 });
   });
@@ -91,6 +95,14 @@ describe('sentinel results cannot reach a money-moving module', () => {
       expect({ file, importsSentinel: /from ['"].*(maker-restriction|exit-policy-sentinel)/.test(source) })
         .toEqual({ file, importsSentinel: false });
     }
+  });
+
+  it('queues current exit observations before detached cycle classification and resolution', () => {
+    const source = readFileSync(path.join(process.cwd(), 'lib', 'paper-execution.ts'), 'utf8');
+    const observation = source.indexOf('changed = await observeAndExecuteStandaloneExits');
+    const maintenance = source.indexOf('void getExitPolicyContinuationOrderIds(dashboard.generatedAt)', observation);
+    expect(observation).toBeGreaterThan(-1);
+    expect(maintenance).toBeGreaterThan(observation);
   });
 
   it('keeps both stores append-journaled and owned by their compactor', () => {

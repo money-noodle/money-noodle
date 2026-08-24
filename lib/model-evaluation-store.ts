@@ -49,34 +49,37 @@ function nextCheckpoint(history: WalkForwardEvaluationHistory): number {
     : WALK_FORWARD_ACTIVATION_WINDOWS;
 }
 
+function serialized<T>(operation: () => Promise<T>): Promise<T> {
+  const result = operationQueue.then(operation);
+  operationQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
+
 export function getWalkForwardEvaluationHistory(currentWindows = 0): Promise<WalkForwardEvaluationHistory> {
-  const operation = operationQueue.then(async () => {
+  return serialized(async () => {
     const history = await readStored();
     return { ...history, currentWindows, nextCheckpointWindows: nextCheckpoint(history) };
   });
-  operationQueue = operation.then(() => undefined, () => undefined);
-  return operation;
 }
 
-/** Dormant below 100 windows; thereafter catches up every missed 25-window checkpoint exactly once. */
-export function maybeRunWalkForwardEvaluation(currentWindows: number): Promise<WalkForwardEvaluationHistory> {
-  const operation = operationQueue.then(async () => {
-    const history = await readStored();
-    history.currentWindows = currentWindows;
-    let checkpoint = nextCheckpoint(history);
-    if (currentWindows < checkpoint) return { ...history, nextCheckpointWindows: checkpoint };
-    const dataset = buildWalkForwardDataset(await getForecastHistory());
-    while (checkpoint <= dataset.length) {
-      const run = runWalkForwardEvaluation(dataset, checkpoint);
-      if (!history.runs.some((existing) => existing.id === run.id)) history.runs.push(run);
-      checkpoint += WALK_FORWARD_CHECKPOINT_WINDOWS;
-    }
-    history.policyVersion = WALK_FORWARD_POLICY_VERSION;
-    history.currentWindows = dataset.length;
-    history.nextCheckpointWindows = checkpoint;
-    await writeStored(history);
-    return history;
-  });
-  operationQueue = operation.then(() => undefined, () => undefined);
-  return operation;
+async function runDueWalkForwardEvaluations(): Promise<WalkForwardEvaluationHistory> {
+  const history = await readStored();
+  const previousRunCount = history.runs.length;
+  let checkpoint = nextCheckpoint(history);
+  const dataset = buildWalkForwardDataset(await getForecastHistory());
+  while (checkpoint <= dataset.length) {
+    const run = runWalkForwardEvaluation(dataset, checkpoint);
+    if (!history.runs.some((existing) => existing.id === run.id)) history.runs.push(run);
+    checkpoint += WALK_FORWARD_CHECKPOINT_WINDOWS;
+  }
+  history.policyVersion = WALK_FORWARD_POLICY_VERSION;
+  history.currentWindows = dataset.length;
+  history.nextCheckpointWindows = checkpoint;
+  if (history.runs.length > previousRunCount) await writeStored(history);
+  return history;
+}
+
+/** Loads authoritative durable history and runs every due v2 checkpoint in the invoking offline process. */
+export function runWalkForwardEvaluationOffline(): Promise<WalkForwardEvaluationHistory> {
+  return serialized(() => runDueWalkForwardEvaluations());
 }

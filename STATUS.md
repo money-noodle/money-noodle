@@ -1,6 +1,6 @@
 # Money Noodle - Implementation Status
 
-> Living status document. Updated 2026-08-22.
+> Living status document. Updated 2026-08-24.
 > Product requirements and architecture decisions live in [SPEC.md](SPEC.md).
 >
 > **Operational-state warning:** this document records dated snapshots; it is not a live interlock or the
@@ -23,12 +23,169 @@ A second policy runs on the same market — the long-shot round trip, detailed i
 | Area | Status |
 | --- | --- |
 | Dashboard and public paper track record | Functional locally and hosted; bounded summary/full-report split implemented. Managed Postgres access recovered and durable production projections returned 200 after the 2026-08-22 deployment. |
-| Forecast and performance tracking | Collection is implemented; the 2026-08-22 interleaved-writer corruption was repaired into checksum-valid, content-addressed v3 after restoring 88 qualified archived rows. Aggregate conclusions still require recalculation, and walk-forward checkpoints require evaluator v3. |
+| Forecast and performance tracking | Collection is implemented; the 2026-08-22 interleaved-writer corruption was repaired into checksum-valid, content-addressed v3 after restoring 88 qualified archived rows. Automatic v3 seals and a 138-file independent Scaleway restore passed on 2026-08-24; aggregate economic conclusions still require recalculation. |
 | Live execution | Kalshi live-capable; repeated-episode identity and known ledger damage are repaired under v6. The operator explicitly resumed live after READY manual reconciliation; the latest dated snapshot above remained active with zero reservations and READY periodic reconciliation. |
 | Paper execution | Continuous and independently accounted under v6; three-episode generation ownership is repaired, exact prospective four-cell pairing is collecting, and fills remain conservative pending an exact queue-calibration held-out fit |
-| Model evaluation | Automatic walk-forward scheduler continues monitoring; the latest v2 run crossed its mechanical review threshold, but evaluator v2 is explicitly barred from promotion and production remains Blend 0.4 |
+| Model evaluation | Evaluator v2 remains barred from promotion and production remains Blend 0.4. Automatic in-process checkpoints are retired; checkpoint 1,300 is now due through the explicit paused/stopped offline command. |
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
 | Operational safety | Collision-resistant bounded live IDs, exact reconciliation ownership, quiescent drain, account reconciliation, kill switch, and budget/risk ceilings are implemented. Runtime readiness and operator state must be read from the live control surfaces named above, not inferred from this table. |
+
+### Object archive restored independently and rebuildable caches reclaimed, 2026-08-24
+
+The expanded archive captured **138 stable files / 1,436,922,799 source bytes** in manifest
+`money-noodle/v1/manifests/2026/08/24/2026-08-24T16-16-01-305Z.json`; 30 blobs were new and 108 content-addressed
+blobs were reused. A clean `/tmp` restore downloaded 130,967,357 compressed bytes and reproduced every file under
+its manifest checksum and source byte count. The restored production forecast verifier passed over 74,817 current
+rows, including 73,680 sealed rows in 17 shards and the 2026-08-24 automatic-seal generation; the restored v9
+execution ledger passed over 4,397 orders and 3,548 compact evidence references. An earlier 133-file restore had
+also passed independently. Exact `.next/cache` and `.next/dev` cleanup reclaimed 2,905,120 KiB while retaining
+`.next/server`/`.next/static`; the running dashboard remained HTTP 200 and filesystem availability rose to about
+34 GiB after temporary restore removal.
+
+No durable local source was deleted. The bucket had suspended versioning, no lifecycle expiration, and no Object
+Lock. Remote-primary eviction remains blocked on Object Lock/enforceable retention or a second independently
+verified bucket plus the durable tier catalog and owner-aware hydration. The operator subsequently set a 10%
+free-space reserve. `npm run check:disk` measures blocks available to the worker and fails below it. The first
+2026-08-24 check found only 42.20 GiB / 4.56% available. Docker cleanup raised that to 71.43 GiB, then the operator
+removed an accidentally fully allocated 512 GiB Android-emulator SD card (`Galaxy_S25_Ultra` was configured with
+`sdcard.size=512G`). The final check passed with **586.36 GiB / 63.30%** available against the 92.64 GiB threshold;
+`~/.android` fell to about 8.57 GiB and the independent `Medium_Phone_API_35` AVD remains. The entire Money Noodle
+tree was only about 3.0 GiB and `data/` about 1.37 GiB; no application evidence was deleted. Method, totals, and caveats:
+[the dated restore report](reports/object-storage-restore-and-disk-reclamation-2026-08-24.md) and
+[the design](docs/object-storage-retention-and-disk-safety-design.md).
+
+### Funded health hour found no unresolved account issue; v3 seal approaches, 2026-08-23
+
+A read-only 2026-08-23T19:25:35Z–20:25:35Z observation made 240 dashboard and 60 authenticated control reads.
+All returned 200. Dashboard latency was 4.6 ms median / 91.3 ms p95 / 747.5 ms maximum; control was 141.0 ms /
+281.4 ms / 2.984 seconds. Collector gaps had 15.024-second median, 29.382-second p95, 44.877-second maximum, and
+none exceeded 45 seconds. Twelve periodic checkpoints advanced; all completed READY, generally in
+0.644–1.536 seconds, with one 7.850-second pass overlapping managed transactions. RSS was 160,544–919,312 KiB
+and ended at 482,304 KiB; no sustained rise or >1 GiB event appeared. The evaluator file stayed byte-identical.
+At the now-due 1,300-window boundary, 47 additional dashboard reads had zero failures and 738 ms maximum latency,
+confirming automatic replay remained retired.
+
+One accepted DOGE order returned `not_found` during managed cancellation. The engine retained authority,
+system-suspended, refused the first unconfirmed reconciliation, then completed READY and guarded-auto-resumed
+about 72 seconds later. Subsequent reconciliation found zero reservation, position, or resting-order
+contradiction. This is successful fail-closed recovery, not unresolved exposure. `managed-maker` nevertheless
+displayed that old error after reconciliation became READY until a later maker success cleared it by 20:33Z, a
+bounded observability defect rather than current degraded state.
+
+The forecast journal grew 2,792,017 bytes to 9,170,124 in the hour. At that single-hour rate, the 50 MiB owning
+seal threshold is roughly 15.5 hours away; rate variation is the main caveat. At that observation time the first
+automatic v3 seal and independent archive restore were the next operational gate; both subsequently passed on
+2026-08-24. Disk was 97% allocated with about 32.5 GiB available and lost only 5,204 KiB during the hour, so it
+was not an immediate exhaustion event but needed capacity alerts before bursty builds/archives. Funded control ended active at 2,382¢ available / 0¢ reserved / +382¢
+current-epoch whole-cent P&L. Full methods and transaction evidence:
+[the dated monitor](reports/live-health-monitor-2026-08-23.md).
+
+### Incremental background reconciliation activated and live resumed, 2026-08-23
+
+A one-hour 2026-08-23T02:53:26Z–03:53:28Z funded-runtime observation found that five-minute full-live-tier
+reconciliation was the operational bottleneck: 12 completed passes included seven READY and five timeout-blocked
+results; successful passes still took 57.9–65.2 seconds, collector success advanced only 154 times against about
+240 nominal 15-second ticks, and eight of 58 compact control reads exceeded 20 seconds. Fail-closed first/second
+failure suspension and guarded recovery worked, reservations returned to zero, and no account contradiction was
+found. The failure was availability and scheduling, not a relaxed safety gate.
+
+Current Kalshi OpenAPI 3.28.0 and bounded production reads verified order/fill `min_ts`/`max_ts`, 1,000-row
+pagination, exact order reads, order-scoped fills, current resting orders/positions, and the moving historical
+cutoff. Order `min_ts` is creation-based rather than update-based. In one 2026-08-23T05:21Z two-hour slice, 10
+orders returned in 178.7 ms, four fills in 79.5 ms, zero resting orders in 77.1 ms, and three nonzero positions in
+95.9 ms; exact order and fill reads took 141.3/87.9 ms. The chief caveat is that this is one current-account slice,
+not a latency distribution, and Kalshi does not promise an atomic snapshot across endpoints.
+
+The implementation in `docs/incremental-background-reconciliation-design.md` keeps full current-account audits
+for startup/manual/pause-drain, and gives periodic/event recovery a durable overlapped checkpoint, fixed-window
+order/fill deltas, exact active/pending transaction reads, current cash/positions/resting orders, and historical-
+cutoff escalation. Its process-global timer is independent of the collector. Reconciliation `running` still
+blocks new live exposure, but venue I/O runs outside the shared ledger serializer; a short fingerprinted commit
+retries if local live authority changed. Paper, collection, and control reads remain available. No forecast,
+entry, route, size, fee, budget ceiling, exit, or strategy semantic changes. Typecheck, 136 test files / 1,085
+tests, lint with zero errors / 37 inherited warnings, and the production build passed.
+
+The funded worker was manually paused and drained restart-safe with zero reservations and zero local/venue-managed
+positions, then rebuilt and restarted at 2026-08-23T07:09:22Z. Full startup reconciliation passed in 1.688 seconds
+against 6,213.89¢ venue cash. The first independent periodic incremental pass completed READY in 0.622 seconds at
+2026-08-23T07:14:26Z and advanced the durable checkpoint. Across 83 dashboard reads spanning that first periodic
+boundary, maximum latency was 900 ms and none exceeded one second; collector success advanced during the same
+window. This is only one empty-position periodic pass, so it does not yet measure targeted pending recovery or
+establish a latency distribution. The restart did not infer permission to reactivate funded execution. After
+that verification, the operator explicitly resumed at 2026-08-23T07:15:26Z; control revision 5,673 became active
+in live mode with 2,465¢ available, 0¢ reserved, healthy collection, and reconciliation READY.
+
+A subsequent funded observation from 07:21:02Z–08:21:03Z closed the first active-hour gate: 12/12 periodic
+checkpoints completed READY and advanced the watermark in 0.444–11.722 seconds, including passes overlapping
+locally active funded transactions. Zero reservations or uncertain state remained. The old 58–65-second routine
+pass and reconciliation-caused collector starvation did not recur. See
+[the activation monitor](reports/incremental-reconciliation-monitor-2026-08-23.md).
+
+That hour isolated a different availability blocker. At the 1,250-window automatic walk-forward checkpoint,
+`maybeRunWalkForwardEvaluation` was awaited by the collector and synchronous evaluation occupied the shared Node
+worker from approximately 07:30:25Z–07:33:09Z: 11 dashboard and two control reads timed out at eight seconds,
+collector success had a 177.868-second gap, CPU stayed near one core, and RSS peaked at 1,154,416 KiB. The prior
+reconciliation had already completed in 0.594 seconds. The old worker reproduced the stall at its 1,275-window
+run, generated at 2026-08-23T13:46:11.975Z. Evaluator v2 is monitoring-only and barred from promotion.
+
+The approved [offline-evaluation design](docs/offline-walk-forward-evaluation-design.md) is now activated.
+`background-collector.ts` has no evaluator import or launch, and no same-event-loop timer replaces it. Explicit
+`npm run evaluate:walk-forward-offline` execution requires exact confirmation plus paused operator state and zero
+reservations; procedure additionally requires restart-safe drain and a stopped worker or isolated snapshot. The
+command preserves the existing atomic store/checkpoint sequence and v2 promotion ban. Typecheck, 138 test files /
+1,093 tests, lint with zero errors / 37 inherited warnings, and the production build passed. With the funded worker
+stopped, the command reloaded 1,283 windows, correctly found no checkpoint due before 1,300, added no run, and did
+not rewrite `model-evaluations.json`. The rebuilt worker restarted at 2026-08-23T15:47:43Z; full startup
+reconciliation passed in 1.705 seconds against 6,152.61¢ venue cash with zero positions/reservations. The first
+post-restart periodic pass completed READY in 0.450 seconds while collection advanced normally. The operator
+explicitly resumed at 2026-08-23T16:08:28Z; control revision 5,803 became active in live mode with 2,398¢
+available, 0¢ reserved, healthy collection, and reconciliation READY.
+
+### Active strict-value exits remain adverse; alternatives evaluated, 2026-08-23
+
+The fresh 2026-08-23T16:09:07Z read used 4,028 execution orders and 80,612 forecasts. Active-v22 live strict
+exits were **0/34 versus authoritative hold across 30 windows**, giving up 128.2834¢ with clustered incremental
+return −11.97% ±3.11pp. The active-v6 execution subset was 0/23 over 19 windows, −93.5138¢ and −11.71% ±3.84pp.
+Paper points the same way: one of 28 exits beat hold over 24 windows, −165.652¢ and −15.88% ±9.11pp.
+Lifetime history still disagrees—live strict exits remained +773.0¢ and +5.3% ±7.3pp over 114 windows—so the
+finding is active-regime failure, not proof that liquidation never helps.
+
+A seven-margin current-policy replay found hold, 10¢, and 20¢ arms ahead of production, but those margins were
+inspected retrospectively and counterfactual live sales assume executable-bid fills. The separate 26-rule replay
+found no persuasive replacement after multiple comparisons: the best raw row had clustered t=0.48, and no related
+rule group supplied stable promotion evidence. This makes exit policy a high-priority design/prospective-sentinel
+decision; it authorizes no automatic rule change. See
+[the strict-value review](reports/strict-value-exit-review-2026-08-23.md).
+
+### Prospective exit sentinel v2 activated; production policy unchanged, 2026-08-24
+
+A fresh read of all 429 v1 sentinel records established that the existing prospective family was not
+promotion-grade: active-v22 live had 38 complete positions across 34 windows from 150 resolved positions (25.3%
+coverage), while the corrected-identity paper diagnostic had 39 across 34 windows from 158 (24.7%). The 5¢ arm
+was positive in both incomplete diagnostics, but no arm reached 60 windows, 20 divergent windows, 90% coverage,
+or corrected significance. V1 paper outcomes also assumed full best-bid fills rather than the production IOC
+depth model. The dated inputs, totals, methods, and dominant coverage/executability caveat are in
+[the v1 review and v2 repair report](reports/prospective-exit-sentinel-v1-review-and-v2-repair-2026-08-24.md).
+
+The approved v2 repair now starts separate `exit-policy-sentinels-v2` snapshot/journal files and preserves all v1
+evidence unchanged. It keeps the four precommitted arms, stamps `entryDecision.executionPolicyVersion` so paper
+uses its actual calibrated execution generation, enrolls filled positions independently of first-quote
+availability, records observed/unavailable evaluator cycles before resolution, and scores paper triggers with the
+existing reduce-only IOC depth/fee model, including no-fill and partial-fill remainders. Missing paper depth makes
+a triggered path incomplete. The review flag now also enforces positive cash and clustered mean, one-sided Holm
+family correction, and simultaneous positive live/paper eligibility. No sentinel can mutate production.
+
+Activation used a paused quiescent drain with zero reservations and successful manual full reconciliation. The
+v2 store began prospectively at 2026-08-24T17:08:03.205Z; its first paper position carried the calibrated-v6
+paper identity, recorded bounded IOC evidence, resolved with 100% explicit-cycle coverage, and reported
+sub-epsilon equal cash differences as zero. The first post-activation periodic incremental reconciliation passed
+READY in 1.319 seconds while v2 collection remained readable. After the reporting-epsilon correction, the final
+rebuilt worker restarted at 2026-08-24T17:21:34Z and startup full reconciliation passed in 2.176 seconds with zero
+local or venue-managed positions. Explicit Resume set control revision 6,208 active in live mode with 2,105¢
+available and 0¢ reserved. Vercel production deployment `dpl_9hMJfeinHWQAfV67v8HhadDeV6hN` reached READY and
+was aliased to `noodle.money`; the homepage, sanitized dashboard, and public paper-summary routes returned 200.
+Typecheck, 140 test files / 1,110 tests, lint with zero errors / 37 inherited warnings, and both local and Vercel
+production builds passed.
 
 ### Live resumed; paper settlement and mirror behavior monitored, 2026-08-22
 
@@ -62,11 +219,32 @@ rather than P&L, deposits, stake, live arming, order count, or trade frequency. 
 paper/live, money, safety, and contract labels remain visible, and no whimsical state may influence a forecast,
 policy, budget, order, or reconciliation path.
 
-This is intentionally **pre-specification and pre-implementation**. Bowl scaling, transition deduplication,
+This is intentionally **pre-specification and pre-implementation**. A standalone, dependency-free visual
+prototype now lives at `docs/prototypes/noodle-land/index.html`, with a reusable review sheet at
+`docs/prototypes/noodle-land/nomi-character-sheet.svg`. Its current friendly-character pass gives Nomi a warm
+pearl-onion face rather than using the app mark's black negative space. Gold noodles, green arrow-leaves, and
+the broken navy orbit retain the main mascot's visual identity, while curious, noodling, comparing, eureka,
+cautious, and resting now reshape the whole character instead of attaching rigid props to an unchanged icon.
+The latest motion/theme pass stages 72 outlined SVG noodles in a center burst, orbital curl, and viewport-wide
+noodle rain using the playful palette. The prototype now opens in light mode, retains a dark toggle, and applies
+theme-aware surfaces and contrast to the hero, event console, research scale, category cards, sublevels, and
+party strands. The Great Noodle Scale now uses friendly onion Nomi as its pivot, a rounded gold noodle beam,
+and two leaf-rimmed cream bowls; Don't Noodle and Noodle This move lower with their respective pans while
+remaining horizontal and clear of the tipping beam. The seven noodle types remain distinct
+aqua/green/gold/coral/lilac/orange/pink categories, each with four same-hue sublevels (28 sample labels total).
+The latest prototype naming pass gives every broth an alliterative title and sublevel family, using clear puns
+selectively (`Udon Know Yet`, `Bayesically Brilliant`, and `Noodlini & Beyond`). A separate, deferred brainstorm
+at [docs/noodle-progression-naming-options.md](docs/noodle-progression-naming-options.md) preserves four
+alternative ten-level groups; none is selected and the prototype remains at seven categories. Category shade
+is progression decoration only, not an outcome, readiness, track, or trading signal. The
+exact-mark, separate-bowl, friendly pre-progression, first
+colorful-progression, and softer first passes remain alongside it for comparison. It uses invented, labelled
+paper values and has no app
+imports, network calls, persistence, route, or trading authority. Bowl scaling, transition deduplication,
 progress ownership and persistence, exact unlock events, public/private scope, mascot production geometry,
-copy, motion, accessibility, and comprehension testing require another approved design pass before any
-`SPEC.md` decision or code change. No store, schema, route, component, animation, policy, or funded behavior is
-authorized by the current document.
+copy, motion, accessibility, and comprehension testing still require another approved design pass before any
+`SPEC.md` decision or product code change. No store, schema, app component, policy, or funded behavior is
+authorized by the prototype.
 
 ### Execution ledger v9 activated; fixed UI reads are bounded, 2026-08-22
 
@@ -99,7 +277,7 @@ A later 30-second native sample was 78.0% idle and found structured clone in onl
 footprint still reached 2.8 GB / 3.1 GB peak. Append-only contract-path, calendar, and exit-sentinel journals were
 approximately 15.5/12.5/8.8 MB and remain separate owning-store work; none was truncated or casually cached.
 See the [migration report](reports/execution-ledger-v9-migration-2026-08-22.md) for method and caveats.
-Automatic v9 evidence compaction remains disabled pending longer observation and an independent archive restore.
+Automatic v9 evidence compaction remains disabled pending longer observation and a separate owning-store activation decision; the 2026-08-24 independent archive restore passed.
 
 Public replication now probes unavailable Postgres with the compact summary before constructing a full report;
 the exhausted quota therefore cannot repeatedly force execution-evidence hydration for a payload it will reject.
@@ -1694,7 +1872,7 @@ Interpretation: the newer exact ledger snapshot is slightly negative lifetime an
 
 - Atomic JSON writes for cache, forecast history, provider settings, budget control, execution ledger, promotion ledger, and evaluation history.
 - Forecast history is sharded under v3: a journal-backed hot open set, immutable content-addressed daily shards and rollups, and one index published last. Only the collector mutates it under a process-global queue and process-lifetime filesystem lease. The legacy and corrupt v2 snapshots are retained and are no longer on any read path.
-- A local-only Scaleway Object Storage archive is enabled against private bucket `money-noodle-archive-857bea21`. A detached nice-priority worker runs every 24 hours, stores gzip-compressed content-addressed blobs, verifies every new upload by full read-back SHA-256 and byte count, and writes an immutable manifest only after the set passes. The first verified archive covered 31 files and 471,687,329 source bytes, uploading 43,128,615 compressed bytes. This first phase performs no local deletion and never runs on Vercel.
+- A local-only Scaleway Object Storage archive is enabled against private bucket `money-noodle-archive-857bea21`. A detached nice-priority worker runs every 24 hours, stores gzip-compressed content-addressed blobs, verifies every new upload by full read-back SHA-256 and byte count, refuses files that change during capture, and writes a manifest only after the set passes. The 2026-08-24 expanded manifest covered 138 files / 1,436,922,799 source bytes, including frozen corrupt/superseded derivatives; a complete independent restore and both owner semantic verifiers passed. This phase performs no durable local deletion and never runs on Vercel. Remote-primary eviction remains blocked because the bucket has no Object Lock or second replica and no tier catalog is active.
 - Optional Postgres public paper projection is implemented with migrations:
   - [001_public_paper_projection.sql](/Users/raiphairow/code/money/db/migrations/001_public_paper_projection.sql)
   - [002_public_paper_performance.sql](/Users/raiphairow/code/money/db/migrations/002_public_paper_performance.sql)
@@ -1708,25 +1886,31 @@ Interpretation: the newer exact ledger snapshot is slightly negative lifetime an
 
 ## Current Priorities
 
-1. **Monitor v3 through its first automatic threshold seal and perform an independent archive restore.** A
-   paused owning-compactor pass verifies now; do not cite new aggregate conclusions until they are recalculated, and do not
-   retire the frozen legacy/corrupt evidence during this observation period.
-2. **Observe execution-ledger v9 and design observational-journal compaction separately.** The measured
+1. **Accumulate untouched exit-policy-sentinel-v2 evidence.** Keep the four precommitted arms fixed and production
+   on `strict-value-v1`. Do not review before 60 resolved independent windows, 20 divergent windows, 90% explicit
+   evaluator-cycle coverage, Holm-corrected positive evidence, and same-sign live/paper results; live replay
+   remains optimistic and cannot alone establish executable IOC transfer.
+2. **Provision durable remote-primary protection and implement the tier catalog before local eviction.** The
+   138-file archive and complete restore passed, but the current bucket has no Object Lock and no independent
+   replica. Add enforceable retention or a second bucket, then implement dry-run-first owner allowlisting and
+   verified hydration; do not retire frozen legacy/corrupt evidence yet.
+3. **Observe execution-ledger v9 and design observational-journal compaction separately.** The measured
    terminal-ledger clone is removed: the hot account ledger retains all control/money rows and immutable heavy
-   evidence hydrates on demand. Automatic evidence compaction remains off until longer observation and an
-   independent archive restore. Native v9 sampling still finds substantial JSON parsing in the contract-path,
+   evidence hydrates on demand. Automatic evidence compaction remains off until longer observation and a separate
+   activation decision; the independent restore passed on 2026-08-24. Native v9 sampling still finds substantial JSON parsing in the contract-path,
    calendar, exit, portfolio, and maker journals; each needs its own checksum/generation/concurrency/crash-window
    design before changing its owning store.
-3. **Design evaluator v3 before any model promotion.** Freeze cohorts and replay the complete policy and
-   execution boundary; evaluator v2 remains monitoring-only.
-4. **Complete the untouched long-shot v2 60-window paper cohort.** No interim tuning or live arming.
-5. **Accumulate exact v6 paper/live mirror evidence.** Keep every execution/calibration generation separate.
-6. **Continue prospective exit and first-organic-switch verification.** Preserve reduce-only semantics.
-7. **Then address provider visibility, alerts, restore testing, dependency pinning, and auth hardening.**
+4. **Run due evaluator-v2 checkpoint 1,300 only during planned paused/stopped maintenance, then design evaluator
+   v3 before any model promotion.** Freeze cohorts and replay the complete policy and execution boundary;
+   evaluator v2 remains monitoring-only and offline-only.
+5. **Complete the untouched long-shot v2 60-window paper cohort.** No interim tuning or live arming.
+6. **Accumulate exact v6 paper/live mirror evidence.** Keep every execution/calibration generation separate.
+7. **Continue first-organic-switch verification.** Preserve reduce-only semantics.
+8. **Then address provider visibility, alerts, restore testing, dependency pinning, and auth hardening.**
 
 ## Detailed Roadmap and Historical Delivery Record
 
-### Forecast storage — v3 repaired; first-seal and residency follow-up open
+### Forecast storage — v3 repaired; automatic seal and independent restore verified
 
 The original migration trigger was ~396 MB retained heap, roughly 40 MB/day growth, and 6–11 second startup.
 The migration met its clean-start target on 2026-08-16. On 2026-08-22, independently bundled dashboard
@@ -1747,7 +1931,7 @@ Started 2026-08-14:
 - Passing the gate required giving every reported ordering and tie-sensitive selection a total order by `id`. Ties are the ordinary case here, so `timeline`, both streaks, the per-cycle representative row, `recent`, grouped sorts, and the missed-buy selections previously could depend on durable row order. The missed-buy gate now uses the compact persisted provenance reference directly and covers an asset/window split across shards, including a globally nearest snapshot that contributes no candidate.
 - A verified `--write` run over 49,703 live rows emitted `forecast-storage-v2`: 79 open rows, 49,624 terminal rows across 8 shards, and 6.6 MB of sufficient-statistic rollups standing in for roughly 190 MB of history. Both shard rows and rollups have indexed SHA-256 checksums, and the verification path now consumes the exact rollup objects that are written rather than rebuilding them invisibly from rows. The older 14 MB / 3,082-row open artifact was a symptom of event-loop starvation; resolution has caught up.
 - **V3 incident repair, 2026-08-22.** V2's caller-held lock was module-local, while Next produced three writer copies; a stale seal could omit another copy's journal events and truncate them. V2 also overwrote active filenames before publishing its index, so a crash could invalidate the prior generation. V3 permits only `background-collector` to import calculation mutation, shares a process-global queue, holds a process-lifetime filesystem lease, compacts from reloaded durable state, uses immutable content-addressed artifacts, verifies them after write, and publishes `index.json` last. The repair restored 88 archived qualified rows and moved every corrupt source to `.corrupt-*`; the first v3 gate passed over 70,837 rows with zero errors. The dominant caveat is an evidence gap whose losing-writer-only rows cannot be enumerated. See the dated incident report rather than treating 88 as a complete loss count.
-- Off-machine archive phase 1 is active: dedicated one-year Scaleway application credentials have object read/write and bucket read permissions but no object-delete or bucket-write permission. The app archives daily from the persistent worker; rolling local deletion remains deliberately disabled until repeated manifests and an independent restore test pass.
+- Off-machine archive and restore verification passed on 2026-08-24: the expanded stable-source manifest held 138 files / 1,436,922,799 source bytes, restored byte-exactly, and passed the full forecast and v9 execution-ledger verifiers. Dedicated application credentials retain object read/write and bucket-read permissions but no object-delete or bucket-write permission. Rolling local deletion remains disabled until Object Lock/enforceable retention or an independent replica and the owner-aware tier catalog exist. See `reports/object-storage-restore-and-disk-reclamation-2026-08-24.md`.
 
 Plan:
 
@@ -1770,13 +1954,12 @@ incomplete-figures notice when a shard rollup cannot be read.
 
 Current follow-ups:
 
-- **Observe the first v3 seal and independently restore its archive.** V3 publishes immutable
-  content-addressed open/shard/rollup artifacts before its index, holds one process-lifetime filesystem
-  lease, reloads durable state before compaction, and keeps request builds read-only for forecast evidence.
-  The corrupt v2 artifacts and frozen legacy snapshot remain preserved. Design:
-  [docs/forecast-storage-generation-repair-design.md](docs/forecast-storage-generation-repair-design.md);
-  incident and exact recovery totals:
-  [reports/forecast-storage-integrity-repair-2026-08-22.md](reports/forecast-storage-integrity-repair-2026-08-22.md).
+- **Automatic v3 seal and independent restore passed.** Restored generations generated at
+  `2026-08-23T17:03:39.476Z` and `2026-08-24T13:38:01.496Z` passed the complete direct-versus-rollup verifier;
+  the latter held 73,680 sealed rows in 17 shards plus 1,137 current rows after journal replay. The corrupt v2
+  artifacts and frozen legacy snapshot remain preserved because passing restore does not itself authorize
+  eviction. Design: [docs/forecast-storage-generation-repair-design.md](docs/forecast-storage-generation-repair-design.md);
+  restore report: [reports/object-storage-restore-and-disk-reclamation-2026-08-24.md](reports/object-storage-restore-and-disk-reclamation-2026-08-24.md).
 - **Execution-ledger v9 is active; observational residency remains open.** Seven emitted execution bundles
   share one serializer and committed snapshot; mutation clones, commit-boundary publication, failed-write
   invalidation, detached scoped reads, and a global pause barrier remain tested. V9 reduced the 3,794-row hot

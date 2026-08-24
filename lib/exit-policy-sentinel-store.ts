@@ -2,9 +2,9 @@ import 'server-only';
 import { appendFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
-  EXIT_POLICY_SENTINEL_VERSION, appendExitSentinelObservation, buildExitPolicySentinelReport,
-  exitPolicySentinelFromOrder, exitSentinelObservation,
-  type ExitPolicySentinel, type ExitPolicySentinelReport, type ExitSentinelObservation,
+  EXIT_POLICY_SENTINEL_VERSION, appendExitEvaluationCycle, appendExitSentinelObservation,
+  buildExitPolicySentinelReport, exitPolicySentinelFromOrder, exitSentinelObservation, validExitIocSimulation,
+  type ExitEvaluationCycle, type ExitPolicySentinel, type ExitPolicySentinelReport, type ExitSentinelObservation,
 } from './exit-policy-sentinel';
 import { ENTRY_EXECUTION_POLICY_VERSION } from './entry-execution-policy';
 import { getActivePaperFillCalibration } from './paper-fill-calibration-store';
@@ -12,15 +12,15 @@ import { BUY_POLICY_VERSION } from './prediction-policy';
 import type { PaperOrder, PositionLifecycleObservation, PositionSide } from './types';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
-const SNAPSHOT_FILE = path.join(DATA_DIR, 'exit-policy-sentinels.json');
-const JOURNAL_FILE = path.join(DATA_DIR, 'exit-policy-sentinels.journal.jsonl');
+const SNAPSHOT_FILE = path.join(DATA_DIR, 'exit-policy-sentinels-v2.json');
+const JOURNAL_FILE = path.join(DATA_DIR, 'exit-policy-sentinels-v2.journal.jsonl');
 const JOURNAL_COMPACTION_BYTES = 50 * 1024 * 1024;
 let operationQueue: Promise<void> = Promise.resolve();
 let storeCache: Promise<ExitPolicySentinelStore> | undefined;
 let storeCacheFingerprint = '';
 
 export interface ExitPolicySentinelStore {
-  version: 1;
+  version: 2;
   sentinelVersion: typeof EXIT_POLICY_SENTINEL_VERSION;
   startedAt: string;
   updatedAt: string;
@@ -30,12 +30,13 @@ export interface ExitPolicySentinelStore {
 export type ExitPolicySentinelEvent =
   | { op: 'position'; value: ExitPolicySentinel }
   | { op: 'observation'; id: string; value: ExitSentinelObservation }
+  | { op: 'evaluation-cycle'; id: string; value: ExitEvaluationCycle }
   | { op: 'state'; value: ExitPolicySentinel }
   | { op: 'resolution'; value: ExitPolicySentinel };
 
 function emptyStore(startedAt: string): ExitPolicySentinelStore {
   return {
-    version: 1, sentinelVersion: EXIT_POLICY_SENTINEL_VERSION,
+    version: 2, sentinelVersion: EXIT_POLICY_SENTINEL_VERSION,
     startedAt, updatedAt: startedAt, sentinels: [],
   };
 }
@@ -52,6 +53,11 @@ export function replayExitPolicySentinelEvents(
     if (event.op === 'observation') {
       const existing = byId.get(event.id);
       if (existing) byId.set(event.id, appendExitSentinelObservation(existing, event.value));
+      continue;
+    }
+    if (event.op === 'evaluation-cycle') {
+      const existing = byId.get(event.id);
+      if (existing) byId.set(event.id, appendExitEvaluationCycle(existing, event.value));
       continue;
     }
     const existing = event.value?.id ? byId.get(event.value.id) : undefined;
@@ -90,7 +96,7 @@ async function readSnapshot(startedAt: string): Promise<{ store: ExitPolicySenti
     return {
       existed: true,
       store: {
-        version: 1, sentinelVersion: EXIT_POLICY_SENTINEL_VERSION,
+        version: 2, sentinelVersion: EXIT_POLICY_SENTINEL_VERSION,
         startedAt: parsed.startedAt, updatedAt: parsed.updatedAt ?? parsed.startedAt,
         sentinels: parsed.sentinels,
       },
@@ -197,17 +203,18 @@ export function recordExitPolicySentinelObservation(
   const observation = exitSentinelObservation(lifecycle, source);
   // Build only the bounded sentinel payload synchronously. Cloning the order would copy its growing
   // lifecycle history on every observation and put avoidable work on the exit path.
-  const prospective = observation ? exitPolicySentinelFromOrder(order, observation) : null;
+  const prospective = observation ? exitPolicySentinelFromOrder(order, observation.at) : null;
   return serialized(async () => {
-    if (!observation || !prospective) return;
+    if (!observation || !prospective
+      || (observation.exitIocSimulation && !validExitIocSimulation(observation.exitIocSimulation, prospective.quantity))) return;
     const store = await ensureStore(observation.at);
-    const existing = store.sentinels.find((sentinel) => sentinel.id === prospective.id);
+    let existing = store.sentinels.find((sentinel) => sentinel.id === prospective.id);
+    const events: ExitPolicySentinelEvent[] = [];
     if (!existing) {
       if (Date.parse(prospective.positionOpenedAt) < Date.parse(store.startedAt)) return;
       store.sentinels.push(prospective);
-      store.updatedAt = observation.at;
-      await persistEvents(store, [{ op: 'position', value: prospective }]);
-      return;
+      existing = prospective;
+      events.push({ op: 'position', value: prospective });
     }
     if (existing.resolvedAt || existing.invalidReason || existing.observations.some((item) => item.at === observation.at)) return;
     if (Math.abs(existing.quantity - prospective.quantity) > 1e-8
@@ -218,18 +225,27 @@ export function recordExitPolicySentinelObservation(
       return;
     }
     const updated = appendExitSentinelObservation(existing, observation);
-    if (updated === existing) return;
+    if (updated === existing) {
+      if (events.length) {
+        store.updatedAt = observation.at;
+        await persistEvents(store, events);
+      }
+      return;
+    }
     store.sentinels[store.sentinels.indexOf(existing)] = updated;
+    events.push({ op: 'observation', id: existing.id, value: observation });
     store.updatedAt = observation.at;
-    await persistEvents(store, [{ op: 'observation', id: existing.id, value: observation }]);
+    await persistEvents(store, events);
   });
 }
 
 export function getExitPolicyContinuationOrderIds(observedAt: string): Promise<string[]> {
   return serialized(async () => {
     const store = await ensureStore(observedAt);
+    // Return every active path. Open positions already queue their production observation first, so the
+    // same-timestamp continuation is deduplicated; positions sold in this cycle do not have to wait for
+    // a later maintenance state patch before detached observation begins.
     return store.sentinels.filter((sentinel) => !sentinel.resolvedAt && !sentinel.invalidReason
-      && (sentinel.production.status === 'strict-exit' || sentinel.production.status === 'other-exit')
       && Date.parse(sentinel.closesAt) > Date.parse(observedAt)).map((sentinel) => sentinel.orderId);
   });
 }
@@ -242,6 +258,12 @@ export interface ExitPolicySentinelMaintenance {
 
 /** Applies detached post-exit observations, production state, and authoritative settlement. */
 export function maintainExitPolicySentinels(cycle: ExitPolicySentinelMaintenance): Promise<void> {
+  // Enrol from immutable order identity rather than from quote availability, so an unavailable first
+  // observation cannot silently select a position out of the prospective cohort.
+  const positions = cycle.orders.flatMap((order) => {
+    const position = exitPolicySentinelFromOrder(order, cycle.observedAt);
+    return position ? [position] : [];
+  });
   // Snapshot only fields maintenance reads; copying full lifecycle arrays would grow work every cycle.
   const orders = new Map(cycle.orders.map((order) => [order.id, {
     id: order.id, status: order.status, outcome: order.outcome,
@@ -258,15 +280,37 @@ export function maintainExitPolicySentinels(cycle: ExitPolicySentinelMaintenance
   return serialized(async () => {
     const store = await ensureStore(cycle.observedAt);
     const events: ExitPolicySentinelEvent[] = [];
+    for (const position of positions) {
+      if (Date.parse(position.positionOpenedAt) < Date.parse(store.startedAt)
+        || store.sentinels.some((sentinel) => sentinel.id === position.id)) continue;
+      store.sentinels.push(position);
+      events.push({ op: 'position', value: position });
+    }
     for (const continuation of continuations) {
       if (!continuation.observation) continue;
       const sentinel = store.sentinels.find((item) => item.orderId === continuation.orderId);
       if (!sentinel || sentinel.resolvedAt || sentinel.invalidReason
+        || (continuation.observation.exitIocSimulation
+          && !validExitIocSimulation(continuation.observation.exitIocSimulation, sentinel.quantity))
         || sentinel.observations.some((item) => item.at === continuation.observation!.at)) continue;
       const updated = appendExitSentinelObservation(sentinel, continuation.observation);
       if (updated === sentinel) continue;
       store.sentinels[store.sentinels.indexOf(sentinel)] = updated;
       events.push({ op: 'observation', id: sentinel.id, value: continuation.observation });
+    }
+
+    for (const sentinel of store.sentinels) {
+      if (sentinel.resolvedAt || sentinel.invalidReason
+        || sentinel.evaluationCycles.some((item) => item.at === cycle.observedAt)) continue;
+      const evaluationCycle: ExitEvaluationCycle = {
+        at: cycle.observedAt,
+        classification: sentinel.observations.some((observation) => observation.at === cycle.observedAt)
+          ? 'observed' : 'unavailable',
+      };
+      const updated = appendExitEvaluationCycle(sentinel, evaluationCycle);
+      if (updated === sentinel) continue;
+      store.sentinels[store.sentinels.indexOf(sentinel)] = updated;
+      events.push({ op: 'evaluation-cycle', id: sentinel.id, value: evaluationCycle });
     }
 
     const due = store.sentinels.filter((sentinel) => !sentinel.resolvedAt && !sentinel.invalidReason

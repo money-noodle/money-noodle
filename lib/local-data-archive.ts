@@ -171,7 +171,10 @@ function archiveCandidate(relative: string): boolean {
   const base = path.posix.basename(normalized);
   if (base === STATE_FILE || base.startsWith('.') || normalized.split('/').some((part) => part.startsWith('.'))) return false;
   if (base.includes('.tmp') || base.endsWith('.lock')) return false;
-  return base.endsWith('.json') || base.endsWith('.jsonl');
+  // Frozen repair/migration evidence keeps the source suffix before its quarantine label, for example
+  // `history.jsonl.corrupt-<stamp>` or `history.journal-copy`. It is durable even though the final extension
+  // is no longer json/jsonl. Keep this narrow enough that arbitrary binaries under data/ are not uploaded.
+  return /\.jsonl?(?:$|\.)/.test(base) || base.endsWith('.journal-copy');
 }
 
 export async function listArchiveCandidates(dataDirectory: string): Promise<string[]> {
@@ -235,6 +238,35 @@ async function existingBlobSize(store: ArchiveObjectStore, bucket: string, key: 
   }
 }
 
+function safeManifestPath(relative: string): boolean {
+  if (!relative || relative.includes('\\') || relative.includes('\0') || path.posix.isAbsolute(relative)) return false;
+  const normalized = path.posix.normalize(relative);
+  return normalized === relative && normalized !== '..' && !normalized.startsWith('../');
+}
+
+function validateManifest(config: LocalArchiveConfig, manifest: LocalArchiveManifest): void {
+  if (manifest.version !== LOCAL_ARCHIVE_VERSION || manifest.sourceRoot !== 'data' || !Array.isArray(manifest.files)) {
+    throw new Error('Archive manifest version or source root is invalid.');
+  }
+  const seen = new Set<string>();
+  for (const file of manifest.files) {
+    if (!safeManifestPath(file.path)) throw new Error(`Archive manifest contained unsafe path ${JSON.stringify(file.path)}.`);
+    if (seen.has(file.path)) throw new Error(`Archive manifest contained duplicate path ${file.path}.`);
+    seen.add(file.path);
+    if (!/^[a-f0-9]{64}$/.test(file.sha256)) throw new Error(`Archive manifest contained an invalid checksum for ${file.path}.`);
+    if (!Number.isSafeInteger(file.sourceBytes) || file.sourceBytes < 0 || !Number.isSafeInteger(file.compressedBytes) || file.compressedBytes < 0) {
+      throw new Error(`Archive manifest contained invalid byte counts for ${file.path}.`);
+    }
+    const expectedKey = `${config.prefix}/blobs/sha256/${file.sha256.slice(0, 2)}/${file.sha256}.gz`;
+    if (file.objectKey !== expectedKey) throw new Error(`Archive manifest object key for ${file.path} was not content-addressed under the configured prefix.`);
+  }
+  const sourceBytes = manifest.files.reduce((sum, file) => sum + file.sourceBytes, 0);
+  const compressedBytes = manifest.files.reduce((sum, file) => sum + file.compressedBytes, 0);
+  if (manifest.totals.files !== manifest.files.length || manifest.totals.sourceBytes !== sourceBytes || manifest.totals.compressedBytes !== compressedBytes) {
+    throw new Error('Archive manifest totals did not match its file records.');
+  }
+}
+
 async function putManifest(store: ArchiveObjectStore, config: LocalArchiveConfig, manifest: LocalArchiveManifest): Promise<string> {
   const content = `${JSON.stringify(manifest)}\n`;
   const digest = createHash('sha256').update(content).digest('hex');
@@ -282,7 +314,14 @@ async function acquireLock(dataDirectory: string): Promise<() => Promise<void>> 
 
 export async function archiveLocalData(
   config: LocalArchiveConfig,
-  options: { store?: ArchiveObjectStore; now?: Date; hostname?: string; onProgress?: (message: string) => void } = {},
+  options: {
+    store?: ArchiveObjectStore;
+    now?: Date;
+    hostname?: string;
+    onProgress?: (message: string) => void;
+    /** Test seam: production has no callback between snapshot completion and the source stability check. */
+    afterSnapshot?: (source: string) => void | Promise<void>;
+  } = {},
 ): Promise<{ manifest: LocalArchiveManifest; manifestKey: string }> {
   await mkdir(config.dataDirectory, { recursive: true });
   const release = await acquireLock(config.dataDirectory);
@@ -313,6 +352,12 @@ export async function archiveLocalData(
       const absolute = path.join(config.dataDirectory, ...relative.split('/'));
       const before = await stat(absolute);
       const measured = await compressedSnapshot(absolute, staging);
+      await options.afterSnapshot?.(absolute);
+      const after = await stat(absolute);
+      if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
+        || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) {
+        throw new Error(`Archive source ${relative} changed while it was being captured.`);
+      }
       const key = `${config.prefix}/blobs/sha256/${measured.sha256.slice(0, 2)}/${measured.sha256}.gz`;
       const storedSize = await existingBlobSize(store, config.bucket, key, measured);
       if (storedSize !== undefined) {
@@ -354,6 +399,7 @@ export async function archiveLocalData(
         reusedBlobs,
       },
     };
+    validateManifest(config, manifest);
     const manifestKey = await putManifest(store, config, manifest);
     const state: LocalArchiveState = {
       version: LOCAL_ARCHIVE_VERSION,
@@ -380,5 +426,110 @@ export async function archiveLocalData(
   } finally {
     await rm(staging, { force: true }).catch(() => undefined);
     await release();
+  }
+}
+
+export interface LocalArchiveRestoreResult {
+  manifestKey: string;
+  manifestCreatedAt: string;
+  manifestSha256: string;
+  destination: string;
+  files: number;
+  sourceBytes: number;
+  compressedBytes: number;
+}
+
+async function readManifest(
+  store: ArchiveObjectStore,
+  config: LocalArchiveConfig,
+  manifestKey: string,
+): Promise<{ manifest: LocalArchiveManifest; sha256: string }> {
+  if (!manifestKey.startsWith(`${config.prefix}/manifests/`) || !manifestKey.endsWith('.json')) {
+    throw new Error('Archive restore manifest key is outside the configured manifest prefix.');
+  }
+  const head = await store.send(new HeadObjectCommand({ Bucket: config.bucket, Key: manifestKey })) as {
+    Metadata?: Record<string, string>;
+  };
+  if (head.Metadata?.manifestversion !== LOCAL_ARCHIVE_VERSION || !/^[a-f0-9]{64}$/.test(head.Metadata.sha256 ?? '')) {
+    throw new Error('Archive restore manifest metadata is missing or invalid.');
+  }
+  const response = await store.send(new GetObjectCommand({ Bucket: config.bucket, Key: manifestKey })) as { Body?: unknown };
+  if (!response.Body) throw new Error('Archive restore manifest had no body.');
+  const chunks: Buffer[] = [];
+  for await (const chunk of objectBodyStream(response.Body)) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  const raw = Buffer.concat(chunks);
+  const digest = createHash('sha256').update(raw).digest('hex');
+  if (digest !== head.Metadata.sha256) throw new Error('Archive restore manifest checksum did not match its stored metadata.');
+  const manifest = JSON.parse(raw.toString('utf8')) as LocalArchiveManifest;
+  validateManifest(config, manifest);
+  return { manifest, sha256: digest };
+}
+
+/**
+ * Restores one complete archive manifest into a new directory. It never overlays active data: bytes are
+ * written under a sibling staging directory and the destination appears only after every object verifies.
+ */
+export async function restoreLocalArchive(
+  config: LocalArchiveConfig,
+  manifestKey: string,
+  destination: string,
+  options: { store?: ArchiveObjectStore; onProgress?: (message: string) => void } = {},
+): Promise<LocalArchiveRestoreResult> {
+  const resolvedDestination = path.resolve(destination);
+  const relativeToActiveData = path.relative(config.dataDirectory, resolvedDestination);
+  if (!relativeToActiveData || (!relativeToActiveData.startsWith('..') && !path.isAbsolute(relativeToActiveData))) {
+    throw new Error('Refusing to restore into or below the active data directory.');
+  }
+  const existing = await stat(resolvedDestination).then(() => true).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  });
+  if (existing) throw new Error(`Archive restore destination already exists: ${resolvedDestination}`);
+  const parent = path.dirname(resolvedDestination);
+  await mkdir(parent, { recursive: true });
+  const staging = path.join(parent, `.${path.basename(resolvedDestination)}.${process.pid}.${crypto.randomUUID()}.restore-tmp`);
+  const store = options.store ?? new S3Client({
+    region: config.region,
+    endpoint: config.endpoint,
+    forcePathStyle: false,
+    credentials: { accessKeyId: config.accessKeyId, secretAccessKey: config.secretAccessKey },
+    maxAttempts: 2,
+    requestHandler: new NodeHttpHandler({ connectionTimeout: 10_000, requestTimeout: 120_000 }),
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+    responseChecksumValidation: 'WHEN_REQUIRED',
+  }) as unknown as ArchiveObjectStore;
+  try {
+    const { manifest, sha256: manifestSha256 } = await readManifest(store, config, manifestKey);
+    await mkdir(staging, { recursive: false, mode: 0o700 });
+    for (const [index, file] of manifest.files.entries()) {
+      options.onProgress?.(`[${index + 1}/${manifest.files.length}] Restoring ${file.path}.`);
+      const output = path.join(staging, ...file.path.split('/'));
+      await mkdir(path.dirname(output), { recursive: true, mode: 0o700 });
+      const temporary = `${output}.${process.pid}.${crypto.randomUUID()}.tmp`;
+      const response = await store.send(new GetObjectCommand({ Bucket: config.bucket, Key: file.objectKey })) as { Body?: unknown };
+      if (!response.Body) throw new Error(`Archive object ${file.objectKey} had no body during restore.`);
+      const hasher = new HashingTransform();
+      await pipeline(objectBodyStream(response.Body), createGunzip(), hasher, createWriteStream(temporary, { flags: 'wx', mode: 0o600 }));
+      const actual = hasher.hash.digest('hex');
+      if (actual !== file.sha256 || hasher.bytes !== file.sourceBytes) {
+        throw new Error(`Archive restore verification failed for ${file.path}: expected ${file.sha256}/${file.sourceBytes}, received ${actual}/${hasher.bytes}.`);
+      }
+      const handle = await open(temporary, 'r');
+      try { await handle.sync(); } finally { await handle.close(); }
+      await rename(temporary, output);
+    }
+    await rename(staging, resolvedDestination);
+    return {
+      manifestKey,
+      manifestCreatedAt: manifest.createdAt,
+      manifestSha256,
+      destination: resolvedDestination,
+      files: manifest.totals.files,
+      sourceBytes: manifest.totals.sourceBytes,
+      compressedBytes: manifest.totals.compressedBytes,
+    };
+  } catch (error) {
+    await rm(staging, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
   }
 }

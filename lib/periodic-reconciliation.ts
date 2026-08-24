@@ -6,12 +6,18 @@ import { configuredReconciliationIntervalMs } from './task-cadence';
 
 const FAILURE_RETRY_MS = 30_000;
 
-interface PeriodicRuntime { nextAtMs: number; consecutiveFailures: number; inFlight: boolean }
+interface PeriodicRuntime {
+  nextAtMs: number;
+  consecutiveFailures: number;
+  inFlight: boolean;
+  started: boolean;
+  timer?: ReturnType<typeof setTimeout>;
+}
 const runtimeKey = Symbol.for('money-noodle.periodic-reconciliation');
 
 function runtime(): PeriodicRuntime {
   const root = globalThis as typeof globalThis & { [runtimeKey]?: PeriodicRuntime };
-  root[runtimeKey] ??= { nextAtMs: 0, consecutiveFailures: 0, inFlight: false };
+  root[runtimeKey] ??= { nextAtMs: 0, consecutiveFailures: 0, inFlight: false, started: false };
   return root[runtimeKey]!;
 }
 
@@ -24,7 +30,7 @@ export function initialPeriodicReconciliationAt(completedAt: string | undefined,
   return Number.isFinite(completed) ? Math.max(nowMs, completed + intervalMs) : nowMs + intervalMs;
 }
 
-/** Called by the 15-second collector; performs at most one serialized account reconciliation. */
+/** Performs at most one account reconciliation when the independently owned deadline is due. */
 export async function maybeRunPeriodicReconciliation(nowMs = Date.now()): Promise<void> {
   if (!liveTradingEnabled()) return;
   const state = runtime();
@@ -57,4 +63,35 @@ export async function maybeRunPeriodicReconciliation(nowMs = Date.now()): Promis
   } finally {
     state.inFlight = false;
   }
+}
+
+function scheduleNext(delayMs: number): void {
+  const state = runtime();
+  state.timer = setTimeout(() => void periodicTick(), Math.max(1_000, delayMs));
+  state.timer.unref?.();
+}
+
+async function periodicTick(): Promise<void> {
+  const state = runtime();
+  try {
+    if (!liveTradingEnabled()) {
+      scheduleNext(60_000);
+      return;
+    }
+    await maybeRunPeriodicReconciliation();
+  } catch (error) {
+    // `reconcileLiveExecution` normally returns a blocked status. This guard keeps an unexpected scheduler
+    // error observable without terminating the timer that must retry it.
+    console.error('Periodic reconciliation scheduler failed:', error);
+    state.nextAtMs = Date.now() + FAILURE_RETRY_MS;
+  }
+  scheduleNext(state.nextAtMs ? state.nextAtMs - Date.now() : 60_000);
+}
+
+/** Starts a process-global background timer. It is never awaited by collection or request handling. */
+export function startPeriodicReconciliationScheduler(): void {
+  const state = runtime();
+  if (state.started) return;
+  state.started = true;
+  void periodicTick();
 }

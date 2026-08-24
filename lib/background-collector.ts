@@ -3,8 +3,6 @@ import { collectorRuntime } from './collector-state';
 import { getDashboard, MODEL_VERSION } from './dashboard';
 import { recordCollectorCalculations, resolveDueForecasts } from './forecast-tracker';
 import { processPaperTradingCycle } from './paper-execution';
-import { maybeRunPeriodicReconciliation } from './periodic-reconciliation';
-import { maybeRunWalkForwardEvaluation } from './model-evaluation-store';
 import { replicatePublicPaperPerformance } from './public-paper-performance';
 import { replicatePublicLongShot } from './long-shot-projection';
 
@@ -34,11 +32,6 @@ async function collect(): Promise<void> {
       .catch((error) => console.error('Postgres public paper performance sync failed:', error));
     void replicatePublicLongShot()
       .catch((error) => console.error('Postgres public long-shot sync failed:', error));
-    await maybeRunPeriodicReconciliation();
-    if (dashboard.performance.calibrationReady) {
-      await maybeRunWalkForwardEvaluation(dashboard.performance.calibrationWindows)
-        .catch((error) => console.error('Automatic walk-forward evaluation failed:', error));
-    }
     state.lastSuccessAt = new Date().toISOString();
     state.lastError = undefined;
   } catch (error) {

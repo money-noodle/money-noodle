@@ -41,8 +41,9 @@ The current code already has a partial deployment split, but not a process bound
 
 - `instrumentation.node.ts` runs startup reconciliation and then starts `startBackgroundCollector`; therefore a
   stateful Next.js server is also the execution engine.
-- `startBackgroundCollector` calls dashboard calculation, `processPaperTradingCycle`, settlement, public
-  projection, periodic reconciliation, and evaluation from one loop.
+- `startBackgroundCollector` calls dashboard calculation, `processPaperTradingCycle`, settlement, and public
+  projection from one loop. Periodic reconciliation now has an independent process-global timer, and walk-forward
+  evaluation is an explicit paused/stopped offline command; both still share the host until engine extraction.
 - `app/api/trading/control/route.ts`, `app/api/trading/allocations/route.ts`, and
   `app/api/trading/providers/route.ts` call worker-local stores and process-local queues directly.
 - `engineQueue`, reconciliation state, execution-drain state, collector state, and task-cadence health are all
@@ -80,7 +81,8 @@ The original separation proposal had a strong process and trust boundary but del
 engine internals. That is safe for extraction, but insufficient as the target architecture:
 
 - `startBackgroundCollector` still makes one crypto-15m dashboard calculation the unit of collection,
-  strategy evaluation, settlement, projection, reconciliation, and model evaluation;
+  strategy evaluation, settlement, and projection; periodic reconciliation has an independent timer and model
+  evaluation is offline, but collection and funded execution still share the web worker;
 - current registries identify providers, markets, and strategies, but their TypeScript unions and normalized
   records still assume binary UP/DOWN contracts, a fixed asset list, and one horizon clock;
 - a `Dashboard` is a presentation read model, not a durable, point-in-time strategy input contract;

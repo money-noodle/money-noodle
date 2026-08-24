@@ -31,7 +31,10 @@
     "compact:execution-ledger": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/compact-execution-ledger.ts",
     "fund:long-shot": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/fund-long-shot.ts",
     "archive:local": "jiti scripts/archive-local-data.ts",
+    "restore:local": "jiti scripts/restore-local-data.ts",
+    "cleanup:next-cache": "jiti scripts/cleanup-next-cache.ts",
     "cleanup:stale-tmp": "jiti scripts/cleanup-stale-tmp.ts",
+    "check:disk": "jiti scripts/check-disk-capacity.ts",
     "correct:live-order-identity": "jiti scripts/correct-live-order-identity.ts",
     "generate:brand": "node scripts/generate-brand-assets.mjs",
     "analyze:edge-gates": "node --max-old-space-size=6144 scripts/analyze-edge-gates.mjs",
@@ -55,7 +58,8 @@
     "analyze:unfilled-entries": "node scripts/analyze-unfilled-entries.mjs",
     "analyze:window-consensus": "node scripts/analyze-window-consensus.mjs",
     "analyze:entry-admission-v22": "node --max-old-space-size=8192 --expose-gc scripts/analyze-entry-admission-v22.mjs",
-    "analyze:walk-forward-review": "NODE_OPTIONS=--max-old-space-size=8192 JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/analyze-walk-forward-review.ts"
+    "analyze:walk-forward-review": "NODE_OPTIONS=--max-old-space-size=8192 JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/analyze-walk-forward-review.ts",
+    "evaluate:walk-forward-offline": "NODE_OPTIONS=--max-old-space-size=8192 JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/run-walk-forward-evaluation-offline.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1111.0",

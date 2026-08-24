@@ -242,7 +242,44 @@ order, and reconciliation modules import no sentinel result. Tests pin candidate
 first-to-fire behavior, confirmation reset, trailing state, full-cohort scoring, event idempotence, immutable
 decision fields, append-only ownership, and dependency isolation.
 
-## 9. Explicitly unchanged
+## 9. Exit-sentinel v2 evidence repair (approved 2026-08-24)
+
+The first prospective generation exposed three measurement defects rather than a production-policy result:
+
+- paper positions stamped the shared route-policy identity instead of the paper execution generation, so the
+  active paper cohort disappeared from the published report;
+- maintenance ran before the current lifecycle observation and the 20-second wall-clock completeness rule
+  treated normal worker scheduling gaps as missing decision opportunities;
+- paper candidate proceeds assumed a full fill at the displayed bid even though production paper exits use a
+  depth-bounded reduce-only IOC simulation.
+
+V1 evidence remains immutable and diagnostic only. V2 starts new snapshot and journal files at its first runtime
+cycle; it does not backfill, rewrite, or pool v1 records. The four candidate rule identities and thresholds remain
+unchanged so observed v1 outcomes cannot select a new arm.
+
+V2 enrolls every newly filled positive-edge position independently of whether its first quote is available. Each
+successful evaluator cycle records either a fresh observation or an explicit unavailable classification before
+settlement is applied. Completeness is measured against those actual evaluator opportunities, not elapsed wall
+clock: at least 90% of a position's classified cycles must contain valid observations. Worker downtime creates no
+fictional order opportunity; a present evaluator cycle with missing public evidence is an unavailable cycle and
+cannot trigger a candidate.
+
+The stamped execution generation comes from the immutable entry decision (`entryDecision.executionPolicyVersion`)
+for both tracks. The shared route-policy identity remains separate execution evidence and cannot replace the paper
+generation.
+
+Every observation also records a bounded public-book reduce-only IOC simulation. Paper candidate P&L uses its
+first trigger's actual simulated outcome: no fill holds the whole position, a partial fill realizes only its filled
+slice and holds the remainder, and a complete fill uses exact simulated net proceeds. Missing book evidence at a
+paper trigger makes that position incomplete rather than inventing a fill. Live remains an explicitly optimistic
+executable-bid replay because an unsigned observation cannot establish a venue fill.
+
+Collection and storage remain detached and public-data-only. V2 does not alter production exit evaluation,
+attempt timing, order authority, sizing, reservations, or reconciliation. The existing 60-window, 20-divergent-
+window, 90%-coverage, Holm-corrected, track-separated review lock remains in force. Any later promotion is a
+separate manual policy-version and capital/downside decision.
+
+## 10. Explicitly unchanged
 
 - Live remains running and armed under existing operator intent.
 - Entry rules and the paper/live mirror do not change.

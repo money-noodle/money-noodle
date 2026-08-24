@@ -1583,6 +1583,17 @@ export interface EntryExecutionObservation {
 
 export interface PositionLifecycleObservation {
   at: string;
+  /** Public-book reduce-only IOC replay for prospective exit evaluation; never order authority. */
+  exitIocSimulation?: {
+    version: 'exit-ioc-depth-v1';
+    evidenceComplete: boolean;
+    filledCount: number;
+    averagePrice: number;
+    grossProceedsCents: number;
+    feeCents: number;
+    netProceedsCents: number;
+    remainingCount: number;
+  };
   selectedBid: number;
   selectedAsk: number;
   spread: number;

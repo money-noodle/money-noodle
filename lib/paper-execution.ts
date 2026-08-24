@@ -90,7 +90,11 @@ import { getProviderBudgets, providerBudget } from './provider-budget-store';
 import { getExecutionLedgerRuntime, serializeExecutionLedgerOperation, waitForExecutionLedger, type ExecutionLedgerMutation } from './execution-ledger-runtime';
 import { isStatelessDeployment } from './runtime-environment';
 import { postgresPaperProjectionSyncEnabled, readPublicPaperBudgetFromPostgres, syncPublicPaperBudgetToPostgres } from './postgres-paper-projection';
-import { fetchKalshiReconciliationSnapshot } from './kalshi-reconciliation';
+import {
+  fetchKalshiIncrementalReconciliationSnapshot,
+  fetchKalshiReconciliationSnapshot,
+  type KalshiReconciliationSnapshot,
+} from './kalshi-reconciliation';
 import { adaptiveEntryEpisodeDecision, entryAttemptsForLogicalOrder, entryEpisodeId, makerAttemptId, makerRetryDecision, maximumLiveMakerAttempts, type MakerRetryDecision } from './maker-retry-policy';
 import { evaluateLiveRisk } from './live-risk-policy';
 import { liveBlockers, liveTradingEnabled, maxLiveOrdersPerHour, maxLiveStakeCents, placeKalshiBuy, placeKalshiSell, placeKalshiTakerBuy } from './live-orders';
@@ -102,6 +106,17 @@ import { maintainPortfolioChoiceSets, recordPortfolioChoiceSet } from './portfol
 import { bestEntry, bestVenueEntry, BUY_POLICY_VERSION, edgeStrength, MAX_ENTRY_PRICE, MIN_ESTIMATE_QUALITY, MIN_NET_EDGE, qualifiesAsBuyEdge, qualifiesVenueBuyEdge, sideProbability, venueFeeRate } from './prediction-policy';
 import { quoteTrajectoryForDecision } from './quote-trajectory-spread';
 import { getKalshiReconciliationStatus, serializedReconciliation, setKalshiReconciliationStatus, type KalshiReconciliationStatus } from './reconciliation-state';
+import {
+  KALSHI_RECONCILIATION_CHECKPOINT_VERSION,
+  readKalshiReconciliationCheckpoint,
+  writeKalshiReconciliationCheckpoint,
+  type ReconciliationCheckpointTrigger,
+} from './reconciliation-checkpoint';
+import {
+  incrementalReconciliationInterval,
+  liveReconciliationAuthorityFingerprint,
+  localReconciliationPlan,
+} from './reconciliation-scope';
 import { getRegimeGateStatus, updateRegimeGate, type RegimeGateStatus, type RegimeSentinelCandidate } from './regime-gate-store';
 import { advanceSignalPersistence, evaluateSignalPersistence, evaluateSignalPersistenceIgnoringSpike, productionSignalPersistence, signalPersistenceAfter, type SignalEligibility, type SignalPersistenceState } from './signal-persistence';
 import { edgeSpikeGateEnabled, maximumEdgeSpike, spikeAdmits } from './edge-spike-policy';
@@ -1422,10 +1437,20 @@ function lifecycleObservation(
   order: PaperOrder, prediction: Prediction, observedAt: string, terms: ExitObservationTerms,
   netLiquidationCents: number,
 ): PositionLifecycleObservation {
-  const depth = order.venue === 'kalshi'
-    ? selectedSideDepth(observeKalshiOrderBook(order.contractId), order.side, terms.quote.bid, terms.quote.ask) : {};
+  const book = order.venue === 'kalshi' ? observeKalshiOrderBook(order.contractId) : undefined;
+  const depth = selectedSideDepth(book, order.side, terms.quote.bid, terms.quote.ask);
+  const fill = immediateSellFill(book, order.side, terms.quote.bid, order.quantity);
+  const fillFeeCents = fill.filledCount > 0
+    ? venueFeeCents(order.venue, fill.averagePrice * 100, fill.filledCount, 'taker') : 0;
   return {
-    at: observedAt, selectedBid: terms.quote.bid, selectedAsk: terms.quote.ask,
+    at: observedAt,
+    exitIocSimulation: {
+      version: 'exit-ioc-depth-v1', evidenceComplete: Boolean(book), filledCount: fill.filledCount,
+      averagePrice: fill.averagePrice, grossProceedsCents: fill.cashCents, feeCents: fillFeeCents,
+      netProceedsCents: fill.cashCents - fillFeeCents,
+      remainingCount: Math.max(0, Math.round((order.quantity - fill.filledCount) * 100) / 100),
+    },
+    selectedBid: terms.quote.bid, selectedAsk: terms.quote.ask,
     spread: terms.quote.ask - terms.quote.bid,
     bestBidDepth: depth.bestBidDepth, bestAskDepth: depth.bestAskDepth, depthImbalance: depth.depthImbalance,
     netLiquidationCents, exitFeeCents: terms.exitFeeCents,
@@ -2266,27 +2291,6 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
     .catch((error) => console.error('Maker restriction sentinel maintenance failed:', error));
   void maintainPortfolioChoiceSets(dashboard.generatedAt)
     .catch((error) => console.error('Portfolio choice-set maintenance failed:', error));
-  // Continue candidate exit paths after production sells. This reads the already-fresh public dashboard,
-  // records no stale substitute, and is detached from every signed order and ledger mutation.
-  void maintainExitPolicySentinels({ observedAt: dashboard.generatedAt, orders: ledger.orders })
-    .then(() => getExitPolicyContinuationOrderIds(dashboard.generatedAt))
-    .then((orderIds) => {
-      if (!orderIds.length || !isFreshCalculationTimestamp(dashboard.generatedAt)) return;
-      const continuationObservations = orderIds.flatMap((orderId) => {
-        const order = ledger.orders.find((item) => item.id === orderId);
-        if (!order) return [];
-        const prediction = dashboard.predictions.find((item) => item.symbol === order.symbol
-          && (order.venue === 'kalshi' ? item.kalshi?.closesAt === order.closesAt : item.market.closesAt === order.closesAt));
-        if (!prediction) return [];
-        const observation = continuationExitObservation(order, prediction, dashboard.generatedAt);
-        return observation ? [{ orderId, observation }] : [];
-      });
-      if (!continuationObservations.length) return;
-      return maintainExitPolicySentinels({
-        observedAt: dashboard.generatedAt, orders: ledger.orders, continuationObservations,
-      });
-    })
-    .catch((error) => console.error('Exit policy sentinel maintenance failed:', error));
   const status = await getTradingControl();
   // Long-shot evidence reconciliation only: trigger records come from the authoritative paper entry
   // decision inside `runLongShot`. This detached pass recovers stamped decisions, observes peaks, and settles them.
@@ -2297,6 +2301,26 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
     .then((cycle) => updateHoldSentinelStore(cycle))
     .catch((error) => console.error('Long-shot evidence collection failed:', error));
   changed = await observeAndExecuteStandaloneExits(dashboard, status, ledger) || changed;
+  // Record current open-position observations first. The store queue then appends continuation evidence,
+  // classifies this evaluator cycle, and only afterward resolves due positions. This remains detached
+  // from execution and uses no signed endpoint.
+  void getExitPolicyContinuationOrderIds(dashboard.generatedAt)
+    .then((orderIds) => {
+      const continuationObservations = isFreshCalculationTimestamp(dashboard.generatedAt)
+        ? orderIds.flatMap((orderId) => {
+          const order = ledger.orders.find((item) => item.id === orderId);
+          if (!order) return [];
+          const prediction = dashboard.predictions.find((item) => item.symbol === order.symbol
+            && (order.venue === 'kalshi' ? item.kalshi?.closesAt === order.closesAt : item.market.closesAt === order.closesAt));
+          if (!prediction) return [];
+          const observation = continuationExitObservation(order, prediction, dashboard.generatedAt);
+          return observation ? [{ orderId, observation }] : [];
+        }) : [];
+      return maintainExitPolicySentinels({
+        observedAt: dashboard.generatedAt, orders: ledger.orders, continuationObservations,
+      });
+    })
+    .catch((error) => console.error('Exit policy sentinel maintenance failed:', error));
   const portfolioUpdate = updatePortfolioDecisions(dashboard, status, ledger);
   changed = portfolioUpdate.changed || changed;
   const previousSkip = ledger.lastLiveSkip?.reason;
@@ -2874,10 +2898,13 @@ export function processPaperTradingCycle(dashboard: DashboardData): Promise<void
   startLongShotExitPoller();
   startLongShotEntryPoller();
   const operation = serializeLedgerMutation(() => processCycle(dashboard));
-  return operation.then(async () => {
+  return operation.then(() => {
     if (!automaticReconciliationRequested) return;
     automaticReconciliationRequested = false;
-    await reconcileLiveExecution({ trigger: 'automatic' });
+    // Recovery owns its own serialized background lane. The uncertain transaction already blocks new
+    // live exposure; collection and paper settlement must not wait for venue account reads.
+    void reconcileLiveExecution({ trigger: 'automatic' })
+      .catch((error) => console.error('Automatic reconciliation failed:', error));
   });
 }
 
@@ -2909,68 +2936,136 @@ export async function pauseAndDrainLiveExecution(reason = 'Paused by user · pap
   }
 }
 
-/** Authoritative startup/manual barrier. Live orders remain blocked until this returns ready. */
-export function reconcileLiveExecution(options: { trigger?: 'startup' | 'manual' | 'automatic' | 'periodic'; pauseOnFailure?: boolean } = {}): Promise<KalshiReconciliationStatus> {
+const RECONCILIATION_RETRY_DELAYS_MS = [0, 2_000, 5_000, 10_000, 15_000] as const;
+
+/**
+ * Authoritative account barrier. Venue reads run outside the shared ledger serializer, but reconciliation
+ * `running` is itself a live-admission fence. A changed local live fingerprint discards the stale snapshot.
+ */
+export function reconcileLiveExecution(options: {
+  trigger?: ReconciliationCheckpointTrigger;
+  pauseOnFailure?: boolean;
+} = {}): Promise<KalshiReconciliationStatus> {
   return serializedReconciliation(async () => {
     const taskRun = beginTaskCadenceRun('reconciliation');
     const trigger = options.trigger ?? 'manual';
     const startedAt = new Date().toISOString();
     const previousStatus = getKalshiReconciliationStatus();
-    setKalshiReconciliationStatus({ ...previousStatus, phase: 'running', trigger, startedAt, completedAt: undefined, reason: `Running ${trigger} Kalshi reconciliation.` });
-    const operation = serializeLedgerMutation(async () => {
-      try {
-        const ledger = await mutableLedger();
-        const trackedIds = ledger.orders.flatMap((order) => [order.venueOrderId, order.exitVenueOrderId]).filter((id): id is string => Boolean(id));
-        const retryDelaysMs = [0, 2_000, 5_000, 10_000, 15_000];
-        let snapshot: Awaited<ReturnType<typeof fetchKalshiReconciliationSnapshot>> | undefined;
-        let result: ReturnType<typeof reconcileExecutionLedger> | undefined;
-        for (const delayMs of retryDelaysMs) {
-          if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
-          snapshot = await fetchKalshiReconciliationSnapshot(trackedIds);
-          result = reconcileExecutionLedger(ledger.orders, snapshot);
-          if (!result.issues.length) break;
-          const onlyPropagationDelay = result.retryableIssues.length > 0 && result.retryableIssues.length === result.issues.length;
-          if (!onlyPropagationDelay) throw new Error(result.issues.join(' '));
-        }
-        if (!snapshot || !result) throw new Error('Kalshi reconciliation did not produce an authoritative snapshot.');
-        if (result.issues.length) throw new Error(result.issues.join(' '));
-        const previousEntryStatus = new Map(ledger.orders.map((order) => [order.id, order.status]));
-        ledger.orders = result.orders;
-        for (const recovered of ledger.orders.filter((order) => order.executionMode === 'live' && order.status === 'open'
-          && previousEntryStatus.get(order.id) !== 'open')) attachMatchedLiveFillShadow(ledger.orders, recovered);
-        await writeLedger(ledger);
-        // Recovered exits use the same deterministic settlement ids as normal execution. Calls are
-        // idempotent against the control audit, including a crash between ledger and budget writes.
-        for (const settlement of result.settlements) {
-          if (settlement.stakeCents > 0) await settleTradingBudget(settlement.stakeCents, settlement.payoutCents, 'kalshi', settlement.relatedId);
-        }
-        await reconcileTradingBudget({
-          targetReservedCents: result.targetReservedCents, venueBalanceCents: snapshot.balanceCents,
-          reason: `Kalshi ${trigger} reconciliation passed: ${result.targetReservedCents}c reserved, ${result.recoveredFills} fill state(s) recovered, ${snapshot.restingOrdersCanceled} managed remainder(s) canceled.`,
-          auditUnchanged: trigger !== 'periodic' || result.recoveredFills > 0 || snapshot.restingOrdersCanceled > 0,
-        });
-        const status: KalshiReconciliationStatus = {
-          ...previousStatus, phase: 'ready', trigger, startedAt, completedAt: new Date().toISOString(),
-          reason: `Kalshi ${trigger} reconciliation passed; balances, positions, orders, fills, IDs, resting orders, and local reservations agree.`,
-          venueBalanceCents: snapshot.balanceCents,
-          localOpenPositions: result.orders.filter((order) => order.executionMode === 'live' && order.status === 'open').length,
-          venueManagedPositions: result.venueManagedPositions,
-          restingOrdersCanceled: snapshot.restingOrdersCanceled, recoveredFills: result.recoveredFills,
-        };
-        setKalshiReconciliationStatus(status);
-        await autoResumeTradingAfterReconciliation().catch((error) => console.error('Guarded auto-resume check failed:', error));
-        taskRun.succeed();
-        return status;
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : 'Unknown Kalshi reconciliation failure';
-        if (options.pauseOnFailure !== false) await recordTradingReconciliationFailure(reason).catch((auditError) => console.error('Unable to persist reconciliation failure:', auditError));
-        const status: KalshiReconciliationStatus = { ...previousStatus, phase: 'blocked', trigger, startedAt, completedAt: new Date().toISOString(), reason };
-        setKalshiReconciliationStatus(status);
-        taskRun.fail(error);
-        return status;
-      }
+    setKalshiReconciliationStatus({
+      ...previousStatus, phase: 'running', trigger, startedAt, completedAt: undefined,
+      reason: `Running ${trigger} Kalshi reconciliation.`,
     });
-    return operation;
+    try {
+      let checkpoint: Awaited<ReturnType<typeof readKalshiReconciliationCheckpoint>>;
+      try {
+        checkpoint = await readKalshiReconciliationCheckpoint(DATA_DIR);
+      } catch {
+        // The owning full audit may replace a malformed discovery watermark only after current account
+        // authority passes. Until then reconciliation remains running/blocked and no new live exposure enters.
+        checkpoint = undefined;
+      }
+      let incremental = (trigger === 'periodic' || trigger === 'automatic') && Boolean(checkpoint);
+      let successful: {
+        snapshot: KalshiReconciliationSnapshot;
+        result: ReturnType<typeof reconcileExecutionLedger>;
+        completedThroughTs: number;
+      } | undefined;
+
+      for (const delayMs of RECONCILIATION_RETRY_DELAYS_MS) {
+        if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
+        const plan = await readLedgerView((ledger) => localReconciliationPlan(ledger.orders));
+        const completedThroughTs = Math.floor(Date.now() / 1_000);
+        let snapshot: KalshiReconciliationSnapshot;
+        if (incremental && checkpoint) {
+          const interval = incrementalReconciliationInterval(checkpoint, plan, completedThroughTs);
+          try {
+            snapshot = await fetchKalshiIncrementalReconciliationSnapshot({
+              ...interval,
+              trackedVenueOrderIds: plan.trackedVenueOrderIds,
+            });
+          } catch (error) {
+            if (!(error instanceof Error) || !error.message.includes('predates the live order/fill tier')) throw error;
+            incremental = false;
+            snapshot = await fetchKalshiReconciliationSnapshot(plan.trackedVenueOrderIds);
+          }
+        } else {
+          snapshot = await fetchKalshiReconciliationSnapshot(plan.trackedVenueOrderIds);
+        }
+
+        const attempt = await serializeLedgerMutation(async () => {
+          const ledger = await mutableLedger();
+          if (liveReconciliationAuthorityFingerprint(ledger.orders) !== plan.authorityFingerprint) {
+            return { kind: 'changed' as const };
+          }
+          const result = reconcileExecutionLedger(ledger.orders, snapshot);
+          if (result.issues.length) {
+            const onlyPropagationDelay = result.retryableIssues.length > 0
+              && result.retryableIssues.length === result.issues.length;
+            if (onlyPropagationDelay) return { kind: 'retryable' as const };
+            throw new Error(result.issues.join(' '));
+          }
+          const previousEntryStatus = new Map(ledger.orders.map((order) => [order.id, order.status]));
+          ledger.orders = result.orders;
+          for (const recovered of ledger.orders.filter((order) => order.executionMode === 'live'
+            && order.status === 'open' && previousEntryStatus.get(order.id) !== 'open')) {
+            attachMatchedLiveFillShadow(ledger.orders, recovered);
+          }
+          await writeLedger(ledger);
+          return { kind: 'committed' as const, result };
+        });
+        if (attempt.kind !== 'committed') continue;
+        successful = { snapshot, result: attempt.result, completedThroughTs };
+        break;
+      }
+
+      if (!successful) throw new Error('Kalshi reconciliation could not obtain a stable complete account snapshot within the bounded retry window.');
+      const { snapshot, result, completedThroughTs } = successful;
+      const reconciliationScope = incremental ? 'incremental' : 'full';
+      // Recovered exits use deterministic settlement ids. These calls remain idempotent if a crash occurs
+      // after the ledger commit but before the budget/checkpoint commit.
+      for (const settlement of result.settlements) {
+        if (settlement.stakeCents > 0) {
+          await settleTradingBudget(settlement.stakeCents, settlement.payoutCents, 'kalshi', settlement.relatedId);
+        }
+      }
+      await reconcileTradingBudget({
+        targetReservedCents: result.targetReservedCents, venueBalanceCents: snapshot.balanceCents,
+        reason: `Kalshi ${trigger} ${reconciliationScope} reconciliation passed: ${result.targetReservedCents}c reserved, ${result.recoveredFills} fill state(s) recovered, ${snapshot.restingOrdersCanceled} managed remainder(s) canceled.`,
+        auditUnchanged: trigger !== 'periodic' || result.recoveredFills > 0 || snapshot.restingOrdersCanceled > 0,
+      });
+      await writeKalshiReconciliationCheckpoint({
+        version: KALSHI_RECONCILIATION_CHECKPOINT_VERSION,
+        completedThroughTs,
+        completedAt: new Date().toISOString(),
+        trigger,
+      }, DATA_DIR);
+      const status: KalshiReconciliationStatus = {
+        ...previousStatus, phase: 'ready', trigger, startedAt, completedAt: new Date().toISOString(),
+        reason: `Kalshi ${trigger} ${reconciliationScope} reconciliation passed; balances, positions, orders, fills, IDs, resting orders, and local reservations agree.`,
+        venueBalanceCents: snapshot.balanceCents,
+        localOpenPositions: result.orders.filter((order) => order.executionMode === 'live' && order.status === 'open').length,
+        venueManagedPositions: result.venueManagedPositions,
+        restingOrdersCanceled: snapshot.restingOrdersCanceled,
+        recoveredFills: result.recoveredFills,
+      };
+      setKalshiReconciliationStatus(status);
+      await autoResumeTradingAfterReconciliation()
+        .catch((error) => console.error('Guarded auto-resume check failed:', error));
+      taskRun.succeed();
+      return status;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'Unknown Kalshi reconciliation failure';
+      if (options.pauseOnFailure !== false) {
+        await recordTradingReconciliationFailure(reason)
+          .catch((auditError) => console.error('Unable to persist reconciliation failure:', auditError));
+      }
+      const status: KalshiReconciliationStatus = {
+        ...previousStatus, phase: 'blocked', trigger, startedAt, completedAt: new Date().toISOString(), reason,
+      };
+      setKalshiReconciliationStatus(status);
+      taskRun.fail(error);
+      return status;
+    }
   });
 }
 
