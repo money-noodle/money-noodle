@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildMakerRestrictionSentinelReport, makerRestrictionCandidateDecisions,
-  makerRestrictionSentinelFromOrder,
+  buildMakerRestrictionSentinelReport, holmSignificantMakerRestrictions,
+  makerRestrictionCandidateDecisions, makerRestrictionSentinelFromOrder,
+  type MakerRestrictionArmReport, type MakerRestrictionCandidateId,
 } from './maker-restriction-sentinel';
 import { EDGE_BINARY_BUY, LONG_SHOT_ROUND_TRIP } from './strategy-registry';
 import type { PaperOrder } from './types';
@@ -30,6 +31,21 @@ function order(patch: Partial<PaperOrder> = {}): PaperOrder {
     ...patch,
   };
 }
+
+describe('maker restriction review lock', () => {
+  it('applies Holm correction across the frozen two-candidate family', () => {
+    const report = (
+      candidateId: MakerRestrictionCandidateId, mean: number, standardError: number,
+    ): MakerRestrictionArmReport => ({
+      candidateId, attempts: 60, divergentAttempts: 20, windows: 60, divergentWindows: 20,
+      filledAttempts: 10, deployedCents: 100, pnlCents: 1, meanReturnAcrossAttempts: mean,
+      incrementalMeanReturn: mean, incrementalStandardError: standardError, reviewUnlocked: false,
+    });
+    expect(holmSignificantMakerRestrictions([
+      report('maker-spread-max2c-v1', 3, 1), report('maker-spike-max2pp-v1', 1.5, 1),
+    ])).toEqual(new Set<MakerRestrictionCandidateId>(['maker-spread-max2c-v1']));
+  });
+});
 
 describe('maker restriction candidates', () => {
   it('fails toward refusal at invalid inputs and pins both candidate boundaries', () => {
@@ -88,5 +104,6 @@ describe('maker restriction candidates', () => {
     expect(spread.deployedCents).toBe(0);
     expect(spread.pnlCents).toBe(0);
     expect(spread.incrementalMeanReturn).toBe(0.5);
+    expect(spread.reviewUnlocked).toBe(false);
   });
 });

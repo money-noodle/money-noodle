@@ -2,7 +2,7 @@ import { makerExecutionStyle } from './execution-order-evidence';
 import { DEFAULT_STRATEGY_ID, normalizeStrategyId } from './strategy-registry';
 import type { PaperOrder, PositionSide, StrategyId } from './types';
 
-export const ENTRY_EXECUTION_POLICY_VERSION = 'maker-high30-requalify3-fresh1c-idv2-v6';
+export const ENTRY_EXECUTION_POLICY_VERSION = 'maker-high30-requalify3-fresh1c-bounded-taker-pilot-v7';
 export const HIGH_EDGE_TAKER_THRESHOLD = 0.30;
 export const MAX_ENTRY_EPISODES_PER_WINDOW = 3;
 export type EntryExecutionMode = 'maker' | 'adaptive' | 'taker';
@@ -26,7 +26,7 @@ export interface EntryExecutionPolicyInput {
   minimumMedianNetEdge: number;
   minimumConfidence: number;
   maximumSpread: number;
-  /** Historical compatibility only. V5 never grants taker fallback authority. */
+  /** Historical compatibility only. V7 never grants taker fallback authority. */
   makerMissFallback?: boolean;
   fallbackFromOrderId?: string;
 }
@@ -36,7 +36,7 @@ export interface EntryExecutionDecision {
   configuredMode: EntryExecutionMode;
   executedStyle: EntryExecutionStyle;
   recommendedStyle: EntryExecutionStyle;
-  route: 'ordinary-maker' | 'high-edge-taker';
+  route: 'ordinary-maker' | 'high-edge-taker' | 'bounded-taker-experiment';
   reason: string;
   takerNetEdge: number;
   medianNetEdge: number;
@@ -66,7 +66,7 @@ export function makerCohortEvidence(orders: PaperOrder[], price: number, spread:
 }
 
 /**
- * V5 spends the spread only on a 30pp edge that survives the exact signed-path refresh. Lower-edge
+ * Baseline v7 routing preserves v6: it spends the spread only on a 30pp edge that survives the exact signed-path refresh. Lower-edge
  * decisions remain maker and receive one attempt per qualified episode. The old fill-rate comparison is retained for audit but
  * cannot gate execution because it treats outcome-selected maker fills as random capture.
  */
@@ -79,7 +79,7 @@ export function evaluateEntryExecutionPolicy(input: EntryExecutionPolicyInput): 
   if (input.medianNetEdge + 1e-12 < input.minimumMedianNetEdge) failures.push(`median edge ${(input.medianNetEdge * 100).toFixed(1)}pp < ${(input.minimumMedianNetEdge * 100).toFixed(1)}pp`);
   if (input.confidence + 1e-12 < input.minimumConfidence) failures.push(`quality ${(input.confidence * 100).toFixed(1)}% < ${(input.minimumConfidence * 100).toFixed(1)}%`);
   if (input.spread > input.maximumSpread + 1e-12) failures.push(`spread ${(input.spread * 100).toFixed(1)}c > ${(input.maximumSpread * 100).toFixed(1)}c`);
-  if (input.makerMissFallback) failures.push('v5 does not permit taker fallback authority');
+  if (input.makerMissFallback) failures.push('v7 does not permit taker fallback authority');
   const recommendedStyle: EntryExecutionStyle = failures.length ? 'maker' : 'taker';
   const executedStyle: EntryExecutionStyle = input.mode === 'maker' ? 'maker' : recommendedStyle;
   const route = recommendedStyle === 'taker' ? 'high-edge-taker' : 'ordinary-maker';

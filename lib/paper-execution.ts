@@ -5,6 +5,10 @@ import { beginLiveTransaction, blockExecutionDrain, completeExecutionDrain, endL
 import { CALENDAR_EVALUATION_VERSION, calendarFixedSnapshotDue, updateCalendarEvaluationStore, type CalendarEvaluationCycle } from './calendar-evaluation-store';
 import { reconcileExecutionLedger } from './execution-reconciliation';
 import { ENTRY_EXECUTION_POLICY_VERSION, MAX_ENTRY_EPISODES_PER_WINDOW, entrySideProbability, evaluateEntryExecutionPolicy, makerCohortEvidence, parseEntryExecutionMode, type EntryExecutionDecision } from './entry-execution-policy';
+import {
+  BOUNDED_TAKER_PER_ORDER_CAP_CENTS, applyBoundedTakerPlan, boundedTakerExperimentEnabled,
+  planBoundedTakerExperiment,
+} from './bounded-taker-experiment';
 import { executionMirrorPairStamp } from './execution-mirror-pair';
 import { hydrateExecutionOrders, readExecutionLedgerFile } from './execution-ledger-storage';
 import { observeEntryDirection } from './entry-direction-observation';
@@ -580,6 +584,63 @@ function entryExecutionDecision(
     makerNetEdge: probability - bid - venueFeeRate('kalshi', bid, 'maker'),
     makerEvidence: evidence,
   });
+}
+
+function boundedTakerAuthorizationCap(order: PaperOrder): number {
+  return Math.min(order.entrySizingDecision?.stakeLimitCents ?? 0, BOUNDED_TAKER_PER_ORDER_CAP_CENTS);
+}
+
+function boundedTakerTreatmentFeasible(order: PaperOrder, authorizationCapCents: number): boolean {
+  const cap = takerQuoteCap(order.issuanceAskPrice ?? order.askPrice);
+  return Boolean(cap && Number.isSafeInteger(authorizationCapCents) && authorizationCapCents > 0
+    && estimatePaperFill(authorizationCapCents, cap.maximumPrice, order.venue));
+}
+
+function applyBoundedTakerExperiment(
+  prediction: Prediction, order: PaperOrder, baseline: EntryExecutionDecision, ledger: Ledger,
+): EntryExecutionDecision {
+  const authorizationCapCents = boundedTakerAuthorizationCap(order);
+  const plan = planBoundedTakerExperiment({
+    enabled: boundedTakerExperimentEnabled(),
+    mode: order.executionMode,
+    nowMs: Date.parse(order.createdAt),
+    identity: {
+      marketId: orderMarketId(order), strategyId: orderStrategyId(order), symbol: order.symbol,
+      side: order.side, closesAt: order.closesAt,
+    },
+    order,
+    baseline,
+    treatmentFeasible: boundedTakerTreatmentFeasible(order, authorizationCapCents),
+    authorizationCapCents,
+    orders: ledger.orders,
+  });
+  order.boundedTakerExperiment = plan.stamp;
+  return applyBoundedTakerPlan(baseline, plan);
+}
+
+/** Re-runs the active venue buy rule on the selected-side signed quote; no experiment threshold is copied. */
+export function boundedTakerFreshQuoteRefusal(
+  prediction: Prediction, side: PositionSide, quote: { bid: number; ask: number; spread: number },
+): string | undefined {
+  if (!prediction.kalshi) return 'The exact Kalshi contract is unavailable.';
+  if (![quote.bid, quote.ask, quote.spread].every(Number.isFinite) || quote.bid <= 0 || quote.ask <= quote.bid
+    || Math.abs((quote.ask - quote.bid) - quote.spread) > 1e-9) return 'The refreshed selected-side quote is malformed.';
+  if (quote.spread > MAX_SPREAD + 1e-9) return `Refreshed spread ${(quote.spread * 100).toFixed(1)}c exceeds the ${MAX_SPREAD * 100}c production ceiling.`;
+  const selectedUp = side === 'UP';
+  const refreshed: Prediction = {
+    ...prediction,
+    kalshi: {
+      ...prediction.kalshi,
+      askUp: selectedUp ? quote.ask : 1 - quote.bid,
+      bidUp: selectedUp ? quote.bid : 1 - quote.ask,
+      askDown: selectedUp ? 1 - quote.bid : quote.ask,
+      bidDown: selectedUp ? 1 - quote.ask : quote.bid,
+    },
+  };
+  if (!qualifiesVenueBuyEdge(refreshed, 'kalshi', side)) {
+    return `Refreshed ${side} ask ${(quote.ask * 100).toFixed(1)}c no longer clears the active production venue buy rule.`;
+  }
+  return undefined;
 }
 
 export function applyTakerQuoteMovementReserve(order: PaperOrder, stakeLimitCents: number): string | undefined {
@@ -1240,14 +1301,19 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
     // hardcode maker here, so the high-edge IOC route lived only in live and the cohort the v4/v5
     // execution change was about had no mirror at all. This is the same call `runLive` makes, on the
     // same inputs; the rule layer is untouched and still takes no execution mode.
-    const route = entryExecutionDecision(built.prediction, built.order.side, built.order, ledger, { eligibility: built.eligibility });
+    const baselineRoute = entryExecutionDecision(built.prediction, built.order.side, built.order, ledger, { eligibility: built.eligibility });
+    const route = applyBoundedTakerExperiment(built.prediction, built.order, baselineRoute, ledger);
     const resting: PaperOrder = {
       ...built.order, status: 'pending_reservation',
       liquidityRole: route.executedStyle, entryExecutionDecision: route, paperEntryRoute: route.executedStyle,
     };
     if (route.executedStyle === 'taker') {
-      // Size and reserve at the worst permitted price, exactly as live does before a taker IOC.
-      const reserveFailure = applyTakerQuoteMovementReserve(resting, resting.entrySizingDecision?.stakeLimitCents ?? resting.stakeCents);
+      // Experimental treatment is additionally hard-capped at 30c; incumbent high-edge takers retain
+      // their approved sizing. Both reserve at the worst permitted one-cent movement price.
+      const stakeLimit = route.route === 'bounded-taker-experiment'
+        ? boundedTakerAuthorizationCap(resting)
+        : resting.entrySizingDecision?.stakeLimitCents ?? resting.stakeCents;
+      const reserveFailure = applyTakerQuoteMovementReserve(resting, stakeLimit);
       if (reserveFailure) continue;
     }
     const funding = marketFundingFor(budgets, 'paper', orderProviderId(resting), orderMarketId(resting), ledger,
@@ -1257,6 +1323,9 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
     ledger.orders.push(resting);
     startedOrders.push(resting);
     authorizers?.set(resting.id, (quote) => {
+      if (route.route === 'bounded-taker-experiment') {
+        return boundedTakerFreshQuoteRefusal(built.prediction, built.order.side, quote);
+      }
       const refreshed = entryExecutionDecision(built.prediction, built.order.side, resting, ledger, { eligibility: built.eligibility }, quote);
       return refreshed.executedStyle === 'taker' ? undefined : refreshed.reason;
     });
@@ -1402,6 +1471,10 @@ async function executePreparedLiveBuy(
       // whether an order or fill exists.
       order.status = 'uncertain';
       order.reason = `Ambiguous live order state; reservation retained pending Kalshi reconciliation. ${message}`;
+      if (order.boundedTakerExperiment?.execution === 'treatment-taker') {
+        order.boundedTakerExperiment.safetyStoppedAt = new Date().toISOString();
+        order.boundedTakerExperiment.safetyStopReason = `Treatment order ${order.id} became ambiguous: ${message}`;
+      }
       automaticReconciliationRequested = true;
       await suspendTrading(`Live order uncertain: ${order.reason}`);
     }
@@ -2216,9 +2289,13 @@ async function runLive(
       await suspendTrading(`Live client order identity blocked: ${reason}`);
       return skip('reconciliation', reason, { symbol: candidate.symbol, side });
     }
-    built.order.entryExecutionDecision = entryExecutionDecision(candidate, side, built.order, ledger, attempt);
+    const baselineRoute = entryExecutionDecision(candidate, side, built.order, ledger, attempt);
+    built.order.entryExecutionDecision = applyBoundedTakerExperiment(candidate, built.order, baselineRoute, ledger);
     if (built.order.entryExecutionDecision.executedStyle === 'taker') {
-      const reserveFailure = applyTakerQuoteMovementReserve(built.order, built.order.entrySizingDecision?.stakeLimitCents ?? liveStakeCeiling);
+      const stakeLimit = built.order.entryExecutionDecision.route === 'bounded-taker-experiment'
+        ? boundedTakerAuthorizationCap(built.order)
+        : built.order.entrySizingDecision?.stakeLimitCents ?? liveStakeCeiling;
+      const reserveFailure = applyTakerQuoteMovementReserve(built.order, stakeLimit);
       if (reserveFailure) {
         priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason: reserveFailure });
         if (!placed) return skip('budget', `${candidate.symbol}: ${reserveFailure}`, { symbol: candidate.symbol, side });
@@ -2240,6 +2317,9 @@ async function runLive(
     const authorizeTakerQuote = built.order.entryExecutionDecision.executedStyle === 'taker'
       ? (quote: { bid: number; ask: number; spread: number }): string | undefined => {
         if (MAX_ENTRY_PRICE + 1e-9 < quote.ask) return `Refreshed ask ${(quote.ask * 100).toFixed(1)}c exceeds the ${MAX_ENTRY_PRICE * 100}c entry ceiling.`;
+        if (built.order.entryExecutionDecision?.route === 'bounded-taker-experiment') {
+          return boundedTakerFreshQuoteRefusal(candidate, side, quote);
+        }
         const refreshed = entryExecutionDecision(candidate, side, built.order, ledger, attempt, quote);
         return refreshed.executedStyle === 'taker' ? undefined : refreshed.reason;
       }

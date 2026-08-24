@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { MAX_FILLABLE_ASK, applyTakerQuoteMovementReserve, estimatePaperFill, evaluateEntryEpisodePersistence, groupedRecentOrders, venueFeeCents } from './paper-execution';
-import type { PaperOrder } from './types';
+import { MAX_FILLABLE_ASK, applyTakerQuoteMovementReserve, boundedTakerFreshQuoteRefusal, estimatePaperFill, evaluateEntryEpisodePersistence, groupedRecentOrders, venueFeeCents } from './paper-execution';
+import type { PaperOrder, Prediction } from './types';
 import type { SignalPersistenceState } from './signal-persistence';
 import { MAX_ENTRY_PRICE, MIN_ENTRY_PRICE, MIN_NET_EDGE, bestEntry, venueFeeRate, ENTRY_ADMISSION_FEE_ROLE } from './prediction-policy';
 
@@ -75,6 +75,17 @@ describe('paper execution fills', () => {
     expect(source).toContain('evaluateEntrySizing(stakeLimitCents, entry.netEdge)');
     expect(source).toContain('entrySizingDecision: { ...selected.sizing }');
     expect(source).toContain('built.order.entrySizingDecision?.stakeLimitCents ?? liveStakeCeiling');
+  });
+
+  it('re-runs the production venue rule for a bounded treatment without inheriting the strict 2c route gate', () => {
+    const prediction = {
+      modelProbabilityUp: 0.70, confidence: 0.70, enabledTradingVenues: ['kalshi'],
+      market: { live: false },
+      kalshi: { live: true, ticker: 'TEST', closesAt: '2026-01-01T00:15:00Z', askUp: 0.50, bidUp: 0.48, askDown: 0.52, bidDown: 0.50 },
+    } as Prediction;
+    expect(boundedTakerFreshQuoteRefusal(prediction, 'UP', { bid: 0.47, ask: 0.50, spread: 0.03 })).toBeUndefined();
+    expect(boundedTakerFreshQuoteRefusal(prediction, 'UP', { bid: 0.64, ask: 0.70, spread: 0.06 })).toContain('production venue buy rule');
+    expect(boundedTakerFreshQuoteRefusal(prediction, 'UP', { bid: 0.65, ask: 0.751, spread: 0.101 })).toContain('production ceiling');
   });
 
   it('sizes taker quantity and fees against the one-cent worst-case cap', () => {

@@ -12,9 +12,9 @@ const base = {
   minimumMedianNetEdge: 0.10, minimumConfidence: 0.65, maximumSpread: 0.02,
 };
 
-describe('high-edge maker/taker entry policy v5', () => {
+describe('high-edge maker/taker entry policy v7 baseline', () => {
   it('records the new policy identity and episode ceiling', () => {
-    expect(ENTRY_EXECUTION_POLICY_VERSION).toBe('maker-high30-requalify3-fresh1c-idv2-v6');
+    expect(ENTRY_EXECUTION_POLICY_VERSION).toBe('maker-high30-requalify3-fresh1c-bounded-taker-pilot-v7');
     expect(MAX_ENTRY_EPISODES_PER_WINDOW).toBe(3);
   });
 

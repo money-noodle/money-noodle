@@ -1612,6 +1612,22 @@ export interface PositionLifecycleObservation {
   secondsRemaining: number;
 }
 
+export interface BoundedTakerExperimentStamp {
+  version: 'bounded-taker-pilot-v1';
+  assignmentKey: string;
+  hashBucket: number;
+  arm: 'control-maker' | 'treatment-taker';
+  assignedAt: string;
+  baselinePolicyVersion: string;
+  baselineRoute: 'ordinary-maker';
+  /** Issuance control amount used by intent-to-treat reporting and the cumulative pilot ceiling. */
+  authorizationCapCents: number;
+  execution: 'control-maker' | 'treatment-taker' | 'paper-treatment-simulation' | 'treatment-withheld';
+  withheldReason?: 'hourly-cap' | 'settlement-window-cap';
+  safetyStoppedAt?: string;
+  safetyStopReason?: string;
+}
+
 export interface PaperOrder {
   id: string;
   /**
@@ -1771,6 +1787,8 @@ export interface PaperOrder {
       candidateDecision: 'continue' | 'refuse' | 'cancel';
     };
   };
+  /** Prospective funded execution assignment. Absent on historical and non-pilot orders. */
+  boundedTakerExperiment?: BoundedTakerExperimentStamp;
   /** Issuance-time maker/taker decision. Maker mode records taker recommendations as shadow only. */
   entryExecutionDecision?: {
     policyVersion: string;
@@ -1787,7 +1805,7 @@ export interface PaperOrder {
     makerSamples: number;
     makerFillRate: number | null;
     /** v4+ route identity; absent on historical execution decisions. */
-    route?: 'ordinary-maker' | 'high-edge-taker';
+    route?: 'ordinary-maker' | 'high-edge-taker' | 'bounded-taker-experiment';
     /** Historical v3 fallback metadata; v4+ never opens taker fallback authority. */
     makerMissFallback?: boolean;
     fallbackFromOrderId?: string;

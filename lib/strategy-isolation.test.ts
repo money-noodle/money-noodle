@@ -8,6 +8,7 @@ import { buildPositiveEdgeFundingReport } from './performance-read-model';
 import { makerCohortEvidence } from './entry-execution-policy';
 import { currentEpochAttribution, evaluateLiveRisk, lifetimeLiveRealizedPnlCents } from './live-risk-policy';
 import { countFilledLiveVenueOrders } from './order-rate-limit';
+import { boundedTakerExperimentState } from './bounded-taker-experiment';
 import { DEFAULT_STRATEGY_ID, EDGE_BINARY_BUY, LONG_SHOT_ROUND_TRIP, isStrategyId, normalizeStrategyId, strategyDescriptor } from './strategy-registry';
 import type { BudgetControl, PaperOrder } from './types';
 
@@ -96,6 +97,19 @@ describe('money never crosses the strategy boundary', () => {
     expect(edge).toHaveLength(2);
     expect(longShot).toHaveLength(2);
     expect(edge.length + longShot.length).toBe(mixed.length);
+  });
+
+  it('does not let another strategy consume the bounded-taker authorization', () => {
+    const longShot = order('shot-treatment', -30, {
+      strategyId: LONG_SHOT_ROUND_TRIP,
+      boundedTakerExperiment: {
+        version: 'bounded-taker-pilot-v1', assignmentKey: 'other-strategy', hashBucket: 1,
+        arm: 'treatment-taker', assignedAt: '2026-08-15T00:00:00Z',
+        baselinePolicyVersion: 'test', baselineRoute: 'ordinary-maker', authorizationCapCents: 30,
+        execution: 'treatment-taker',
+      },
+    });
+    expect(boundedTakerExperimentState([longShot])).toMatchObject({ assignments: 0, authorizedCents: 0 });
   });
 
   it('keeps the maker fill cohort from pooling two different executions in one price band', () => {

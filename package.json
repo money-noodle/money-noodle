@@ -40,6 +40,7 @@
     "analyze:edge-gates": "node --max-old-space-size=6144 scripts/analyze-edge-gates.mjs",
     "analyze:execution-value": "node --max-old-space-size=6144 scripts/analyze-execution-value.mjs",
     "analyze:positive-edge-current": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/analyze-positive-edge-current.ts",
+    "analyze:live-opportunities": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/analyze-live-opportunity-review.ts",
     "analyze:trading-clock": "node --max-old-space-size=6144 scripts/analyze-trading-clock.mjs",
     "analyze:exit-alternatives": "node --max-old-space-size=6144 scripts/analyze-exit-alternatives.mjs",
     "analyze:exit-counterfactuals": "node scripts/analyze-exit-counterfactuals.mjs",

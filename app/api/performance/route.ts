@@ -19,6 +19,7 @@ import { getPersistenceCandidateReport } from '@/lib/persistence-candidate-store
 import { BUY_POLICY_VERSION } from '@/lib/prediction-policy';
 import { getMakerRestrictionSentinelReport } from '@/lib/maker-restriction-sentinel-store';
 import { getExitPolicySentinelReport } from '@/lib/exit-policy-sentinel-store';
+import { buildBoundedTakerExperimentReport } from '@/lib/bounded-taker-experiment';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -86,6 +87,7 @@ export async function GET(request: Request) {
       // Prospective evaluation only. Both reports are track-separated and have no production mutation path.
       makerRestrictionSentinel,
       exitPolicySentinel,
+      boundedTakerExperiment: buildBoundedTakerExperimentReport(funding.edgeOrders),
       persistenceCandidate,
       calendarEvaluation,
       modelEvaluations,

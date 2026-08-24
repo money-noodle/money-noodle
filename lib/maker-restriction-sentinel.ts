@@ -1,4 +1,5 @@
 import { clusterByWindow } from './action-counterfactual';
+import { normalCdf } from './basis-model';
 import { PAPER_MANAGED_MAKER_EXECUTION_VERSION } from './paper-maker-simulation';
 import { EDGE_BINARY_BUY } from './strategy-registry';
 import type { ExecutionMode, PaperOrder, PositionSide, StrategyId } from './types';
@@ -155,6 +156,25 @@ function orderPnl(order: PaperOrder): number {
   return order.actualPnlCents ?? order.pnlCents ?? 0;
 }
 
+/** One-sided clustered normal tests with Holm correction across the frozen two-arm family. */
+export function holmSignificantMakerRestrictions(candidates: MakerRestrictionArmReport[]): Set<MakerRestrictionCandidateId> {
+  const tests = candidates.map((candidate) => {
+    const mean = candidate.incrementalMeanReturn;
+    const standardError = candidate.incrementalStandardError;
+    const pValue = mean === null || standardError === null || mean <= 1e-12 ? 1
+      : standardError <= 1e-15 ? 0 : 1 - normalCdf(mean / standardError);
+    return { candidateId: candidate.candidateId as MakerRestrictionCandidateId, pValue };
+  }).sort((left, right) => left.pValue - right.pValue);
+  const significant = new Set<MakerRestrictionCandidateId>();
+  let earlierRejected = false;
+  for (let rank = 0; rank < tests.length; rank += 1) {
+    const test = tests[rank];
+    if (earlierRejected || test.pValue > 0.05 / (tests.length - rank)) earlierRejected = true;
+    else significant.add(test.candidateId);
+  }
+  return significant;
+}
+
 /** Exact restrictive comparison: a refusal earns zero; an admission inherits production's actual result. */
 export function buildMakerRestrictionSentinelReport(input: {
   startedAt: string;
@@ -181,53 +201,73 @@ export function buildMakerRestrictionSentinelReport(input: {
     const trackIds = new Set(trackSentinels.map((sentinel) => sentinel.id));
     const trackRows = rows.filter((row) => trackIds.has(row.sentinel.id));
     const arm = (candidateId: MakerRestrictionCandidateId | 'production'): MakerRestrictionArmReport => {
-    const values = trackRows.map((row) => {
-      const admitted = candidateId === 'production'
-        || row.sentinel.candidates.find((candidate) => candidate.candidateId === candidateId)?.decision === 'admit';
-      const candidateReturn = admitted ? row.productionReturn : 0;
+      const values = trackRows.map((row) => {
+        const admitted = candidateId === 'production'
+          || row.sentinel.candidates.find((candidate) => candidate.candidateId === candidateId)?.decision === 'admit';
+        const candidateReturn = admitted ? row.productionReturn : 0;
+        return {
+          closesAt: row.sentinel.closesAt,
+          incremental: candidateReturn - row.productionReturn,
+          candidateReturn,
+          admitted,
+          stake: admitted ? row.stake : 0,
+          pnl: admitted ? row.pnl : 0,
+          filled: admitted && (row.order.filledCount ?? 0) > 0,
+        };
+      });
+      const clusteredReturn = clusterByWindow(values, (value) => value.closesAt, (value) => value.candidateReturn);
+      const incremental = clusterByWindow(values, (value) => value.closesAt, (value) => value.incremental);
+      const divergentWindows = new Set(values.filter((value) => !value.admitted).map((value) => value.closesAt)).size;
       return {
-        closesAt: row.sentinel.closesAt,
-        incremental: candidateReturn - row.productionReturn,
-        candidateReturn,
-        admitted,
-        stake: admitted ? row.stake : 0,
-        pnl: admitted ? row.pnl : 0,
-        filled: admitted && (row.order.filledCount ?? 0) > 0,
+        candidateId,
+        attempts: values.length,
+        divergentAttempts: values.filter((value) => !value.admitted).length,
+        windows: clusteredReturn.windows,
+        divergentWindows,
+        filledAttempts: values.filter((value) => value.filled).length,
+        deployedCents: values.reduce((sum, value) => sum + value.stake, 0),
+        pnlCents: values.reduce((sum, value) => sum + value.pnl, 0),
+        meanReturnAcrossAttempts: clusteredReturn.mean,
+        incrementalMeanReturn: incremental.mean,
+        incrementalStandardError: incremental.standardError,
+        reviewUnlocked: false,
       };
-    });
-    const clusteredReturn = clusterByWindow(values, (value) => value.closesAt, (value) => value.candidateReturn);
-    const incremental = clusterByWindow(values, (value) => value.closesAt, (value) => value.incremental);
-    const divergentWindows = new Set(values.filter((value) => !value.admitted).map((value) => value.closesAt)).size;
-    return {
-      candidateId,
-      attempts: values.length,
-      divergentAttempts: values.filter((value) => !value.admitted).length,
-      windows: clusteredReturn.windows,
-      divergentWindows,
-      filledAttempts: values.filter((value) => value.filled).length,
-      deployedCents: values.reduce((sum, value) => sum + value.stake, 0),
-      pnlCents: values.reduce((sum, value) => sum + value.pnl, 0),
-      meanReturnAcrossAttempts: clusteredReturn.mean,
-      incrementalMeanReturn: incremental.mean,
-      incrementalStandardError: incremental.standardError,
-      reviewUnlocked: candidateId !== 'production'
-        && clusteredReturn.windows >= MAKER_RESTRICTION_REVIEW_WINDOWS
-        && divergentWindows >= MAKER_RESTRICTION_MINIMUM_DIVERGENT_WINDOWS,
     };
-    };
+    const resolvedRecords = trackSentinels.filter((sentinel) => sentinel.resolvedAt && !sentinel.invalidReason).length;
+    const production = arm('production');
+    const candidates = candidateIds.map(arm);
+    const significant = holmSignificantMakerRestrictions(candidates);
+    const coverage = resolvedRecords ? trackRows.length / resolvedRecords : 0;
+    for (const candidate of candidates) {
+      candidate.reviewUnlocked = candidate.windows >= MAKER_RESTRICTION_REVIEW_WINDOWS
+        && candidate.divergentWindows >= MAKER_RESTRICTION_MINIMUM_DIVERGENT_WINDOWS
+        && coverage + 1e-12 >= MAKER_RESTRICTION_MINIMUM_COVERAGE
+        && candidate.pnlCents - production.pnlCents > 1e-9
+        && (candidate.incrementalMeanReturn ?? 0) > 1e-12
+        && significant.has(candidate.candidateId as MakerRestrictionCandidateId);
+    }
     return {
       records: trackSentinels.length,
-      resolvedRecords: trackSentinels.filter((sentinel) => sentinel.resolvedAt && !sentinel.invalidReason).length,
+      resolvedRecords,
       unscorableRecords: trackSentinels.length - trackRows.length,
-      production: arm('production'),
-      candidates: candidateIds.map(arm),
+      production,
+      candidates,
     };
   };
+  const tracks = { live: track('live'), paper: track('paper') };
+  for (const candidateId of candidateIds) {
+    const live = tracks.live.candidates.find((candidate) => candidate.candidateId === candidateId)!;
+    const paper = tracks.paper.candidates.find((candidate) => candidate.candidateId === candidateId)!;
+    const jointlyUnlocked = live.reviewUnlocked && paper.reviewUnlocked
+      && (live.incrementalMeanReturn ?? 0) > 1e-12 && (paper.incrementalMeanReturn ?? 0) > 1e-12;
+    live.reviewUnlocked = jointlyUnlocked;
+    paper.reviewUnlocked = jointlyUnlocked;
+  }
   return {
     sentinelVersion: MAKER_RESTRICTION_SENTINEL_VERSION,
     startedAt: input.startedAt,
     buyPolicyVersion: input.buyPolicyVersion,
     executionPolicyVersions: input.executionPolicyVersions,
-    tracks: { live: track('live'), paper: track('paper') },
+    tracks,
   };
 }

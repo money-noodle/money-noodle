@@ -180,12 +180,67 @@ v2 store began prospectively at 2026-08-24T17:08:03.205Z; its first paper positi
 paper identity, recorded bounded IOC evidence, resolved with 100% explicit-cycle coverage, and reported
 sub-epsilon equal cash differences as zero. The first post-activation periodic incremental reconciliation passed
 READY in 1.319 seconds while v2 collection remained readable. After the reporting-epsilon correction, the final
-rebuilt worker restarted at 2026-08-24T17:21:34Z and startup full reconciliation passed in 2.176 seconds with zero
-local or venue-managed positions. Explicit Resume set control revision 6,208 active in live mode with 2,105¢
+rebuilt worker restarted at 2026-08-24T17:44:11Z and startup full reconciliation passed in 2.040 seconds with zero
+local or venue-managed positions. Explicit Resume set control revision 6,214 active in live mode with 2,105¢
 available and 0¢ reserved. Vercel production deployment `dpl_9hMJfeinHWQAfV67v8HhadDeV6hN` reached READY and
 was aliased to `noodle.money`; the homepage, sanitized dashboard, and public paper-summary routes returned 200.
-Typecheck, 140 test files / 1,110 tests, lint with zero errors / 37 inherited warnings, and both local and Vercel
-production builds passed.
+The latest local validation passed typecheck, 140 test files / 1,111 tests, lint with zero errors / 37 inherited
+warnings, and a production build. The cited Vercel deployment passed its own production build before the
+local-only maker-report gate correction.
+
+### Last-day opportunity loss is execution-selected, not an entry-tightening case, 2026-08-24
+
+The 2026-08-24T17:37:52Z read used 75,362 durable forecasts and 4,402 orders through the resolved
+2026-08-24T17:30Z window. In the latest 24 hours, production-v22's 402 first-to-fire Kalshi positions across 86
+windows returned +33.1% ±7.8pp at the ask; candidates in funded-active windows returned +18.1% ±6.9pp and the
+131 ordered positions +20.7% ±11.0pp. The 46 positions that actually filled reversed to −32.8% ±15.5pp at their
+issuance terms and realized −226.1777¢ on 1,144.95¢, −28.4% ±16.7pp over 31 windows. Accepted maker misses would
+have won 73/101 and returned +45.4% ±12.2pp at their posted prices, versus 16/46 and −23.7% ±17.5pp for held
+fills. Current-v6's 73 paired fill/miss windows retain a −25.1% ±12.8pp fill-return gap.
+
+None of twelve non-inert entry-tightening screens beat v22 when omissions earned zero; the same null held over 72
+hours and active-v22 history. Crossing every first ordered ask was retrospectively positive (+15.4% ±10.0pp last
+day; +19.0% ±6.5pp current v6), but assumes full IOC fills and ignores capital/rate-slot displacement. Actual v6
+taker evidence is only five fills. Strict exits again cost value—0/10 beating hold, −58.2277¢ and −24.0% ±7.6pp
+last day—but explain only about one quarter of the loss and remain under untouched v2 prospective evaluation.
+No production policy changes. The dated method, horizon comparisons, twelve-comparison cost, and fill-causality
+caveat are in [the live opportunity review](reports/live-opportunity-review-2026-08-24.md).
+
+The review also found that maker-sentinel `reviewUnlocked` checked counts but not its approved economic/statistical
+lock. Reporting now requires scoreable coverage, positive exact cash and clustered mean, Holm correction across
+both arms, and simultaneous positive live/paper eligibility; all current maker candidate flags recalculate false.
+This changes no sentinel evidence or order path.
+
+### Bounded taker pilot v1 activated, 2026-08-24
+
+The maintainer approved and activated
+[`bounded-taker-pilot-v1`](docs/bounded-taker-experiment-design.md) under execution generation
+`maker-high30-requalify3-fresh1c-bounded-taker-pilot-v7`. It changes no v22 buy rule: eligible first-episode,
+sub-30pp baseline makers with incumbent caps no greater than 30¢ are assigned by immutable SHA-256 identity to
+25% taker treatment / 75% maker control. Treatment reruns the production venue buy rule at a fresh exact quote,
+retains the 1¢ movement and active 75¢/10¢ price/spread ceilings, and submits only a capped IOC limit. The pilot
+is compiled to at most 30¢ per treatment, 300¢/10 authorizations, 80 live assignments, two authorizations/hour,
+one/settlement timestamp, 14 days, and 150¢ gross realized treatment losses. It has no promotion state.
+
+Activation used the exact typed environment confirmation, a paused quiescent drain, zero reservations, and a
+successful manual full reconciliation. The worker restarted at 2026-08-24T18:17:51Z; startup full reconciliation
+passed in 1.994 seconds with zero local/venue-managed positions, and explicit Resume set revision 6,224 active in
+live mode with 2,105¢ available and 0¢ reserved. Local validation passed typecheck, 141 test files / 1,123 tests,
+lint with zero errors / 37 inherited warnings, and the production build. The execution-generation change starts
+a fresh live cohort for generation-scoped maker and exit sentinels; prior v6 evidence remains durable and is not
+pooled.
+
+The first assignment was the same HYPE DOWN intent on live and paper, bucket 7,285/control. Both used the managed
+maker; both filled 0.65 contract, validating mode-free assignment and separate fill accounting. The first
+treatment was the same ETH DOWN intent on both tracks, bucket 847, authorized at 30¢ from a 51¢ issuance ask.
+The exact refresh saw 72¢, beyond the 52¢ one-cent cap, so live submitted no venue order, paper independently
+classified the same pre-submit movement refusal, and the live reservation returned in full. The conservative
+pilot allowance still consumed the 30¢ authorization as designed. At the post-inspection read the pilot was
+collecting with three live assignments, one treatment authorization / 30¢ authorized, zero treatment loss,
+reconciliation READY, and no treatment ambiguity. This is operational evidence only; actual treatment IOC fills
+remain zero. A follow-up durable-stamp identity check and explicit submission/acceptance/refusal counters passed
+the same full validation, then a final quiescent restart at 2026-08-24T19:02:47Z passed startup reconciliation in
+1.833 seconds; explicit Resume set revision 6,238 active with 2,167¢ available and 0¢ reserved.
 
 ### Live resumed; paper settlement and mirror behavior monitored, 2026-08-22
 
@@ -1886,27 +1941,31 @@ Interpretation: the newer exact ledger snapshot is slightly negative lifetime an
 
 ## Current Priorities
 
-1. **Accumulate untouched exit-policy-sentinel-v2 evidence.** Keep the four precommitted arms fixed and production
+1. **Monitor bounded-taker-pilot-v1 to its compiled terminal boundary.** Inspect actual treatment submissions,
+   fills, exact fees, cap accounting, and reconciliation without changing the 25/75 assignment or any threshold.
+   The first treatment correctly refused a 21¢ pre-submit move and produced no signed IOC; actual treatment-fill
+   evidence remains zero. V1 can authorize only a separately designed fresh efficacy generation.
+2. **Accumulate untouched exit-policy-sentinel-v2 evidence.** Keep the four precommitted arms fixed and production
    on `strict-value-v1`. Do not review before 60 resolved independent windows, 20 divergent windows, 90% explicit
    evaluator-cycle coverage, Holm-corrected positive evidence, and same-sign live/paper results; live replay
    remains optimistic and cannot alone establish executable IOC transfer.
-2. **Provision durable remote-primary protection and implement the tier catalog before local eviction.** The
+3. **Provision durable remote-primary protection and implement the tier catalog before local eviction.** The
    138-file archive and complete restore passed, but the current bucket has no Object Lock and no independent
    replica. Add enforceable retention or a second bucket, then implement dry-run-first owner allowlisting and
    verified hydration; do not retire frozen legacy/corrupt evidence yet.
-3. **Observe execution-ledger v9 and design observational-journal compaction separately.** The measured
+4. **Observe execution-ledger v9 and design observational-journal compaction separately.** The measured
    terminal-ledger clone is removed: the hot account ledger retains all control/money rows and immutable heavy
    evidence hydrates on demand. Automatic evidence compaction remains off until longer observation and a separate
    activation decision; the independent restore passed on 2026-08-24. Native v9 sampling still finds substantial JSON parsing in the contract-path,
    calendar, exit, portfolio, and maker journals; each needs its own checksum/generation/concurrency/crash-window
    design before changing its owning store.
-4. **Run due evaluator-v2 checkpoint 1,300 only during planned paused/stopped maintenance, then design evaluator
+5. **Run due evaluator-v2 checkpoint 1,300 only during planned paused/stopped maintenance, then design evaluator
    v3 before any model promotion.** Freeze cohorts and replay the complete policy and execution boundary;
    evaluator v2 remains monitoring-only and offline-only.
-5. **Complete the untouched long-shot v2 60-window paper cohort.** No interim tuning or live arming.
-6. **Accumulate exact v6 paper/live mirror evidence.** Keep every execution/calibration generation separate.
-7. **Continue first-organic-switch verification.** Preserve reduce-only semantics.
-8. **Then address provider visibility, alerts, restore testing, dependency pinning, and auth hardening.**
+6. **Complete the untouched long-shot v2 60-window paper cohort.** No interim tuning or live arming.
+7. **Accumulate exact v7 paper/live mirror evidence.** Keep v6 and every paper calibration/execution generation separate.
+8. **Continue first-organic-switch verification.** Preserve reduce-only semantics.
+9. **Then address provider visibility, alerts, restore testing, dependency pinning, and auth hardening.**
 
 ## Detailed Roadmap and Historical Delivery Record
 

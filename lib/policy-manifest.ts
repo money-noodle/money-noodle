@@ -1,4 +1,9 @@
 import { excludedAssets } from './asset-exclusion';
+import {
+  BOUNDED_TAKER_MAX_ASSIGNMENTS, BOUNDED_TAKER_MAX_AUTHORIZATIONS,
+  BOUNDED_TAKER_PER_ORDER_CAP_CENTS, BOUNDED_TAKER_TOTAL_CAP_CENTS,
+  boundedTakerExperimentEnabled,
+} from './bounded-taker-experiment';
 import { maximumEdgeSpike } from './edge-spike-policy';
 import { PRODUCTION_BASIS_LOG_ODDS_WEIGHT } from './calibration-replay';
 import { MAX_TRADEABLE_PROBABILITY, MIN_TRADEABLE_PROBABILITY } from './dashboard';
@@ -342,6 +347,7 @@ export function activePolicyManifest(providers: TradingProviderDescriptor[], mod
   const regime = regimeGateSettings();
   const switchSettings = switchPolicySettings();
   const executionMode = parseEntryExecutionMode(process.env.MONEY_NOODLE_ENTRY_EXECUTION_MODE);
+  const boundedTakerPilot = boundedTakerExperimentEnabled();
   const downEnabled = downEntryEnabled();
   const excluded = excludedAssets();
   const maximumEdge = maximumNetEdge();
@@ -374,10 +380,15 @@ export function activePolicyManifest(providers: TradingProviderDescriptor[], mod
       ]),
       component('execution', 'Entry execution', ENTRY_EXECUTION_POLICY_VERSION, 'production', executionMode === 'maker'
         ? 'Maker-only live execution with separately measured high-edge taker shadows.'
-        : 'Up to three requalifying episodes: fresh 30pp+ edges may take; every lower edge receives one managed maker per episode.', [
+        : boundedTakerPilot
+          ? 'Bounded v1 pilot: incumbent adaptive routing plus a deterministic 25% taker treatment on eligible first-episode sub-30pp makers.'
+          : 'Up to three requalifying episodes: fresh 30pp+ edges may take; every lower edge receives one managed maker per episode.', [
         { label: 'Production mode', value: executionMode === 'maker' ? 'Managed post-only maker' : 'High-edge adaptive maker/taker' },
         { label: 'High-edge route', value: `Issuance and refreshed taker edge ≥${points(HIGH_EDGE_TAKER_THRESHOLD)}; median ≥10pp; quality ≥65%; spread ≤2¢` },
         { label: 'Ordinary route', value: `Below ${points(HIGH_EDGE_TAKER_THRESHOLD)}: one managed maker per qualified episode` },
+        { label: 'Bounded taker pilot', value: boundedTakerPilot
+          ? `Armed · 25% deterministic treatment · ≤${BOUNDED_TAKER_PER_ORDER_CAP_CENTS}¢ each · ≤${BOUNDED_TAKER_TOTAL_CAP_CENTS}¢/${BOUNDED_TAKER_MAX_AUTHORIZATIONS} authorizations/${BOUNDED_TAKER_MAX_ASSIGNMENTS} assignments`
+          : 'Not armed; exact typed confirmation required' },
         { label: 'Pre-submit ask movement', value: '≤1.0¢; fresh quote re-runs gates, all-in reserve uses worst price' },
         { label: 'Live entry episodes per side/window', value: `${executionMode === 'adaptive' ? MAX_ENTRY_EPISODES_PER_WINDOW : maximumLiveMakerAttempts()}` },
         { label: 'Maker miss rearming', value: 'Two new qualifying snapshots over 15s, strictly after completion; no nonqualifying gap required' },

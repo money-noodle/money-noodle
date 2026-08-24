@@ -214,6 +214,12 @@ Reaching the bar changes status only to reviewable. Promotion remains manual, re
 policy/version history, and must satisfy the existing paused/quiescent real-money mutation controls. No
 sentinel can auto-promote, auto-withdraw, or auto-resume anything.
 
+A 2026-08-24 reporting review found that the maker report's `reviewUnlocked` projection enforced only the first
+two count thresholds. The corrected projection also enforces scoreable coverage, positive exact aggregate cash,
+positive clustered mean, one-sided Holm family-wise significance across the two frozen arms, and simultaneous
+positive live/paper eligibility. Historical evidence is unchanged; previously emitted `true` projections are not
+promotion records and must not be reinterpreted as such.
+
 ## 7. Tests required before collection
 
 - Pure maker candidate grids at, within epsilon of, and beyond 2¢/2pp boundaries.
