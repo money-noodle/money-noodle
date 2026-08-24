@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 900" role="img" aria-labelledby="title desc">
+  <title id="title">Friendly onion Nomi character sheet</title>
+  <desc id="desc">Six endearing poses of the Money Noodle mascot with a pearl-onion face, flowing gold noodles, green arrow leaves, and navy orbit.</desc>
+  <defs>
+    <linearGradient id="night" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#031b27"/><stop offset="1" stop-color="#0a3443"/></linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ffe47f"/><stop offset=".45" stop-color="#f6bd42"/><stop offset="1" stop-color="#da921f"/></linearGradient>
+    <linearGradient id="green" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#58d36a"/><stop offset="1" stop-color="#269f3e"/></linearGradient>
+    <linearGradient id="onion" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#fffdf0"/><stop offset=".72" stop-color="#faedc8"/><stop offset="1" stop-color="#ead7a8"/></linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#fff" stroke-opacity=".04"/></pattern>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="190%"><feDropShadow dx="0" dy="13" stdDeviation="11" flood-color="#00080d" flood-opacity=".5"/></filter>
+    <style>
+      .title{font:900 45px Impact,Haettenschweiler,'Arial Narrow Bold',sans-serif;letter-spacing:.04em;fill:#fff}.gold-text{fill:#f6bd42}.green-text{fill:#43c957}.sub{font:800 14px Arial,sans-serif;letter-spacing:.2em;fill:#82a1ab}.card{fill:#082735;stroke:#1a4b5c;stroke-width:2}.pose-title{font:900 27px Impact,Haettenschweiler,'Arial Narrow Bold',sans-serif;letter-spacing:.05em;fill:#fff}.pose-sub{font:800 12px Arial,sans-serif;letter-spacing:.14em;fill:#7f9fa9}.orbit{fill:none;stroke:#123d4d;stroke-width:10;stroke-linecap:round}.arrow{fill:url(#green);stroke:#031b27;stroke-width:9;stroke-linejoin:round}.noodle-out{fill:none;stroke:#031b27;stroke-width:29;stroke-linecap:round;stroke-linejoin:round}.noodle{fill:none;stroke:url(#gold);stroke-width:18;stroke-linecap:round;stroke-linejoin:round}.noodle-hi{fill:none;stroke:#fff2aa;stroke-width:3.5;stroke-linecap:round;opacity:.68}.onion{fill:url(#onion);stroke:#031b27;stroke-width:8;stroke-linejoin:round}.leaf{fill:url(#green);stroke:#031b27;stroke-width:7;stroke-linejoin:round}.eye{fill:#092c3b}.glint{fill:#fff}.cheek{fill:#efa18e;opacity:.72}.mouth{fill:none;stroke:#092c3b;stroke-width:4.5;stroke-linecap:round}.brow{fill:none;stroke:#356171;stroke-width:3.5;stroke-linecap:round}
+    </style>
+  </defs>
+  <rect width="1400" height="900" rx="42" fill="url(#night)"/>
+  <rect width="1400" height="900" rx="42" fill="url(#grid)"/>
+  <path d="M-80 793 C245 566 440 956 775 692 C1020 498 1225 724 1510 490" fill="none" stroke="#43c957" stroke-width="100" opacity=".04"/>
+  <text x="62" y="75" class="title"><tspan class="gold-text">NOMI</tspan><tspan> &amp; THE </tspan><tspan class="green-text">PEARL ONION</tspan></text>
+  <text x="64" y="109" class="sub">A FRIENDLY INGREDIENT FACE · CHARACTER REFINEMENT V3</text>
+
+  <!-- CURIOUS: leaning onion, lifted noodle tail, alert sprout. -->
+  <g transform="translate(55 145)">
+    <rect class="card" width="410" height="310" rx="22" filter="url(#shadow)"/>
+    <path class="orbit" d="M102 247 C65 198 72 124 118 81 C165 37 239 35 286 75"/><path class="orbit" d="M316 127 C332 183 305 241 257 267 C214 291 159 283 125 258"/>
+    <path class="arrow" d="M194 257 C216 222 236 184 250 143 L228 132 L288 75 L303 161 L278 148 C260 195 239 232 211 268Z"/>
+    <path class="noodle-out" d="M224 152 C252 180 263 211 230 231 C199 251 158 226 129 255 C112 271 103 267 95 276"/><path class="noodle" d="M224 152 C252 180 263 211 230 231 C199 251 158 226 129 255 C112 271 103 267 95 276"/><path class="noodle-hi" d="M232 174 C244 195 241 213 224 220"/>
+    <path class="noodle-out" d="M237 191 C274 223 245 263 208 270 C171 277 146 256 126 274"/><path class="noodle" d="M237 191 C274 223 245 263 208 270 C171 277 146 256 126 274"/>
+    <g transform="rotate(-5 197 132)">
+      <path class="onion" d="M184 92 C180 76 192 66 199 52 C207 66 220 76 216 92 C239 101 249 124 243 146 C236 172 213 185 189 178 C165 172 151 150 155 126 C157 108 169 97 184 92Z"/>
+      <path class="leaf" d="M198 57 C183 36 185 18 201 10 C213 27 212 43 198 57Z"/><path class="leaf" d="M202 58 C209 35 227 25 241 33 C235 50 221 60 202 58Z"/>
+      <path class="brow" d="M174 119 q8 -6 15 -1 M208 116 q8 -2 14 5"/><ellipse class="eye" cx="183" cy="130" rx="8" ry="10"/><circle class="glint" cx="186" cy="126" r="2.7"/><ellipse class="eye" cx="216" cy="130" rx="8" ry="10"/><circle class="glint" cx="219" cy="126" r="2.7"/><circle class="cheek" cx="170" cy="146" r="6"/><circle class="cheek" cx="228" cy="146" r="6"/><path class="mouth" d="M190 149 Q200 157 211 148"/>
+    </g>
+    <path class="noodle-out" d="M157 183 C134 174 121 185 126 201 C131 214 145 211 148 199"/><path class="noodle" d="M157 183 C134 174 121 185 126 201 C131 214 145 211 148 199"/>
+    <text x="24" y="38" class="pose-title">CURIOUS</text><text x="25" y="59" class="pose-sub">LEAN IN · LOOK CLOSER</text>
+  </g>
+
+  <!-- NOODLING: the arrow and noodle become a soft question curve; eyes look up. -->
+  <g transform="translate(495 145)">
+    <rect class="card" width="410" height="310" rx="22" filter="url(#shadow)"/>
+    <path class="orbit" d="M101 246 C61 187 78 106 137 68 C192 32 267 47 302 101"/><path class="orbit" d="M317 153 C322 215 275 268 216 277 C170 284 128 267 105 240"/>
+    <path class="arrow" d="M207 260 C235 228 250 198 255 166 C260 130 247 113 224 104 L239 84 C271 98 285 129 278 169 C272 207 253 242 225 271Z"/>
+    <path class="noodle-out" d="M220 163 C254 186 265 218 232 238 C201 257 166 236 132 260"/><path class="noodle" d="M220 163 C254 186 265 218 232 238 C201 257 166 236 132 260"/>
+    <path class="noodle-out" d="M237 199 C270 229 245 267 207 273 C174 278 153 262 133 276"/><path class="noodle" d="M237 199 C270 229 245 267 207 273 C174 278 153 262 133 276"/>
+    <path class="onion" d="M181 96 C178 80 190 68 198 53 C207 67 220 78 216 95 C240 104 250 128 243 150 C235 174 213 187 189 180 C166 173 152 151 156 128 C159 110 168 101 181 96Z"/>
+    <path class="leaf" d="M198 58 C183 38 185 18 202 10 C214 29 211 45 198 58Z"/><path class="leaf" d="M202 59 C212 38 228 31 240 39 C234 55 220 63 202 59Z"/>
+    <path class="brow" d="M174 120 q7 -2 14 3 M207 115 q8 -7 15 -3"/><ellipse class="eye" cx="183" cy="132" rx="8" ry="10"/><circle class="glint" cx="186" cy="127" r="2.7"/><ellipse class="eye" cx="216" cy="128" rx="8" ry="10"/><circle class="glint" cx="219" cy="123" r="2.7"/><circle class="cheek" cx="171" cy="149" r="6"/><circle class="cheek" cx="228" cy="147" r="6"/><path class="mouth" d="M192 151 Q200 155 208 150"/>
+    <path class="noodle-out" d="M260 84 C274 65 272 46 257 38 C242 30 226 40 226 54"/><path class="noodle" d="M260 84 C274 65 272 46 257 38 C242 30 226 40 226 54"/><circle cx="223" cy="77" r="8" fill="url(#gold)" stroke="#031b27" stroke-width="5"/>
+    <text x="24" y="38" class="pose-title">NOODLING</text><text x="25" y="59" class="pose-sub">LET THE QUESTION CURL</text>
+  </g>
+
+  <!-- COMPARING: body itself becomes balanced and symmetrical; arrow branches into two leaves. -->
+  <g transform="translate(935 145)">
+    <rect class="card" width="410" height="310" rx="22" filter="url(#shadow)"/>
+    <path class="orbit" d="M95 241 C66 188 78 116 127 76 C174 38 245 41 288 83"/><path class="orbit" d="M315 128 C330 188 296 246 243 269 C198 289 147 278 114 249"/>
+    <path class="arrow" d="M202 265 L202 159 L181 167 L205 126 L229 167 L210 159 L210 265Z"/>
+    <path class="leaf" d="M204 170 C164 151 128 158 107 184 C139 197 173 194 204 174Z"/><path class="leaf" d="M207 170 C247 151 283 158 304 184 C272 197 238 194 207 174Z"/>
+    <path class="noodle-out" d="M184 180 C159 192 138 211 115 224"/><path class="noodle" d="M184 180 C159 192 138 211 115 224"/><path class="noodle-out" d="M226 180 C251 192 272 211 295 224"/><path class="noodle" d="M226 180 C251 192 272 211 295 224"/>
+    <path class="noodle-out" d="M115 224 C142 251 173 257 205 244 C237 257 268 251 295 224"/><path class="noodle" d="M115 224 C142 251 173 257 205 244 C237 257 268 251 295 224"/>
+    <path class="noodle-out" d="M139 266 C178 282 232 282 271 266"/><path class="noodle" d="M139 266 C178 282 232 282 271 266"/>
+    <path class="onion" d="M190 91 C187 76 198 65 205 50 C214 65 226 76 222 92 C245 102 254 125 247 147 C240 171 218 184 195 178 C171 171 158 149 162 126 C165 108 176 97 190 91Z"/>
+    <path class="leaf" d="M205 56 C192 37 194 19 208 11 C219 28 218 43 205 56Z"/><path class="leaf" d="M209 57 C218 38 234 30 246 38 C239 53 226 60 209 57Z"/>
+    <path class="brow" d="M181 119 h14 M215 119 h14"/><ellipse class="eye" cx="190" cy="132" rx="8" ry="10"/><circle class="glint" cx="193" cy="128" r="2.7"/><ellipse class="eye" cx="222" cy="132" rx="8" ry="10"/><circle class="glint" cx="225" cy="128" r="2.7"/><circle class="cheek" cx="178" cy="148" r="6"/><circle class="cheek" cx="234" cy="148" r="6"/><path class="mouth" d="M197 151 Q206 157 216 151"/>
+    <circle cx="112" cy="224" r="12" fill="#43c957" stroke="#031b27" stroke-width="6"/><circle cx="298" cy="224" r="12" fill="#f6bd42" stroke="#031b27" stroke-width="6"/>
+    <text x="24" y="38" class="pose-title">COMPARING</text><text x="25" y="59" class="pose-sub">HOLD BOTH IDEAS GENTLY</text>
+  </g>
+
+  <!-- EUREKA: sprout and arrow become one; noodles rise with the character. -->
+  <g transform="translate(55 495)">
+    <rect class="card" width="410" height="310" rx="22" filter="url(#shadow)"/>
+    <path class="orbit" d="M99 246 C65 198 72 126 115 83 C158 39 226 34 277 68"/><path class="orbit" d="M315 125 C333 181 310 239 264 267 C219 294 160 287 124 256"/>
+    <path class="arrow" d="M204 268 C225 224 241 181 248 130 L226 130 L264 68 L287 137 L267 132 C259 185 243 230 220 276Z"/>
+    <path class="noodle-out" d="M183 181 C143 199 136 229 164 247 C190 264 221 249 238 226"/><path class="noodle" d="M183 181 C143 199 136 229 164 247 C190 264 221 249 238 226"/>
+    <path class="noodle-out" d="M159 263 C195 284 247 269 262 235"/><path class="noodle" d="M159 263 C195 284 247 269 262 235"/>
+    <path class="onion" d="M180 101 C177 84 189 72 198 57 C208 71 222 81 219 99 C242 109 251 132 243 154 C235 178 211 190 188 181 C165 173 152 150 157 127 C160 113 168 105 180 101Z"/>
+    <path class="leaf" d="M198 62 C182 40 185 20 201 10 C215 29 213 48 198 62Z"/><path class="leaf" d="M202 62 C214 40 233 32 246 42 C237 59 222 66 202 62Z"/>
+    <path class="brow" d="M173 128 q8 4 15 0 M207 128 q8 4 15 0"/><path d="M174 137 q9 9 18 0 M205 137 q9 9 18 0" fill="none" stroke="#092c3b" stroke-width="5" stroke-linecap="round"/><circle class="cheek" cx="169" cy="151" r="7"/><circle class="cheek" cx="229" cy="151" r="7"/><path class="mouth" d="M188 154 Q199 168 212 153"/>
+    <path d="M288 82 l9 20 20 9 -20 9 -9 20 -9 -20 -20 -9 20 -9Z" fill="#f6bd42"/><path d="M122 118 l5 11 11 5 -11 5 -5 11 -5 -11 -11 -5 11 -5Z" fill="#43c957"/>
+    <text x="24" y="38" class="pose-title">EUREKA</text><text x="25" y="59" class="pose-sub">UNDERSTANDING BLOOMS</text>
+  </g>
+
+  <!-- CAUTIOUS: arrow folds into a leaf shield; noodles tuck inward, no punitive X. -->
+  <g transform="translate(495 495)">
+    <rect class="card" width="410" height="310" rx="22" filter="url(#shadow)"/>
+    <path class="orbit" d="M104 246 C67 191 80 115 132 76 C180 40 249 45 290 88"/><path class="orbit" d="M315 134 C326 193 291 247 240 269 C195 288 146 276 116 247"/>
+    <path class="noodle-out" d="M183 183 C151 200 147 229 174 244 C199 259 229 247 242 222"/><path class="noodle" d="M183 183 C151 200 147 229 174 244 C199 259 229 247 242 222"/>
+    <path class="noodle-out" d="M153 261 C189 281 238 270 258 238"/><path class="noodle" d="M153 261 C189 281 238 270 258 238"/>
+    <path class="onion" d="M178 103 C176 87 187 76 196 61 C206 75 219 85 216 102 C237 112 246 134 239 155 C232 177 210 189 188 182 C166 175 153 154 157 132 C160 116 168 108 178 103Z"/>
+    <path class="leaf" d="M196 66 C183 47 184 29 199 20 C211 37 210 52 196 66Z"/><path class="leaf" d="M200 66 C211 48 227 40 239 49 C231 63 217 69 200 66Z"/>
+    <path class="brow" d="M171 130 q8 -5 16 2 M204 132 q8 -7 16 -2"/><ellipse class="eye" cx="181" cy="142" rx="8" ry="9"/><circle class="glint" cx="184" cy="139" r="2.5"/><ellipse class="eye" cx="212" cy="142" rx="8" ry="9"/><circle class="glint" cx="215" cy="139" r="2.5"/><circle class="cheek" cx="168" cy="156" r="5"/><circle class="cheek" cx="225" cy="156" r="5"/><path class="mouth" d="M188 160 Q197 155 207 160"/>
+    <path class="arrow" d="M224 270 C250 236 263 196 262 154 L244 160 C265 121 290 102 317 100 C320 142 305 179 277 204 C270 233 258 258 242 280Z"/>
+    <path d="M264 160 C285 145 296 128 306 112" fill="none" stroke="#89ed97" stroke-width="4" stroke-linecap="round" opacity=".7"/>
+    <text x="24" y="38" class="pose-title">CAUTIOUS</text><text x="25" y="59" class="pose-sub">SAFE TO PAUSE · SAFE TO ASK</text>
+  </g>
+
+  <!-- RESTING: onion nestles into a noodle coil; arrow becomes a leaf blanket. -->
+  <g transform="translate(935 495)">
+    <rect class="card" width="410" height="310" rx="22" filter="url(#shadow)"/>
+    <path class="orbit" d="M104 242 C74 198 79 137 116 96 C157 51 226 42 276 74"/><path class="orbit" d="M311 126 C328 179 307 232 266 260 C221 291 159 283 122 251"/>
+    <path class="noodle-out" d="M118 235 C151 208 184 229 216 219 C251 208 276 228 262 251 C246 277 194 273 159 268 C137 265 121 256 110 262"/><path class="noodle" d="M118 235 C151 208 184 229 216 219 C251 208 276 228 262 251 C246 277 194 273 159 268 C137 265 121 256 110 262"/>
+    <path class="noodle-out" d="M137 276 C176 291 228 288 260 270"/><path class="noodle" d="M137 276 C176 291 228 288 260 270"/>
+    <g transform="rotate(9 189 166)">
+      <path class="onion" d="M169 125 C166 110 177 98 186 84 C196 98 210 108 207 125 C230 134 239 157 232 179 C225 202 203 214 180 207 C157 200 144 178 148 155 C151 139 159 130 169 125Z"/>
+      <path class="leaf" d="M186 89 C173 70 174 52 189 43 C201 60 200 75 186 89Z"/><path class="leaf" d="M190 89 C201 70 217 63 229 72 C221 86 207 92 190 89Z"/>
+      <path d="M158 161 q9 8 18 0 M190 161 q9 8 18 0" fill="none" stroke="#092c3b" stroke-width="5" stroke-linecap="round"/><circle class="cheek" cx="151" cy="177" r="6"/><circle class="cheek" cx="214" cy="177" r="6"/><path class="mouth" d="M175 181 Q184 188 194 180"/>
+    </g>
+    <path class="leaf" d="M210 199 C243 177 282 180 305 205 C279 231 244 237 210 220Z"/>
+    <path d="M229 210 C254 205 279 206 296 207" fill="none" stroke="#89ed97" stroke-width="4" stroke-linecap="round"/>
+    <text x="312" y="142" fill="#43c957" font-family="Arial,sans-serif" font-size="29" font-weight="900">z</text><text x="340" y="118" fill="#43c957" font-family="Arial,sans-serif" font-size="18" font-weight="900">z</text>
+    <text x="24" y="38" class="pose-title">RESTING</text><text x="25" y="59" class="pose-sub">HELD BY THE NOODLE NEST</text>
+  </g>
+</svg>

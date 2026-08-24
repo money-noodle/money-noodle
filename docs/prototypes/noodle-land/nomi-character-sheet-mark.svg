@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 900" role="img" aria-labelledby="title desc">
+  <title id="title">Nomi mascot sheet based on the Money Noodle app mark</title>
+  <desc id="desc">Six poses of a flowing gold noodle mascot integrated with the app logo's green arrow and navy orbit.</desc>
+  <defs>
+    <linearGradient id="night" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#031b27"/><stop offset="1" stop-color="#0b3443"/></linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ffe37a"/><stop offset=".43" stop-color="#f6bd42"/><stop offset="1" stop-color="#da921f"/></linearGradient>
+    <linearGradient id="green" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#51ce62"/><stop offset="1" stop-color="#249d3c"/></linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#fff" stroke-opacity=".045"/></pattern>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="190%"><feDropShadow dx="0" dy="13" stdDeviation="11" flood-color="#00080d" flood-opacity=".5"/></filter>
+    <symbol id="nomi-core" viewBox="0 0 330 330">
+      <!-- Broken orbit follows the production app mark. -->
+      <path d="M77 273 C29 219 26 136 67 76 C107 18 190 4 253 35" fill="none" stroke="#0a2c3e" stroke-width="15" stroke-linecap="round"/>
+      <path d="M292 118 C319 175 302 244 249 282 C203 315 142 316 94 286" fill="none" stroke="#0a2c3e" stroke-width="15" stroke-linecap="round"/>
+      <!-- Up-arrow spine, behind the noodles. -->
+      <path d="M144 248 C174 210 196 175 216 137 L189 118 L274 44 L298 158 L265 141 C243 188 217 226 181 260Z" fill="url(#green)" stroke="#031b27" stroke-width="13" stroke-linejoin="round"/>
+      <path d="M278 65 L289 133" fill="none" stroke="#8bf298" stroke-width="5" stroke-linecap="round" opacity=".65"/>
+      <!-- Top loop and three flowing lower strands recreate the logo's noodle silhouette. -->
+      <path d="M205 108 C181 80 135 78 121 111 C108 142 137 164 168 158 C198 152 209 130 197 113" fill="none" stroke="#031b27" stroke-width="37" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M205 108 C181 80 135 78 121 111 C108 142 137 164 168 158 C198 152 209 130 197 113" fill="none" stroke="url(#gold)" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M198 116 C183 151 211 159 220 183 C234 220 195 236 155 233 C119 230 100 249 79 268" fill="none" stroke="#031b27" stroke-width="37" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M198 116 C183 151 211 159 220 183 C234 220 195 236 155 233 C119 230 100 249 79 268" fill="none" stroke="url(#gold)" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M216 187 C243 216 222 250 183 259 C143 269 112 248 83 282" fill="none" stroke="#031b27" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M216 187 C243 216 222 250 183 259 C143 269 112 248 83 282" fill="none" stroke="url(#gold)" stroke-width="21" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M223 215 C249 246 220 278 180 286 C143 294 117 278 101 293" fill="none" stroke="#031b27" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M223 215 C249 246 220 278 180 286 C143 294 117 278 101 293" fill="none" stroke="url(#gold)" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+      <!-- Ribbon highlights. -->
+      <path d="M130 112 C143 91 177 95 190 111" fill="none" stroke="#fff1a2" stroke-width="5" stroke-linecap="round" opacity=".75"/>
+      <path d="M205 150 C214 171 229 187 216 208" fill="none" stroke="#fff1a2" stroke-width="5" stroke-linecap="round" opacity=".65"/>
+      <path d="M102 266 C123 244 144 246 164 247" fill="none" stroke="#fff1a2" stroke-width="4" stroke-linecap="round" opacity=".6"/>
+      <!-- Face sits inside the same upper loop visible in the app mark. -->
+      <circle cx="151" cy="126" r="7" fill="#031b27"/><circle cx="154" cy="123" r="2" fill="#fff"/>
+      <circle cx="174" cy="128" r="7" fill="#031b27"/><circle cx="177" cy="125" r="2" fill="#fff"/>
+      <path d="M153 143 Q163 151 174 143" fill="none" stroke="#031b27" stroke-width="5" stroke-linecap="round"/>
+    </symbol>
+    <style>
+      .title{font:900 45px Impact,Haettenschweiler,'Arial Narrow Bold',sans-serif;letter-spacing:.04em;fill:#fff}.gold{fill:#f6bd42}.green{fill:#39bd50}.sub{font:800 14px Arial,sans-serif;letter-spacing:.2em;fill:#82a1ab}.card{fill:#082735;stroke:#1a4b5c;stroke-width:2}.pose-title{font:900 27px Impact,Haettenschweiler,'Arial Narrow Bold',sans-serif;letter-spacing:.05em;fill:#fff}.pose-sub{font:800 12px Arial,sans-serif;letter-spacing:.14em;fill:#7f9fa9}.prop{stroke:#031b27;stroke-width:8;stroke-linecap:round;stroke-linejoin:round}
+    </style>
+  </defs>
+  <rect width="1400" height="900" rx="42" fill="url(#night)"/>
+  <rect width="1400" height="900" rx="42" fill="url(#grid)"/>
+  <path d="M-80 793 C245 566 440 956 775 692 C1020 498 1225 724 1510 490" fill="none" stroke="#39bd50" stroke-width="100" opacity=".04"/>
+  <text x="62" y="75" class="title"><tspan class="gold">NOMI</tspan><tspan> FROM THE </tspan><tspan class="green">MARK</tspan></text>
+  <text x="64" y="109" class="sub">THE MAIN APP MASCOT, GIVEN EXPRESSIONS · VECTOR CHARACTER SYSTEM V2</text>
+
+  <!-- Curious: closest to the untouched app icon. -->
+  <g transform="translate(55 145)">
+    <rect class="card" width="410" height="310" rx="22" filter="url(#shadow)"/>
+    <use href="#nomi-core" x="90" y="32" width="255" height="255"/>
+    <path d="M332 71 l9 -19 M352 84 l18 -10" stroke="#39bd50" stroke-width="6" stroke-linecap="round"/>
+    <text x="24" y="38" class="pose-title">CURIOUS</text><text x="25" y="59" class="pose-sub">THE APP MARK WAKES UP</text>
+  </g>
+
+  <!-- Noodling: thought bubbles orbit the existing mark. -->
+  <g transform="translate(495 145)">
+    <rect class="card" width="410" height="310" rx="22" filter="url(#shadow)"/>
+    <g transform="rotate(-4 217 166)"><use href="#nomi-core" x="90" y="32" width="255" height="255"/></g>
+    <circle cx="318" cy="79" r="14" fill="#f6bd42" stroke="#031b27" stroke-width="7"/><circle cx="346" cy="55" r="9" fill="#f6bd42" stroke="#031b27" stroke-width="6"/>
+    <path d="M356 31 C351 13 375 5 386 20 C397 35 379 42 373 51" fill="none" stroke="#39bd50" stroke-width="8" stroke-linecap="round"/><circle cx="370" cy="66" r="4" fill="#39bd50"/>
+    <text x="24" y="38" class="pose-title">NOODLING</text><text x="25" y="59" class="pose-sub">THE QUESTION KEEPS MOVING</text>
+  </g>
+
+  <!-- Comparing: noodle mascot holds a small balance, silhouette remains recognizable. -->
+  <g transform="translate(935 145)">
+    <rect class="card" width="410" height="310" rx="22" filter="url(#shadow)"/>
+    <use href="#nomi-core" x="90" y="32" width="255" height="255"/>
+    <line x1="215" y1="157" x2="215" y2="79" class="prop"/><line x1="158" y1="93" x2="270" y2="78" class="prop"/>
+    <path d="M138 96 L176 91 L165 130 Q149 137 138 96Z" fill="url(#green)" class="prop"/><path d="M254 80 L292 75 L284 115 Q267 122 254 80Z" fill="url(#gold)" class="prop"/>
+    <text x="24" y="38" class="pose-title">COMPARING</text><text x="25" y="59" class="pose-sub">BOTH SIDES STAY VISIBLE</text>
+  </g>
+
+  <!-- Eureka: arrow gets the moment, rather than changing Nomi into a lightbulb. -->
+  <g transform="translate(55 495)">
+    <rect class="card" width="410" height="310" rx="22" filter="url(#shadow)"/>
+    <use href="#nomi-core" x="90" y="32" width="255" height="255"/>
+    <path d="M320 68 l17 -19 M343 91 l25 -7 M292 50 l4 -26" stroke="#f6bd42" stroke-width="8" stroke-linecap="round"/>
+    <path d="M276 75 l7 16 16 7 -16 7 -7 16 -7 -16 -16 -7 16 -7Z" fill="#39bd50"/>
+    <text x="24" y="38" class="pose-title">EUREKA</text><text x="25" y="59" class="pose-sub">THE ARROW LIGHTS THE WAY</text>
+  </g>
+
+  <!-- Cautious: chopsticks guard the complete mark, not the mascot's face. -->
+  <g transform="translate(495 495)">
+    <rect class="card" width="410" height="310" rx="22" filter="url(#shadow)"/>
+    <use href="#nomi-core" x="90" y="32" width="255" height="255" opacity=".72"/>
+    <line x1="129" y1="62" x2="339" y2="267" stroke="#a76531" stroke-width="12" stroke-linecap="round"/>
+    <line x1="339" y1="62" x2="129" y2="267" stroke="#a76531" stroke-width="12" stroke-linecap="round"/>
+    <text x="24" y="38" class="pose-title">CAUTIOUS</text><text x="25" y="59" class="pose-sub">STALE · BLOCKED · WAIT</text>
+  </g>
+
+  <!-- Resting: the whole flowing mark settles horizontally. -->
+  <g transform="translate(935 495)">
+    <rect class="card" width="410" height="310" rx="22" filter="url(#shadow)"/>
+    <g transform="translate(12 65) rotate(10 215 166) scale(.88)"><use href="#nomi-core" x="90" y="32" width="255" height="255"/></g>
+    <path d="M205 164 q10 8 20 0 M228 166 q10 8 20 0" fill="none" stroke="#031b27" stroke-width="6" stroke-linecap="round"/>
+    <text x="326" y="101" fill="#39bd50" font-family="Arial,sans-serif" font-size="31" font-weight="900">Z</text><text x="354" y="75" fill="#39bd50" font-family="Arial,sans-serif" font-size="19" font-weight="900">Z</text>
+    <text x="24" y="38" class="pose-title">RESTING</text><text x="25" y="59" class="pose-sub">NO ACTION NEEDED</text>
+  </g>
+</svg>

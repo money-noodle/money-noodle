@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Noodle Land · Money Noodle brand pass</title>
+  <style>
+    :root {
+      --navy:#041d2a;
+      --navy-2:#082c3a;
+      --navy-3:#15495a;
+      --gold:#f3b93c;
+      --gold-hi:#ffe171;
+      --green:#35b84b;
+      --green-hi:#55d267;
+      --cream:#fffaf0;
+      --mist:#edf3ef;
+      --ink:#041d2a;
+      --muted:#617680;
+      --line:#c9d9d8;
+      --white:#fff;
+      --tilt:0deg;
+      font-family:Arial,Helvetica,sans-serif;
+      color-scheme:light;
+    }
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{
+      margin:0;color:var(--ink);min-height:100vh;
+      background:
+        linear-gradient(rgba(4,29,42,.035) 1px,transparent 1px),
+        linear-gradient(90deg,rgba(4,29,42,.035) 1px,transparent 1px),
+        radial-gradient(circle at 95% 5%,rgba(53,184,75,.14),transparent 30rem),
+        var(--cream);
+      background-size:36px 36px,36px 36px,auto,auto;
+    }
+    body.dark{--cream:#061f2c;--mist:#082735;--ink:#f9fbf8;--muted:#8fa9b2;--line:#1b4b5c;--white:#082735;color-scheme:dark;background:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px),radial-gradient(circle at 95% 5%,rgba(53,184,75,.12),transparent 30rem),#041d2a;background-size:36px 36px,36px 36px,auto,auto}
+    button{font:inherit}
+    button:focus-visible,a:focus-visible{outline:3px solid var(--gold);outline-offset:3px}
+    .shell{width:min(1240px,calc(100% - 32px));margin:auto}
+    .prototype{padding:9px 16px;background:linear-gradient(90deg,var(--gold),#f7cd5c);color:var(--navy);font-size:11px;font-weight:900;letter-spacing:.12em;text-align:center;text-transform:uppercase;border-bottom:4px solid var(--navy)}
+    .topbar{height:78px;display:flex;align-items:center;justify-content:space-between;gap:18px}
+    .brand{display:flex;align-items:center;gap:12px;text-decoration:none;color:var(--ink)}
+    .brand img{width:50px;height:50px;object-fit:contain;filter:drop-shadow(0 7px 8px rgba(4,29,42,.22))}
+    .brand-text{display:grid;line-height:.92;font-family:Impact,Haettenschweiler,'Arial Narrow Bold',sans-serif;font-size:24px;letter-spacing:.035em;text-transform:uppercase}
+    .brand-text small{font:800 9px Arial,sans-serif;letter-spacing:.2em;color:var(--muted);margin-top:7px}
+    .money{color:var(--gold)}.noodle{color:var(--green)}
+    .toolbar{display:flex;gap:8px}
+    .icon-button,.button,.pose-button,.scale-button{appearance:none;cursor:pointer;border:2px solid var(--navy);background:var(--cream);color:var(--ink);font-weight:900;text-transform:uppercase;letter-spacing:.06em;box-shadow:4px 4px 0 var(--navy);transition:transform .16s,box-shadow .16s,background .16s}
+    .dark .icon-button,.dark .button,.dark .pose-button,.dark .scale-button{border-color:var(--line);box-shadow:4px 4px 0 #000f16;background:var(--mist)}
+    .icon-button:hover,.button:hover,.pose-button:hover,.scale-button:hover{transform:translate(2px,2px);box-shadow:2px 2px 0 var(--navy)}
+    .icon-button{width:42px;height:42px;border-radius:8px;font-size:17px}
+    .button{min-height:44px;padding:0 18px;border-radius:7px;font-size:11px}
+    .button.primary{background:linear-gradient(135deg,var(--green-hi),var(--green));color:var(--navy)}
+    .button.gold{background:linear-gradient(135deg,var(--gold-hi),var(--gold));color:var(--navy)}
+
+    .hero{position:relative;display:grid;grid-template-columns:.92fr 1.08fr;min-height:590px;overflow:hidden;border:6px solid var(--navy);border-radius:25px;background:linear-gradient(135deg,#082b39,#041b27 72%);box-shadow:14px 14px 0 rgba(4,29,42,.13),0 35px 90px rgba(4,29,42,.2);color:white;isolation:isolate}
+    .hero:before{content:"";position:absolute;inset:0;background:linear-gradient(rgba(255,255,255,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.045) 1px,transparent 1px);background-size:34px 34px;mask-image:linear-gradient(90deg,#000,transparent 75%);z-index:-1}
+    .hero:after{content:"";position:absolute;width:500px;height:500px;border:36px solid rgba(53,184,75,.08);border-radius:50%;right:-165px;top:-205px;z-index:-1}
+    .hero-copy{padding:70px 20px 58px 56px;align-self:center;position:relative;z-index:3}
+    .eyebrow{display:inline-flex;align-items:center;gap:9px;margin:0 0 19px;color:#9bb2ba;font-size:10px;font-weight:900;letter-spacing:.22em;text-transform:uppercase}
+    .eyebrow:before{content:"";width:28px;height:4px;background:var(--green)}
+    h1,h2,.display{font-family:Impact,Haettenschweiler,'Arial Narrow Bold',sans-serif;text-transform:uppercase;font-weight:900}
+    h1{margin:0;font-size:clamp(57px,7.7vw,94px);line-height:.86;letter-spacing:.018em}
+    h1 .gold{color:var(--gold)}h1 .green{color:var(--green)}
+    .lede{max-width:495px;margin:26px 0 0;color:#b9c8cc;font-size:15px;line-height:1.68}
+    .hero-actions{display:flex;flex-wrap:wrap;gap:11px;margin-top:29px}
+    .brand-tags{display:flex;flex-wrap:wrap;gap:7px;margin-top:28px}
+    .brand-tag{border:1px solid #315667;border-radius:4px;padding:7px 9px;color:#8eaab3;font-size:9px;font-weight:900;letter-spacing:.12em;text-transform:uppercase}
+    .scene{position:relative;min-height:585px}
+    .scene>svg{width:100%;height:100%;display:block;overflow:visible}.scene>svg.mark-nomi{position:relative;z-index:2}.scene>svg.legacy-nomi{display:none}.nomi-app-image{position:absolute;z-index:1;left:20.75%;top:9.8%;width:68.95%;height:auto;filter:drop-shadow(0 20px 20px rgba(0,8,13,.48));animation:float 3.4s ease-in-out infinite}.mark-prop{transform-box:fill-box;transform-origin:center;animation:propBob 2.7s ease-in-out infinite}
+    .orbit{stroke-dasharray:530;animation:orbit 5s ease-in-out infinite}
+    .arrow-main{transform-box:fill-box;transform-origin:center;animation:arrowPulse 3.4s ease-in-out infinite}
+    .nomi-float{transform-origin:410px 300px;animation:float 3.4s ease-in-out infinite}
+    .nomi-pose{opacity:0;transition:opacity .24s}.nomi-pose.active{opacity:1}
+    .eye{transform-box:fill-box;transform-origin:center;animation:blink 5.4s ease-in-out infinite}
+    .shine-line{stroke-dasharray:72;animation:shine 3.4s ease-in-out infinite}
+    .hero-label{position:absolute;right:27px;bottom:24px;display:flex;flex-wrap:wrap;justify-content:flex-end;gap:7px;max-width:440px}
+    .pose-button{padding:7px 9px;border-color:#315667;background:#082c3a;color:#8eaab3;box-shadow:none;border-radius:4px;font-size:9px}
+    .pose-button.active{background:var(--gold);border-color:var(--gold);color:var(--navy)}
+    .party-layer{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:9}.confetti{position:absolute;top:-30px;width:9px;height:30px;border-radius:2px;opacity:0}.party-layer.go .confetti{animation:fall var(--fall,1.8s) cubic-bezier(.2,.7,.3,1) var(--delay,0s) forwards}
+
+    .section{padding-top:94px}
+    .section-head{display:grid;grid-template-columns:1fr minmax(280px,470px);gap:30px;align-items:end;margin-bottom:26px}
+    .kicker{margin:0 0 9px;color:var(--green);font-size:10px;font-weight:900;letter-spacing:.2em;text-transform:uppercase}
+    h2{margin:0;font-size:clamp(41px,5.5vw,64px);line-height:.9;letter-spacing:.025em}
+    .section-head>p{margin:0;color:var(--muted);font-size:13px;line-height:1.65}
+    .brand-grid{display:grid;grid-template-columns:1.05fr .95fr;gap:18px}
+    .panel{position:relative;overflow:hidden;border:4px solid var(--navy);border-radius:17px;background:var(--white);box-shadow:9px 9px 0 rgba(4,29,42,.12)}
+    .dark .panel{border-color:#1a4b5c;box-shadow:9px 9px 0 #020e14}
+    .panel.dark-panel{background:linear-gradient(135deg,#092d3b,#041d2a);color:white}
+    .panel-head{padding:23px 25px;border-bottom:3px solid var(--navy);display:flex;align-items:center;justify-content:space-between;gap:15px}.dark-panel .panel-head{border-color:#1a4b5c}
+    .panel-head h3{margin:0;font-family:Impact,Haettenschweiler,'Arial Narrow Bold',sans-serif;text-transform:uppercase;letter-spacing:.05em;font-size:24px}
+    .panel-code{color:var(--muted);font-size:9px;font-weight:900;letter-spacing:.14em}
+    .brand-board{min-height:435px;display:grid;place-items:center;padding:34px;background:radial-gradient(circle at center,rgba(53,184,75,.1),transparent 17rem)}
+    .brand-board img{max-width:88%;max-height:370px;object-fit:contain;filter:drop-shadow(0 16px 18px rgba(0,0,0,.35))}
+    .rules{display:grid;gap:0}.rule{display:grid;grid-template-columns:54px 1fr;gap:17px;padding:20px 24px;border-bottom:1px solid var(--line)}.rule:last-child{border-bottom:0}.rule-index{font-family:Impact,sans-serif;font-size:27px;color:var(--gold)}.rule h4{margin:1px 0 5px;text-transform:uppercase;letter-spacing:.04em;font-size:13px}.rule p{margin:0;color:var(--muted);font-size:11px;line-height:1.55}
+
+    .motion-grid{display:grid;grid-template-columns:1.05fr .95fr;gap:18px}
+    .gain-frame{min-height:430px;background:#041d2a}.gain-frame img{display:block;width:100%;height:100%;min-height:430px;object-fit:cover}
+    .event-console{display:flex;flex-direction:column;min-height:430px;padding:27px;background:linear-gradient(145deg,#092f3e,#041d2a);color:white}
+    .console-top{display:flex;justify-content:space-between;align-items:center;gap:10px;color:#86a6b0;font-size:9px;font-weight:900;letter-spacing:.14em;text-transform:uppercase}.console-dot{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 14px var(--green)}
+    .event-word{margin:auto 0 0;font-family:Impact,Haettenschweiler,'Arial Narrow Bold',sans-serif;font-size:clamp(59px,8vw,92px);line-height:.78;letter-spacing:.025em;text-transform:uppercase}.event-word .event-first{color:var(--gold)}.event-word .event-second{color:var(--green)}
+    .event-detail{margin:24px 0 0;max-width:450px;color:#a7bbc1;font-size:12px;line-height:1.65}
+    .event-controls{display:flex;flex-wrap:wrap;gap:8px;margin-top:25px}.event-controls .button{border-color:#315667;box-shadow:none;background:#082c3a;color:#9db3ba}.event-controls .button.active{background:var(--gold);border-color:var(--gold);color:var(--navy)}
+
+    .scale-panel{padding:28px}.scale-stage{position:relative;min-height:350px;border-radius:10px;background:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px),#061f2c;background-size:30px 30px;overflow:hidden;display:grid;place-items:center}
+    .scale-orbit{position:absolute;width:305px;height:305px;border:12px solid #15495a;border-radius:50%;opacity:.66}.scale-orbit:after{content:"";position:absolute;right:-22px;top:63px;border-left:35px solid var(--green);border-top:22px solid transparent;border-bottom:22px solid transparent;transform:rotate(-32deg);filter:drop-shadow(0 0 0 var(--navy))}
+    .scale{width:min(620px,90%);height:260px;position:relative;z-index:2}.scale-post{position:absolute;left:calc(50% - 8px);top:82px;width:16px;height:137px;background:#e6edf0;border:4px solid var(--navy)}.scale-foot{position:absolute;left:calc(50% - 75px);top:211px;width:150px;height:23px;background:var(--gold);border:5px solid var(--navy);border-radius:50%}.scale-pin{position:absolute;left:calc(50% - 20px);top:66px;width:40px;height:40px;border:10px solid var(--navy);border-radius:50%;background:var(--green);z-index:3}.scale-beam{position:absolute;left:6%;top:79px;width:88%;height:15px;border:5px solid var(--navy);background:var(--gold);transform:rotate(var(--tilt));transition:transform .65s cubic-bezier(.2,.8,.2,1)}.pan{position:absolute;top:13px;width:165px;text-align:center}.pan.left{left:0}.pan.right{right:0}.cord{height:78px;width:120px;margin:auto;border-left:3px solid #8ca6ae;border-right:3px solid #8ca6ae;clip-path:polygon(48% 0,52% 0,100% 100%,0 100%);background:linear-gradient(90deg,transparent 48%,#8ca6ae 49%,#8ca6ae 51%,transparent 52%)}.dish{height:39px;border:5px solid var(--navy);border-radius:0 0 80px 80px;background:#e8efec;color:var(--navy);display:grid;place-items:center;font-size:10px;font-weight:900;letter-spacing:.08em}.scale-output{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);background:var(--gold);border:4px solid var(--navy);padding:9px 14px;color:var(--navy);font-size:10px;font-weight:900;letter-spacing:.09em;text-transform:uppercase;white-space:nowrap;z-index:4}.scale-controls{display:flex;justify-content:center;flex-wrap:wrap;gap:9px;margin-top:20px}.scale-button{min-height:40px;padding:0 15px;border-radius:6px;font-size:9px}.scale-button.active{background:var(--green);color:var(--navy)}.terminal-note{text-align:center;color:var(--muted);font-size:10px;font-weight:800;letter-spacing:.04em;margin:16px 0 0}
+
+    .levels{display:grid;grid-template-columns:repeat(7,minmax(145px,1fr));gap:11px;overflow:auto;padding:4px 3px 20px}.level{position:relative;min-height:300px;padding:17px 16px;background:#061f2c;color:white;border:3px solid #17495a;border-radius:12px;overflow:hidden}.level:after{content:"";position:absolute;width:120px;height:120px;border:9px solid #17495a;border-radius:50%;right:-49px;top:73px}.level-num{font-family:Impact,sans-serif;color:var(--green);font-size:18px;letter-spacing:.06em}.level svg{position:relative;z-index:2;width:100%;height:100px;margin:15px 0 10px;overflow:visible}.level h3{position:relative;z-index:2;margin:0;font-family:Impact,sans-serif;font-size:20px;letter-spacing:.04em;text-transform:uppercase}.level-title{position:relative;z-index:2;margin:7px 0 0;color:var(--gold);font-size:9px;font-weight:900;letter-spacing:.09em;text-transform:uppercase}.level-copy{position:relative;z-index:2;margin:13px 0 0;color:#8fa8b0;font-size:10px;line-height:1.5}.arrow-tick{position:absolute;right:12px;top:14px;color:var(--green);font-size:22px;font-weight:900}
+    .footer{display:flex;justify-content:space-between;gap:25px;margin-top:90px;padding:31px 0 50px;border-top:4px solid var(--navy);color:var(--muted);font-size:10px;font-weight:700;line-height:1.6}
+
+    @keyframes orbit{0%,100%{stroke-dashoffset:0;opacity:.72}50%{stroke-dashoffset:70;opacity:1}}
+    @keyframes arrowPulse{50%{transform:translate(4px,-6px) scale(1.04)}}
+    @keyframes float{50%{transform:translateY(-8px)}}
+    @keyframes blink{0%,44%,48%,100%{transform:scaleY(1)}46%{transform:scaleY(.08)}}
+    @keyframes shine{0%,30%{stroke-dashoffset:72;opacity:0}50%{opacity:.8}70%,100%{stroke-dashoffset:-72;opacity:0}}
+    @keyframes propBob{50%{transform:translateY(-6px) rotate(2deg)}}
+    @keyframes fall{0%{opacity:0;transform:translateY(-30px) rotate(0)}10%{opacity:1}100%{opacity:0;transform:translateY(650px) rotate(560deg)}}
+    @media(max-width:950px){.hero,.brand-grid,.motion-grid{grid-template-columns:1fr}.hero-copy{padding:57px 35px 10px}.scene{min-height:510px}.section-head{grid-template-columns:1fr}.brand-board{min-height:360px}.section-head>p{max-width:520px}.gain-frame img{object-fit:contain}.event-console{min-height:380px}.levels{grid-template-columns:repeat(7,170px)}}
+    @media(max-width:620px){.shell{width:calc(100% - 18px)}.brand-text small{display:none}.hero{border-width:4px}.hero-copy{padding:42px 20px 0}h1{font-size:59px}.scene{min-height:420px;margin-left:-60px;width:calc(100% + 85px)}.hero-label{left:20px;right:20px;justify-content:center}.section{padding-top:72px}.section-head{padding:0 5px}.brand-board{padding:18px}.brand-board img{max-width:100%}.scale-panel{padding:14px}.pan{width:110px}.cord{width:80px}.footer{display:block;padding-inline:5px}}
+    @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}}
+    body.motion-off *,body.motion-off *::before,body.motion-off *::after{animation:none!important;transition-duration:.001ms!important}
+  </style>
+</head>
+<body class="dark">
+  <div class="prototype">Exploratory brand pass · invented paper values · no trading data or authority</div>
+  <header class="shell topbar">
+    <a class="brand" href="#" aria-label="Money Noodle prototype home">
+      <img src="../../../public/brand/money-noodle-icon-64.png" alt="">
+      <span class="brand-text"><span><span class="money">Money</span> <span class="noodle">Noodle</span></span><small>Noodle Land · Original graphic style pass</small></span>
+    </a>
+    <div class="toolbar"><button class="icon-button" id="motionToggle" type="button" aria-pressed="false" title="Turn motion off">〰</button><button class="icon-button" id="themeToggle" type="button" aria-pressed="true" title="Show light canvas">◐</button></div>
+  </header>
+
+  <main class="shell">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow">The Noodle Lab is open</p>
+        <h1 id="hero-title"><span class="gold">Noodle</span><br>the numbers.<br><span class="green">Learn</span> out loud.</h1>
+        <p class="lede">Nomi is now the flowing noodle-and-arrow mascot already living in the main app mark—not a separate bowl character. Expressions and props wake up that familiar silhouette without replacing it.</p>
+        <div class="hero-actions"><button class="button gold" id="meetNomi" type="button">Cycle Nomi</button><button class="button primary" id="partyButton" type="button">Noodle Party</button></div>
+        <div class="brand-tags"><span class="brand-tag">Evidence first</span><span class="brand-tag">Paper ≠ Live</span><span class="brand-tag">1 noodle = 1¢</span></div>
+      </div>
+      <div class="scene" id="nomiScene" aria-live="polite" aria-label="Nomi is curious">
+        <img class="nomi-app-image" src="../../../public/brand/money-noodle-icon-512.png" alt="">
+        <svg class="mark-nomi" viewBox="0 0 660 590" role="img" aria-labelledby="markNomiTitle markNomiDesc">
+          <title id="markNomiTitle">The Money Noodle app mark animated as Nomi</title>
+          <desc id="markNomiDesc">The existing gold noodle, green arrow, and navy orbit mascot from the main app, with small expressive overlays.</desc>
+          <g class="nomi-float">
+            <!-- Expressions sit in the upper gold loop; the production mark remains intact below. -->
+            <g class="nomi-pose active" data-pose-group="curious">
+              <g class="eye"><circle cx="337" cy="245" r="9" fill="#041d2a"/><circle cx="340" cy="242" r="2.5" fill="#fff"/></g><g class="eye"><circle cx="363" cy="248" r="9" fill="#041d2a"/><circle cx="366" cy="245" r="2.5" fill="#fff"/></g>
+              <path d="M339 265 Q351 274 364 265" fill="none" stroke="#041d2a" stroke-width="6" stroke-linecap="round"/>
+              <g class="mark-prop" stroke="#35b84b" stroke-width="7" stroke-linecap="round"><path d="M520 119 l13 -23"/><path d="M542 135 l24 -9"/></g>
+            </g>
+            <g class="nomi-pose" data-pose-group="noodling">
+              <g class="eye"><circle cx="337" cy="245" r="9" fill="#041d2a"/></g><g class="eye"><circle cx="363" cy="248" r="9" fill="#041d2a"/></g>
+              <circle class="mark-prop" cx="524" cy="137" r="14" fill="#f3b93c" stroke="#041d2a" stroke-width="7"/><circle class="mark-prop" cx="554" cy="111" r="9" fill="#f3b93c" stroke="#041d2a" stroke-width="6"/>
+              <path class="mark-prop" d="M568 82 C562 62 590 53 602 70 C613 87 591 95 587 105" fill="none" stroke="#35b84b" stroke-width="9" stroke-linecap="round"/><circle cx="584" cy="122" r="5" fill="#35b84b"/>
+            </g>
+            <g class="nomi-pose" data-pose-group="comparing">
+              <g class="eye"><circle cx="337" cy="245" r="9" fill="#041d2a"/></g><g class="eye"><circle cx="363" cy="248" r="9" fill="#041d2a"/></g>
+              <g class="mark-prop"><line x1="351" y1="302" x2="351" y2="169" stroke="#041d2a" stroke-width="9"/><line x1="270" y1="191" x2="434" y2="168" stroke="#041d2a" stroke-width="9" stroke-linecap="round"/><path d="M244 201 L297 193 L284 240 Q261 248 244 201Z" fill="#35b84b" stroke="#041d2a" stroke-width="8"/><path d="M410 173 L463 165 L453 212 Q430 221 410 173Z" fill="#f3b93c" stroke="#041d2a" stroke-width="8"/></g>
+            </g>
+            <g class="nomi-pose" data-pose-group="eureka">
+              <path d="M339 264 Q351 278 365 264" fill="none" stroke="#041d2a" stroke-width="6" stroke-linecap="round"/>
+              <g class="mark-prop" stroke="#f3b93c" stroke-width="9" stroke-linecap="round"><path d="M523 116 l20 -24"/><path d="M550 140 l30 -8"/><path d="M494 99 l2 -31"/></g><path class="mark-prop" d="M511 145 l8 18 18 8 -18 8 -8 18 -8 -18 -18 -8 18 -8Z" fill="#35b84b"/>
+            </g>
+            <g class="nomi-pose" data-pose-group="cautious">
+              <path d="M339 270 Q351 259 365 270" fill="none" stroke="#041d2a" stroke-width="6" stroke-linecap="round"/>
+              <line x1="196" y1="112" x2="548" y2="461" stroke="#a76531" stroke-width="15" stroke-linecap="round"/><line x1="548" y1="112" x2="196" y2="461" stroke="#a76531" stroke-width="15" stroke-linecap="round"/>
+            </g>
+            <g class="nomi-pose" data-pose-group="resting">
+              <path d="M328 247 q10 9 20 0 M354 250 q10 9 20 0" fill="none" stroke="#041d2a" stroke-width="7" stroke-linecap="round"/>
+              <text class="mark-prop" x="527" y="181" fill="#35b84b" font-size="39" font-weight="900">Z</text><text class="mark-prop" x="566" y="148" fill="#35b84b" font-size="23" font-weight="900">Z</text>
+            </g>
+          </g>
+        </svg>
+        <svg class="legacy-nomi" viewBox="0 0 660 590" role="img" aria-hidden="true">
+          <title id="nomiTitle">Brand-style animated Nomi mascot</title><desc id="nomiDesc">A dimensional gold noodle mascot rising from a white and green bowl inside a circular upward-arrow mark.</desc>
+          <defs>
+            <linearGradient id="heroGold" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ffe171"/><stop offset=".46" stop-color="#f3b93c"/><stop offset="1" stop-color="#d88e1f"/></linearGradient>
+            <linearGradient id="heroGreen" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#55d267"/><stop offset="1" stop-color="#269f3d"/></linearGradient>
+            <linearGradient id="heroBowl" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#fff"/><stop offset="1" stop-color="#d7e5df"/></linearGradient>
+            <filter id="sceneShadow" x="-40%" y="-40%" width="180%" height="200%"><feDropShadow dx="0" dy="16" stdDeviation="13" flood-color="#000a0f" flood-opacity=".5"/></filter>
+          </defs>
+          <g opacity=".45"><path d="M25 488 L197 316" stroke="#164858" stroke-width="2"/><path d="M119 552 L302 369" stroke="#164858" stroke-width="2"/><circle cx="529" cy="105" r="5" fill="#35b84b"/><circle cx="567" cy="152" r="3" fill="#f3b93c"/></g>
+          <g class="nomi-float" filter="url(#sceneShadow)">
+            <path class="orbit" d="M198 402 A193 193 0 1 1 515 403" fill="none" stroke="#17495a" stroke-width="18" stroke-linecap="round"/>
+            <g class="arrow-main"><path d="M485 353 C517 323 539 288 553 247 L521 240 L582 191 L589 270 L563 258 C547 307 521 348 485 380Z" fill="url(#heroGreen)" stroke="#041d2a" stroke-width="13" stroke-linejoin="round"/><path d="M570 211 L576 250" stroke="#8ef09a" stroke-width="6" stroke-linecap="round"/></g>
+            <ellipse cx="365" cy="482" rx="171" ry="25" fill="#000b10" opacity=".45"/>
+            <ellipse cx="365" cy="378" rx="153" ry="39" fill="#fff" stroke="#041d2a" stroke-width="12"/>
+            <ellipse cx="365" cy="381" rx="124" ry="22" fill="#b56d1d"/>
+            <path d="M212 380 C225 470 278 503 365 503 C452 503 505 470 518 380Z" fill="url(#heroBowl)" stroke="#041d2a" stroke-width="12" stroke-linejoin="round"/>
+            <path d="M235 424 C301 451 429 451 495 424" fill="none" stroke="url(#heroGreen)" stroke-width="17" stroke-linecap="round"/>
+            <path d="M326 465 Q365 488 404 465" fill="none" stroke="url(#heroGold)" stroke-width="13" stroke-linecap="round"/>
+
+            <g class="nomi-pose active" data-pose-group="curious">
+              <path d="M298 386 C250 326 278 213 366 211 C456 213 481 326 432 386" fill="none" stroke="#041d2a" stroke-width="58" stroke-linecap="round"/>
+              <path d="M298 386 C250 326 278 213 366 211 C456 213 481 326 432 386" fill="none" stroke="url(#heroGold)" stroke-width="39" stroke-linecap="round"/>
+              <path class="shine-line" d="M301 315 C287 257 316 227 359 226" fill="none" stroke="#fff2a4" stroke-width="7" stroke-linecap="round"/>
+              <g class="eye"><circle cx="338" cy="266" r="11" fill="#041d2a"/><circle cx="342" cy="262" r="3" fill="white"/></g><g class="eye"><circle cx="394" cy="266" r="11" fill="#041d2a"/><circle cx="398" cy="262" r="3" fill="white"/></g>
+              <path d="M344 303 Q366 322 390 302" fill="none" stroke="#041d2a" stroke-width="8" stroke-linecap="round"/>
+            </g>
+            <g class="nomi-pose" data-pose-group="noodling">
+              <path d="M299 386 C275 331 281 282 351 263 C434 240 465 168 414 135 C361 101 294 140 304 197" fill="none" stroke="#041d2a" stroke-width="58" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M299 386 C275 331 281 282 351 263 C434 240 465 168 414 135 C361 101 294 140 304 197" fill="none" stroke="url(#heroGold)" stroke-width="39" stroke-linecap="round" stroke-linejoin="round"/>
+              <circle cx="311" cy="230" r="20" fill="url(#heroGold)" stroke="#041d2a" stroke-width="10"/>
+              <g class="eye"><circle cx="351" cy="292" r="10" fill="#041d2a"/></g><g class="eye"><circle cx="395" cy="278" r="10" fill="#041d2a"/></g>
+            </g>
+            <g class="nomi-pose" data-pose-group="comparing">
+              <path d="M298 386 C254 323 279 217 366 213 C454 217 478 323 432 386" fill="none" stroke="#041d2a" stroke-width="58" stroke-linecap="round"/>
+              <path d="M298 386 C254 323 279 217 366 213 C454 217 478 323 432 386" fill="none" stroke="url(#heroGold)" stroke-width="39" stroke-linecap="round"/>
+              <g class="eye"><circle cx="340" cy="268" r="10" fill="#041d2a"/></g><g class="eye"><circle cx="392" cy="268" r="10" fill="#041d2a"/></g>
+              <line x1="366" y1="333" x2="366" y2="190" stroke="#041d2a" stroke-width="9"/><line x1="279" y1="215" x2="455" y2="190" stroke="#041d2a" stroke-width="9" stroke-linecap="round"/>
+              <path d="M251 226 L310 217 L296 267 Q270 276 251 226Z" fill="url(#heroGreen)" stroke="#041d2a" stroke-width="8"/><path d="M428 194 L485 186 L475 236 Q449 244 428 194Z" fill="url(#heroGold)" stroke="#041d2a" stroke-width="8"/>
+            </g>
+            <g class="nomi-pose" data-pose-group="eureka">
+              <path d="M299 386 C260 334 268 270 320 238 C277 174 320 121 366 121 C412 121 455 174 412 238 C465 270 473 334 432 386" fill="none" stroke="#041d2a" stroke-width="58" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M299 386 C260 334 268 270 320 238 C277 174 320 121 366 121 C412 121 455 174 412 238 C465 270 473 334 432 386" fill="none" stroke="url(#heroGold)" stroke-width="39" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M337 239 H395 M345 257 H387" stroke="#041d2a" stroke-width="9" stroke-linecap="round"/><g class="eye"><circle cx="340" cy="292" r="10" fill="#041d2a"/></g><g class="eye"><circle cx="392" cy="292" r="10" fill="#041d2a"/></g><path d="M342 327 Q366 348 392 326" fill="none" stroke="#041d2a" stroke-width="8" stroke-linecap="round"/>
+            </g>
+            <g class="nomi-pose" data-pose-group="cautious">
+              <path d="M298 386 C257 326 276 221 366 214 C456 221 475 326 432 386" fill="none" stroke="#041d2a" stroke-width="58" stroke-linecap="round"/><path d="M298 386 C257 326 276 221 366 214 C456 221 475 326 432 386" fill="none" stroke="url(#heroGold)" stroke-width="39" stroke-linecap="round"/><g class="eye"><circle cx="340" cy="270" r="10" fill="#041d2a"/></g><g class="eye"><circle cx="392" cy="270" r="10" fill="#041d2a"/></g><path d="M342 327 Q366 307 392 327" fill="none" stroke="#041d2a" stroke-width="8" stroke-linecap="round"/><line x1="242" y1="200" x2="490" y2="384" stroke="#a76531" stroke-width="15" stroke-linecap="round"/><line x1="490" y1="200" x2="242" y2="384" stroke="#a76531" stroke-width="15" stroke-linecap="round"/>
+            </g>
+            <g class="nomi-pose" data-pose-group="resting">
+              <path d="M298 386 C257 329 282 235 366 232 C450 235 475 329 432 386" fill="none" stroke="#041d2a" stroke-width="58" stroke-linecap="round"/><path d="M298 386 C257 329 282 235 366 232 C450 235 475 329 432 386" fill="none" stroke="url(#heroGold)" stroke-width="39" stroke-linecap="round"/><path d="M320 282 q15 13 30 0 M382 282 q15 13 30 0" fill="none" stroke="#041d2a" stroke-width="9" stroke-linecap="round"/><text x="452" y="227" fill="#35b84b" font-size="42" font-weight="900">Z</text><text x="497" y="190" fill="#35b84b" font-size="25" font-weight="900">Z</text>
+            </g>
+          </g>
+        </svg>
+        <div class="hero-label" aria-label="Nomi pose samples"><button class="pose-button active" data-pose="curious" type="button">Curious</button><button class="pose-button" data-pose="noodling" type="button">Noodling</button><button class="pose-button" data-pose="comparing" type="button">Comparing</button><button class="pose-button" data-pose="eureka" type="button">Eureka</button><button class="pose-button" data-pose="cautious" type="button">Cautious</button><button class="pose-button" data-pose="resting" type="button">Resting</button></div>
+        <div class="party-layer" id="partyLayer" aria-hidden="true"></div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="dna-title">
+      <div class="section-head"><div><p class="kicker">Graphic direction</p><h2 id="dna-title">The mark is Nomi.</h2></div><p>This pass stops inventing a second mascot silhouette. The familiar app emblem—three flowing noodles, rising arrow, and broken orbit—is now Nomi’s body. Expressions are small overlays; the production mark stays recognizable.</p></div>
+      <div class="brand-grid">
+        <article class="panel dark-panel"><div class="panel-head"><h3>Original brand anchor</h3><span class="panel-code">SOURCE LOCKUP</span></div><div class="brand-board"><img src="../../../public/brand/money-noodle-logo.png" alt="Original Money Noodle logo"></div></article>
+        <article class="panel"><div class="panel-head"><h3>Translation rules</h3><span class="panel-code">MASCOT PASS 03</span></div><div class="rules"><div class="rule"><span class="rule-index">01</span><div><h4>The app mark is the character</h4><p>Nomi keeps the production icon’s flowing three-strand silhouette, upward arrow, and broken orbit.</p></div></div><div class="rule"><span class="rule-index">02</span><div><h4>Expression stays additive</h4><p>Eyes, a mouth, thought marks, and research props sit over the emblem without redrawing its core identity.</p></div></div><div class="rule"><span class="rule-index">03</span><div><h4>Green means forward motion</h4><p>Arrows and environmental accents carry momentum while production semantics remain unchanged.</p></div></div><div class="rule"><span class="rule-index">04</span><div><h4>Navy holds the system together</h4><p>Heavy outlines, grid structure, and operational surfaces keep the playfulness grounded.</p></div></div></div></article>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="motion-title">
+      <div class="section-head"><div><p class="kicker">Motion language</p><h2 id="motion-title">Ribbon in. Arrow up.</h2></div><p>Gain motion now echoes the original emblem: a gold strand resolves into the bowl while a green arrow and orbit complete. It still starts only from a verified sample settlement.</p></div>
+      <div class="motion-grid">
+        <article class="panel gain-frame"><img id="motionGraphic" src="noodle-gain-loop.svg" alt="Animated sample Noodle Gain graphic"></article>
+        <article class="panel event-console" aria-live="polite"><div class="console-top"><span>Paper Pot · sample event console</span><i class="console-dot"></i></div><div class="event-word"><span class="event-first" id="eventFirst">Noodle</span><br><span class="event-second" id="eventSecond">Gain</span></div><p class="event-detail" id="eventDetail">A gold ribbon enters and the green arrow resolves only after a verified positive paper settlement. The exact sample remains +$0.25.</p><div class="event-controls"><button class="button active" data-event="gain" type="button">Gain</button><button class="button" data-event="drain" type="button">Drain</button><button class="button" data-event="simmer" type="button">Simmer</button><button class="button" data-event="party" type="button">Party</button></div></article>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="scale-title">
+      <div class="section-head"><div><p class="kicker">Research instrument</p><h2 id="scale-title">The Great Noodle Scale.</h2></div><p>The scale now reads like a device from the same graphic system: navy chassis, gold beam, green decision marker, and an orbital research frame. It remains terminal and advisory.</p></div>
+      <article class="panel scale-panel"><div class="scale-stage"><div class="scale-orbit"></div><div class="scale" aria-hidden="true"><div class="pan left"><div class="cord"></div><div class="dish">DON’T NOODLE</div></div><div class="pan right"><div class="cord"></div><div class="dish">NOODLE THIS</div></div><div class="scale-beam"></div><div class="scale-post"></div><div class="scale-pin"></div><div class="scale-foot"></div></div><div class="scale-output" id="scaleOutput">Keep noodling · unresolved</div></div><div class="scale-controls"><button class="scale-button" data-scale="-1" type="button">Contrary evidence</button><button class="scale-button active" data-scale="0" type="button">Keep noodling</button><button class="scale-button" data-scale="1" type="button">Ready to test on paper</button></div><p class="terminal-note">RESEARCH ORGANIZATION ONLY · NO FORECAST, POLICY, BUDGET, OR ORDER AUTHORITY</p></article>
+    </section>
+
+    <section class="section" aria-labelledby="levels-title">
+      <div class="section-head"><div><p class="kicker">Evidence progression</p><h2 id="levels-title">The long broth.</h2></div><p>The names stay whimsical, but the presentation becomes a collectible family of Money Noodle marks rather than seven unrelated colors.</p></div>
+      <div class="levels" id="levels"></div>
+    </section>
+
+    <footer class="footer"><span>MONEY NOODLE · ORIGINAL GRAPHIC STYLE PASS · STANDALONE HTML/SVG/CSS</span><span>RESEARCH ONLY—NOT FINANCIAL ADVICE · ALL VALUES ARE INVENTED AND LABELLED</span></footer>
+  </main>
+
+  <script>
+    (()=>{
+      const body=document.body;
+      const scene=document.getElementById('nomiScene');
+      const poseButtons=[...document.querySelectorAll('[data-pose]')];
+      const poseGroups=[...document.querySelectorAll('[data-pose-group]')];
+      const poses=['curious','noodling','comparing','eureka','cautious','resting'];
+      let poseIndex=0;
+      function setPose(pose){poseIndex=poses.indexOf(pose);poseGroups.forEach(g=>g.classList.toggle('active',g.dataset.poseGroup===pose));poseButtons.forEach(b=>b.classList.toggle('active',b.dataset.pose===pose));scene.setAttribute('aria-label',`Nomi is ${pose}`)}
+      poseButtons.forEach(b=>b.addEventListener('click',()=>setPose(b.dataset.pose)));
+      document.getElementById('meetNomi').addEventListener('click',()=>setPose(poses[(poseIndex+1)%poses.length]));
+
+      const partyLayer=document.getElementById('partyLayer');
+      const colors=['#f3b93c','#ffe171','#35b84b','#55d267','#fff'];
+      for(let i=0;i<42;i+=1){const p=document.createElement('i');p.className='confetti';p.style.left=`${3+Math.random()*94}%`;p.style.background=colors[i%colors.length];p.style.setProperty('--delay',`${Math.random()*.5}s`);p.style.setProperty('--fall',`${1.4+Math.random()*1.1}s`);partyLayer.appendChild(p)}
+      function party(){partyLayer.classList.remove('go');void partyLayer.offsetWidth;partyLayer.classList.add('go');window.setTimeout(()=>partyLayer.classList.remove('go'),2500)}
+      document.getElementById('partyButton').addEventListener('click',party);
+
+      const eventFirst=document.getElementById('eventFirst');const eventSecond=document.getElementById('eventSecond');const eventDetail=document.getElementById('eventDetail');
+      const eventCopy={gain:['Noodle','Gain','A gold ribbon enters and the green arrow resolves only after a verified positive paper settlement. The exact sample remains +$0.25.'],drain:['Noodle','Drain','The orbit reverses conceptually and a strand leaves without punishment or loss-recovery pressure. The exact sample loss remains visible.'],simmer:['Noodles','Simmering','A slow orbit marks unresolved sample value. Steam and motion do not imply winnings or an executable recommendation.'],party:['Noodle','Party','A gold-and-green ribbon burst marks a completed learning milestone—never a funded win, deposit, stake increase, or trade streak.']};
+      document.querySelectorAll('[data-event]').forEach(b=>b.addEventListener('click',()=>{const type=b.dataset.event;document.querySelectorAll('[data-event]').forEach(x=>x.classList.toggle('active',x===b));eventFirst.textContent=eventCopy[type][0];eventSecond.textContent=eventCopy[type][1];eventDetail.textContent=eventCopy[type][2];if(type==='party')party()}));
+
+      document.querySelectorAll('[data-scale]').forEach(b=>b.addEventListener('click',()=>{const value=Number(b.dataset.scale);document.documentElement.style.setProperty('--tilt',`${value*7}deg`);document.getElementById('scaleOutput').textContent=value<0?'Don’t Noodle · insufficient':value>0?'Ready to test · paper only':'Keep noodling · unresolved';document.querySelectorAll('[data-scale]').forEach(x=>x.classList.toggle('active',x===b))}));
+
+      const levelData=[['01','Fresh Somen','Curious Noodler','Begins with a question.'],['02','Tinker Udon','Broth Tinkerer','Explores assumptions.'],['03','Signal Soba','Signal Twirler','Separates forecast and price.'],['04','Evidelli','Evidence Gatherer','Tests against outcomes.'],['05','Calibramen','Calibration Cook','Waits for independent windows.'],['06','Bayes-Biang','Master Noodler','Updates beliefs with discipline.'],['07','Infinite Noodlini','Noodler of the Long Broth','Documents null results too.']];
+      const paths=['M10 74C18 12 49 80 66 33C80-4 104 32 120 10','M10 17C48 2 36 79 75 63C108 50 86 13 126 18','M10 69C35 3 57 86 82 28C97-5 115 27 129 8','M10 56C33 18 56 10 68 51C80 89 105 74 129 16','M10 42C21-2 58-2 70 42C82 87 116 85 130 22','M9 17C45 4 28 82 72 71C113 61 89 8 132 19','M8 62C20-3 57 88 75 31C91-13 124 62 134 8'];
+      document.getElementById('levels').innerHTML=levelData.map((l,i)=>`<article class="level"><span class="level-num">LEVEL ${l[0]}</span><span class="arrow-tick">↗</span><svg viewBox="0 0 142 92" aria-hidden="true"><path d="${paths[i]}" fill="none" stroke="#041d2a" stroke-width="25" stroke-linecap="round" stroke-linejoin="round"/><path d="${paths[i]}" fill="none" stroke="url(#levelGold${i})" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/><defs><linearGradient id="levelGold${i}" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ffe171"/><stop offset="1" stop-color="#db941f"/></linearGradient></defs></svg><h3>${l[1]}</h3><p class="level-title">${l[2]}</p><p class="level-copy">${l[3]}</p></article>`).join('');
+
+      document.getElementById('themeToggle').addEventListener('click',e=>{const dark=body.classList.toggle('dark');e.currentTarget.setAttribute('aria-pressed',String(dark));e.currentTarget.title=dark?'Show light canvas':'Show dark canvas'});
+      document.getElementById('motionToggle').addEventListener('click',e=>{const off=body.classList.toggle('motion-off');e.currentTarget.setAttribute('aria-pressed',String(off));e.currentTarget.textContent=off?'—':'〰';e.currentTarget.title=off?'Turn motion on':'Turn motion off'});
+    })();
+  </script>
+</body>
+</html>

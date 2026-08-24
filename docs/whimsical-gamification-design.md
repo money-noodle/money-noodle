@@ -5,7 +5,16 @@
 > optional deeper immersion; progression rewards learning and evidence rather than trading activity or
 > profit; and funded execution remains restrained. This records product intent, not an implementation-ready
 > specification. The open questions in §12 must be resolved in a further design pass before this enters
-> `SPEC.md` or authorizes code.
+> `SPEC.md` or authorizes product code.
+
+> **Exploratory prototype:** `docs/prototypes/noodle-land/index.html` demonstrates sample SVG geometry,
+> mascot poses, bowl motion, Noodle Party, the research scale, levels, and environmental color. Its current
+> visual pass gives Nomi a friendly pearl-onion face while retaining the main app mascot's broken navy
+> orbit, green arrow-leaves, and dimensional gold noodles. Each state now reshapes the character's noodles,
+> leaves, posture, and orbit instead of placing rigid props over an unchanged icon. Exact-app-mark,
+> separate-bowl, and softer first passes remain alongside it for comparison. All use invented paper values and
+> have no app imports, network requests, durable state, or trading authority. Their geometry, timing, and
+> interactions are review material rather than requirements.
 
 ## 1. Product intent
 
@@ -103,7 +112,11 @@ celebration.
 - Larger gain: several strands with restrained ingredient sparkles.
 - Drain: calm removal, with no shame, alarm, or comic punishment.
 - **Noodle Party:** learning/evidence milestones only, never a funded win, deposit, increased stake, resumed
-  automation, or streak of trades.
+  automation, or streak of trades. Its visual language is a field of curled, wobbling noodle ribbons—not
+  rectangular confetti—in broth gold, scallion green, chili coral, splash aqua, dumpling lilac, porcelain
+  cream, orange, and pink. The current prototype stages 72 ribbons in three layers: a center burst, an orbital
+  curl around Nomi, and a softer noodle rain. Nomi may briefly move into Eureka and then return to the prior
+  state. Outlined strands and theme-aware highlights keep every color legible on light and dark surfaces.
 - No loss-recovery prompt, near-miss treatment, variable reward schedule, or urgency mechanic.
 
 Motion must honor `prefers-reduced-motion`, pause in hidden tabs, avoid blocking controls, and have a user-facing
@@ -111,48 +124,76 @@ off switch. Critical live state must never be communicated only through animatio
 
 ## 6. Mascot direction: Nomi the Noodler
 
-The working mascot name is **Nomi the Noodler**. Nomi should evolve from the existing circular noodle-arrow
-mark rather than introduce an unrelated character.
+The working mascot name is **Nomi the Noodler**. Nomi should remain visibly related to the existing circular
+noodle-arrow mark, not become an unrelated bowl character. The current preferred prototype adds a pearl onion
+as Nomi's face rather than treating the mark's black negative space as a face. It aims for a warm, endearing,
+comforting character that can communicate trust and understanding. This remains a refinement candidate, not
+yet a specification lock.
 
-The mascot will be a small, dependency-free SVG system with simple reusable anatomy:
+The proposed dependency-free SVG anatomy is:
 
-- one semicircular bowl path;
-- one continuous thick noodle stroke;
-- two eye circles;
-- two chopstick lines; and
-- reusable steam, thought-bubble, sparkle, and caution paths.
+- the broken navy orbit remains Nomi's stable frame;
+- the green upward arrow becomes both momentum and living onion leaves;
+- dimensional gold ribbons remain Nomi's flowing noodle body;
+- a warm cream pearl onion carries large navy eyes, highlights, cheeks, brows, and a small mouth; and
+- the noodles, leaves, posture, and orbit all change with the state rather than relying on detached props.
 
-Simple paths permit CSS transforms and `stroke-dashoffset` animation, remain crisp at icon and hero sizes, and
-support a static reduced-motion rendering.
+The bowl remains the separate balance illustration; it is not Nomi's body. Component paths permit CSS
+transforms and `stroke-dashoffset` animation, remain crisp at icon and hero sizes, and support a static
+reduced-motion rendering.
 
 Proposed Nomi states:
 
 | State | Pose | Product use |
 | --- | --- | --- |
-| **Curious** | Peeking over the bowl | Empty research prompt or new idea |
-| **Noodling** | Noodle forms a question mark | Research or calculation in progress |
-| **Comparing** | Holding a tiny scale | Reviewing evidence for and against an idea |
-| **Eureka** | Noodle forms a lightbulb | A learning milestone, not a predicted win |
-| **Cautious** | Chopsticks crossed | Stale, unavailable, blocked, or unresolved state |
-| **Resting** | Sleeping beside the bowl | No action warranted |
-| **Party** | Confetti noodles | Completed evidence milestone only |
+| **Curious** | Onion leans in while a noodle tip curls forward | Empty research prompt or new idea |
+| **Noodling** | Arrow bends and a noodle becomes a soft question curl | Research or calculation in progress |
+| **Comparing** | Noodles and leaves form a balanced, symmetrical body | Reviewing evidence for and against an idea |
+| **Eureka** | Sprout and upward arrow rise together as the noodle body opens | A learning milestone, not a predicted win |
+| **Cautious** | Noodles tuck inward and a leaf becomes a protective shield | Stale, unavailable, blocked, or unresolved state |
+| **Resting** | Onion nestles into a noodle coil beneath a leaf blanket | No action warranted |
+| **Party** | Gold noodles and green leaves open into a gentle orbit celebration | Completed evidence milestone only |
 
 Nomi may react to freshness, evidence state, and system availability. Nomi must not pressure the operator to
 trade, taunt a loss, celebrate funded risk, or imply that a safety block should be bypassed.
 
 ## 7. Noodle types, levels, and titles
 
-Progression is noncompetitive and rewards evidence discipline. The approved creative ladder is:
+Progression is noncompetitive and rewards evidence discipline. Each noodle type is a **category**, not one
+atomic level. Every category has sublevels represented by increasingly saturated variations of that category's
+color. The current naming pass gives each broth an alliterative family so its four steps read as one category;
+puns appear only where they remain immediately understandable, such as **Udon Know Yet**, **Bayesically
+Brilliant**, and **Noodlini & Beyond**. Exact names and unlock conditions remain part of the pre-specification
+refinement.
+
+The playful category colors return here without changing financial semantics: Fresh Somen is aqua, Tinker
+Udon green, Signal Soba gold, Evidelli coral, Calibramen lilac, Bayes-Biang orange, and Infinite Noodlini pink.
+A lighter or darker category shade indicates progression only; it must never indicate gain, loss, readiness,
+paper/live identity, or permission to trade.
+
+The approved creative ladder is:
 
 | Level | Noodle type | Title | Meaning |
 | --- | --- | --- | --- |
-| 1 | **Fresh Somen** | Curious Noodler | Begins asking questions |
-| 2 | **Tinker Udon** | Broth Tinkerer | Opens factors and explores assumptions |
-| 3 | **Signal Soba** | Signal Twirler | Compares model probability with market price |
-| 4 | **Evidelli** | Evidence Gatherer | Tests an idea against resolved evidence |
+| 1 | **Fresh Somen** | Somen Seeker | Begins asking questions |
+| 2 | **Tinker Udon** | Udon Unraveler | Opens factors and explores assumptions |
+| 3 | **Signal Soba** | Soba Signal Scout | Compares model probability with market price |
+| 4 | **Evidelli** | Evidence Explorer | Tests an idea against resolved evidence |
 | 5 | **Calibramen** | Calibration Cook | Waits for independent windows and updates beliefs |
-| 6 | **Bayes-Biang** | Master Noodler | Separates uncertainty, evidence, and action |
-| 7 | **Infinite Noodlini** | Noodler of the Long Broth | Completes repeated documented experiments without hiding null results |
+| 6 | **Bayes-Biang** | Belief Balancer | Separates uncertainty, evidence, and action |
+| 7 | **Infinite Noodlini** | Null Navigator | Completes repeated documented experiments without hiding null results |
+
+The prototype currently explores these category-specific sublevel labels:
+
+| Category | S1 | S2 | S3 | S4 |
+| --- | --- | --- | --- | --- |
+| Fresh Somen | Somen Starter | Somen Sifter | Somen Solver | Somen Sage |
+| Tinker Udon | Udon Know Yet | Udon Unraveler | Udon Updater | Ultimate Udon |
+| Signal Soba | Soba Spotter | Soba Sorter | Soba Synthesizer | Soba Seer |
+| Evidelli | Evidelli Explorer | Evidelli Examiner | Evidelli Evaluator | Evidelli Expert |
+| Calibramen | Calibramen Collector | Calibramen Counter | Calibramen Corrector | Calibramen Connoisseur |
+| Bayes-Biang | Bayes Beginner | Broth Bayesian | Belief Balancer | Bayesically Brilliant |
+| Infinite Noodlini | Null Noodler | Noodlini Noticer | Null Navigator | Noodlini & Beyond |
 
 Candidate accomplishments include:
 
@@ -167,6 +208,11 @@ Candidate accomplishments include:
 The exact unlock rules are not yet specified. They must use meaningful, non-spammable evidence events and
 must not be functions of P&L, balance, stake, deposits, order count, live arming, or trade frequency. A user
 must be able to hide levels and accomplishments without losing access to any product capability.
+
+A later brainstorm expanded the naming space to four ten-level groups: real noodles with origin notes,
+invented real-adjacent puns, an extended next-level combination, and a boundary-pushing mythic menu. Those
+options are preserved in [noodle-progression-naming-options.md](noodle-progression-naming-options.md) for a
+future naming pass. No group is selected and the seven-category prototype remains unchanged for now.
 
 ## 8. The Great Noodle Scale
 
@@ -185,6 +231,12 @@ The scale can conclude:
 2. **Keep Noodling** — unresolved;
 3. **Ready to Test** — suitable for a paper experiment; or
 4. **Evidence Served** — experiment completed and documented.
+
+The current visual candidate uses friendly onion Nomi as the pivot, a rounded gold noodle as the beam, and two
+cream bowls with green leaf rims. **Don't Noodle** and **Noodle This** live low inside those bowls rather than on
+the beam. Each pan moves vertically with its end of the tipping beam while its label remains horizontal, so the
+beam can never cover or rotate the text. The center conclusion stays in a separate pill below the apparatus.
+This construction remains prototype detail pending the wider interaction refinement.
 
 No conclusion can place, preview, arm, size, recommend, or authorize a live order. Generated research text and
 user-arranged evidence remain terminal and advisory under the existing LLM boundary.
@@ -207,8 +259,11 @@ colors cannot recolor outcome, readiness, safety, or execution state. The Live S
 more operational than the Noodle Lab or Paper Pot.
 
 Noodle Land is ambient by default: brand, hero, mascot, bowl, section illustrations, and restrained motion.
-Deeper immersion is optional. The core information architecture, dense evidence tables, and authenticated
-controls remain usable without the whimsical layer.
+Deeper immersion is optional. Light and dark themes receive equal treatment: hero text, tags, event console,
+research scale, category cards, sublevels, outlines, and motion contrast must all use theme-aware surface and
+ink tokens rather than assuming a navy canvas. Decorative dark brand-anchor art may remain intentionally dark.
+The core information architecture, dense evidence tables, and authenticated controls remain usable without
+the whimsical layer.
 
 ## 10. Safety and authority boundaries
 

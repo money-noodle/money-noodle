@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 420" role="img" aria-labelledby="title desc">
+  <title id="title">Brand-style Noodle Gain animation</title>
+  <desc id="desc">A gold noodle curls into a white and green bowl as a green arrow rises, beside a sample twenty-five noodle paper gain.</desc>
+  <defs>
+    <linearGradient id="night" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#041d2a"/><stop offset="1" stop-color="#0b3747"/></linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ffe176"/><stop offset=".48" stop-color="#f4b93a"/><stop offset="1" stop-color="#d88e1f"/></linearGradient>
+    <linearGradient id="green" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#4ace5d"/><stop offset="1" stop-color="#239b3a"/></linearGradient>
+    <linearGradient id="bowl" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#fff"/><stop offset="1" stop-color="#d9e7e1"/></linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#fff" stroke-opacity=".045"/></pattern>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="200%"><feDropShadow dx="0" dy="14" stdDeviation="12" flood-color="#000b10" flood-opacity=".5"/></filter>
+    <style>
+      .incoming { stroke-dasharray:310; animation:curl 3.8s cubic-bezier(.2,.8,.2,1) infinite; }
+      .incoming-shine { stroke-dasharray:310; animation:curl 3.8s cubic-bezier(.2,.8,.2,1) infinite; }
+      .arrow { transform-box:fill-box; transform-origin:center bottom; animation:arrow 3.8s cubic-bezier(.2,.8,.2,1) infinite; }
+      .orbit { stroke-dasharray:420; animation:orbit 3.8s ease-out infinite; }
+      .value { animation:value 3.8s ease-out infinite; transform-box:fill-box; transform-origin:left center; }
+      .glint { animation:glint 3.8s ease-out infinite; transform-box:fill-box; transform-origin:center; }
+      @keyframes curl { 0%,10% { opacity:0; stroke-dashoffset:310; transform:translateY(-50px) } 20% { opacity:1 } 52%,88% { opacity:1; stroke-dashoffset:0; transform:translateY(0) } 100% { opacity:0 } }
+      @keyframes arrow { 0%,38% { opacity:0; transform:translateY(28px) scale(.72) } 52%,84% { opacity:1; transform:translateY(0) scale(1) } 100% { opacity:0; transform:translateY(-8px) scale(1.04) } }
+      @keyframes orbit { 0%,22% { opacity:.18; stroke-dashoffset:420 } 56%,90% { opacity:1; stroke-dashoffset:0 } 100% { opacity:.18 } }
+      @keyframes value { 0%,44% { transform:scale(1); fill:#fff } 56% { transform:scale(1.09); fill:#42c957 } 70%,100% { transform:scale(1); fill:#fff } }
+      @keyframes glint { 0%,43%,74%,100% { opacity:0; transform:scale(.2) rotate(0) } 56% { opacity:1; transform:scale(1.15) rotate(25deg) } }
+      @media (prefers-reduced-motion:reduce) { * { animation:none!important } .incoming,.incoming-shine,.arrow,.orbit { opacity:1; stroke-dashoffset:0; transform:none } }
+    </style>
+  </defs>
+  <rect width="640" height="420" rx="34" fill="url(#night)"/>
+  <rect width="640" height="420" rx="34" fill="url(#grid)"/>
+  <path d="M-60 410 C160 252 265 475 455 323 C540 255 615 272 700 205" fill="none" stroke="#38b84d" stroke-width="80" opacity=".05"/>
+  <text x="34" y="42" fill="#43c858" font-family="Arial,sans-serif" font-size="11" font-weight="900" letter-spacing="2.2">PAPER POT · VERIFIED SAMPLE</text>
+
+  <g transform="translate(7 58)">
+    <ellipse cx="218" cy="316" rx="157" ry="21" fill="#000b10" opacity=".38"/>
+    <path class="orbit" d="M84 238 A145 145 0 1 1 345 251" fill="none" stroke="#1e5a6d" stroke-width="10" stroke-linecap="round"/>
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path class="incoming" d="M215 21 C148 83 286 92 208 164 C181 188 183 217 215 244" stroke="#041d2a" stroke-width="31"/>
+      <path class="incoming" d="M215 21 C148 83 286 92 208 164 C181 188 183 217 215 244" stroke="url(#gold)" stroke-width="20"/>
+      <path class="incoming-shine" d="M207 35 C177 69 207 84 229 96" stroke="#fff0a1" stroke-width="4" opacity=".72"/>
+      <path d="M105 215 C145 171 185 239 222 191 C255 147 292 229 340 181" stroke="url(#gold)" stroke-width="17"/>
+      <path d="M112 238 C154 199 190 255 230 214 C263 181 299 245 337 214" stroke="url(#gold)" stroke-width="17"/>
+    </g>
+    <g class="arrow">
+      <path d="M285 140 C305 123 321 102 335 79 L315 72 L359 39 L365 94 L348 85 C334 113 315 138 291 158Z" fill="url(#green)" stroke="#041d2a" stroke-width="9" stroke-linejoin="round"/>
+      <path d="M350 56 L355 79" stroke="#8ff19a" stroke-width="4" stroke-linecap="round"/>
+    </g>
+    <g filter="url(#shadow)">
+      <ellipse cx="218" cy="222" rx="151" ry="37" fill="#fafcf9" stroke="#041d2a" stroke-width="10"/>
+      <ellipse cx="218" cy="224" rx="124" ry="22" fill="#b56d1d"/>
+      <path d="M67 224 C80 303 134 328 218 328 C302 328 356 303 369 224Z" fill="url(#bowl)" stroke="#041d2a" stroke-width="10" stroke-linejoin="round"/>
+      <path d="M90 258 C155 283 281 283 346 258" fill="none" stroke="url(#green)" stroke-width="14" stroke-linecap="round"/>
+      <path d="M182 297 Q218 317 254 297" fill="none" stroke="url(#gold)" stroke-width="11" stroke-linecap="round"/>
+    </g>
+  </g>
+
+  <g transform="translate(405 140)">
+    <text x="0" y="0" fill="#89a8b1" font-family="Arial,sans-serif" font-size="11" font-weight="900" letter-spacing="1.6">SETTLED PAPER EVENT</text>
+    <text x="0" y="53" fill="#f5bb3d" font-family="Impact,'Arial Black',sans-serif" font-size="53" letter-spacing="1">NOODLE</text>
+    <text x="0" y="101" fill="#3bc351" font-family="Impact,'Arial Black',sans-serif" font-size="53" letter-spacing="1">GAIN</text>
+    <text class="value" x="0" y="147" fill="#fff" font-family="Impact,'Arial Black',sans-serif" font-size="28" letter-spacing=".5">+25 NOODLES</text>
+    <text x="0" y="174" fill="#9bb1b7" font-family="Arial,sans-serif" font-size="12" font-weight="700">+$0.25 · SAMPLE DISPLAY</text>
+    <g class="glint"><path d="M180 12 l8 18 18 8 -18 8 -8 18 -8 -18 -18 -8 18 -8Z" fill="#f5bb3d"/><path d="M202 102 l5 11 11 5 -11 5 -5 11 -5 -11 -11 -5 11 -5Z" fill="#3bc351"/></g>
+  </g>
+</svg>
