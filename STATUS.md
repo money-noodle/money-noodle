@@ -64,6 +64,10 @@ markets were all `WATCH`. Therefore the source/wire correction and fail-closed t
 natural accepted order carrying durable `venueExchangeIndex` remains the runtime confirmation gate; no artificial
 funded test was sent.
 
+Production source deployment `dpl_DdSaB76cS6iKZoqgdeKDWBMinyf7` completed READY and was aliased to
+`https://noodle.money`; the homepage, compact paper-performance summary, and paper-budget endpoints returned HTTP
+200. Hosted remains stateless and has no funded wire authority.
+
 ### External venue positions no longer inherit rejected local ownership, 2026-08-25
 
 [`docs/external-venue-position-ownership-design.md`](docs/external-venue-position-ownership-design.md) corrects the
