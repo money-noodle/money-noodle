@@ -22,8 +22,8 @@ Use these names consistently in code, UI, and discussion:
 4. **Venue candidate** — the funded venue's own quote, readiness, sizing, and market-structure checks pass.
 5. **Portfolio selection** — the candidate wins a provisional slot under account exposure constraints.
 6. **Live authorization** — current operational, risk, reconciliation, funding, and rate gates all pass.
-7. **Attempt and outcome** — a durable intent reaches the venue and becomes a fill, confirmed no-fill, refusal,
-   rejection, or uncertain state.
+7. **Attempt and outcome** — a durable intent becomes a refusal, rejection, confirmed no-fill, partial/full fill,
+   or uncertain state; acquired exposure later becomes sold, won, lost, invalid, or remains unresolved.
 
 A state does not imply the next one. In particular, a base signal is research output, not permission to trade,
 and a portfolio selection is provisional until the live authorization checks run.
@@ -83,7 +83,10 @@ Output: a **venue candidate** and, for winners, a provisional **portfolio select
 operator read model; it does not itself authorize funded execution. The approved safety/ownership, gate-attribution,
 and implementation-shortfall review is queued after the confirmed-signal final review in
 [`docs/venue-candidate-evaluation-design.md`](venue-candidate-evaluation-design.md); it is not collecting or
-changing production yet.
+changing production yet. After that layer freezes, the separate full-cycle greedy-fidelity, reranking, and
+stateful-shadow plan in
+[`docs/portfolio-selection-evaluation-design.md`](portfolio-selection-evaluation-design.md) evaluates provisional
+portfolio selection. The existing issued-order choice-set journal remains a narrower integrity sentinel.
 
 ### 5. Account-wide live gates — `runLive`
 
@@ -95,7 +98,10 @@ changing production yet.
 19. Apply asset admission and per-candidate cycle classification, then retain only candidates whose retry,
     confirmation, and provisional portfolio state still pass.
 
-Output: candidates that may proceed to per-order **live authorization**.
+Output: candidates that may proceed to per-order **live authorization**. The approved complete-manifest,
+concurrency-fault, authority-age, funding-ownership, and guarded-recovery review is queued after portfolio selection
+freezes in [`docs/live-authorization-evaluation-design.md`](live-authorization-evaluation-design.md). It is not
+collecting or changing production yet.
 
 ### 6. Final per-order authorization and routing — `runLive`, `lib/entry-execution-policy.ts`
 
@@ -119,8 +125,14 @@ Output: an operationally **authorized live order**.
     confirmed no-fill or pre-submit refusal.
 27. If venue state is ambiguous, retain the reservation, mark the order uncertain, suspend the desk, and require
     authoritative reconciliation.
+28. Keep the execution outcome separate from the later position outcome: only acquired quantity may be reduced or
+    settled, and exact venue P&L remains distinct from whole-cent budget control.
 
-Output: an **attempt and outcome**. Only an authoritative fill creates funded exposure.
+Output: an **attempt and outcome**. Only an authoritative fill creates funded exposure. The approved normalized-
+lifecycle, fault/recovery, accounting, partial-fill, implementation-shortfall, and intent-to-treat review is queued
+after live authorization freezes in
+[`docs/attempt-outcome-evaluation-design.md`](attempt-outcome-evaluation-design.md). It is not collecting or
+changing production yet.
 
 ## Important current implementation details
 
@@ -153,5 +165,5 @@ When changing this path:
 6. Update this introduction when a decision moves between owners or a state changes meaning. Update `SPEC.md`
    and its decision log only when the product decision itself changes.
 
-The milestone-gated plan for forecast candidates and evaluator v3 is
+The master milestone-gated serial plan across all seven states, from base signal through attempt and outcome, is
 [`docs/forecast-model-and-evaluator-v3-design.md`](forecast-model-and-evaluator-v3-design.md).

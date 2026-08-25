@@ -1,10 +1,10 @@
 # Forecast model boundary and evaluator v3 design
 
 > **Status:** Phase 1 implemented on 2026-08-24. Phase 2 prospective collection activated locally at
-> 2026-08-25T03:17:17.456Z. Confirmed-signal and venue-candidate reviews are approved next in strict layer order.
-> Every later phase remains observation-only and must clear its milestone review before the next phase is
-> activated. This design changes no production forecast, buy policy, execution, capital, or live authority by
-> itself.
+> 2026-08-25T03:17:17.456Z. Confirmed-signal, venue-candidate, portfolio-selection, live-authorization, and
+> attempt-and-outcome reviews are approved next in strict layer order. Every later phase remains observation-only
+> and must clear its milestone review before the next phase is activated. This design changes no production
+> forecast, buy policy, execution, capital, accounting, or live authority by itself.
 
 ## 1. Decision
 
@@ -14,7 +14,8 @@ candidate easy to score under a formula, side, venue, cost, or policy that produ
 monitoring-only evaluator v2 has exhibited all of those failures and cannot support promotion.
 
 Implement the base-signal improvement plan in six gated phases, then evaluate the confirmed-signal layer in four
-strictly serial phases, then evaluate exact-provider venue candidacy in four more:
+strictly serial phases, exact-provider venue candidacy in four more, portfolio selection in four, live
+authorization in four, and attempt/outcome lifecycle in four final phases:
 
 1. extract one pure, versioned forecast-model boundary while proving production equivalence;
 2. commit prospective candidate outputs with no order authority;
@@ -29,7 +30,19 @@ strictly serial phases, then evaluate exact-provider venue candidacy in four mor
 11. classify and parity-test venue-candidate safety, economic, capital, and diagnostic checks;
 12. collect current-rule venue attribution and implementation-shortfall evidence;
 13. freeze and prospectively score at most one small venue-economic family;
-14. perform one corrected venue-candidate review.
+14. perform one corrected venue-candidate review;
+15. implement full-cycle portfolio attribution and prove exact production-control parity;
+16. compare greedy fidelity, control activity, and downstream reranking without changing production;
+17. freeze and prospectively shadow at most one small stateful portfolio family;
+18. perform one corrected portfolio-selection review;
+19. implement complete authorization manifests and prove exact production-control parity;
+20. fault-test concurrency and attribute current authority without changing production;
+21. freeze and validate at most one focused fail-closed authorization generation;
+22. perform one final live-authorization reliability review;
+23. implement a normalized attempt/outcome lifecycle projection and prove exact production-control parity;
+24. fault-test recovery/accounting and attribute the current execution funnel without changing production;
+25. freeze and prospectively validate at most one focused safety/accounting or economic lifecycle generation; and
+26. perform one final attempt-and-outcome review.
 
 No phase automatically starts the next, changes production, or grants promotion eligibility. Evaluator v2 remains
 monitoring-only history and is never rewritten into v3 evidence.
@@ -41,7 +54,9 @@ monitoring-only history and is never rewritten into v3 evidence.
 - The shared buy-policy mirror remains unchanged: paper and live receive the same production probability and pure
   entry decision.
 - Candidate definitions and evidence have no imports into forecast selection, persistence, sizing, portfolio,
-  routing, budgets, reconciliation, or orders.
+  routing, budgets, reconciliation, orders, exits, or settlement. Later portfolio, authorization, and lifecycle
+  evaluators observe production decisions and outcomes, but their stores and reports likewise have no policy,
+  accounting, or money-path authority.
 - Every candidate is immutable and versioned. Changing a parameter starts a new candidate identity and cohort.
 - UTC settlement timestamps are the unit of independence. Asset rows sharing a close are one correlated window.
 - Retroactive screening may reject an idea and may never promote one. Promotion requires prospectively committed
@@ -353,9 +368,166 @@ windows. Signal and execution results remain separate.
 
 Report displayed, construction, pre-submit, submitted, and deployable value without smoothing their disagreement;
 apply the predeclared family-wise correction; and record inert, misplaced, null, or positive findings equally. A
-successful result permits only a separate ownership/policy design and manual promotion request.
+successful result permits only a separate ownership/policy design and manual promotion request. Phase 14 ends by
+freezing the retained or promoted exact venue-candidate definition before portfolio evidence begins.
 
-## 11. Overall serial timeline
+## 11. Phases 15–18 — portfolio-selection evaluation, in series
+
+The approved fourth decision-layer plan is
+[`docs/portfolio-selection-evaluation-design.md`](portfolio-selection-evaluation-design.md). It starts only after
+the venue-candidate final review. The existing issued-order `portfolio-choice-set-v1` lane continues as an
+integrity sentinel; it does not record no-order calculations and cannot become evidence for a later ranking family.
+
+### Phase 15 — full-cycle ownership and exact-control parity
+
+Classify hard exposure ceilings as safety/risk controls, ranking and penalties as economic selectors, and exact
+optimization, side/size-aware exposure, downstream skips, and capacity opportunity cost as diagnostics. Add a
+separate observation-only record for every fresh calculation where an exact venue candidate reaches portfolio
+consideration, including no-order results and complete later-gate state.
+
+**Exit:** fault/tie/boundary grid plus 25 live-runtime portfolio calculations with zero production score, rank,
+selected-set, or reason mismatch; then 10-window wiring and 100 closed windows with at least 95% complete
+portfolio-decision/outcome coverage and complete issued-intent ledger coverage.
+
+### Phase 16 — stated-objective and orchestration attribution
+
+Compare production greedy selection with exhaustive subset optimization under production's exact objective,
+eligibility-before-selection reconstruction, reranking after a downstream skip, and a hard-ceiling-only diagnostic.
+All alternatives use only state available at the calculation; hindsight best-of-window remains an upper-bound
+diagnostic. Measure effective-cap and penalty bind rates, redundant controls, objective gaps, and viable candidates
+left unused after provisional winners disappear.
+
+**Exit:** 300 closed windows and at least 100 windows with an exact-solver, eligibility-order, downstream-rerank,
+or independently binding-selector difference, or a written inert/insufficient-activity finding. This cohort may
+select a later hypothesis and may never promote it.
+
+### Phase 17 — focused stateful portfolio family
+
+After the attribution report, write an amendment freezing at most one small family. Candidate areas may include
+exact versus greedy optimization, eligibility ordering/reranking, independently active soft penalties, side/size-
+aware exposure, or a causal capacity-reservation price; none is selected by this roadmap. Hold upstream signals,
+venue candidacy, sizing, routes, fees, exits, and authorization fixed.
+
+Every arm maintains its own causal shadow positions and capacity from a common initial state; it cannot reuse
+production exposure after choices diverge. Keep ask-and-hold signal return separate from public-evidence simulated
+execution and fill/no-fill state.
+
+**Exit:** a new cohort with 300 closed signal windows, 90% per-arm availability, and 100 materially divergent
+windows, then 200 execution-scoreable windows with 90% public-evidence coverage and 100 divergent windows.
+
+### Phase 18 — one corrected portfolio review
+
+Score every position with zero for an omitted candidate and cluster by UTC settlement timestamp. Report signal and
+deployable return, capacity utilization, no-order rescue, occupied stake, cash return, continuous drawdown,
+exact/unavailable cohorts, and the predeclared family-wise correction. A successful result permits only a separate
+policy/ownership request. Loosening a hard exposure ceiling additionally requires its own capital and downside
+approval; this review cannot authorize it. Phase 18 ends by freezing the retained or promoted portfolio definition
+before live-authorization evidence begins.
+
+## 12. Phases 19–22 — live-authorization evaluation, in series
+
+The approved fifth decision-layer plan is
+[`docs/live-authorization-evaluation-design.md`](live-authorization-evaluation-design.md). It starts only after the
+portfolio final review. Existing `live-skip-v1` remains a first-blocker episode journal; it cannot prove simultaneous
+authority or supply candidate evidence for a later authorization generation.
+
+### Phase 19 — complete manifest and exact-control parity
+
+Classify environment/operator/capability/reconciliation/identity/wire checks as safety authority, funding and loss
+limits as capital/risk ceilings, late regime/persistence/route checks as economic or lifecycle ownership, and all
+simultaneous results plus clocks/revisions as diagnostics. Add one detached manifest for every portfolio-selected
+exact candidate, including no-intent outcomes.
+
+**Exit:** pure boundary/fault grid plus 25 live-runtime portfolio-selected calculations with zero first-blocker,
+authority-vector, order-term, reservation, or disposition mismatch; then 10-window wiring and 100 closed windows
+with 95% complete authority/outcome coverage and 100% durable-intent/reservation coverage.
+
+### Phase 20 — fault, concurrency, and current-rule attribution
+
+Fault-test pause, kill, reconciliation fences, stale READY state, provider/budget revision, strategy funding,
+duplicate identity, malformed wire terms, lost responses, crash boundaries, partial/overfill, cancellation, and
+guarded recovery. Record every simultaneous blocker, effective limit, authority age, ownership seam, and availability
+cost without relaxing production.
+
+**Exit:** every declared fault passes plus at least 1,000 deterministic seeded schedules across each critical
+pause/reconciliation/reservation race; then 300 closed windows and 100 windows where an authority independently
+blocks or differs from first-blocker reporting, or a written inert/insufficient-activity finding. This cohort may
+identify one fail-closed repair and cannot promote a loosening.
+
+### Phase 21 — one focused authorization generation
+
+After the attribution report, write an amendment freezing at most one generation: one proven fail-closed repair,
+authorization fencing generation, bounded reconciliation-readiness lease, strategy-funding ownership correction,
+or exact production control when no repair is justified. Capital-ceiling, economic-policy, and execution-style
+changes remain separate programs.
+
+**Exit:** a new cohort with 300 closed windows, 100 portfolio-selected authorization opportunities, 95% complete
+manifests, 100% issued-intent/reservation coverage, the complete fault matrix, and seven continuous days at the
+configured reconciliation cadence without an unexplained authority gap.
+
+### Phase 22 — one final authorization review
+
+Report fault correctness, complete-manifest coverage, simultaneous/first blockers, authority age, cash/reservation/
+allocation agreement, pause/drain/suspension/recovery transitions, and availability separately. A safety repair
+succeeds by closing its fault, not by increasing return. A successful result permits only a separate versioned
+ownership/rollout request; no capital or authority loosening is authorized. Freeze the retained or separately
+repaired authorization generation before attempt/outcome evidence begins.
+
+## 13. Phases 23–26 — attempt-and-outcome evaluation, in series
+
+The approved final decision-layer plan is
+[`docs/attempt-outcome-evaluation-design.md`](attempt-outcome-evaluation-design.md). It starts only after the
+live-authorization final review. Existing order rows, execution observations, budget audits, and reconciliation
+audits remain authoritative for their current fields; a new detached lifecycle projection does not replace the
+shared order or money ledger.
+
+### Phase 23 — normalized lifecycle and exact-control parity
+
+Project current behavior into orthogonal intent, venue-order, position, and cash states. Type reservation refusal,
+pre-submit refusal, post-only create rejection, accepted maker/IOC zero-fill, partial/full fill, uncertainty,
+recovery, sale, settlement, and invalidity without inferring a prospective state from mutable prose. Append detached
+transition evidence keyed by exact order, provider contract, budget, and reconciliation identity.
+
+**Exit:** pure valid/impossible-state grid plus 25 terminal live-runtime controls with zero state, disposition,
+identity, quantity, or money mismatch; then 10 closed authorized-intent timestamps for wiring and 100 closed
+authorized-intent timestamps with at least 95% diagnostic-transition coverage and 100% coverage of every applicable
+accepted-order, fill, reservation, release, position, and settlement event.
+
+### Phase 24 — fault, recovery, accounting, and current attribution
+
+Fault every boundary from durable intent through reservation, submission, acceptance, fill, cancellation,
+reconciliation, exit, and settlement. Include response loss, delayed visibility, duplicate/out-of-order/partial/
+over fills, amendment chains, cancellation races, ownership collisions, exact money edges, invalid/delayed outcomes,
+and process crashes. Report the complete funnel and intent-to-treat economics without changing production.
+
+**Exit:** every declared fault passes plus at least 1,000 deterministic seeded schedules per critical submit/
+accept/fill/cancel/reconcile/settle race; then 300 closed authorized-intent timestamps and 100 windows with a
+nontrivial refusal, rejection, accepted zero-fill, partial fill, uncertainty/recovery, or early exit—or a written
+insufficient-activity finding. Exact and whole-cent views must each tie independently.
+
+### Phase 25 — one focused lifecycle generation
+
+After attribution, write an amendment freezing at most one mutually exclusive generation: one lifecycle/provenance,
+recovery/ownership/cancellation/settlement, or accounting repair; one focused post-authorization economic management
+family; or exact production control if no change is justified. A repair uses invariant and fault evidence. An
+economic family uses independent causal shadow management and complete intent-to-treat scoring; it cannot read the
+production fill to choose its path.
+
+**Exit for safety/accounting:** a new 300-window authorized-intent cohort, 95% complete diagnostics, 100% critical
+ownership/money coverage, repeated targeted fault/seeded-race gates, and seven continuous days without an
+unexplained lifecycle/accounting gap. **Exit for economics:** a new 300-window authorized-intent cohort with 100
+materially divergent windows, then 200 execution-scoreable windows with 90% required public-evidence coverage and
+100 divergent windows. Only one exit path applies.
+
+### Phase 26 — one final attempt-and-outcome review
+
+Report lifecycle completeness, ownership/recovery correctness, exact and whole-cent account ties, stage-specific
+latency, partial/full/no-fill cohorts, implementation shortfall, fill selection, complete intent-to-treat return,
+legacy/unavailable evidence, and rollback. A safety/accounting repair succeeds by closing its fault; an economic
+family must clear its predeclared paired execution and downside tests. Any production schema, lifecycle, retry,
+management, reconciliation, settlement, or accounting change remains a separate manual proposal.
+
+## 14. Overall serial timeline
 
 | Serial stage | Earliest evidence gate | Planning duration after activation | Advancement |
 | --- | --- | --- | --- |
@@ -371,17 +543,31 @@ successful result permits only a separate ownership/policy design and manual pro
 | Venue Phase 11 — ownership/safety parity | Fault grid plus 25 exact-control observations | Engineering-dependent | Starts attribution only after parity |
 | Venue Phase 12 — current-rule attribution | 300 closed plus 100 selector-changing, or documented inertness | At least 75 hours; selector frequency may dominate | Freezes at most one new-outcome family |
 | Venue Phase 13 — focused family | 300 signal, 200 execution, and 100 divergent | At least 75 hours plus multi-day/week execution | Authorizes one venue review |
-| Venue Phase 14 — final review | Both lanes and declared correction complete | Manual, once | Separate ownership/policy request or documented null |
+| Venue Phase 14 — final review | Both lanes and declared correction complete | Manual, once | Freeze retained/promoted venue definition; separate request or null |
+| Portfolio Phase 15 — full-cycle parity/coverage | Grid plus 25 exact-control observations; then 100 closed at 95% coverage | Engineering-dependent plus at least 25 hours | Starts objective attribution only after parity/coverage |
+| Portfolio Phase 16 — objective/orchestration attribution | 300 closed plus 100 selector/solver/rerank differences, or documented inertness | At least 75 hours; divergence may control | Freezes at most one new-outcome family |
+| Portfolio Phase 17 — stateful focused family | 300 signal, 200 execution, and 100 divergent | At least 75 hours plus multi-day/week execution | Authorizes one portfolio review |
+| Portfolio Phase 18 — final review | Both lanes, cash/downside checks, and declared correction complete | Manual, once | Freeze retained/promoted portfolio definition; separate request or null |
+| Authorization Phase 19 — manifest parity/coverage | Grid plus 25 exact controls; then 100 closed at 95% coverage and 100% intent/reservation coverage | Engineering-dependent plus at least 25 hours | Starts fault/attribution only after parity |
+| Authorization Phase 20 — fault/current attribution | Complete fault matrix and seeded races; 300 closed plus 100 authority differences or documented inertness | Engineering-dependent plus at least 75 hours | Freezes at most one fail-closed generation |
+| Authorization Phase 21 — focused generation | 300 closed, 100 authorization opportunities, complete intent coverage, and seven continuous cadence days | At least seven days; opportunity frequency may extend it | Authorizes one reliability review |
+| Authorization Phase 22 — final review | Fault, manifest, cash/reservation, recovery, availability, and rollback checks complete | Manual, once | Freeze retained/repaired authorization; separate request or null |
+| Attempt Phase 23 — lifecycle parity/coverage | Grid plus 25 terminal controls; then 100 closed authorized-intent windows at 95% diagnostic and 100% critical money/ownership coverage | Engineering-dependent; authorized-intent frequency controls | Starts fault/attribution only after parity |
+| Attempt Phase 24 — fault/current attribution | Complete fault matrix and seeded races; 300 closed authorized-intent windows plus 100 nontrivial paths or documented insufficient activity | Engineering-dependent plus multi-day/week collection | Freezes at most one focused lifecycle generation |
+| Attempt Phase 25 — focused generation | Safety/accounting: 300 closed, complete critical coverage, repeated faults, seven continuous days; economic: 300 closed/100 divergent plus 200 scoreable/100 divergent | At least seven days or multi-day to multi-week, by selected class | Authorizes one final lifecycle review |
+| Attempt Phase 26 — final review | Lifecycle, account tie, intent-to-treat, correction/downside, availability, and rollback checks complete | Manual, once | Separate versioned implementation request or documented null |
 
 Only the current Base Phase 2 row has a calendar estimate. Later rows begin after the preceding written gate and
 engineering activation, so their durations may not be added to claim a delivery date. Under uninterrupted data and
 immediate approvals the arithmetic lower bound is measured in weeks, not days; realistic divergence and execution
 coverage can extend it further. The confirmation clock explicitly does **not** start at the current three-day
-base-signal checkpoint, and the venue clock does not start until confirmation's final retained/promoted handoff.
+base-signal checkpoint, the venue clock does not start until confirmation's final retained/promoted handoff, and
+the portfolio clock does not start until venue candidacy is frozen. The authorization clock does not start until
+portfolio selection is frozen, and the attempt/outcome clock does not start until authorization is frozen.
 
-## 12. Storage and operational design
+## 15. Storage and operational design
 
-### 12.1 Phase 2 activation schema
+### 15.1 Phase 2 activation schema
 
 Phase 2 uses the existing forecast history as its owning store rather than adding a second journal with duplicate
 observation and contract identities. `candidateEvaluation` is written once inside the forecast's issuance `upsert`:
@@ -408,19 +594,28 @@ and order modules are protected by an isolation invariant and contain no candida
 read. A candidate calculation failure fails the advisory forecast append; it cannot alter the already-built
 production prediction, and forecast persistence remains advisory to execution as before.
 
-### 12.2 Phase 3 and later additions
+### 15.2 Phase 3 and later additions
 
-Before raw volatility vectors or V3 manifests activate:
+Before raw volatility vectors, V3 manifests, or later layer journals activate:
 
 - bounded feature vectors are content-addressed and referenced rather than duplicated per candidate;
 - a V3 run manifest includes ordered forecast/content identities and checksums;
+- the full-cycle portfolio generation is separate from immutable `portfolio-choice-set-v1`, records no-order
+  calculations explicitly, and has one owning append/compaction path;
+- portfolio shadow arms keep independent causal state and never write the production exposure, ledger, or budget;
+- authorization manifests store no secret material, remain detached, and cannot be read by control, budget,
+  reconciliation, policy, or order paths;
+- attempt/outcome transition evidence references authoritative ledger revisions and venue identities but never
+  becomes a second order, position, reservation, settlement, or cash ledger;
+- normalized lifecycle corrections append a superseding observation, preserve explicit gaps, and cannot be read by
+  order management, retry, exit, budget, reconciliation, settlement, or policy paths;
 - stateless hosts expose no writer and never evaluate;
 - archive manifests include every new durable tier before activation.
 
 No candidate store may share a budget or order authority with the funded ledger. Observation absence is explicit;
 it never authorizes a production action.
 
-## 13. Validation and documentation
+## 16. Validation and documentation
 
 Every phase requires typecheck and the full test suite. A phase touching the Next.js runtime also requires a
 production build before activation. Structural activation updates `STATUS.md`; a changed production decision

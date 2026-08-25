@@ -4,7 +4,9 @@
 > leak. This is an observation-only evaluation lane under SPEC §12. It changes no forecast, entry gate,
 > persistence rule, regime rule, retry, sizing, portfolio constraint, execution style, budget, order, or
 > exit behavior. Collection begins only when the built runtime initializes the v1 store; no historical
-> choice set is backfilled.
+> choice set is backfilled. The later full-cycle portfolio program is separately approved in
+> [`docs/portfolio-selection-evaluation-design.md`](portfolio-selection-evaluation-design.md); it does not widen,
+> rewrite, or reuse this issued-order cohort as candidate evidence.
 
 ## 1. Decision and question
 
@@ -21,7 +23,8 @@ The next question is narrower and prospective:
 > candidate from the exact state it had, and what did any differing choice earn relative to that candidate?
 
 No alternative ranking formula is being screened. V1 records production's own ranking and execution drain.
-A later ranking candidate requires a separate named design and a new prospective cohort.
+A later ranking candidate requires a separate named design and a new prospective cohort. That requirement is now
+carried by the queued portfolio-selection design above; v1 continues only as its original integrity sentinel.
 
 ## 2. Prospective boundary and unit
 

@@ -27,7 +27,7 @@ A second policy runs on the same market — the long-shot round trip, detailed i
 | Forecast and performance tracking | Collection is implemented; the 2026-08-22 interleaved-writer corruption was repaired into checksum-valid, content-addressed v3 after restoring 88 qualified archived rows. Automatic v3 seals and a 138-file independent Scaleway restore passed on 2026-08-24; aggregate economic conclusions still require recalculation. |
 | Live execution | Kalshi live-capable; repeated-episode identity and known ledger damage are repaired under v6. The operator explicitly resumed live after READY manual reconciliation; the latest dated snapshot above was active with one reconciled reserved open position and no readiness blocker. |
 | Paper execution | Continuous and independently accounted under v6; three-episode generation ownership is repaired, exact prospective four-cell pairing is collecting, and fills remain conservative pending an exact queue-calibration held-out fit |
-| Model evaluation | Evaluator v2 remains barred from promotion and production remains Blend 0.4. Phase 2 prospective `forecast-candidate-registry-v1` collection is active locally from 2026-08-25T03:17:17.456Z; it has no promotion or order authority. Exact-provider confirmed-signal evaluation is queued after the base final review, followed strictly by venue-candidate ownership/attribution and implementation-shortfall evaluation. Automatic evaluator-v2 checkpoints remain retired from the worker. |
+| Model evaluation | Evaluator v2 remains barred from promotion and production remains Blend 0.4. Phase 2 prospective `forecast-candidate-registry-v1` collection is active locally from 2026-08-25T03:17:17.456Z; it has no promotion or order authority. Exact-provider confirmed-signal evaluation is queued after the base final review, followed strictly by venue-candidate, portfolio-selection, live-authorization, and attempt/outcome evaluation. Automatic evaluator-v2 checkpoints remain retired from the worker. |
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
 | Operational safety | Collision-resistant bounded live IDs, exact reconciliation ownership, quiescent drain, account reconciliation, kill switch, and budget/risk ceilings are implemented. Runtime readiness and operator state must be read from the live control surfaces named above, not inferred from this table. |
 
@@ -109,7 +109,7 @@ base version is frozen, because changing the base probability changes which obse
 then requires exact-control grid/25-observation parity, 10-window wiring, 100 closed windows at 95% exact-provider
 outcome coverage, 300 closed windows with 90% per-arm availability and 100 divergent windows, followed by 200
 execution-scoreable and 100 divergent windows before one review. The updated overall timeline is in
-[`docs/forecast-model-and-evaluator-v3-design.md`](docs/forecast-model-and-evaluator-v3-design.md) §11. Only the
+[`docs/forecast-model-and-evaluator-v3-design.md`](docs/forecast-model-and-evaluator-v3-design.md) §14. Only the
 current base Phase 2 has a calendar estimate; the confirmation clock does not begin at its three-day checkpoint.
 No runtime, store, forecast, confirmation, policy, execution, capital, or live authority changed.
 
@@ -136,6 +136,74 @@ confirmation change alters the population, time, side, and quote entering venue 
 provider ranking is explicitly not evidence for multi-provider routing; a second funded provider remains fail-closed
 pending its own exact target, adapter, funding, reconciliation, fill, and routing design. No runtime, store, provider,
 policy, sizing, route, capital, reconciliation, or live authority changed.
+
+### Portfolio-selection evaluation queued after venue candidacy, 2026-08-25
+
+[`docs/portfolio-selection-evaluation-design.md`](docs/portfolio-selection-evaluation-design.md) adds Phases 15–18
+to the strict serial roadmap. It starts only after the venue-candidate final review freezes the exact candidate
+population. The existing `portfolio-choice-set-v1` journal remains an issued-order integrity sentinel; because it
+omits no-order calculations, it cannot evaluate unused capacity, a new ranking formula, or a later promotion
+candidate.
+
+Phase 15 adds a separate observation-only full-cycle generation and requires fault/tie/boundary-grid parity plus 25
+exact live-runtime controls, 10-window wiring, and 100 closed windows with 95% complete decision/outcome coverage
+and complete issued-intent coverage. Phase 16 compares production greedy selection with exhaustive optimization
+under production's own objective, eligibility-before-selection, reranking after a downstream skip, and hard-ceiling-
+only attribution. Its exit is 300 closed windows plus 100 windows with a solver, selector, eligibility-order, or
+rerank difference—or a documented inert/insufficient-activity finding.
+
+Only then may an amendment freeze at most one small stateful family. Every arm must maintain its own causal shadow
+positions and capacity rather than reuse production exposure after choices diverge. Signal readiness requires 300
+closed windows, 90% per-arm availability, and 100 divergent windows; execution readiness requires 200 scoreable,
+90% public-evidence coverage, and 100 divergent windows before one corrected review. The review cannot loosen a
+hard exposure ceiling without separate capital/downside approval. Current production ranking, constraints, sizing,
+capital, execution, and live authority are unchanged.
+
+### Live-authorization evaluation queued after portfolio selection, 2026-08-25
+
+[`docs/live-authorization-evaluation-design.md`](docs/live-authorization-evaluation-design.md) adds Phases 19–22
+to the strict serial roadmap. It starts only after portfolio selection freezes. Existing `live-skip-v1` remains a
+first-blocker episode journal; the new generation records every simultaneous authority result for each portfolio-
+selected exact candidate, including no-intent outcomes, without gaining order or control authority.
+
+Phase 19 requires a pure boundary/fault grid plus 25 exact live-runtime controls, 10-window wiring, and 100 closed
+windows with 95% complete authority/outcome coverage and 100% durable-intent/reservation coverage. Phase 20 tests
+pause, kill, reconciliation, provider/budget revision, strategy funding, duplicate identity, malformed wire terms,
+lost response, crash, fill, cancellation, and recovery boundaries. It requires every declared fault plus 1,000
+seeded schedules per critical pause/reconciliation/reservation race, then 300 closed windows and 100 independent
+authority differences or a documented inert/insufficient-activity result.
+
+Only then may an amendment freeze one focused fail-closed authorization generation: a proven safety repair,
+fencing generation, bounded reconciliation lease, strategy-funding ownership correction, or exact control if no
+repair is justified. Its held-out gate is 300 closed windows, 100 portfolio-selected authorization opportunities,
+95% complete manifests, 100% issued-intent/reservation coverage, and seven continuous days at the configured
+reconciliation cadence before one final review. Safety correctness is decided by fault and invariant evidence, not
+higher return; capital loosening and misplaced economic/lifecycle changes remain separate programs. No runtime,
+control, risk, budget, reconciliation, order, or live authority changed.
+
+### Attempt-and-outcome evaluation queued after live authorization, 2026-08-25
+
+[`docs/attempt-outcome-evaluation-design.md`](docs/attempt-outcome-evaluation-design.md) adds Phases 23–26 as the
+final decision-layer program. It starts only after the live-authorization final review freezes the exact authority
+generation. The shared execution and budget ledgers remain authoritative; a future append-only observer projects
+current behavior into separate intent, venue-order, position, and cash states and cannot be read by policy, order
+management, retry, exit, budget, reconciliation, settlement, or any live authority.
+
+Phase 23 requires a pure valid/impossible-state grid plus 25 terminal live-runtime controls, 10 authorized-intent
+window wiring, and 100 closed authorized-intent windows with 95% diagnostic-transition coverage and 100% critical
+accepted-order, fill, reservation, release, position, and settlement coverage. Phase 24 faults every boundary from
+durable intent through cash, requires 1,000 deterministic seeded schedules per critical submit/accept/fill/cancel/
+reconcile/settle race, then 300 closed authorized-intent windows and 100 nontrivial refusal, rejection, zero-fill,
+partial-fill, uncertainty/recovery, or early-exit paths—or a documented insufficient-activity finding.
+
+Only then may an amendment freeze one mutually exclusive generation: a lifecycle/provenance, recovery/ownership/
+cancellation/settlement, or exact/whole-cent accounting repair; one focused post-authorization economic management
+family; or exact production control. Safety/accounting validation requires a new 300-window cohort, complete
+critical ownership/money coverage, repeated fault gates, and seven continuous days without an unexplained gap.
+Economic validation requires 300 closed/100 divergent windows followed by 200 execution-scoreable/100 divergent
+windows. The final review keeps execution disposition separate from economic outcome and exact P&L separate from
+whole-cent budget control. No status, schema, route, retry, management, reconciliation, settlement, accounting, or
+funded behavior changed.
 
 ### Object archive restored independently and rebuildable caches reclaimed, 2026-08-24
 
@@ -1404,10 +1472,13 @@ promote a policy. Design: [docs/portfolio-choice-set-journal-design.md](docs/por
 Run `npm run analyze:portfolio-choice-sets`.
 
 The initial deployment boundary was **0 records / 0 windows** and no historical order was backfilled.
-At the fresh 2026-08-22T05:32Z replay, collection held 410 records across 152 resolved windows, with zero
-integrity failures and zero missing post-boundary live edge orders. Production and replay selected the same
-contract in all 410 records, so the 20-differing-window review remains locked. This is a null ranking sample,
-not evidence that the journal can discriminate choices.
+At the fresh **2026-08-25T04:35:52Z** replay, collection held **852 records**, 851 scoreable, across **323
+independent windows**, with one unresolved record, zero integrity failures, and zero missing post-boundary live edge
+orders. Issued and production-preferred choices matched in all 851 scoreable records and both returned +17.4%, so
+the paired difference was 0.0pp and the 20-differing-window review remains locked. This proves conditional issuance
+integrity; because v1 records only issued orders, it does not test the economic ranking formula, no-order cycles,
+or downstream unused capacity. The separately queued full-cycle portfolio plan starts a new prospective generation
+only after venue candidacy freezes.
 
 ### Edge policy v17, reviewed 2026-08-17
 

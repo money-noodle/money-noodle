@@ -3,7 +3,8 @@
 > **Status:** Approved analysis plan, queued strictly after the confirmed-signal final review in
 > [`docs/confirmed-signal-evaluation-design.md`](confirmed-signal-evaluation-design.md). No venue-candidate
 > observation family is collecting, and this document changes no forecast, buy policy, confirmation, sizing,
-> portfolio, execution, capital, reconciliation, or live authority.
+> portfolio, execution, capital, reconciliation, or live authority. Its final retained/promoted handoff is the
+> prerequisite for the separately approved portfolio-selection program.
 
 ## 1. Question
 
@@ -247,7 +248,9 @@ The serial handoff is:
 6. freeze at most one small prospective venue-economic family;
 7. collect separate signal and execution evidence;
 8. perform one corrected review;
-9. consider a separate manual policy/ownership change, or record the null result.
+9. freeze the retained or separately promoted exact venue-candidate definition;
+10. only then permit the portfolio-selection parity phase in
+    [`docs/portfolio-selection-evaluation-design.md`](portfolio-selection-evaluation-design.md) to start.
 
 Counts and dates never promote automatically. Any change affecting the shared buy rule, confirmation, sizing,
 provider capabilities, route, portfolio, funding, or live authorization receives its own version and decision
