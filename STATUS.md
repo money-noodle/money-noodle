@@ -6,10 +6,10 @@
 > **Operational-state warning:** this document records dated snapshots; it is not a live interlock or the
 > authority for whether funded execution is running. Before any operational action, read the authenticated
 > Automation surface and `data/trading-control.json`. At the latest operational snapshot, the control record
-> updated at 2026-08-25T06:32:24.733Z was operator-paused / `live`, revision 6,569, with 2,094¢ available,
-> zero reserved, zero live open orders, and operator intent paused. Startup reconciliation completed READY and the
-> execution drain was quiescent/restart-safe at 2026-08-25T06:32:24.832Z. The operator pause was the manual
-> maintenance boundary for loading F2 and was not automatically resumed. That state may change after publication.
+> updated at 2026-08-25T06:46:43.218Z was active / `live`, revision 6,570, with 2,094¢ available, zero
+> reserved, zero live open orders, and operator intent active after an explicit maintainer-requested resume. The
+> preceding periodic reconciliation completed READY at 2026-08-25T06:42:59.605Z with balances, positions, orders,
+> fills, IDs, resting orders, and reservations in agreement. That state may change after publication.
 
 ## Executive Summary
 
@@ -25,7 +25,7 @@ A second policy runs on the same market — the long-shot round trip, detailed i
 | --- | --- |
 | Dashboard and public paper track record | Functional locally and hosted; bounded summary/full-report split implemented. Managed Postgres access recovered and durable production projections returned 200 after the 2026-08-22 deployment. |
 | Forecast and performance tracking | Collection is implemented; the 2026-08-22 interleaved-writer corruption was repaired into checksum-valid, content-addressed v3 after restoring 88 qualified archived rows. Automatic v3 seals and a 138-file independent Scaleway restore passed on 2026-08-24; aggregate economic conclusions still require recalculation. |
-| Live execution | Kalshi live-capable; repeated-episode identity is repaired under v6. The latest dated snapshot is operator-paused, READY, zero-reserved, and restart-safe after F2 maintenance; funded automation was not automatically resumed. |
+| Live execution | Kalshi live-capable; repeated-episode identity is repaired under v6. After READY/zero-reserved F2 maintenance, the maintainer explicitly resumed funded automation; the latest dated snapshot is active with no blocker. |
 | Paper execution | Continuous under neutral v6; exact prospective pairing is collecting. F1 is complete and the built F2 timing observer is loaded, but its evidence clock awaits the first eligible durable paper maker decision. |
 | Model evaluation | Evaluator v2 remains barred from promotion and production remains Blend 0.4. Phase 2 prospective `forecast-candidate-registry-v1` collection is active locally from 2026-08-25T03:17:17.456Z; it has no promotion or order authority. Exact-provider confirmed-signal evaluation is queued after the base final review, followed strictly by venue-candidate, portfolio-selection, live-authorization, and attempt/outcome evaluation. Automatic evaluator-v2 checkpoints remain retired from the worker. |
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
@@ -118,10 +118,12 @@ zero-reserved, reconciliation READY, and quiescent/restart-safe. The already-bui
 startup reconciliation READY at revision 6,569 / 2026-08-25T06:32:24.832Z. It remains manually paused; funded
 execution was not resumed implicitly, while paper collection continues.
 
-The new process has loaded F2, but no eligible paper maker appeared in the first three minutes and
+The new process has loaded F2, but no eligible paper maker appeared before the explicit live resume and
 `data/paper-execution-timing-shadows.journal.jsonl` remained absent. Therefore the prospective F2 clock has **not**
-been backdated to restart: activation is the timestamp of the first durable timing decision. Reproduce the zero-row
-boundary with `npm run analyze:paper-execution-timing`.
+been backdated to restart or resume: activation is the timestamp of the first durable timing decision. At
+2026-08-25T06:46:43.218Z the maintainer explicitly resumed live from READY reconciliation with zero reservations,
+so future exact paper/live maker pairs can now score acceptance; no funded state was resumed automatically.
+Reproduce the zero-row boundary with `npm run analyze:paper-execution-timing`.
 
 ### Opportunity decision introduction and UI vocabulary aligned, 2026-08-24
 
