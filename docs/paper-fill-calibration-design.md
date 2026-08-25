@@ -2,7 +2,12 @@
 
 Status: approved in prose by the maintainer on 2026-08-21 and implemented. This design preceded
 implementation. Scope: ship the machinery (`queueClearFraction: 0` = exact current model, fresh v6
-cohort), provide the held-out re-evaluation, no funded-execution or rule change.
+cohort), provide the held-out re-evaluation, no funded-execution or rule change. The evaluator denominator was
+corrected on 2026-08-25 to require an accepted live order plus the same maker route and quantity; post-only create
+races and route/quantity differences occur before queue placement and are not queue-calibration evidence. Phase F1
+of [`paper-execution-fidelity-v2-design.md`](paper-execution-fidelity-v2-design.md) also repaired the implementation
+to apply the fraction at every newly joined queue, including a price-changing amendment, while proving the active
+neutral value exactly preserves v6 behavior.
 
 ## 0. Decision
 
@@ -57,10 +62,11 @@ held-out analysis to say when a calibration is justified.
 
 ### 3.1 The one tunable
 
-`queueClearFraction` — the fraction of the initial displayed-ahead queue cleared **ahead of any
-applied** by realism (cancellations + FIFO advancement). Bounded `[0, 0.5)` so a paper order can
-never be assumed to skip more than half its shown depth. Default **`0` = today's exact model**.
-At every reprice reset, the initial quantity is composed the fraction:
+`queueClearFraction` — the fraction of each newly joined displayed-ahead queue cleared by the
+cancellation/FIFO-advance proxy before aggressive prints are applied. Bounded `[0, 0.5)` so a paper order can
+never be assumed to skip more than half its shown depth. Default **`0` = today's exact model**. At initial
+acceptance, later recovery from unavailable depth, and every price-changing amendment, the displayed quantity is
+transformed by the same fraction:
 
 ```
 effectiveInitialAhead = floor(displayedAhead * (1 - queueClearFraction) + 1e-9)   // toward zero
@@ -131,7 +137,8 @@ faithfully re-simulated from the durable ledger after the fact, and this review 
 It reports instead:
 
 - the current model's held-out cells (both / paper-only / live-only / neither) and agreement, capture
-  and precision on the **second half of settlement windows**;
+  and precision on the **second half of settlement windows**, conditional on an accepted live maker with the same
+  paper/live route and requested quantity;
 - the **structural upper bound** of any queue-shortening recovery: the live-only filled rows paper's
   model refused, summed realized P&L;
 - the evaluator selects exactly the active paper execution cohort before creating its held-out split and
@@ -156,7 +163,7 @@ and the paper execution version history.
 | --- | --- |
 | `lib/paper-fill-calibration.ts` | pure model: bounded parameter, `applyQueueClearFraction`, versioning contract |
 | `lib/paper-fill-calibration-store.ts` | durable atomic store; read active calibration, manual adopt |
-| `lib/paper-maker-simulation.ts` | accept calibration input in the maker queue model; apply at initial reset; no default behavior change |
+| `lib/paper-maker-simulation.ts` | accept calibration input in the maker queue model; apply whenever a new queue is joined; no neutral behavior change |
 | `lib/paper-execution.ts` | load active calibration and pass through `managePaperMakerOrder`; bump paper version + record calibration on orders |
 | `lib/types.ts` | calibration field on orders; history store types |
 | `scripts/analyze-paper-fill-calibration.mjs` | held-out re-evaluation (read-only) |
@@ -166,8 +173,9 @@ and the paper execution version history.
 
 Required tests:
 
-- `queueClearFraction: 0` produces byte-identical fills to the current model;
-- positive values reduce the initial ahead with exact arithmetic (floor + 1e-9) and never go negative;
+- `queueClearFraction: 0` produces an exactly equal complete simulation with or without an explicit calibration;
+- positive values reduce initial, recovered, and amended queue-ahead proxies with exact arithmetic (floor + 1e-9)
+  and never go negative;
 - bounds reject `>= 0.5` and `NaN`; exactly-arithmetic edge (float-representation landing) is pinned;
 - store atomic write + manual adoption appends immutable history and never auto-promotes;
 - calibration never reads a live fill field (independent simulation);

@@ -23,6 +23,7 @@
     "analyze:maker-fills": "node --max-old-space-size=6144 scripts/analyze-maker-fills.mjs",
     "analyze:paper-live-mirror": "node scripts/analyze-paper-live-mirror.mjs",
     "analyze:paper-fill-calibration": "node scripts/analyze-paper-fill-calibration.mjs",
+    "analyze:paper-settlement": "node scripts/analyze-paper-settlement-health.mjs",
     "experiment:fine-paths": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/experiment-fine-paths.ts",
     "verify:forecast-storage": "jiti scripts/verify-forecast-storage.ts",
     "repair:forecast-storage": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/repair-forecast-storage.ts",

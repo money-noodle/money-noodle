@@ -4,8 +4,8 @@ import 'server-only';
  * Paper fill calibration: a versioned, bounded parameter held by the independent paper maker queue
  * simulation so it can reproduce the venue's real fill frequency without ever reading a live fill.
  *
- * The one tunable models cancellation/fifo advance: how much of the *initial displayed* queue ahead
- * is cleared by predecessor cancellations and shared priority before aggressive prints arrive. The
+ * The one tunable models cancellation/fifo advance: how much of each newly joined displayed queue
+ * ahead is cleared by predecessor cancellations and shared priority before aggressive prints arrive. The
  * default is exact-current behavior (queueClearFraction=0). A non-zero value is adopted only by an
  * explicit, recorded manual act with held-out evidence (SPEC §12.5, AGENTS.md §5.5); it is never
  * read from a live order on any entry row.
@@ -29,7 +29,7 @@ export function paperExecutionGeneration(version: string): number | undefined {
 
 export interface PaperFillCalibration {
   version: typeof PAPER_FILL_CALIBRATION_VERSION;
-  /** Fraction of the initial displayed queue ahead treated as cancelled / FIFO-advanced. [0, 0.5) */
+  /** Fraction of each newly joined displayed queue ahead treated as cancelled / FIFO-advanced. [0, 0.5) */
   queueClearFraction: number;
   /** Identity of the paper execution cohort this calibration was validated under. */
   appliedToPaperExecution: string;
@@ -69,11 +69,11 @@ export function isPaperFillCalibration(input: unknown): input is PaperFillCalibr
 }
 
 /**
- * Applies the queue-clear fraction to a displayed initial queue ahead. Pure and exact: rounds toward
- * zero with the standard 1e-9 epsilon so a value landing on a float-representation edge stays below
- * the cap and never negative or non-finite.
+ * Applies the queue-clear fraction whenever paper joins a displayed queue: initial acceptance, later
+ * recovery from unavailable depth, or a price-changing amendment. Pure and exact: rounds toward zero
+ * with the standard 1e-9 epsilon so a float-representation edge stays below the cap and never negative.
  */
-export function effectiveInitialQueueAhead(displayedAhead: number | undefined, fraction: number): number | undefined {
+export function effectiveQueueAhead(displayedAhead: number | undefined, fraction: number): number | undefined {
   if (displayedAhead === undefined || !Number.isFinite(displayedAhead) || displayedAhead < 0) return undefined;
   // The neutral fraction must reproduce the exact upstream value for any incoming displayed-ahead
   // (including sub-unit proxies) rather than flooring it, so a zero calibration can never alter v5.

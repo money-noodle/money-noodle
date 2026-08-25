@@ -3,7 +3,7 @@ import { selectedSideDepth } from './order-book-depth';
 import type { EntryExecutionObservation, PositionSide } from './types';
 import type { KalshiTradePrint } from './kalshi-market-data';
 import {
-  PAPER_NEUTRAL_EXECUTION_VERSION, effectiveInitialQueueAhead, type PaperFillCalibration,
+  PAPER_NEUTRAL_EXECUTION_VERSION, effectiveQueueAhead, type PaperFillCalibration,
 } from './paper-fill-calibration';
 
 /**
@@ -59,7 +59,7 @@ export interface PaperMakerSimulationDependencies {
   pollMs?: number;
   /** Synchronous observability hook for the on-demand quote; it must not perform I/O. */
   onInitialQuoteSettled?: (error?: unknown) => void;
-  /** Versioned calibration of the initial queue-clear fraction. Never read from a live fill. */
+  /** Versioned calibration applied whenever paper joins a queue. Never read from a live fill. */
   calibration?: PaperFillCalibration;
 }
 
@@ -140,7 +140,7 @@ export async function simulateManagedPaperMaker(input: {
   const restingUntil = new Date(acceptedAtMs + checks * pollMs).toISOString();
   const initialDepth = selectedSideDepth(initialQuote.orderBook, input.side, initialQuote.bid, initialQuote.ask, initialPrice);
   const queueClearFraction = dependencies.calibration?.queueClearFraction ?? 0;
-  const initialAhead = effectiveInitialQueueAhead(initialDepth.displayedAhead, queueClearFraction);
+  const initialAhead = effectiveQueueAhead(initialDepth.displayedAhead, queueClearFraction);
   const observations: EntryExecutionObservation[] = [{
     at: submittedAt, event: 'paper_submitted', selectedBid: initialQuote.bid, selectedAsk: initialQuote.ask,
     spread: initialQuote.ask - initialQuote.bid, limitPrice: initialPrice, remainingCount: input.requestedCount,
@@ -181,7 +181,9 @@ export async function simulateManagedPaperMaker(input: {
       filledCount: Number(state.filledCount.toFixed(2)), remainingCount: Number((input.requestedCount - state.filledCount).toFixed(2)),
       touched: latestQuote.ask <= state.currentLimit + 1e-9, ...depth,
     });
-    if (state.queueAhead === undefined && depth.displayedAhead !== undefined) state.queueAhead = depth.displayedAhead;
+    if (state.queueAhead === undefined && depth.displayedAhead !== undefined) {
+      state.queueAhead = effectiveQueueAhead(depth.displayedAhead, queueClearFraction);
+    }
     const nextPrice = nextManagedMakerPrice({
       quote: latestQuote, maximumPrice: input.maximumPrice, currentPrice: state.currentLimit,
       managementAttempt: attempt, managementChecks: checks,
@@ -189,9 +191,9 @@ export async function simulateManagedPaperMaker(input: {
     if (nextPrice <= state.currentLimit + 1e-10) continue;
     state.currentLimit = nextPrice;
     const amendedDepth = selectedSideDepth(latestQuote.orderBook, input.side, latestQuote.bid, latestQuote.ask, nextPrice);
-    // Moving up loses the old queue position and joins behind every displayed bid at the new price or
-    // better. This is intentionally conservative; private queue rank is not observable.
-    state.queueAhead = amendedDepth.displayedAhead;
+    // Moving up loses the old queue position and joins behind the calibrated displayed proxy at the
+    // new price or better. The neutral fraction is exact prior behavior; private rank remains unknown.
+    state.queueAhead = effectiveQueueAhead(amendedDepth.displayedAhead, queueClearFraction);
     observations.push({
       at: new Date(now()).toISOString(), event: 'amend_accepted', selectedBid: latestQuote.bid,
       selectedAsk: latestQuote.ask, spread: latestQuote.ask - latestQuote.bid, limitPrice: nextPrice,

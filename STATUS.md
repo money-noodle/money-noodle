@@ -26,10 +26,66 @@ A second policy runs on the same market — the long-shot round trip, detailed i
 | Dashboard and public paper track record | Functional locally and hosted; bounded summary/full-report split implemented. Managed Postgres access recovered and durable production projections returned 200 after the 2026-08-22 deployment. |
 | Forecast and performance tracking | Collection is implemented; the 2026-08-22 interleaved-writer corruption was repaired into checksum-valid, content-addressed v3 after restoring 88 qualified archived rows. Automatic v3 seals and a 138-file independent Scaleway restore passed on 2026-08-24; aggregate economic conclusions still require recalculation. |
 | Live execution | Kalshi live-capable; repeated-episode identity and known ledger damage are repaired under v6. The operator explicitly resumed live after READY manual reconciliation; the latest dated snapshot above was active with one reconciled reserved open position and no readiness blocker. |
-| Paper execution | Continuous and independently accounted under v6; three-episode generation ownership is repaired, exact prospective four-cell pairing is collecting, and fills remain conservative pending an exact queue-calibration held-out fit |
+| Paper execution | Continuous and independently accounted under neutral v6; exact prospective pairing is collecting. Fidelity Phase F1 now proves neutral queue-reset parity and separates acceptance, accepted-order queue, and settlement attribution; timing/queue candidate shadows remain unactivated. |
 | Model evaluation | Evaluator v2 remains barred from promotion and production remains Blend 0.4. Phase 2 prospective `forecast-candidate-registry-v1` collection is active locally from 2026-08-25T03:17:17.456Z; it has no promotion or order authority. Exact-provider confirmed-signal evaluation is queued after the base final review, followed strictly by venue-candidate, portfolio-selection, live-authorization, and attempt/outcome evaluation. Automatic evaluator-v2 checkpoints remain retired from the worker. |
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
 | Operational safety | Collision-resistant bounded live IDs, exact reconciliation ownership, quiescent drain, account reconciliation, kill switch, and budget/risk ceilings are implemented. Runtime readiness and operator state must be read from the live control surfaces named above, not inferred from this table. |
+
+### Paper settlement operationally healthy but last-day economics negative, 2026-08-25
+
+The fixed 24-hour review ending 2026-08-25T05:15:00Z found 183 edge-paper attempts across 68 settlement windows:
+48 fills, 135 confirmed no-fills, zero rejected/nonterminal rows, and no currently overdue paper position with a
+close at or before that boundary. Forty ordinary binary outcomes settled in 14.168 seconds median / 35.117 seconds
+p95; one BNB outcome took 364.977 seconds and
+left no reservation or accounting contradiction. Execution-ledger v9 verification passed, and the 10,000¢ paper
+bankroll tied exactly to −3,258¢ whole-cent realized P&L, 0¢ open stake, and 6,742¢ available.
+
+Economic performance did not share that health. The 48 terminal fills over 37 independent windows lost **398.481¢
+exact on 1,250¢**, or −31.88% aggregate ROI and −30.93% ±15.77pp settlement-window-clustered standard error. SOL
+and DOGE supplied 364.544¢ / 91.5% of the exact loss. Eight sold positions were 53.519¢ better than hold, so exits
+did not explain the day's loss. End-to-end fidelity over 161 exact pairs / 67 windows was 80.1%, but 12 of 14
+paper-only fills occurred when live never accepted a working order: 10 post-only acknowledgement races and two
+reconciled-absent intents. Conditional on 125 same-route, same-quantity accepted live makers, paper agreement was
+84.8%, live-fill capture 58.5%, and paper-positive precision 92.3%. Paper therefore assumes acceptance too early
+while remaining conservative after comparable acceptance. The corrected broader held-out queue review now has 94
+accepted-maker windows at 85.8% agreement, 67.6% capture, and 88.5% precision. Every one of the last day's 116
+classified maker misses carried all six two-second trade reads; consuming-print observation lag was 1.221 seconds
+median / 2.072 seconds p95. Faster whole-horizon polling is therefore not the first repair. A prospective final
+read-after-horizon grace and separate sub-second create/acknowledgement model are better-scoped candidates. Private
+FIFO rank and cancellations remain unobserved, and neither cohort authorizes a calibration or policy conclusion.
+
+The public compact/full performance and budget endpoints returned 200 in 0.119/0.308/0.116 seconds at the check;
+the compact projection was about 41 seconds old and the full projection about seven minutes old. The lifetime
+public edge-paper record was −3,800.552¢ exact / −6.23% on cumulative stake, while the separately labelled
+whole-cent bankroll was −3,258¢ with a 0¢ residual. Forecast accuracy, paper execution P&L, and budget control are
+not interchangeable. `npm run analyze:paper-settlement` now reproduces rolling last/prior-day settlement, money,
+latency, fidelity, and bankroll checks without writing durable data. Full method and caveats:
+[`reports/paper-settlement-health-2026-08-25.md`](reports/paper-settlement-health-2026-08-25.md). No forecast, paper
+fill, exit, bankroll, public projection, or funded behavior changed.
+
+### Paper-execution fidelity Phase F1 establishes exact neutral control, 2026-08-25
+
+[`docs/paper-execution-fidelity-v2-design.md`](docs/paper-execution-fidelity-v2-design.md) adds a four-stage
+workstream alongside—but not inside or ahead of—the strict seven-layer decision roadmap. F2 will prospectively
+separate the sub-second create/acknowledgement race from one event-time-bounded read-after-horizon evidence grace;
+F3 will score a frozen queue-clear family only after comparable live acceptance; F4 will validate at most one
+combined generation. None is activated by F1, and a retained or manually adopted paper generation must be frozen
+before any later serial execution-evidence cohort uses it.
+
+F1 repairs one dormant calibration-ownership discrepancy. The approved `queueClearFraction` definition applies
+when paper joins each displayed queue, but implementation applied it only initially. The pure transformation now
+owns initial acceptance, later recovery from unavailable depth, and every price-changing amendment. Complete
+simulations with no calibration and an explicit neutral zero calibration are exactly equal; a manager test proves
+a nonzero candidate applies after an amendment. The active store remains absent/neutral, so execution stays
+`paper-managed-execution-route-ioc-requalify3-calibrated-v6`; no paper result, bankroll entry, public projection,
+or funded path changes and no runtime restart is required.
+
+The corrected calibration analyzer now excludes open rows and narrows queue scoring to accepted same-route,
+same-quantity maker pairs. The rolling settlement analyzer separately reports acceptance attribution, comparable
+queue fidelity, six-read coverage, public-read latency, and consuming-print observation lag. Phase F1 validation
+passed typecheck, 145 test files / 1,136 tests, lint with 37 inherited warnings and no errors, execution-ledger v9
+verification over 4,626 rows, and `git diff --check`. F2 remains a proposal requiring separate
+implementation review and does not yet add requests or evidence storage.
 
 ### Opportunity decision introduction and UI vocabulary aligned, 2026-08-24
 

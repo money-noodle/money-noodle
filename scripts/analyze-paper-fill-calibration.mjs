@@ -75,7 +75,10 @@ const orders = ledger.orders ?? [];
 const entries = orders.filter((order) => !order.id.includes(':exit:') && (order.strategyId ?? EDGE) === EDGE);
 const executionVersion = (order) => order.entryDecision?.executionPolicyVersion ?? order.executionPolicyVersion;
 const filled = (order) => (order.filledCount ?? 0) > 1e-8;
-const terminal = (order) => !['pending_reservation', 'uncertain'].includes(order.status);
+const terminal = (order) => !['pending_reservation', 'uncertain', 'open'].includes(order.status);
+const route = (order) => order.paperEntryRoute ?? order.entryExecutionDecision?.executedStyle
+  ?? order.liquidityRole ?? 'unknown';
+const requestedQuantity = (order) => order.requestedQuantity ?? order.quantity;
 
 const grouped = new Map();
 for (const order of entries) {
@@ -92,10 +95,16 @@ for (const rows of grouped.values()) {
   if (terminal(paper[0]) && terminal(live[0])) pairs.push({ paper: paper[0], live: live[0] });
 }
 
-const windows = [...new Set(pairs.map((pair) => pair.paper.closesAt))].sort();
+// Queue calibration begins only after both lanes chose the same maker terms and live proved venue
+// acceptance. A post-only create race or route/quantity difference is an earlier lifecycle mismatch,
+// not evidence that the paper queue was too long or short.
+const comparablePairs = pairs.filter((pair) => Boolean(pair.live.venueOrderId)
+  && route(pair.paper) === 'maker' && route(pair.live) === 'maker'
+  && Math.abs(requestedQuantity(pair.paper) - requestedQuantity(pair.live)) <= 1e-8);
+const windows = [...new Set(comparablePairs.map((pair) => pair.paper.closesAt))].sort();
 const half = Math.ceil(windows.length / 2);
 const heldOut = new Set(windows.slice(half));
-const rows = pairs.filter((pair) => heldOut.has(pair.paper.closesAt));
+const rows = comparablePairs.filter((pair) => heldOut.has(pair.paper.closesAt));
 
 let both = 0, paperOnly = 0, liveOnly = 0, neither = 0;
 let liveOnlyPnlSource = 0;
@@ -114,8 +123,10 @@ const percent = (value) => value === null ? '—' : `${(value * 100).toFixed(1)}
 
 console.log(`# Paper fill calibration held-out review — ${new Date().toISOString()}`);
 console.log(`paper execution cohort: ${selectedPaperExecution}`);
-console.log(`ledger rows ${orders.length} | cohort-paired terminal intents ${pairs.length} in ${windows.length} settlement windows`);
-console.log(`held-out windows evaluated: ${heldOut.size}`);
+console.log(`ledger rows ${orders.length} | exact terminal pair identities ${pairs.length}`);
+console.log(`accepted same-route/same-quantity maker pairs ${comparablePairs.length} in ${windows.length} settlement windows`);
+console.log(`excluded before queue comparison: ${pairs.length - comparablePairs.length}`);
+console.log(`held-out accepted-maker windows evaluated: ${heldOut.size}`);
 console.log(`cells both / paper-only / live-only / neither: ${both} / ${paperOnly} / ${liveOnly} / ${neither}`);
 console.log(`agreement ${percent(agreement)} | paper capture of live fills ${percent(capture)} | paper-positive precision ${percent(both / (both + paperOnly))}`);
 

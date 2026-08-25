@@ -2,9 +2,11 @@
 
 > **Status:** Phase 1 implemented on 2026-08-24. Phase 2 prospective collection activated locally at
 > 2026-08-25T03:17:17.456Z. Confirmed-signal, venue-candidate, portfolio-selection, live-authorization, and
-> attempt-and-outcome reviews are approved next in strict layer order. Every later phase remains observation-only
-> and must clear its milestone review before the next phase is activated. This design changes no production
-> forecast, buy policy, execution, capital, accounting, or live authority by itself.
+> attempt-and-outcome reviews are approved next in strict layer order. A separate paper-execution fidelity
+> workstream began exact-control Phase F1 on 2026-08-25; it does not advance a decision layer and must freeze its
+> execution generation before any serial execution-evidence phase uses paper as a control. Every later phase remains
+> observation-only and must clear its milestone review before the next phase is activated. This design changes no
+> production forecast, buy policy, execution, capital, accounting, or live authority by itself.
 
 ## 1. Decision
 
@@ -46,6 +48,12 @@ authorization in four, and attempt/outcome lifecycle in four final phases:
 
 No phase automatically starts the next, changes production, or grants promotion eligibility. Evaluator v2 remains
 monitoring-only history and is never rewritten into v3 evidence.
+
+The parallel paper-simulator repair is governed by
+[`docs/paper-execution-fidelity-v2-design.md`](paper-execution-fidelity-v2-design.md): F1 exact-control parity,
+F2 prospective create/acknowledgement and read-after-horizon timing shadows, F3 one prospective queue family, and
+F4 one combined held-out generation. It may not change the paper execution identity during a serial execution
+cohort; the retained or separately adopted generation must be frozen before Base Phase 5.
 
 ## 2. Boundaries
 
@@ -526,6 +534,26 @@ latency, partial/full/no-fill cohorts, implementation shortfall, fill selection,
 legacy/unavailable evidence, and rollback. A safety/accounting repair succeeds by closing its fault; an economic
 family must clear its predeclared paired execution and downside tests. Any production schema, lifecycle, retry,
 management, reconciliation, settlement, or accounting change remains a separate manual proposal.
+
+## 13A. Parallel paper-execution fidelity workstream
+
+The approved execution-simulator plan is
+[`docs/paper-execution-fidelity-v2-design.md`](paper-execution-fidelity-v2-design.md). It is not Phase 27 and does
+not follow or bypass the serial opportunity-decision layers. Its purpose is to make later public execution evidence
+a better independent approximation of live while preserving the mirror invariant and paper accounting.
+
+| Fidelity stage | Gate | Advancement |
+| --- | --- | --- |
+| F1 — exact-control parity | queue-reset grid, explicit-neutral versus absent-calibration simulation equality, corrected lifecycle denominators, typecheck/tests | permits an F2 implementation proposal only |
+| F2 — timing shadows | 300 exact maker-pair windows, 30 live create races, 95% coverage, no request/latency effect | freezes retained acceptance and final-evidence mechanics |
+| F3 — accepted-order queue family | 300 accepted-maker windows, 90% per-arm availability, 100 divergent windows, declared correction | locks at most one queue candidate |
+| F4 — combined held-out generation | 300 exact-pair windows, 100 divergent outcomes, accounting ties, fidelity/non-regression and isolation gates | permits a separate manual paper-generation adoption request or a recorded null |
+
+F1 changes no result under the active neutral calibration. F2–F4 are detached shadows until a separate manual
+adoption. Two-second ordinary management remains fixed; only create/acknowledgement receives sub-second study, and
+a read-after-horizon grace may recover event-time-bounded evidence without extending the 12-second order horizon.
+If this workstream is still unsettled when Base Phase 5 becomes otherwise ready, Phase 5 must either freeze and cite
+the retained v6 control for its whole cohort or wait; it may not blend paper execution generations.
 
 ## 14. Overall serial timeline
 
