@@ -1,9 +1,10 @@
 # Forecast model boundary and evaluator v3 design
 
 > **Status:** Phase 1 implemented on 2026-08-24. Phase 2 prospective collection activated locally at
-> 2026-08-25T03:17:17.456Z. Later phases are approved as an ordered research plan, but each remains
-> observation-only and must clear its milestone review before the next phase is activated. This design changes no
-> production forecast, buy policy, execution, capital, or live authority by itself.
+> 2026-08-25T03:17:17.456Z. Confirmed-signal and venue-candidate reviews are approved next in strict layer order.
+> Every later phase remains observation-only and must clear its milestone review before the next phase is
+> activated. This design changes no production forecast, buy policy, execution, capital, or live authority by
+> itself.
 
 ## 1. Decision
 
@@ -13,7 +14,7 @@ candidate easy to score under a formula, side, venue, cost, or policy that produ
 monitoring-only evaluator v2 has exhibited all of those failures and cannot support promotion.
 
 Implement the base-signal improvement plan in six gated phases, then evaluate the confirmed-signal layer in four
-strictly serial phases:
+strictly serial phases, then evaluate exact-provider venue candidacy in four more:
 
 1. extract one pure, versioned forecast-model boundary while proving production equivalence;
 2. commit prospective candidate outputs with no order authority;
@@ -24,7 +25,11 @@ strictly serial phases:
 7. implement and parity-test the exact-provider five-arm confirmation family;
 8. collect its prospective signal lane;
 9. shadow-execute at most one locked confirmation candidate;
-10. perform one corrected confirmation review.
+10. perform one corrected confirmation review;
+11. classify and parity-test venue-candidate safety, economic, capital, and diagnostic checks;
+12. collect current-rule venue attribution and implementation-shortfall evidence;
+13. freeze and prospectively score at most one small venue-economic family;
+14. perform one corrected venue-candidate review.
 
 No phase automatically starts the next, changes production, or grants promotion eligibility. Evaluator v2 remains
 monitoring-only history and is never rewritten into v3 evidence.
@@ -304,7 +309,53 @@ different-choice windows; delay cost; unavailable classes; and the predeclared H
 production comparisons. Counts only open manual review. A successful result permits a separate policy design and
 manual promotion request; a null result is recorded and production remains unchanged.
 
-## 10. Overall serial timeline
+## 10. Phases 11–14 — venue-candidate evaluation, in series
+
+The approved third decision-layer plan is
+[`docs/venue-candidate-evaluation-design.md`](venue-candidate-evaluation-design.md). It starts only after the
+confirmed-signal final review freezes an exact-provider confirmation rule. It asks which venue checks actually
+select a cohort and whether displayed value survives quote refresh, submitted limit, fill selection, fees, and
+exit.
+
+### Phase 11 — ownership, safety, and exact-control parity
+
+Classify each current check as safety/mechanical feasibility, economic selection, capital/portfolio, execution
+lifecycle, live authorization, or diagnostic. Strengthen the observation contract around exact provider variant,
+contract provenance, side, close, quote time, lattice, and same-provider outcome. Record—not yet change—misplaced
+ownership such as sizing, cash, cooldown, route, and portfolio state.
+
+**Exit:** fault grid plus 25 live-runtime calculation observations with zero production identity, candidate-build,
+or rejection mismatch. No economic clock starts before parity.
+
+### Phase 12 — current-rule attribution and implementation shortfall
+
+Prospectively record every exact-provider confirmed signal through construction quote, exact pre-submit quote,
+submitted limit, public simulated or authoritative fill/no-fill, fees, exit, and terminal outcome. Attribute every
+current refusal, all simultaneous reasons, duplicate gates, unavailable evidence, and disagreement with later live
+authorization.
+
+**Milestones:** 10-window wiring; 100 closed windows with at least 95% exact-provider coverage; then 300 closed
+windows and 100 windows where a current economic selector independently changes a candidate, or a written finding
+that the selector is inert/insufficiently active. This diagnostic cohort may select a hypothesis and may never
+promote the threshold selected from it.
+
+### Phase 13 — focused prospective venue family
+
+After the attribution report, write an amendment freezing a small new-outcome family. Candidate areas may include
+the 10-cent economic spread ceiling, route-specific spread, or explicit quote-age/implementation-shortfall rules;
+none is preselected by this roadmap. Sizing and future multi-provider ranking remain separate families.
+
+**Exit:** a new prospective cohort with 300 closed signal windows, 90% per-arm availability, 100 materially
+divergent windows, then 200 execution-scoreable windows with 90% public-evidence coverage and 100 divergent
+windows. Signal and execution results remain separate.
+
+### Phase 14 — one corrected venue review
+
+Report displayed, construction, pre-submit, submitted, and deployable value without smoothing their disagreement;
+apply the predeclared family-wise correction; and record inert, misplaced, null, or positive findings equally. A
+successful result permits only a separate ownership/policy design and manual promotion request.
+
+## 11. Overall serial timeline
 
 | Serial stage | Earliest evidence gate | Planning duration after activation | Advancement |
 | --- | --- | --- | --- |
@@ -316,17 +367,21 @@ manual promotion request; a null result is recorded and production remains uncha
 | Confirmation Phase 7 — engineering | Grid plus 25 exact-control observations | Engineering-dependent | Starts confirmation evidence only after parity |
 | Confirmation Phase 8 — five-arm signal lane | 300 closed plus 100 divergent | At least 75 hours; divergence may control | Lock at most one candidate |
 | Confirmation Phase 9 — execution shadow | 200 scoreable plus 100 divergent | Multi-day to multi-week | Authorizes one confirmation review |
-| Confirmation Phase 10 — final review | Both lanes and Holm correction complete | Manual, once | Separate promotion request or documented null |
+| Confirmation Phase 10 — final review | Both lanes and Holm correction complete | Manual, once | Freeze promoted or retained confirmation |
+| Venue Phase 11 — ownership/safety parity | Fault grid plus 25 exact-control observations | Engineering-dependent | Starts attribution only after parity |
+| Venue Phase 12 — current-rule attribution | 300 closed plus 100 selector-changing, or documented inertness | At least 75 hours; selector frequency may dominate | Freezes at most one new-outcome family |
+| Venue Phase 13 — focused family | 300 signal, 200 execution, and 100 divergent | At least 75 hours plus multi-day/week execution | Authorizes one venue review |
+| Venue Phase 14 — final review | Both lanes and declared correction complete | Manual, once | Separate ownership/policy request or documented null |
 
 Only the current Base Phase 2 row has a calendar estimate. Later rows begin after the preceding written gate and
 engineering activation, so their durations may not be added to claim a delivery date. Under uninterrupted data and
 immediate approvals the arithmetic lower bound is measured in weeks, not days; realistic divergence and execution
 coverage can extend it further. The confirmation clock explicitly does **not** start at the current three-day
-base-signal checkpoint.
+base-signal checkpoint, and the venue clock does not start until confirmation's final retained/promoted handoff.
 
-## 11. Storage and operational design
+## 12. Storage and operational design
 
-### 11.1 Phase 2 activation schema
+### 12.1 Phase 2 activation schema
 
 Phase 2 uses the existing forecast history as its owning store rather than adding a second journal with duplicate
 observation and contract identities. `candidateEvaluation` is written once inside the forecast's issuance `upsert`:
@@ -353,7 +408,7 @@ and order modules are protected by an isolation invariant and contain no candida
 read. A candidate calculation failure fails the advisory forecast append; it cannot alter the already-built
 production prediction, and forecast persistence remains advisory to execution as before.
 
-### 11.2 Phase 3 and later additions
+### 12.2 Phase 3 and later additions
 
 Before raw volatility vectors or V3 manifests activate:
 
@@ -365,7 +420,7 @@ Before raw volatility vectors or V3 manifests activate:
 No candidate store may share a budget or order authority with the funded ledger. Observation absence is explicit;
 it never authorizes a production action.
 
-## 12. Validation and documentation
+## 13. Validation and documentation
 
 Every phase requires typecheck and the full test suite. A phase touching the Next.js runtime also requires a
 production build before activation. Structural activation updates `STATUS.md`; a changed production decision

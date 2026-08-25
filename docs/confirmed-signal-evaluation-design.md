@@ -250,8 +250,10 @@ The serial order is:
 4. collect and review the five-arm signal family;
 5. lock at most one confirmation candidate for prospective simulated execution;
 6. perform one corrected final review;
-7. consider a separate manual production policy change, or record the null result.
+7. freeze the promoted or retained production confirmation rule;
+8. only then hand off to [`docs/venue-candidate-evaluation-design.md`](venue-candidate-evaluation-design.md).
 
 If the base-signal review changes production, confirmation starts only after that version is deployed and its exact
 control parity passes. If the base-signal review retains production, the same boundary is recorded as an explicit
-null-result handoff before confirmation activation.
+null-result handoff before confirmation activation. Venue attribution likewise waits for the confirmation handoff,
+because a changed confirmation rule changes the population, timing, side, and quote entering venue candidacy.

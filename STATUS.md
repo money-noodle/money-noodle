@@ -27,7 +27,7 @@ A second policy runs on the same market — the long-shot round trip, detailed i
 | Forecast and performance tracking | Collection is implemented; the 2026-08-22 interleaved-writer corruption was repaired into checksum-valid, content-addressed v3 after restoring 88 qualified archived rows. Automatic v3 seals and a 138-file independent Scaleway restore passed on 2026-08-24; aggregate economic conclusions still require recalculation. |
 | Live execution | Kalshi live-capable; repeated-episode identity and known ledger damage are repaired under v6. The operator explicitly resumed live after READY manual reconciliation; the latest dated snapshot above was active with one reconciled reserved open position and no readiness blocker. |
 | Paper execution | Continuous and independently accounted under v6; three-episode generation ownership is repaired, exact prospective four-cell pairing is collecting, and fills remain conservative pending an exact queue-calibration held-out fit |
-| Model evaluation | Evaluator v2 remains barred from promotion and production remains Blend 0.4. Phase 2 prospective `forecast-candidate-registry-v1` collection is active locally from 2026-08-25T03:17:17.456Z; it has no promotion or order authority. The five-arm exact-provider confirmed-signal evaluation is approved but queued strictly after the base-signal final review. Automatic evaluator-v2 checkpoints remain retired from the worker. |
+| Model evaluation | Evaluator v2 remains barred from promotion and production remains Blend 0.4. Phase 2 prospective `forecast-candidate-registry-v1` collection is active locally from 2026-08-25T03:17:17.456Z; it has no promotion or order authority. Exact-provider confirmed-signal evaluation is queued after the base final review, followed strictly by venue-candidate ownership/attribution and implementation-shortfall evaluation. Automatic evaluator-v2 checkpoints remain retired from the worker. |
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
 | Operational safety | Collision-resistant bounded live IDs, exact reconciliation ownership, quiescent drain, account reconciliation, kill switch, and budget/risk ceilings are implemented. Runtime readiness and operator state must be read from the live control surfaces named above, not inferred from this table. |
 
@@ -109,9 +109,33 @@ base version is frozen, because changing the base probability changes which obse
 then requires exact-control grid/25-observation parity, 10-window wiring, 100 closed windows at 95% exact-provider
 outcome coverage, 300 closed windows with 90% per-arm availability and 100 divergent windows, followed by 200
 execution-scoreable and 100 divergent windows before one review. The updated overall timeline is in
-[`docs/forecast-model-and-evaluator-v3-design.md`](docs/forecast-model-and-evaluator-v3-design.md) §10. Only the
+[`docs/forecast-model-and-evaluator-v3-design.md`](docs/forecast-model-and-evaluator-v3-design.md) §11. Only the
 current base Phase 2 has a calendar estimate; the confirmation clock does not begin at its three-day checkpoint.
 No runtime, store, forecast, confirmation, policy, execution, capital, or live authority changed.
+
+### Venue-candidate review queued after confirmed signal, 2026-08-25
+
+[`docs/venue-candidate-evaluation-design.md`](docs/venue-candidate-evaluation-design.md) places the next runtime
+layer after the confirmed-signal final handoff. It separates exact contract/provider identity, quote validity,
+freshness, quantity lattice, all-in reservation, and other safety/mechanical feasibility from economic spread or
+implementation-shortfall selection; it moves sizing, portfolio, execution lifecycle/style, funding, and live
+readiness out of the conceptual venue-attractiveness question while retaining every production recheck until a
+separate approved change.
+
+The first venue phase is attribution, not a threshold candidate: fault-grid and 25-observation exact-control parity,
+then 10-window wiring, 100 closed windows at 95% exact-provider coverage, and 300 closed windows with 100 windows
+where a current economic selector independently changes the candidate—or a documented inert/insufficiently-active
+finding. It records displayed confirmation ask, construction quote, exact pre-submit quote, submitted limit,
+public simulated or authoritative fill/no-fill, fees, exit, and terminal outcome as separate views. Only after that
+report may an amendment freeze a small new-outcome family; the likely areas are spread, route-specific spread, or
+quote-age/implementation shortfall, not preselected thresholds. A new cohort then requires 300 signal windows, 200
+execution-scoreable windows, and 100 divergent windows before one corrected review.
+
+This program is Phases 11–14 in the serial roadmap. It cannot start while confirmation is unsettled because a
+confirmation change alters the population, time, side, and quote entering venue candidacy. Current single-funded-
+provider ranking is explicitly not evidence for multi-provider routing; a second funded provider remains fail-closed
+pending its own exact target, adapter, funding, reconciliation, fill, and routing design. No runtime, store, provider,
+policy, sizing, route, capital, reconciliation, or live authority changed.
 
 ### Object archive restored independently and rebuildable caches reclaimed, 2026-08-24
 

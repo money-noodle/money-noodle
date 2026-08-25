@@ -80,7 +80,10 @@ changing production yet.
     position, same-window, same-asset, and correlation-group constraints.
 
 Output: a **venue candidate** and, for winners, a provisional **portfolio selection**. This pass supports the
-operator read model; it does not itself authorize funded execution.
+operator read model; it does not itself authorize funded execution. The approved safety/ownership, gate-attribution,
+and implementation-shortfall review is queued after the confirmed-signal final review in
+[`docs/venue-candidate-evaluation-design.md`](venue-candidate-evaluation-design.md); it is not collecting or
+changing production yet.
 
 ### 5. Account-wide live gates — `runLive`
 
