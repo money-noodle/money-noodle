@@ -12,14 +12,19 @@ The current contract-basis forecast is a useful production control, but its impl
 candidate easy to score under a formula, side, venue, cost, or policy that production did not actually use. The
 monitoring-only evaluator v2 has exhibited all of those failures and cannot support promotion.
 
-Implement the improvement plan in six gated phases:
+Implement the base-signal improvement plan in six gated phases, then evaluate the confirmed-signal layer in four
+strictly serial phases:
 
 1. extract one pure, versioned forecast-model boundary while proving production equivalence;
 2. commit prospective candidate outputs with no order authority;
 3. collect reproducible volatility, jump, settlement, and oracle-uncertainty inputs;
-4. implement immutable, policy-complete evaluator v3;
-5. add a separate prospective simulated-execution lane;
-6. perform one predeclared review after both evidence lanes mature.
+4. implement immutable, policy-complete evaluator v3 for the base buy decision;
+5. add a separate prospective simulated-execution lane while holding production confirmation fixed;
+6. perform one predeclared base-signal review after both evidence lanes mature;
+7. implement and parity-test the exact-provider five-arm confirmation family;
+8. collect its prospective signal lane;
+9. shadow-execute at most one locked confirmation candidate;
+10. perform one corrected confirmation review.
 
 No phase automatically starts the next, changes production, or grants promotion eligibility. Evaluator v2 remains
 monitoring-only history and is never rewritten into v3 evidence.
@@ -176,7 +181,8 @@ V3 must:
    patches or retention changes;
 2. stamp the exact production forecast and buy-policy values;
 3. regenerate each arm's selected side and funded-provider cost from both actionable asks;
-4. run the shared persistence and admission semantics rather than hard-coded stale bounds;
+4. run the shared base buy-policy semantics rather than hard-coded stale bounds, while holding production
+   confirmation fixed and outside this base-signal comparison;
 5. score every settlement timestamp, assigning zero to an arm that declines a position instead of dropping it;
 6. report paired signal-policy return, Brier score, log loss, coverage, and contiguous drawdown;
 7. show exact and unavailable cohorts separately;
@@ -205,8 +211,10 @@ calendar and may take substantially longer.
 
 Signal-policy return assumes an immediate ask fill and hold. It is not funded P&L. Phase 5 adds a separate lane
 that gives both production and the locked candidate comparable public execution evidence without order authority.
+Both probability arms pass through the same current production confirmation rule; changing confirmation here would
+make the base-signal effect unidentifiable.
 
-For each arm, commit the versioned persistence state, route decision, issuance quote, displayed depth/trades,
+For each arm, commit the versioned production-persistence state, route decision, issuance quote, displayed depth/trades,
 simulated maker or IOC result, fees, and terminal outcome. Missing public evidence produces `unavailable`, never a
 manufactured fill or miss. Baseline and candidate simulations cannot read live fill outcomes.
 
@@ -250,9 +258,75 @@ At a theoretical 15-minute cadence, 500 windows are about 125 hours. Coverage, o
 and untouched outcome resolution make one to several weeks the realistic planning range; these are planning
 estimates, not evidence substitutes or delivery promises.
 
-## 9. Storage and operational design
+Phase 6 ends with an explicit handoff: either deploy and freeze the promoted base-signal version, or record that
+production was retained. Confirmed-signal evidence cannot begin before that boundary because a changed base signal
+changes which observations are eligible to confirm.
 
-### 9.1 Phase 2 activation schema
+## 9. Phases 7–10 — confirmed-signal evaluation, in series
+
+The approved next decision layer is
+[`docs/confirmed-signal-evaluation-design.md`](confirmed-signal-evaluation-design.md). It starts only after the
+Phase 6 base-signal handoff and does not collect concurrently with an unsettled probability/admission candidate.
+
+### Phase 7 — engineering and exact-control parity
+
+Implement the separate append-only observation lane and five frozen arms: exact production, provider-specific
+production timing, provider-specific first-pass, provider-specific three-consecutive-over-30-seconds, and
+provider-specific current-plus-one-of-the-prior-two. Exact provider contract, side, market, strategy, and outcome
+identity are safety invariants; cross-provider evidence is diagnostic only.
+
+**Exit:** pure-grid parity plus 25 live-runtime calculation observations (no orders) with zero exact-production
+state or eligibility mismatch. This is an engineering gate and starts no economic clock.
+
+### Phase 8 — prospective confirmation signal lane
+
+Collect the complete family on every distinct fresh calculation. Hold the production base signal, 90-second
+warm-up, final 30-second cutoff, freshness, fees, and all other policy values fixed.
+
+**Milestones:** 10 independent windows for wiring, 100 closed windows with at least 95% exact-provider outcome
+coverage, then 300 closed windows with at least 90% per-arm availability and at least 100 materially divergent
+windows. Ten, 100, and 300 timestamps are nominally 2.5, 25, and 75 hours; divergence and outages extend them.
+
+### Phase 9 — one locked confirmation execution shadow
+
+After the corrected five-arm signal review, lock at most one confirmation candidate. Compare it with production
+under equivalent public maker/IOC, fee, exit, and terminal evidence. Missing depth or trades are unavailable, not a
+fill assumption.
+
+**Exit:** 200 execution-scoreable windows, at least 90% public-evidence coverage, 100 divergent windows, exact
+provider/outcome identity, and no candidate import reachable from the live order graph. Opportunity frequency is
+expected to make this multi-day or multi-week.
+
+### Phase 10 — one corrected confirmation review
+
+Report signal and simulated-execution return separately; paired candidate-only, production-only, same-choice, and
+different-choice windows; delay cost; unavailable classes; and the predeclared Holm correction across four
+production comparisons. Counts only open manual review. A successful result permits a separate policy design and
+manual promotion request; a null result is recorded and production remains unchanged.
+
+## 10. Overall serial timeline
+
+| Serial stage | Earliest evidence gate | Planning duration after activation | Advancement |
+| --- | --- | --- | --- |
+| Base Phase 2 — current six-arm collection | 300 closed windows, 90% per-arm availability | About 75 hours; nominally around 2026-08-28T06:15Z from the current activation | Written review may authorize base Phase 3 only |
+| Base Phase 3 — uncertainty inputs | 300 complete windows | At least another 75 hours | Written input review may authorize V3 |
+| Base Phase 4 — immutable V3 signal lane | 300 windows plus 100 divergent | At least 75 hours; divergence likely controls | Authorizes execution shadow only |
+| Base Phase 5 — execution shadow | 200 scoreable plus 100 divergent | Multi-day to multi-week | Authorizes one base review |
+| Base Phase 6 — final base review | 500 signal, 200 execution, 100 divergent | One to several weeks overall | Freeze promoted or retained base version |
+| Confirmation Phase 7 — engineering | Grid plus 25 exact-control observations | Engineering-dependent | Starts confirmation evidence only after parity |
+| Confirmation Phase 8 — five-arm signal lane | 300 closed plus 100 divergent | At least 75 hours; divergence may control | Lock at most one candidate |
+| Confirmation Phase 9 — execution shadow | 200 scoreable plus 100 divergent | Multi-day to multi-week | Authorizes one confirmation review |
+| Confirmation Phase 10 — final review | Both lanes and Holm correction complete | Manual, once | Separate promotion request or documented null |
+
+Only the current Base Phase 2 row has a calendar estimate. Later rows begin after the preceding written gate and
+engineering activation, so their durations may not be added to claim a delivery date. Under uninterrupted data and
+immediate approvals the arithmetic lower bound is measured in weeks, not days; realistic divergence and execution
+coverage can extend it further. The confirmation clock explicitly does **not** start at the current three-day
+base-signal checkpoint.
+
+## 11. Storage and operational design
+
+### 11.1 Phase 2 activation schema
 
 Phase 2 uses the existing forecast history as its owning store rather than adding a second journal with duplicate
 observation and contract identities. `candidateEvaluation` is written once inside the forecast's issuance `upsert`:
@@ -279,7 +353,7 @@ and order modules are protected by an isolation invariant and contain no candida
 read. A candidate calculation failure fails the advisory forecast append; it cannot alter the already-built
 production prediction, and forecast persistence remains advisory to execution as before.
 
-### 9.2 Phase 3 and later additions
+### 11.2 Phase 3 and later additions
 
 Before raw volatility vectors or V3 manifests activate:
 
@@ -291,7 +365,7 @@ Before raw volatility vectors or V3 manifests activate:
 No candidate store may share a budget or order authority with the funded ledger. Observation absence is explicit;
 it never authorizes a production action.
 
-## 10. Validation and documentation
+## 12. Validation and documentation
 
 Every phase requires typecheck and the full test suite. A phase touching the Next.js runtime also requires a
 production build before activation. Structural activation updates `STATUS.md`; a changed production decision

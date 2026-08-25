@@ -64,7 +64,10 @@ make the same entry-policy decision for the same snapshot (`SPEC.md` §12.3).
     current-policy evidence.
 
 Output: a **confirmed signal** when persistence is eligible. The adaptive regime gate remains a later account-wide
-entry authorization rather than part of the pure buy policy.
+entry authorization rather than part of the pure buy policy. The approved exact-provider debounce/dwell evaluation
+is queued behind the base-signal program in
+[`docs/confirmed-signal-evaluation-design.md`](confirmed-signal-evaluation-design.md); it is not collecting or
+changing production yet.
 
 ### 4. Funded-venue and provisional portfolio evaluation — `updatePortfolioDecisions`, `buildOrder`
 
