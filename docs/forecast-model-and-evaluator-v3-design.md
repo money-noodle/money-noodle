@@ -1,7 +1,9 @@
 # Forecast model boundary and evaluator v3 design
 
 > **Status:** Phase 1 implemented on 2026-08-24. Phase 2 prospective collection activated locally at
-> 2026-08-25T03:17:17.456Z. Confirmed-signal, venue-candidate, portfolio-selection, live-authorization, and
+> 2026-08-25T03:17:17.456Z. Its written 10-window wiring review passed on 2026-08-25 with 5,169/5,169
+> complete-family rows, 45 closed windows, and zero production replay error; the 100-window coverage and 300-window
+> phase-exit gates remain closed. Confirmed-signal, venue-candidate, portfolio-selection, live-authorization, and
 > attempt-and-outcome reviews are approved next in strict layer order. A separate paper-execution fidelity
 > workstream began exact-control Phase F1 on 2026-08-25; it does not advance a decision layer and must freeze its
 > execution generation before any serial execution-evidence phase uses paper as a control. Every later phase remains

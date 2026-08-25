@@ -1,8 +1,12 @@
 # Bounded taker execution pilot
 
-> Agreed with the maintainer on 2026-08-24 before implementation. This changes funded execution and capital,
-> not the shared buy rule. It is a deliberately small operational pilot, not a policy promotion and not
-> evidence for an unconditional taker switch.
+> Agreed with the maintainer on 2026-08-24 before implementation. The v1 pilot completed on 2026-08-25 at its
+> compiled 10-authorization / 300¢ ceiling: three signed IOC submissions were accepted, no treatment safety stop
+> occurred, and treatment-minus-control was negative with broad uncertainty in both live and paper. It closed
+> without extension and with `reviewUnlocked: false`; see
+> [`reports/bounded-taker-pilot-v1-closure-2026-08-25.md`](../reports/bounded-taker-pilot-v1-closure-2026-08-25.md).
+> This changed funded execution and capital, not the shared buy rule. It was a deliberately small operational
+> pilot, not a policy promotion and not evidence for an unconditional taker switch.
 
 ## 1. Decision and question
 
