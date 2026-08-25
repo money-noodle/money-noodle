@@ -6,9 +6,9 @@
 > **Operational-state warning:** this document records dated snapshots; it is not a live interlock or the
 > authority for whether funded execution is running. Before any operational action, read the authenticated
 > Automation surface and `data/trading-control.json`. At the latest operational snapshot, the control record
-> updated at 2026-08-25T14:46:49.112Z was active / `live`, revision 6,748, with 1,817¢ available, 27¢
-> reserved for one managed open position, and operator intent active. Periodic incremental reconciliation completed
-> READY at 2026-08-25T14:51:59.895Z with exact agreement on one local/venue managed position and no blocker. The adaptive gate was open and allowed entries. The maintainer
+> updated at 2026-08-25T16:13:41Z was active / `live`, revision 6,752, with 1,789¢ available, zero
+> reserved, and operator intent active. Periodic incremental reconciliation completed READY at
+> 2026-08-25T16:10:46.476Z with no blocker. The adaptive gate was open and allowed entries. The maintainer
 > explicitly chose continued funded collection rather than Pause while the written economic gates mature. That
 > state may change after publication.
 
@@ -99,6 +99,28 @@ Four fixed reviews now record the active collection posture without changing pro
 - [`reports/live-paper-economic-monitor-2026-08-25.md`](reports/live-paper-economic-monitor-2026-08-25.md): the fixed day ending 14:30Z found 47 live fills across 34 windows and −259.466¢ exact P&L on one attribution route, versus 52 paper fills across 42 windows and −258.308¢. The complete ask-priced signal surface remained positive while fills were negative, preserving implementation selection and exits as leads rather than promoting a retrospective filter.
 
 The maker restrictions remain locked: live spread has only 13/20 divergent windows and weak paper support; spike has ten live divergences and is negative in paper. Exit v2 remains locked at 28 complete live / 30 complete paper windows and only 66.67% / 68.63% coverage versus 60-window, 20-divergence, and 90%-coverage gates. Stake expansion is explicitly ineligible because current-epoch clustered return was −7.9% ±8.7pp over 189 windows, peak drawdown was 26.6%, and lifetime exact P&L was negative. These observations authorize continued frozen collection and fixed-UTC review, not tuning.
+
+### Exit-v2 low coverage is primarily a post-close denominator defect, 2026-08-25
+
+[`reports/exit-sentinel-v2-coverage-diagnosis-2026-08-25.md`](reports/exit-sentinel-v2-coverage-diagnosis-2026-08-25.md)
+replays all 6,333 immutable v2 journal events through `npm run analyze:exit-sentinel-coverage`. The active cohort
+had 50 resolved live / 52 resolved paper positions but published only 34 / 36 complete (68.0% / 69.23%). Aggregate
+pre-close observation was actually 1,508/1,529 live (98.63%) and 1,371/1,393 paper (98.42%). The report classified
+120 live and 91 paper cycles at or after exact contract close as unavailable while waiting for outcome resolution;
+zero could have executed an exit. One delayed settlement added 23 false misses over 343.204 seconds.
+
+Excluding only those non-opportunities mechanically produces 48/50 live (96.0%) and 47/52 paper (90.38%) while
+retaining every genuine pre-close gap and one paper candidate trigger lacking exact book evidence. Fourteen of 16
+published live incompletes and 11 of 16 paper incompletes are therefore mechanical. The root is explicit:
+`maintainExitPolicySentinels` classifies every unresolved sentinel before its due-resolution pass, and
+`exitSentinelPathComplete` has no close bound. Waiting unchanged would keep selecting evidence by settlement
+latency and late-entry path length.
+
+This diagnosis changes no official coverage, journal, report, `reviewUnlocked` flag, exit, or runtime. Option A is
+a close-bounded v2 reporting correction with immutable history; Option B starts a fresh generation with the same
+semantics. Because either changes the reviewed cohort after outcomes are visible, implementation waits for an
+explicit design amendment. The separate 60-window, 20-divergence, Holm, positive-cash, and simultaneous-track gates
+remain closed under either mechanical view.
 
 ### External venue positions no longer inherit rejected local ownership, 2026-08-25
 
@@ -2354,10 +2376,11 @@ Interpretation: the newer exact ledger snapshot is slightly negative lifetime an
 
 1. **Continue untouched forecast Phase 2 to its 100- and 300-window gates.** The wiring review passed at 45 closed
    windows; do not rank arms from survivor counts, start Phase 3, or begin confirmed-signal collection early.
-2. **Accumulate untouched exit-policy-sentinel-v2 evidence and diagnose coverage.** Keep the four arms fixed and
-   production on `strict-value-v1`. The current 66.67% live / 68.63% paper completeness is below the 90% gate;
-   missing trigger-time evidence stays missing. Do not review efficacy before 60 independent windows, 20 divergent
-   windows, Holm-corrected positive evidence, and simultaneous live/paper eligibility.
+2. **Resolve exit-v2 opportunity semantics before efficacy review.** The diagnosis found 120 live / 91 paper
+   post-close false misses; official coverage remains unchanged until the maintainer approves either a close-bounded
+   immutable-history correction or a fresh generation. Keep every genuine pre-close and paper trigger-depth gap,
+   all four arms, and production `strict-value-v1` unchanged. The 60-window, 20-divergence, Holm, positive-cash,
+   and simultaneous-track gates remain mandatory.
 3. **Continue maker-restriction v1 without tuning.** Live spread has 13/20 divergent windows and paper support is
    weak; spike has ten live divergences and is negative in paper. Counts, raw cash, and an isolated t-statistic do
    not bypass the locked joint gate.

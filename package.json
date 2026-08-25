@@ -46,6 +46,7 @@
     "analyze:trading-clock": "node --max-old-space-size=6144 scripts/analyze-trading-clock.mjs",
     "analyze:exit-alternatives": "node --max-old-space-size=6144 scripts/analyze-exit-alternatives.mjs",
     "analyze:exit-counterfactuals": "node scripts/analyze-exit-counterfactuals.mjs",
+    "analyze:exit-sentinel-coverage": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/analyze-exit-sentinel-coverage.ts",
     "analyze:loss-decomposition": "node --max-old-space-size=6144 scripts/analyze-loss-decomposition.mjs",
     "analyze:take-the-ask": "node --max-old-space-size=6144 scripts/analyze-take-the-ask.mjs",
     "analyze:entry-realization": "node --max-old-space-size=6144 scripts/analyze-entry-realization.mjs",
