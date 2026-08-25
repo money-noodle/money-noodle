@@ -1,9 +1,10 @@
 # Paper execution fidelity v2 design
 
 > **Status:** approved in prose by the maintainer on 2026-08-25. Phase F1 engineering parity is complete. Phase
-> F2's detached implementation is complete but its prospective clock is not active until the built persistent worker
-> starts it and writes the first decision. Phases F3–F4 remain unactivated and require their preceding written
-> milestone review. This program changes no funded execution, buy rule, portfolio rule, live authority, settlement
+> F2's detached implementation is complete and loaded by the persistent worker after READY startup reconciliation
+> on 2026-08-25; its prospective clock is not active until the first decision is durably written. Phases F3–F4
+> remain unactivated and require their preceding written milestone review. This program changes no funded execution,
+> buy rule, portfolio rule, live authority, settlement
 > outcome, or bankroll accounting by itself.
 
 ## 0. Decision

@@ -6,11 +6,10 @@
 > **Operational-state warning:** this document records dated snapshots; it is not a live interlock or the
 > authority for whether funded execution is running. Before any operational action, read the authenticated
 > Automation surface and `data/trading-control.json`. At the latest operational snapshot, the control record
-> updated at 2026-08-25T06:29:04.715Z was system-paused / `live`, revision 6,563, with operator intent still active,
-> 2,064¢ available and 30¢ reserved. Reconciliation reported venue position −1.89 on
-> `KXBTC15M-26AUG250230-30` against local open quantity 0.00. This contradiction blocks restart/F2 activation and
-> must be resolved by the authoritative reconciliation/ownership path, not by editing a ledger. That state may
-> change after publication.
+> updated at 2026-08-25T06:32:24.733Z was operator-paused / `live`, revision 6,569, with 2,094¢ available,
+> zero reserved, zero live open orders, and operator intent paused. Startup reconciliation completed READY and the
+> execution drain was quiescent/restart-safe at 2026-08-25T06:32:24.832Z. The operator pause was the manual
+> maintenance boundary for loading F2 and was not automatically resumed. That state may change after publication.
 
 ## Executive Summary
 
@@ -26,8 +25,8 @@ A second policy runs on the same market — the long-shot round trip, detailed i
 | --- | --- |
 | Dashboard and public paper track record | Functional locally and hosted; bounded summary/full-report split implemented. Managed Postgres access recovered and durable production projections returned 200 after the 2026-08-22 deployment. |
 | Forecast and performance tracking | Collection is implemented; the 2026-08-22 interleaved-writer corruption was repaired into checksum-valid, content-addressed v3 after restoring 88 qualified archived rows. Automatic v3 seals and a 138-file independent Scaleway restore passed on 2026-08-24; aggregate economic conclusions still require recalculation. |
-| Live execution | Kalshi live-capable; repeated-episode identity is repaired under v6. The latest dated snapshot above is system-paused on a venue/local position contradiction with 30¢ reserved; do not infer readiness from older READY snapshots. |
-| Paper execution | Continuous on the existing worker under neutral v6; exact prospective pairing is collecting. Fidelity F1 is complete and F2 timing shadows are implemented in the repository but remain unactivated pending a restart-safe reconciliation state. |
+| Live execution | Kalshi live-capable; repeated-episode identity is repaired under v6. The latest dated snapshot is operator-paused, READY, zero-reserved, and restart-safe after F2 maintenance; funded automation was not automatically resumed. |
+| Paper execution | Continuous under neutral v6; exact prospective pairing is collecting. F1 is complete and the built F2 timing observer is loaded, but its evidence clock awaits the first eligible durable paper maker decision. |
 | Model evaluation | Evaluator v2 remains barred from promotion and production remains Blend 0.4. Phase 2 prospective `forecast-candidate-registry-v1` collection is active locally from 2026-08-25T03:17:17.456Z; it has no promotion or order authority. Exact-provider confirmed-signal evaluation is queued after the base final review, followed strictly by venue-candidate, portfolio-selection, live-authorization, and attempt/outcome evaluation. Automatic evaluator-v2 checkpoints remain retired from the worker. |
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
 | Operational safety | Collision-resistant bounded live IDs, exact reconciliation ownership, quiescent drain, account reconciliation, kill switch, and budget/risk ceilings are implemented. Runtime readiness and operator state must be read from the live control surfaces named above, not inferred from this table. |
@@ -88,7 +87,7 @@ passed typecheck, 145 test files / 1,136 tests, lint with 37 inherited warnings 
 verification over 4,626 rows, and `git diff --check`. Those gates authorized only the separate F2 implementation
 recorded below; they did not activate an evidence clock.
 
-### Paper-execution timing shadow implemented but activation blocked, 2026-08-25
+### Paper-execution timing shadow loaded; first-decision clock pending, 2026-08-25
 
 Phase F2 is implemented under immutable `paper-execution-timing-shadow-v1`: one exact public maker-price quote
 400ms after detached observer start, a second 250ms after the first completes, and one trade-history read three
@@ -109,12 +108,20 @@ The canonical traffic inventory is updated in
 The implementation passed its pure event-time, exact-horizon, wrong-aggressor, duplicate-print, fixed-delay,
 request-cap, immutable-order, append/reload, source-isolation, and durable-intent-before-observer tests. Typecheck,
 147 test files / 1,146 tests, lint with zero errors / 37 inherited warnings, the production build, and execution-
-ledger v9 verification over 4,639 rows passed. However, the running worker has not loaded it and the prospective
-store remains absent. At the attempted activation boundary,
-control revision 6,563 was system-paused with 30¢ reserved because reconciliation found venue position −1.89 for
-`KXBTC15M-26AUG250230-30` while local open quantity was 0.00. No restart, manual resume, ledger edit, or F2 evidence
-activation was attempted across that contradiction. F2's clock starts only after authoritative ownership is
-restart-safe, the built worker starts, and the first timing decision is durably appended.
+ledger v9 verification over 4,639 rows passed.
+
+The first restart boundary correctly stopped on control revision 6,563: reconciliation saw venue position −1.89
+for `KXBTC15M-26AUG250230-30` against local open 0.00 with 30¢ reserved. No restart, resume, or ledger edit crossed
+that contradiction. The authoritative path later cleared it to active revision 6,566 with zero reserved. The
+maintainer-requested activation then used the normal manual pause/drain: revision 6,568 became operator-paused,
+zero-reserved, reconciliation READY, and quiescent/restart-safe. The already-built worker started and completed
+startup reconciliation READY at revision 6,569 / 2026-08-25T06:32:24.832Z. It remains manually paused; funded
+execution was not resumed implicitly, while paper collection continues.
+
+The new process has loaded F2, but no eligible paper maker appeared in the first three minutes and
+`data/paper-execution-timing-shadows.journal.jsonl` remained absent. Therefore the prospective F2 clock has **not**
+been backdated to restart: activation is the timestamp of the first durable timing decision. Reproduce the zero-row
+boundary with `npm run analyze:paper-execution-timing`.
 
 ### Opportunity decision introduction and UI vocabulary aligned, 2026-08-24
 
