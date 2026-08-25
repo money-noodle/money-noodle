@@ -6,10 +6,11 @@
 > **Operational-state warning:** this document records dated snapshots; it is not a live interlock or the
 > authority for whether funded execution is running. Before any operational action, read the authenticated
 > Automation surface and `data/trading-control.json`. At the latest operational snapshot, the control record
-> updated at 2026-08-25T07:55:18.711Z was active / `live`, revision 6,619, with 2,094¢ available, zero
+> updated at 2026-08-25T08:04:21.504Z was active / `live`, revision 6,627, with 2,094¢ available, zero
 > reserved, and operator intent active. The external-position ownership correction was loaded through a quiescent
-> pause/drain and built-worker restart; startup full reconciliation completed READY at
-> 2026-08-25T07:55:02.621Z before the explicit Resume. That state may change after publication.
+> pause/drain and built-worker restart. Two subsequent `market_not_found` attempts each reconciled absent and
+> guarded-auto-resumed in about 32 seconds rather than retaining rejected ticker ownership until close. That state
+> may change after publication.
 
 ## Executive Summary
 
@@ -52,9 +53,17 @@ The status/side fault grid passed 31 focused reconciliation tests and the comple
 verification over 4,653 orders, and `git diff --check`. Activation used manual pause/drain at revision 6,617 with
 zero reservations and READY full reconciliation; the built worker completed startup full reconciliation READY at
 revision 6,618 / 2026-08-25T07:55:02.621Z. The maintainer-approved explicit Resume set active revision 6,619 at
-2026-08-25T07:55:18.711Z. The first post-restart periodic incremental reconciliation completed READY with no
-blocker at 2026-08-25T08:00:04.766Z. Simultaneous external and Money Noodle ownership of one exact ticker remains
-unsupported and blocking.
+2026-08-25T07:55:18.711Z. The first post-restart periodic incremental reconciliation completed READY with no blocker at
+2026-08-25T08:00:04.766Z. The next BNB and DOGE creates returned `market_not_found`; each retained its reservation
+through the 30-second consistency window, reconciled to rejected/zero-reserved in 32.260 and 32.087 seconds, and
+then guarded-auto-resumed at revisions 6,623 and 6,627. This demonstrates that rejected lifecycle rows no longer
+hold ticker ownership until close; it does not weaken the uncertainty window. Simultaneous external and Money
+Noodle ownership of one exact ticker remains unsupported and blocking.
+
+Production source deployment `dpl_7BXnyjSnv3PDX1ELvPQEYfD8VCJD` completed READY and was aliased to
+`https://noodle.money`. The homepage, compact paper-performance summary, and paper-budget endpoints returned HTTP
+200 after deployment. Hosted remains stateless, so funded activation authority stays with the separately monitored
+local worker.
 
 ### Paper settlement operationally healthy but last-day economics negative, 2026-08-25
 
