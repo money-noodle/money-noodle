@@ -7,10 +7,10 @@
 > authority for whether funded execution is running. Before any operational action, read the authenticated
 > Automation surface and `data/trading-control.json`. At the latest operational snapshot, the control record
 > updated at 2026-08-25T07:30:30.583Z was active / `live`, revision 6,611, with 2,094¢ available, zero
-> reserved, and operator intent active after guarded recovery from a system suspension. Reconciliation completed
-> READY with zero reserved after a SOL `market_not_found` create response and temporary venue-position/local-zero
-> contradiction. The local attempt resolved rejected with no accepted venue ID or authoritative fill. That state
-> may change after publication.
+> reserved, and operator intent active after guarded recovery from a system suspension. The local SOL attempt
+> resolved rejected with no accepted venue ID or authoritative fill. The simultaneous unmatched venue position was
+> acceptable activity created outside Money Noodle, not an outcome of that attempt. Reconciliation completed READY
+> after the external mismatch disappeared. That state may change after publication.
 
 ## Executive Summary
 
@@ -145,11 +145,11 @@ later reconciled absent. The public timing candidate classified both books accep
 predict that provider response. There were zero accepted live makers and zero post-only-race targets, so accepted
 recall is undefined and the 10-window wiring gate remains closed.
 
-Both provider errors temporarily produced venue-position-versus-local-zero reconciliation contradictions—BNB until
-its 07:00 close and SOL until 07:30—then READY passes returned reservations to zero and guarded auto-resume ran. No
-local accepted venue ID or fill was recovered. This is a material funded lifecycle/provenance seam for the approved
-attempt/outcome program, not evidence for paper calibration; reconciliation must remain fail-closed. Full method,
-counts, timing, and caveats:
+Attribution correction: the simultaneous unmatched BNB and SOL venue positions were acceptable activity created
+outside Money Noodle, not outcomes of the local `market_not_found` attempts. The current account-wide reconciler
+cannot causally own that external activity, so it remained fail-closed until each mismatch disappeared and then ran
+guarded auto-resume. No local accepted venue ID or fill was recovered. The overlap is not evidence of a Money Noodle
+accounting contradiction or of paper calibration behavior. Full method, counts, timing, and caveats:
 [`reports/paper-execution-timing-smoke-2026-08-25.md`](reports/paper-execution-timing-smoke-2026-08-25.md).
 Continue F2 unchanged to 10 independent windows; no model or policy change is authorized.
 

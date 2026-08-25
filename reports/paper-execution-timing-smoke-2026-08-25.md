@@ -3,6 +3,10 @@
 > **Finding:** F2 is durably collecting complete, event-time-bounded evidence, but two independent settlement
 > windows are only an operational smoke sample. It contains no accepted live maker with which to validate the
 > acceptance candidate. No paper fill, bankroll, live policy, or promotion changes.
+>
+> **Attribution correction:** the unmatched venue positions observed during this watch were created outside Money
+> Noodle and were acceptable operator activity. Temporal overlap did not make them outcomes of Money Noodle's
+> `market_not_found` attempts. The original monitoring interpretation incorrectly joined those events causally.
 
 ## Question and method
 
@@ -75,22 +79,25 @@ acceptance claim requires actual accepted and post-only-race targets; counts alo
 
 ## 4. Funded safety behavior during the watch
 
-Two live create responses became uncertain:
+Two distinct event families overlapped and must not be joined causally:
 
-1. BNB, created at 2026-08-25T06:47:41Z, returned `market_not_found`; reconciliation temporarily observed unmatched
-   venue position and suspended the desk until a READY pass at 2026-08-25T07:00:30Z, then guarded auto-resume ran.
-2. SOL, created at 2026-08-25T07:23:28Z, followed the same explicit error/uncertain/reservation path; reconciliation
-   remained blocked until READY at 2026-08-25T07:30:30Z, then guarded auto-resume ran.
+1. Money Noodle's exact BNB and SOL live create attempts returned `market_not_found`, entered the ordinary
+   uncertain/reserved fail-closed path, and later reconciled to no accepted durable client order or fill.
+2. Reconciliation observed BNB and SOL venue positions absent from Money Noodle's local ledger. The operator has
+   identified these as acceptable orders created outside Money Noodle—not hidden outcomes of the two local create
+   attempts.
 
-The final local rows are rejected with no accepted venue ID or authoritative fill, reservations returned to zero,
-and control revision 6,611 was active with 2,094¢ available. The timing observer logged no runtime error. Its public
-requests may share the venue token pool, but these were explicit provider `market_not_found` responses rather than
-429s, timeouts, or ambiguous transport errors; this sample does not establish F2 as their cause.
+Because reconciliation is account-wide and does not own those external causal records, it suspended until the
+external position mismatches disappeared: READY at 2026-08-25T07:00:30Z for BNB and at
+2026-08-25T07:30:30Z for SOL, followed by guarded auto-resume. That is expected fail-closed behavior under the
+current ownership model, not evidence of a Money Noodle accounting contradiction.
 
-The temporary venue-position-versus-local-zero contradictions are still a material lifecycle/provenance seam. Their
-disappearance at settlement with zero recovered fill state is not paper-calibration evidence and should be retained
-for the approved attempt/outcome fault and accounting program. Do not edit the ledger or weaken reconciliation to
-make those episodes disappear.
+The final local attempt rows are rejected with no accepted venue ID or authoritative fill, reservations returned to
+zero, and control revision 6,611 was active with 2,094¢ available. The timing observer logged no runtime error. Its
+public requests may share the venue token pool, but the local outcomes were explicit provider `market_not_found`
+responses rather than 429s, timeouts, or ambiguous transport errors; this sample does not establish F2 as their
+cause. External venue activity is outside this F2 acceptance cohort unless separately captured with authoritative
+causal identity.
 
 ## Decision
 
