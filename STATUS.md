@@ -6,12 +6,11 @@
 > **Operational-state warning:** this document records dated snapshots; it is not a live interlock or the
 > authority for whether funded execution is running. Before any operational action, read the authenticated
 > Automation surface and `data/trading-control.json`. At the latest operational snapshot, the control record
-> updated at 2026-08-25T08:37:07.009Z was active / `live`, revision 6,635, with 2,094¢ available, zero
-> reserved, and operator intent active. The dynamic Kalshi exchange-index wire repair was loaded through a
-> quiescent pause/drain and built-worker restart; startup reconciliation completed READY before explicit Resume.
-> Periodic reconciliation remained READY at 2026-08-25T09:06:57.213Z. No natural eligible intent appeared during
-> the first 30-minute watch, so accepted-wire runtime confirmation remains pending. That state may change after
-> publication.
+> updated at 2026-08-25T14:36:57.059Z was active / `live`, revision 6,745, with 1,797¢ available, 24¢
+> reserved for one reconciled open position, and operator intent active. The clarified adaptive-regime labels were
+> loaded through a quiescent pause/drain and built-worker restart; startup full reconciliation completed READY at
+> 2026-08-25T14:36:38.532Z before explicit Resume. The gate was open and allowed entries. That state may change
+> after publication.
 
 ## Executive Summary
 
@@ -27,7 +26,7 @@ A second policy runs on the same market — the long-shot round trip, detailed i
 | --- | --- |
 | Dashboard and public paper track record | Functional locally and hosted; bounded summary/full-report split implemented. Managed Postgres access recovered and durable production projections returned 200 after the 2026-08-22 deployment. |
 | Forecast and performance tracking | Collection is implemented; the 2026-08-22 interleaved-writer corruption was repaired into checksum-valid, content-addressed v3 after restoring 88 qualified archived rows. Automatic v3 seals and a 138-file independent Scaleway restore passed on 2026-08-24; aggregate economic conclusions still require recalculation. |
-| Live execution | Kalshi live-capable; repeated-episode and external-position ownership are repaired. Event-order bodies now use validated exact-market exchange identity instead of stale index 0; the built runtime is active/READY, with first natural accepted-wire confirmation pending. |
+| Live execution | Kalshi live-capable; repeated-episode and external-position ownership are repaired. Event-order bodies use validated exact-market exchange identity; 19/19 naturally accepted post-repair entries and 2/2 accepted exits durably carried index 2 with zero further `market_not_found`. |
 | Paper execution | Continuous under neutral v6; exact prospective pairing is collecting. F1 is complete and F2 began at 2026-08-25T06:47:41.724Z; its first two-window smoke passed below the 10-window gate. |
 | Model evaluation | Evaluator v2 remains barred from promotion and production remains Blend 0.4. Phase 2 prospective `forecast-candidate-registry-v1` collection is active locally from 2026-08-25T03:17:17.456Z; it has no promotion or order authority. Exact-provider confirmed-signal evaluation is queued after the base final review, followed strictly by venue-candidate, portfolio-selection, live-authorization, and attempt/outcome evaluation. Automatic evaluator-v2 checkpoints remain retired from the worker. |
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
@@ -56,17 +55,39 @@ pause/drain at revision 6,633 with zero reservations; the built worker completed
 revision 6,634 / 2026-08-25T08:36:46.502Z, and explicit Resume set active revision 6,635 at
 2026-08-25T08:37:07.009Z.
 
-A 30-minute natural-opportunity watch through 09:07Z found zero post-resume reservations. This was not an authority
-block: the adaptive regime gate was open and allowed entries, with 369/12 resolved policy windows, +20.7pp weighted
-recent fee-aware edge, and only 0.5% estimated negative-return probability versus 99% required to pause. The live-
-skip journal instead recorded `none`: no current positive-edge binary buy qualified. The latest seven dashboard
-markets were all `WATCH`. Therefore the source/wire correction and fail-closed tests are complete, but the first
-natural accepted order carrying durable `venueExchangeIndex` remains the runtime confirmation gate; no artificial
-funded test was sent.
+The initial 30-minute natural-opportunity watch through 09:07Z found zero post-resume reservations because no
+positive-edge binary buy qualified; the gate was open and all seven markets were `WATCH`. The later runtime review
+through the 14:33Z issuance observed **22 natural live attempts, 19 accepted entries, and two accepted exits**. All
+19 accepted entries durably carried `venueExchangeIndex: 2`, both accepted exits carried
+`exitVenueExchangeIndex: 2`, no accepted row had missing/malformed index, and zero post-repair attempt recorded
+`market_not_found`. The cohort ended with seven unfilled, 12 lost, one won, one sold, and one still-open row; those
+economic outcomes do not authorize a policy conclusion. The runtime wire confirmation gate is complete without an
+artificial funded test.
 
 Production source deployment `dpl_DdSaB76cS6iKZoqgdeKDWBMinyf7` completed READY and was aliased to
 `https://noodle.money`; the homepage, compact paper-performance summary, and paper-budget endpoints returned HTTP
 200. Hosted remains stateless and has no funded wire authority.
+
+### Adaptive regime UI now states permission and probability plainly, 2026-08-25
+
+The signed Automation strip and Budget dialog no longer call `negativeReturnConfidence` “negative confidence” or
+format resolved/minimum windows like a capacity fraction. An open gate now says **entry permission remains open**,
+labels the metric **estimated negative-return probability**, states the probability required to pause, calls
+`weightedMeanEdge` **weighted recent fee-aware return**, and shows resolved windows and minimum separately. Closed
+and reopened reasons use the same vocabulary. The internal field, normal-CDF arithmetic, 99% pause threshold, 75%
+resume threshold, 12-window minimum, half-life, evidence cohort, and entry authority are unchanged.
+
+The wording change passed typecheck, 147 files / 1,169 tests including explicit open/closed/reopened copy semantics,
+lint with zero errors / 37 inherited warnings, and the production build. Rollout used manual pause/drain at revision
+6,743 with the existing 24¢ open-position reservation intact and authoritative full reconciliation READY. The built
+worker completed startup reconciliation READY at revision 6,744 / 2026-08-25T14:36:38.532Z; explicit Resume set
+active revision 6,745 at 14:36:57.059Z. The live read then showed `phase: open`, `allowsEntries: true`, and the new
+reason: “Entry permission remains open: estimated negative-return probability is 23.0%; pausing requires 99.0%.”
+
+Production deployment `dpl_GJpGYKZATAfANmwxykgYJn7bVBoQ` completed READY under the explicit
+`phairows-projects` scope and was aliased to `https://noodle.money`. The homepage, compact paper-performance
+summary, and paper-budget endpoints returned HTTP 200. Hosted remains stateless and has no funded control or order
+authority.
 
 ### External venue positions no longer inherit rejected local ownership, 2026-08-25
 

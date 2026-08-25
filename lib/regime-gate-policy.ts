@@ -113,9 +113,10 @@ export function evaluateRegimeGate(
     phase, allowsEntries: !closed, policyVersion, resolvedWindows: current.length, effectiveWindows,
     weightedMeanEdge: mean, standardError, negativeReturnConfidence,
     reason: closed
-      ? `New live entries are cooling off: ${(negativeReturnConfidence * 100).toFixed(1)}% confidence recent fee-aware return is negative. Sentinel evidence continues; entries reopen automatically below ${(settings.resumeConfidence * 100).toFixed(0)}%.`
+      ? `New live entries are paused: estimated negative-return probability is ${(negativeReturnConfidence * 100).toFixed(1)}%. Sentinel evidence continues; entries reopen automatically below ${(settings.resumeConfidence * 100).toFixed(0)}%.`
       : wasClosed
-        ? `Adaptive regime gate reopened automatically: negative-return confidence fell to ${(negativeReturnConfidence * 100).toFixed(1)}%.`
-        : `Adaptive regime healthy: ${(negativeReturnConfidence * 100).toFixed(1)}% confidence recent fee-aware return is negative, below the ${(settings.pauseConfidence * 100).toFixed(1)}% pause threshold.`,
+        ? `Entry permission reopened automatically: estimated negative-return probability fell to ${(negativeReturnConfidence * 100).toFixed(1)}%.`
+        : `Entry permission remains open: estimated negative-return probability is ${(negativeReturnConfidence * 100).toFixed(1)}%; pausing requires ${(settings.pauseConfidence * 100).toFixed(1)}%.`,
+
   };
 }

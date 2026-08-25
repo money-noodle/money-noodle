@@ -39,6 +39,7 @@ describe('adaptive regime gate', () => {
     expect(result.phase).toBe('closed');
     expect(result.allowsEntries).toBe(false);
     expect(result.negativeReturnConfidence).toBeGreaterThanOrEqual(0.99);
+    expect(result.reason).toContain('New live entries are paused: estimated negative-return probability');
   });
 
   it('automatically reopens under the lower recovery threshold as new sentinel wins arrive', () => {
@@ -48,6 +49,19 @@ describe('adaptive regime gate', () => {
     expect(result.phase).toBe('open');
     expect(result.allowsEntries).toBe(true);
     expect(result.negativeReturnConfidence).toBeLessThan(0.75);
+    expect(result.reason).toContain('Entry permission reopened automatically');
+  });
+
+  it('states plainly that an open gate permits entries and names the probability threshold', () => {
+    const result = evaluateRegimeGate(
+      Array.from({ length: 12 }, (_, index) => observation(index, 0.4)),
+      'current', 'open', settings,
+    );
+    expect(result.phase).toBe('open');
+    expect(result.allowsEntries).toBe(true);
+    expect(result.reason).toMatch(/^Entry permission remains open:/);
+    expect(result.reason).toContain('estimated negative-return probability');
+    expect(result.reason).toContain('pausing requires 99.0%');
   });
 
   it('does not let observations from an older policy warm the active generation', () => {
