@@ -6,10 +6,11 @@
 > **Operational-state warning:** this document records dated snapshots; it is not a live interlock or the
 > authority for whether funded execution is running. Before any operational action, read the authenticated
 > Automation surface and `data/trading-control.json`. At the latest operational snapshot, the control record
-> updated at 2026-08-25T06:46:43.218Z was active / `live`, revision 6,570, with 2,094¢ available, zero
-> reserved, zero live open orders, and operator intent active after an explicit maintainer-requested resume. The
-> preceding periodic reconciliation completed READY at 2026-08-25T06:42:59.605Z with balances, positions, orders,
-> fills, IDs, resting orders, and reservations in agreement. That state may change after publication.
+> updated at 2026-08-25T07:30:30.583Z was active / `live`, revision 6,611, with 2,094¢ available, zero
+> reserved, and operator intent active after guarded recovery from a system suspension. Reconciliation completed
+> READY with zero reserved after a SOL `market_not_found` create response and temporary venue-position/local-zero
+> contradiction. The local attempt resolved rejected with no accepted venue ID or authoritative fill. That state
+> may change after publication.
 
 ## Executive Summary
 
@@ -124,6 +125,33 @@ been backdated to restart or resume: activation is the timestamp of the first du
 2026-08-25T06:46:43.218Z the maintainer explicitly resumed live from READY reconciliation with zero reservations,
 so future exact paper/live maker pairs can now score acceptance; no funded state was resumed automatically.
 Reproduce the zero-row boundary with `npm run analyze:paper-execution-timing`.
+
+### F2 first-decision and two-window wiring smoke recorded, 2026-08-25
+
+The F2 clock began at **2026-08-25T06:47:41.724Z**. A bounded watch through 07:32Z stopped before its two-hour
+maximum after two independent UTC close windows had complete evidence and the second system suspension recovered
+through READY reconciliation. All 7 expected exact paper makers had one decision, acceptance result, and final-
+grace result: 100% decision/acceptance/grace coverage, zero unavailable or missing records, zero timing-shadow
+runtime errors, and zero event-time replay differences from production paper fills.
+
+Public-read latency was 68ms median / 105ms maximum for create and 71ms / 153ms for acknowledgement. Request
+scheduling landed 2ms median late beyond both frozen delays, with 101ms create, 243ms acknowledgement, and 226ms
+final-grace maxima. Actual timestamps are durable, so later scoring need not pretend nominal and realized timing
+were equal.
+
+Acceptance efficacy remains unmeasured. Five records had no live counterpart while funded execution was suspended;
+the other two exact live attempts returned `market_not_found`, entered uncertain/reserved fail-closed handling, and
+later reconciled absent. The public timing candidate classified both books accepted, but no public quote model can
+predict that provider response. There were zero accepted live makers and zero post-only-race targets, so accepted
+recall is undefined and the 10-window wiring gate remains closed.
+
+Both provider errors temporarily produced venue-position-versus-local-zero reconciliation contradictions—BNB until
+its 07:00 close and SOL until 07:30—then READY passes returned reservations to zero and guarded auto-resume ran. No
+local accepted venue ID or fill was recovered. This is a material funded lifecycle/provenance seam for the approved
+attempt/outcome program, not evidence for paper calibration; reconciliation must remain fail-closed. Full method,
+counts, timing, and caveats:
+[`reports/paper-execution-timing-smoke-2026-08-25.md`](reports/paper-execution-timing-smoke-2026-08-25.md).
+Continue F2 unchanged to 10 independent windows; no model or policy change is authorized.
 
 ### Opportunity decision introduction and UI vocabulary aligned, 2026-08-24
 

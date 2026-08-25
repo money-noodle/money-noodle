@@ -44,7 +44,12 @@ for (const order of ledger.orders ?? []) {
   if (pairId) byPair.set(pairId, [...(byPair.get(pairId) ?? []), order]);
 }
 const rows = [...records.values()];
-const startedAtMs = rows.length ? Math.min(...rows.map((record) => Date.parse(record.decision.recordedAt))) : undefined;
+const ledgerById = new Map((ledger.orders ?? []).map((order) => [order.id, order]));
+// The first decision is appended only after its owning paper intent is durable, so its order creation
+// necessarily predates `recordedAt`. Anchor expected coverage on that first recorded order, not on the
+// later journal write, or the denominator omits the very row that activated the cohort.
+const startedAtMs = rows.length ? Math.min(...rows.map((record) =>
+  Date.parse(ledgerById.get(record.decision.orderId)?.createdAt ?? record.decision.recordedAt))) : undefined;
 const route = (order) => order.paperEntryRoute ?? order.entryExecutionDecision?.executedStyle
   ?? order.liquidityRole ?? 'unknown';
 const expectedPaperMakers = startedAtMs === undefined ? [] : (ledger.orders ?? []).filter((order) =>
@@ -55,7 +60,7 @@ const recordedOrderIds = new Set(rows.map((record) => record.decision.orderId));
 const missingDecisions = expectedPaperMakers.filter((order) => !recordedOrderIds.has(order.id));
 const expectedCount = expectedPaperMakers.length;
 const knownAcceptance = [];
-let missingLivePair = 0, ambiguousLivePair = 0;
+let missingLivePair = 0, pendingLivePair = 0, ambiguousLivePair = 0;
 for (const record of rows) {
   const live = (byPair.get(record.decision.mirrorPairId) ?? []).filter((order) => order.executionMode === 'live');
   if (!live.length) { missingLivePair += 1; continue; }
@@ -63,15 +68,37 @@ for (const record of rows) {
   const target = live[0].venueOrderId ? 'accepted'
     : ['unfilled', 'rejected', 'won', 'lost', 'sold', 'invalid'].includes(live[0].status) ? 'not_accepted' : undefined;
   if (target) knownAcceptance.push({ record, live: live[0], target });
+  else pendingLivePair += 1;
 }
 
 const matrix = { acceptedAccepted: 0, acceptedNotAccepted: 0, raceAccepted: 0, raceNotAccepted: 0 };
+const liveNonAcceptanceReasons = {};
+const nonAcceptanceReason = (order) => {
+  const reason = order.reason?.toLowerCase() ?? '';
+  const observationReason = (order.entryExecutionObservations ?? [])
+    .map((observation) => observation.reason?.toLowerCase() ?? '').join(' ');
+  if (order.noFillReason) return order.noFillReason;
+  if (reason.includes('market_not_found') || reason.includes('market not found')
+    || observationReason.includes('market_not_found') || observationReason.includes('market not found')) {
+    return reason.includes('reconciliation found no accepted')
+      ? 'market_not_found_then_reconciled_absent' : 'market_not_found';
+  }
+  if (reason.includes('post-only') && (reason.includes('cross') || reason.includes('acknowledgement race'))) {
+    return 'post_only_race';
+  }
+  if (reason.includes('reconciliation found no accepted')) return 'reconciled_absent';
+  return order.status;
+};
 for (const row of knownAcceptance) {
   const candidate = row.record.acceptance?.status;
   if (candidate === 'accepted' && row.target === 'accepted') matrix.acceptedAccepted += 1;
   if (candidate === 'accepted' && row.target === 'not_accepted') matrix.acceptedNotAccepted += 1;
   if (candidate === 'post_only_race' && row.target === 'accepted') matrix.raceAccepted += 1;
   if (candidate === 'post_only_race' && row.target === 'not_accepted') matrix.raceNotAccepted += 1;
+  if (row.target === 'not_accepted') {
+    const reason = nonAcceptanceReason(row.live);
+    liveNonAcceptanceReasons[reason] = (liveNonAcceptanceReasons[reason] ?? 0) + 1;
+  }
 }
 const acceptanceAvailable = rows.filter((record) => record.acceptance
   && record.acceptance.status !== 'unavailable');
@@ -81,14 +108,25 @@ const graceDifferences = graceAvailable.filter((record) => {
   return replay && (Math.abs(production.filledCount - replay.filledCount) > 1e-8
     || Math.abs(production.purchaseCents - replay.purchaseCents) > 1e-9);
 });
-const timing = (field) => acceptanceAvailable.flatMap((record) => {
+const sortedFinite = (values) => values.filter(Number.isFinite).sort((left, right) => left - right);
+const quoteLatency = (field) => sortedFinite(acceptanceAvailable.map((record) => {
   const quote = record.acceptance[field];
-  if (!quote) return [];
-  const value = Date.parse(quote.observedAt) - Date.parse(quote.requestedAt);
-  return Number.isFinite(value) ? [value] : [];
-}).sort((left, right) => left - right);
+  return quote ? Date.parse(quote.observedAt) - Date.parse(quote.requestedAt) : Number.NaN;
+}));
+const createScheduleDelay = sortedFinite(acceptanceAvailable.map((record) =>
+  Date.parse(record.acceptance.createQuote?.requestedAt) - Date.parse(record.decision.recordedAt)
+    - record.decision.createDelayMs));
+const acknowledgementScheduleDelay = sortedFinite(acceptanceAvailable.map((record) =>
+  Date.parse(record.acceptance.acknowledgementQuote?.requestedAt)
+    - Date.parse(record.acceptance.createQuote?.observedAt) - record.decision.acknowledgementDelayMs));
+const graceScheduleDelay = sortedFinite(graceAvailable.map((record) =>
+  Date.parse(record.grace.graceReadRequestedAt) - Date.parse(record.grace.restingUntil)
+    - record.decision.finalEvidenceGraceMs));
 const percentile = (values, fraction) => values.length
   ? values[Math.floor((values.length - 1) * fraction)] : null;
+const timingSummary = (values) => ({
+  median: percentile(values, 0.5), p95: percentile(values, 0.95), maximum: percentile(values, 1),
+});
 const windows = new Set(rows.map((record) => record.decision.closesAt));
 
 console.log(JSON.stringify({
@@ -101,19 +139,22 @@ console.log(JSON.stringify({
     startedAt: rows.map((record) => record.decision.recordedAt).sort()[0] ?? null,
     latestAt: rows.map((record) => record.decision.recordedAt).sort().at(-1) ?? null,
   },
-  identity: { knownAcceptancePairs: knownAcceptance.length, missingLivePair, ambiguousLivePair },
+  identity: { knownAcceptancePairs: knownAcceptance.length, missingLivePair, pendingLivePair, ambiguousLivePair },
   acceptance: {
     available: acceptanceAvailable.length,
     unavailable: rows.filter((record) => record.acceptance?.status === 'unavailable').length,
     incomplete: rows.filter((record) => !record.acceptance).length,
     coverage: expectedCount ? acceptanceAvailable.length / expectedCount : null,
     matrix,
+    liveNonAcceptanceReasons,
     acceptedRecall: matrix.acceptedAccepted + matrix.raceAccepted
       ? matrix.acceptedAccepted / (matrix.acceptedAccepted + matrix.raceAccepted) : null,
     raceRecall: matrix.acceptedNotAccepted + matrix.raceNotAccepted
       ? matrix.raceNotAccepted / (matrix.acceptedNotAccepted + matrix.raceNotAccepted) : null,
-    createReadLatencyMs: { median: percentile(timing('createQuote'), 0.5), p95: percentile(timing('createQuote'), 0.95) },
-    acknowledgementReadLatencyMs: { median: percentile(timing('acknowledgementQuote'), 0.5), p95: percentile(timing('acknowledgementQuote'), 0.95) },
+    createReadLatencyMs: timingSummary(quoteLatency('createQuote')),
+    acknowledgementReadLatencyMs: timingSummary(quoteLatency('acknowledgementQuote')),
+    createScheduleDelayMs: timingSummary(createScheduleDelay),
+    acknowledgementScheduleDelayMs: timingSummary(acknowledgementScheduleDelay),
   },
   grace: {
     available: graceAvailable.length,
@@ -125,6 +166,7 @@ console.log(JSON.stringify({
       && record.grace.eventTimeReplay.filledCount > 1e-8).length,
     removedFill: graceDifferences.filter((record) => record.grace.production.filledCount > 1e-8
       && record.grace.eventTimeReplay.filledCount <= 1e-8).length,
+    scheduleDelayMs: timingSummary(graceScheduleDelay),
   },
   milestones: {
     tenWindowWiringReady: windows.size >= 10,

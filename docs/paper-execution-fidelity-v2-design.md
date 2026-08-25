@@ -2,8 +2,10 @@
 
 > **Status:** approved in prose by the maintainer on 2026-08-25. Phase F1 engineering parity is complete. Phase
 > F2's detached implementation is complete and loaded by the persistent worker after READY startup reconciliation
-> on 2026-08-25; its prospective clock is not active until the first decision is durably written. Phases F3–F4
-> remain unactivated and require their preceding written milestone review. This program changes no funded execution,
+> on 2026-08-25. Its prospective clock began with the first durable decision at 2026-08-25T06:47:41.724Z. A bounded
+> smoke through 07:32Z found 7/7 complete records across two independent windows and no runtime error; this is below
+> the 10-window wiring gate and included no accepted live maker target. Phases F3–F4 remain unactivated and require
+> their preceding written milestone review. This program changes no funded execution,
 > buy rule, portfolio rule, live authority, settlement
 > outcome, or bankroll accounting by itself.
 
