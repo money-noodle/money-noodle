@@ -44,7 +44,8 @@ function order(id: string, patch: Partial<PaperOrder> = {}): PaperOrder {
     askPrice: 0.4, bidPrice: 0.39, spread: 0.01, quantity: 1, requestedQuantity: 1,
     stakeCents: 41, feeCents: 1, actualPurchaseCents: 40, actualFeeCents: 1,
     actualStakeCents: 41, actualPnlCents: 59, potentialPayoutCents: 100,
-    filledCount: 1, venueOrderId: `venue-${id}`, liquidityRole: 'maker', outcome: 'UP',
+    filledCount: 1, venueOrderId: `venue-${id}`, venueExchangeIndex: 2,
+    exitVenueOrderId: `exit-${id}`, exitVenueExchangeIndex: 2, liquidityRole: 'maker', outcome: 'UP',
     payoutCents: 100, pnlCents: 59, settledAt: '2026-08-22T00:01:00.000Z',
     ...patch,
   } as PaperOrder;

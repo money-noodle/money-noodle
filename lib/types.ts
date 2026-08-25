@@ -1597,6 +1597,8 @@ export interface EntryExecutionObservation {
   selectedAsk?: number;
   spread?: number;
   limitPrice?: number;
+  /** Exact venue-owned wire routing identity observed for this quote/order event. */
+  exchangeIndex?: number;
   displayedAtLimit?: number;
   displayedAhead?: number;
   bestBidDepth?: number;
@@ -1740,6 +1742,8 @@ export interface PaperOrder {
   identityCorrectionId?: string;
   /** Venue order identifier, persisted as soon as Kalshi acknowledges an order. */
   venueOrderId?: string;
+  /** Exact Kalshi exchange index accepted with `venueOrderId`; audit-only, never inferred for history. */
+  venueExchangeIndex?: number;
   filledCount?: number;
   liquidityRole?: 'maker' | 'taker';
   noFillReason?: 'post_only_race' | 'rested_no_fill' | 'pre_submit_quote_moved' | 'ioc_no_fill';
@@ -1905,6 +1909,8 @@ export interface PaperOrder {
   exitRequestedAt?: string;
   exitPending?: boolean;
   exitVenueOrderId?: string;
+  /** Exact Kalshi exchange index accepted with `exitVenueOrderId`. */
+  exitVenueExchangeIndex?: number;
   /**
    * Long-shot policy exit target in force for this position, recorded so a later mark change cannot be
    * mistaken for the one this order actually traded under.

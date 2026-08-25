@@ -44,6 +44,7 @@ export function liveBlockers(): string[] {
 
 export interface LiveFill {
   venueOrderId: string;
+  exchangeIndex: number;
   filledCount: number;
   averagePriceCents: number;
   feeCents: number;
@@ -66,6 +67,9 @@ interface KalshiOrderResponse {
 
 interface KalshiMarketResponse {
   market?: {
+    ticker?: string;
+    status?: string;
+    exchange_index?: unknown;
     yes_bid_dollars?: string;
     yes_ask_dollars?: string;
     price_ranges?: Array<{ start: string; end: string; step: string }>;
@@ -110,31 +114,77 @@ export async function confirmKalshiCancellation(
   throw new Error(`Kalshi cancellation remains uncertain for ${venueOrderId}.`);
 }
 
-interface KalshiBookQuote { yesBid: number; yesAsk: number; ranges?: Array<{ start: string; end: string; step: string }>; orderBook?: BinaryOrderBook }
+interface KalshiMarketWireIdentity { ticker: string; exchangeIndex: number }
+interface KalshiBookQuote extends KalshiMarketWireIdentity {
+  yesBid: number;
+  yesAsk: number;
+  ranges?: Array<{ start: string; end: string; step: string }>;
+  orderBook?: BinaryOrderBook;
+}
+
+export function validateKalshiExchangeIndex(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error('Kalshi exact market returned an invalid exchange_index.');
+  }
+  return value;
+}
+
+export function validateKalshiMarketWireIdentity(
+  requestedTicker: string,
+  market: KalshiMarketResponse['market'],
+): KalshiMarketWireIdentity {
+  if (!market || market.ticker !== requestedTicker) {
+    throw new Error(`Kalshi exact market identity did not match requested ticker ${requestedTicker}.`);
+  }
+  if (market.status !== 'active') throw new Error(`Kalshi exact market ${requestedTicker} is not active.`);
+  return { ticker: requestedTicker, exchangeIndex: validateKalshiExchangeIndex(market.exchange_index) };
+}
+
+export function stableKalshiExchangeIndex(captured: number | undefined, observed: number): number {
+  const validObserved = validateKalshiExchangeIndex(observed);
+  if (captured === undefined) return validObserved;
+  const validCaptured = validateKalshiExchangeIndex(captured);
+  if (validCaptured !== validObserved) {
+    throw new Error(`Kalshi exchange_index changed from ${validCaptured} to ${validObserved} during one order transaction.`);
+  }
+  return validCaptured;
+}
+
+async function exactMarket(ticker: string): Promise<NonNullable<KalshiMarketResponse['market']>> {
+  const response = await kalshiRequest<KalshiMarketResponse>(`/markets/${encodeURIComponent(ticker)}`);
+  validateKalshiMarketWireIdentity(ticker, response.market);
+  return response.market!;
+}
 
 async function marketQuote(ticker: string): Promise<KalshiBookQuote> {
-  const response = await kalshiRequest<KalshiMarketResponse>(`/markets/${encodeURIComponent(ticker)}`);
+  const market = await exactMarket(ticker);
+  const identity = validateKalshiMarketWireIdentity(ticker, market);
   // This starts an optional public refresh but returns cached depth synchronously, so queue telemetry
   // cannot delay the signed quote or any amend/cancel operation.
   const orderBook = observeKalshiOrderBook(ticker);
-  const market = response.market;
-  const yesBid = Number(market?.yes_bid_dollars);
-  const yesAsk = Number(market?.yes_ask_dollars);
-  if (!market || !Number.isFinite(yesBid) || !Number.isFinite(yesAsk) || yesBid <= 0 || yesAsk <= yesBid) throw new Error('Kalshi did not return a usable live bid/ask.');
-  return { yesBid, yesAsk, ranges: market.price_ranges, orderBook };
+  const yesBid = Number(market.yes_bid_dollars);
+  const yesAsk = Number(market.yes_ask_dollars);
+  if (!Number.isFinite(yesBid) || !Number.isFinite(yesAsk) || yesBid <= 0 || yesAsk <= yesBid) throw new Error('Kalshi did not return a usable live bid/ask.');
+  return { ...identity, yesBid, yesAsk, ranges: market.price_ranges, orderBook };
 }
 
-async function preSubmitQuote(ticker: string): Promise<KalshiBookQuote> {
+async function timedPreSubmit<T>(read: () => Promise<T>): Promise<T> {
   const taskRun = beginTaskCadenceRun('exact-pre-submit-quote');
   try {
-    const quote = await marketQuote(ticker);
+    const value = await read();
     taskRun.succeed();
-    return quote;
+    return value;
   } catch (error) {
     taskRun.fail(error);
     throw error;
   }
 }
+
+const preSubmitQuote = (ticker: string) => timedPreSubmit(() => marketQuote(ticker));
+const preSubmitMarketIdentity = async (ticker: string) => timedPreSubmit(async () => {
+  const market = await exactMarket(ticker);
+  return validateKalshiMarketWireIdentity(ticker, market);
+});
 
 /** Converts Kalshi's YES-denominated fill/limit price to the side the ledger owns. */
 export function selectedSidePriceFromYes(yesPrice: number, side: PositionSide): number {
@@ -152,12 +202,25 @@ export function kalshiOrderBookSide(positionSide: PositionSide, operation: 'entr
 }
 
 function selectedQuote(quote: KalshiBookQuote, side: PositionSide) {
-  return selectedManagedMakerQuote({
-    yesBid: quote.yesBid, yesAsk: quote.yesAsk, side, ranges: quote.ranges, orderBook: quote.orderBook,
-  });
+  return {
+    ...selectedManagedMakerQuote({
+      yesBid: quote.yesBid, yesAsk: quote.yesAsk, side, ranges: quote.ranges, orderBook: quote.orderBook,
+    }),
+    ticker: quote.ticker,
+    exchangeIndex: quote.exchangeIndex,
+  };
 }
 
-export function kalshiTakerEntryOrderBody(input: { ticker: string; positionSide: PositionSide; selectedLimit: number; count: number; clientOrderId: string }) {
+interface KalshiEntryBodyInput {
+  ticker: string;
+  positionSide: PositionSide;
+  selectedLimit: number;
+  count: number;
+  clientOrderId: string;
+  exchangeIndex: number;
+}
+
+export function kalshiTakerEntryOrderBody(input: KalshiEntryBodyInput) {
   return {
     ticker: input.ticker,
     side: kalshiOrderBookSide(input.positionSide, 'entry'),
@@ -169,7 +232,41 @@ export function kalshiTakerEntryOrderBody(input: { ticker: string; positionSide:
     cancel_order_on_pause: true,
     reduce_only: false,
     subaccount: 0,
-    exchange_index: 0,
+    exchange_index: validateKalshiExchangeIndex(input.exchangeIndex),
+    client_order_id: input.clientOrderId,
+  };
+}
+
+export function kalshiMakerEntryOrderBody(input: KalshiEntryBodyInput) {
+  return {
+    ...kalshiTakerEntryOrderBody(input),
+    time_in_force: 'good_till_canceled',
+    post_only: true,
+  };
+}
+
+export function kalshiMakerAmendOrderBody(input: Omit<KalshiEntryBodyInput, 'clientOrderId'>) {
+  return {
+    ticker: input.ticker,
+    side: kalshiOrderBookSide(input.positionSide, 'entry'),
+    price: yesPriceFromSelectedSide(input.selectedLimit, input.positionSide).toFixed(4),
+    count: input.count.toFixed(2),
+    exchange_index: validateKalshiExchangeIndex(input.exchangeIndex),
+  };
+}
+
+export function kalshiExitOrderBody(input: KalshiEntryBodyInput) {
+  return {
+    ticker: input.ticker,
+    side: kalshiOrderBookSide(input.positionSide, 'exit'),
+    count: input.count.toFixed(2),
+    price: yesPriceFromSelectedSide(input.selectedLimit, input.positionSide).toFixed(4),
+    time_in_force: 'immediate_or_cancel',
+    self_trade_prevention_type: 'taker_at_cross',
+    post_only: false,
+    reduce_only: true,
+    subaccount: 0,
+    exchange_index: validateKalshiExchangeIndex(input.exchangeIndex),
     client_order_id: input.clientOrderId,
   };
 }
@@ -189,7 +286,7 @@ async function fillsFor(orderId: string, ticker: string): Promise<KalshiFill[]> 
  */
 export async function placeKalshiBuy(input: {
   ticker: string; positionSide?: PositionSide; priceCents: number; startPriceCents?: number;
-  count: number; clientOrderId: string; onAccepted?: (venueOrderId: string) => Promise<void>;
+  count: number; clientOrderId: string; onAccepted?: (venueOrderId: string, exchangeIndex: number) => Promise<void>;
   onObservation?: (observation: EntryExecutionObservation) => Promise<void>;
 }): Promise<LiveFill> {
   if (!liveTradingEnabled()) throw new Error('Live trading is disabled.');
@@ -208,14 +305,17 @@ export async function placeKalshiBuy(input: {
   };
   const quoteObservation = (event: EntryExecutionObservation['event'], quote: ReturnType<typeof selectedQuote>, limitPrice: number, patch: Partial<EntryExecutionObservation> = {}): EntryExecutionObservation => ({
     at: new Date().toISOString(), event, selectedBid: quote.bid, selectedAsk: quote.ask,
-    spread: quote.ask - quote.bid, limitPrice, touched: quote.ask <= limitPrice + 1e-9,
+    spread: quote.ask - quote.bid, limitPrice, exchangeIndex: quote.exchangeIndex,
+    touched: quote.ask <= limitPrice + 1e-9,
     ...selectedSideDepth(quote.orderBook, positionSide, quote.bid, quote.ask, limitPrice),
     ...patch,
   });
   let orderPrice = 0;
+  let exchangeIndex: number | undefined;
   let created: KalshiCreateOrderV2Response | undefined;
   for (let createAttempt = 0; createAttempt < 3 && !created; createAttempt += 1) {
     const quote = selectedQuote(await preSubmitQuote(input.ticker), positionSide);
+    exchangeIndex = stableKalshiExchangeIndex(exchangeIndex, quote.exchangeIndex);
     // After each acknowledgement race, concede one more valid tick rather than repeatedly chasing
     // the moving ask at the highest passive level. Paper calls this same pure decision.
     orderPrice = initialManagedMakerPrice({
@@ -226,24 +326,15 @@ export async function placeKalshiBuy(input: {
     try {
       created = await kalshiRequest<KalshiCreateOrderV2Response>('/portfolio/events/orders', {
         method: 'POST',
-        body: {
-          ticker: input.ticker,
-          side: kalshiOrderBookSide(positionSide, 'entry'),
-          count: input.count.toFixed(2),
-          // Kalshi's event book is YES-denominated. An ask opens NO exposure; the ledger and risk
-          // cap remain in selected-side cents and are converted only at the signed API boundary.
-          price: yesPriceFromSelectedSide(orderPrice, positionSide).toFixed(4),
-          time_in_force: 'good_till_canceled',
-          self_trade_prevention_type: 'taker_at_cross',
-          post_only: true,
-          cancel_order_on_pause: true,
-          reduce_only: false,
-          subaccount: 0,
-          exchange_index: 0,
+        // Kalshi's event book is YES-denominated. An ask opens NO exposure; the ledger and risk
+        // cap remain in selected-side cents and are converted only at the signed API boundary.
+        body: kalshiMakerEntryOrderBody({
+          ticker: input.ticker, positionSide, selectedLimit: orderPrice, count: input.count,
+          exchangeIndex,
           // A definitively rejected post-only request can safely use a new exact attempt id. The complete
           // episode identity is retained; truncation would let later episodes alias earlier ones.
-          client_order_id: kalshiMakerCreateClientOrderId(input.clientOrderId, createAttempt),
-        },
+          clientOrderId: kalshiMakerCreateClientOrderId(input.clientOrderId, createAttempt),
+        }),
       });
     } catch (error) {
       const message = error instanceof Error ? error.message.toLowerCase() : '';
@@ -255,9 +346,13 @@ export async function placeKalshiBuy(input: {
   }
   const venueOrderId = created?.order_id;
   if (!venueOrderId) throw new Error('Kalshi v2 returned no order id.');
-  await input.onAccepted?.(venueOrderId);
+  const acceptedExchangeIndex = validateKalshiExchangeIndex(exchangeIndex);
+  await input.onAccepted?.(venueOrderId, acceptedExchangeIndex);
   const acceptedAtMs = Date.now();
-  await emit({ at: new Date(acceptedAtMs).toISOString(), event: 'accepted', limitPrice: orderPrice, filledCount: 0, remainingCount: input.count });
+  await emit({
+    at: new Date(acceptedAtMs).toISOString(), event: 'accepted', limitPrice: orderPrice,
+    exchangeIndex: acceptedExchangeIndex, filledCount: 0, remainingCount: input.count,
+  });
 
   let managementError: unknown;
   try {
@@ -271,6 +366,7 @@ export async function placeKalshiBuy(input: {
       if (attempt === MAKER_MANAGEMENT_CHECKS - 1) break;
 
       const quote = selectedQuote(await marketQuote(input.ticker), positionSide);
+      stableKalshiExchangeIndex(acceptedExchangeIndex, quote.exchangeIndex);
       // Progressively traverse the passive spread using the same pure state transition as paper.
       const nextPrice = nextManagedMakerPrice({
         quote, maximumPrice: maximumDollars, currentPrice: orderPrice, managementAttempt: attempt,
@@ -280,7 +376,10 @@ export async function placeKalshiBuy(input: {
       try {
         await kalshiRequest(`/portfolio/events/orders/${encodeURIComponent(venueOrderId)}/amend`, {
           method: 'POST',
-          body: { ticker: input.ticker, side: kalshiOrderBookSide(positionSide, 'entry'), price: yesPriceFromSelectedSide(nextPrice, positionSide).toFixed(4), count: input.count.toFixed(2), exchange_index: 0 },
+          body: kalshiMakerAmendOrderBody({
+            ticker: input.ticker, positionSide, selectedLimit: nextPrice,
+            count: input.count, exchangeIndex: acceptedExchangeIndex,
+          }),
         });
         orderPrice = nextPrice;
         await emit(quoteObservation('amend_accepted', quote, nextPrice, { filledCount: filled, remainingCount: Math.max(0, input.count - filled) }));
@@ -348,7 +447,7 @@ export async function placeKalshiBuy(input: {
     restingDurationMs: Date.now() - acceptedAtMs,
   });
   return {
-    venueOrderId, filledCount, averagePriceCents, feeCents,
+    venueOrderId, exchangeIndex: acceptedExchangeIndex, filledCount, averagePriceCents, feeCents,
     liquidityRole: fills.some((fill) => fill.is_taker) ? 'taker' : 'maker',
     status: filledCount >= input.count ? 'filled' : filledCount > 0 ? 'partial' : 'unfilled',
     executionObservations,
@@ -362,7 +461,7 @@ export async function placeKalshiBuy(input: {
  */
 export async function placeKalshiTakerBuy(input: {
   ticker: string; positionSide?: PositionSide; maximumPriceCents: number; count: number;
-  clientOrderId: string; onAccepted?: (venueOrderId: string) => Promise<void>;
+  clientOrderId: string; onAccepted?: (venueOrderId: string, exchangeIndex: number) => Promise<void>;
   onObservation?: (observation: EntryExecutionObservation) => Promise<void>;
   authorizeQuote?: (quote: { bid: number; ask: number; spread: number }) => string | undefined;
 }): Promise<LiveFill> {
@@ -386,21 +485,24 @@ export async function placeKalshiTakerBuy(input: {
   if (refusal) throw new Error(`Taker not submitted: refreshed quote no longer clears execution policy. ${refusal}`);
   await emit({
     at: new Date().toISOString(), event: 'create_quote', selectedBid: quote.bid, selectedAsk: quote.ask,
-    spread: quote.ask - quote.bid, limitPrice: limit,
+    spread: quote.ask - quote.bid, limitPrice: limit, exchangeIndex: quote.exchangeIndex,
     ...selectedSideDepth(quote.orderBook, positionSide, quote.bid, quote.ask, limit),
   });
   const created = await kalshiRequest<KalshiCreateOrderV2Response>('/portfolio/events/orders', {
     method: 'POST',
     body: kalshiTakerEntryOrderBody({
-      ticker: input.ticker, positionSide, selectedLimit: limit,
+      ticker: input.ticker, positionSide, selectedLimit: limit, exchangeIndex: quote.exchangeIndex,
       count: input.count, clientOrderId: input.clientOrderId,
     }),
   });
   const venueOrderId = created.order_id;
   if (!venueOrderId) throw new Error('Kalshi accepted the taker order but returned no order id.');
-  await input.onAccepted?.(venueOrderId);
+  await input.onAccepted?.(venueOrderId, quote.exchangeIndex);
   const acceptedAtMs = Date.now();
-  await emit({ at: new Date(acceptedAtMs).toISOString(), event: 'accepted', limitPrice: limit, filledCount: 0, remainingCount: input.count });
+  await emit({
+    at: new Date(acceptedAtMs).toISOString(), event: 'accepted', limitPrice: limit,
+    exchangeIndex: quote.exchangeIndex, filledCount: 0, remainingCount: input.count,
+  });
   const cancellationStartedAt = Date.now();
   await confirmKalshiCancellation(
     venueOrderId,
@@ -423,7 +525,7 @@ export async function placeKalshiTakerBuy(input: {
   if (![filledCount, averagePriceCents, feeCents].every(Number.isFinite) || filledCount > input.count + 1e-8) throw new Error('Kalshi returned malformed taker fill terms.');
   await emit({ at: new Date().toISOString(), event: 'terminal_fill', limitPrice: limit, filledCount, remainingCount: Math.max(0, input.count - filledCount), restingDurationMs: Date.now() - acceptedAtMs });
   return {
-    venueOrderId, filledCount, averagePriceCents, feeCents, liquidityRole: 'taker',
+    venueOrderId, exchangeIndex: quote.exchangeIndex, filledCount, averagePriceCents, feeCents, liquidityRole: 'taker',
     status: filledCount >= input.count ? 'filled' : filledCount > 0 ? 'partial' : 'unfilled', executionObservations,
   };
 }
@@ -435,37 +537,29 @@ export async function placeKalshiTakerBuy(input: {
  * account into a short position and leaves no resting remainder. Callers must reconcile a partial
  * fill and must not buy the replacement unless the incumbent closed completely.
  */
-export async function placeKalshiSell(input: { ticker: string; positionSide?: PositionSide; minimumPriceCents: number; count: number; clientOrderId: string; onAccepted?: (venueOrderId: string) => Promise<void> }): Promise<LiveFill> {
+export async function placeKalshiSell(input: { ticker: string; positionSide?: PositionSide; minimumPriceCents: number; count: number; clientOrderId: string; onAccepted?: (venueOrderId: string, exchangeIndex: number) => Promise<void> }): Promise<LiveFill> {
   if (!liveTradingEnabled()) throw new Error('Live trading is disabled.');
   const positionSide = input.positionSide ?? 'UP';
   const countUnits = Math.round(input.count * 100);
   if (!Number.isSafeInteger(countUnits) || countUnits < 1 || Math.abs(input.count * 100 - countUnits) > 1e-8) throw new Error('Live sell count must be at least 0.01 contract in 0.01 increments.');
   if (!Number.isFinite(input.minimumPriceCents) || input.minimumPriceCents < 0.1 || input.minimumPriceCents >= 100) throw new Error('Live sell limit must be between 0.1 and 99.9 cents.');
+  const { exchangeIndex } = await preSubmitMarketIdentity(input.ticker);
   const response = await kalshiRequest<KalshiCreateOrderV2Response>('/portfolio/events/orders', {
     method: 'POST',
-    body: {
-      ticker: input.ticker,
-      side: kalshiOrderBookSide(positionSide, 'exit'),
-      count: input.count.toFixed(2),
-      price: yesPriceFromSelectedSide(input.minimumPriceCents / 100, positionSide).toFixed(4),
-      time_in_force: 'immediate_or_cancel',
-      self_trade_prevention_type: 'taker_at_cross',
-      post_only: false,
-      reduce_only: true,
-      subaccount: 0,
-      exchange_index: 0,
-      client_order_id: input.clientOrderId,
-    },
+    body: kalshiExitOrderBody({
+      ticker: input.ticker, positionSide, selectedLimit: input.minimumPriceCents / 100,
+      count: input.count, clientOrderId: input.clientOrderId, exchangeIndex,
+    }),
   });
   const venueOrderId = response.order_id;
   if (!venueOrderId) throw new Error('Kalshi v2 returned no reduce-only exit order id.');
-  await input.onAccepted?.(venueOrderId);
+  await input.onAccepted?.(venueOrderId, exchangeIndex);
   const filledCount = Number(response.fill_count ?? 0);
   const averagePriceCents = selectedSidePriceFromYes(Number(response.average_fill_price ?? 0), positionSide) * 100;
   const feeCents = Number(response.average_fee_paid ?? 0) * filledCount * 100;
   if (![filledCount, averagePriceCents, feeCents].every(Number.isFinite)) throw new Error('Kalshi returned malformed exit fill terms.');
   return {
-    venueOrderId, filledCount, averagePriceCents, feeCents, liquidityRole: 'taker',
+    venueOrderId, exchangeIndex, filledCount, averagePriceCents, feeCents, liquidityRole: 'taker',
     status: filledCount + 1e-8 >= input.count ? 'filled' : filledCount > 0 ? 'partial' : 'unfilled',
     executionObservations: [],
   };

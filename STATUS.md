@@ -6,11 +6,12 @@
 > **Operational-state warning:** this document records dated snapshots; it is not a live interlock or the
 > authority for whether funded execution is running. Before any operational action, read the authenticated
 > Automation surface and `data/trading-control.json`. At the latest operational snapshot, the control record
-> updated at 2026-08-25T08:04:21.504Z was active / `live`, revision 6,627, with 2,094¢ available, zero
-> reserved, and operator intent active. The external-position ownership correction was loaded through a quiescent
-> pause/drain and built-worker restart. Two subsequent `market_not_found` attempts each reconciled absent and
-> guarded-auto-resumed in about 32 seconds rather than retaining rejected ticker ownership until close. That state
-> may change after publication.
+> updated at 2026-08-25T08:37:07.009Z was active / `live`, revision 6,635, with 2,094¢ available, zero
+> reserved, and operator intent active. The dynamic Kalshi exchange-index wire repair was loaded through a
+> quiescent pause/drain and built-worker restart; startup reconciliation completed READY before explicit Resume.
+> Periodic reconciliation remained READY at 2026-08-25T09:06:57.213Z. No natural eligible intent appeared during
+> the first 30-minute watch, so accepted-wire runtime confirmation remains pending. That state may change after
+> publication.
 
 ## Executive Summary
 
@@ -26,11 +27,42 @@ A second policy runs on the same market — the long-shot round trip, detailed i
 | --- | --- |
 | Dashboard and public paper track record | Functional locally and hosted; bounded summary/full-report split implemented. Managed Postgres access recovered and durable production projections returned 200 after the 2026-08-22 deployment. |
 | Forecast and performance tracking | Collection is implemented; the 2026-08-22 interleaved-writer corruption was repaired into checksum-valid, content-addressed v3 after restoring 88 qualified archived rows. Automatic v3 seals and a 138-file independent Scaleway restore passed on 2026-08-24; aggregate economic conclusions still require recalculation. |
-| Live execution | Kalshi live-capable; repeated-episode identity is repaired under v6. Current-position reconciliation now claims only open or unresolved exact-contract local lifecycles, while genuine overlap remains fail-closed. The latest dated snapshot is active with no blocker. |
+| Live execution | Kalshi live-capable; repeated-episode and external-position ownership are repaired. Event-order bodies now use validated exact-market exchange identity instead of stale index 0; the built runtime is active/READY, with first natural accepted-wire confirmation pending. |
 | Paper execution | Continuous under neutral v6; exact prospective pairing is collecting. F1 is complete and F2 began at 2026-08-25T06:47:41.724Z; its first two-window smoke passed below the 10-window gate. |
 | Model evaluation | Evaluator v2 remains barred from promotion and production remains Blend 0.4. Phase 2 prospective `forecast-candidate-registry-v1` collection is active locally from 2026-08-25T03:17:17.456Z; it has no promotion or order authority. Exact-provider confirmed-signal evaluation is queued after the base final review, followed strictly by venue-candidate, portfolio-selection, live-authorization, and attempt/outcome evaluation. Automatic evaluator-v2 checkpoints remain retired from the worker. |
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
 | Operational safety | Collision-resistant bounded live IDs, exact reconciliation ownership, quiescent drain, account reconciliation, kill switch, and budget/risk ceilings are implemented. Runtime readiness and operator state must be read from the live control surfaces named above, not inferred from this table. |
+
+### Kalshi event-order routing now uses exact dynamic exchange identity, 2026-08-25
+
+[`docs/kalshi-exchange-index-wire-design.md`](docs/kalshi-exchange-index-wire-design.md) repairs a stale funded wire
+constant. The last accepted local live order was created at 03:51:23Z; the next 15 consecutive creates from
+04:11:24Z through 08:03:48Z returned `market_not_found` and reconciled absent. Fresh exact-market API responses for
+all six funded-capable active 08:30Z contracts returned `exchange_index: 2`, while maker create/amend, taker entry,
+and reduce-only exit bodies all hardcoded index 0. Index 2 is current evidence, not the replacement constant.
+
+Every order path now reads the exact signed active market immediately before submission, requires exact ticker,
+active status, and a non-negative safe-integer `exchange_index`, and injects that value into the fixed-decimal wire
+body. Maker create retries capture one index and fail before another submit if it changes; management refreshes
+must retain the accepted index before amendment. Taker entry uses its exact quote index, and reduce-only exit adds a
+fresh exact-market identity read without changing its limit, quantity, or reduce-only semantics. Missing,
+string-coerced, fractional, negative, unsafe, inactive, mismatched, or changing identity has no fallback and fails
+before the next wire request. Accepted entry and exit indexes are durable audit fields only.
+
+Validation passed typecheck, 147 files / 1,168 tests, 59 focused live-order/target/reconciliation tests, lint with
+zero errors / 37 inherited warnings, production build, execution-ledger v9 verification over 4,662 orders, source
+search proving no `exchange_index: 0` remains under `lib/`, and `git diff --check`. Activation used operator
+pause/drain at revision 6,633 with zero reservations; the built worker completed READY startup reconciliation at
+revision 6,634 / 2026-08-25T08:36:46.502Z, and explicit Resume set active revision 6,635 at
+2026-08-25T08:37:07.009Z.
+
+A 30-minute natural-opportunity watch through 09:07Z found zero post-resume reservations. This was not an authority
+block: the adaptive regime gate was open and allowed entries, with 369/12 resolved policy windows, +20.7pp weighted
+recent fee-aware edge, and only 0.5% estimated negative-return probability versus 99% required to pause. The live-
+skip journal instead recorded `none`: no current positive-edge binary buy qualified. The latest seven dashboard
+markets were all `WATCH`. Therefore the source/wire correction and fail-closed tests are complete, but the first
+natural accepted order carrying durable `venueExchangeIndex` remains the runtime confirmation gate; no artificial
+funded test was sent.
 
 ### External venue positions no longer inherit rejected local ownership, 2026-08-25
 

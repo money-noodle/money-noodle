@@ -1395,7 +1395,11 @@ async function executePreparedLiveBuy(
     return;
   }
   try {
-    const onAccepted = async (venueOrderId: string) => { order.venueOrderId = venueOrderId; await writeLedger(ledger); };
+    const onAccepted = async (venueOrderId: string, exchangeIndex: number) => {
+      order.venueOrderId = venueOrderId;
+      order.venueExchangeIndex = exchangeIndex;
+      await writeLedger(ledger);
+    };
     const onObservation = async (observation: NonNullable<PaperOrder['entryExecutionObservations']>[number]) => {
       order.entryExecutionObservations = [...(order.entryExecutionObservations ?? []), observation];
       if (executionStyle === 'maker') {
@@ -1431,6 +1435,7 @@ async function executePreparedLiveBuy(
       throw error;
     }
     order.venueOrderId = fill.venueOrderId;
+    order.venueExchangeIndex = fill.exchangeIndex;
     order.filledCount = fill.filledCount;
     order.liquidityRole = fill.liquidityRole;
     order.entryExecutionObservations = fill.executionObservations;
@@ -1721,8 +1726,13 @@ async function executeLiveStandaloneExit(order: PaperOrder, decision: NonNullabl
         ticker: order.contractId, positionSide: order.side,
         minimumPriceCents: decision.executableBid * 100,
         count: order.quantity, clientOrderId: order.exitClientOrderId,
-        onAccepted: async (venueOrderId) => { order.exitVenueOrderId = venueOrderId; await writeLedger(ledger); },
+        onAccepted: async (venueOrderId, exchangeIndex) => {
+          order.exitVenueOrderId = venueOrderId;
+          order.exitVenueExchangeIndex = exchangeIndex;
+          await writeLedger(ledger);
+        },
       });
+      order.exitVenueExchangeIndex = exit.exchangeIndex;
       order.exitPending = false;
       if (exit.filledCount <= 0) {
         order.reason = `${decision.policy} reduce-only exit received no fill; position retained and no automatic exit retry will occur.`;
@@ -1903,8 +1913,13 @@ async function executeSwitch(plan: SwitchPlan, status: TradingControlData, ledge
     const exit = await placeKalshiSell({
       ticker: incumbent.contractId, positionSide: incumbent.side, minimumPriceCents: plan.exitLimitPriceCents, count: incumbent.quantity,
       clientOrderId: incumbent.exitClientOrderId,
-      onAccepted: async (venueOrderId) => { incumbent.exitVenueOrderId = venueOrderId; await writeLedger(ledger); },
+      onAccepted: async (venueOrderId, exchangeIndex) => {
+        incumbent.exitVenueOrderId = venueOrderId;
+        incumbent.exitVenueExchangeIndex = exchangeIndex;
+        await writeLedger(ledger);
+      },
     });
+    incumbent.exitVenueExchangeIndex = exit.exchangeIndex;
     incumbent.exitPending = false;
     if (exit.filledCount <= 0) {
       recordSwitchSkip('fill', `${incumbent.symbol} reduce-only switch exit did not fill; incumbent retained.`, incumbent, ledger);
@@ -2576,8 +2591,13 @@ async function runLongShot(
           ticker: order.contractId, positionSide: side,
           maximumPriceCents: settings.entryMarkCents, count: fill.quantity,
           clientOrderId: order.clientOrderId!,
-          onAccepted: async (venueOrderId) => { order.venueOrderId = venueOrderId; await writeLedger(ledger); },
+          onAccepted: async (venueOrderId, exchangeIndex) => {
+            order.venueOrderId = venueOrderId;
+            order.venueExchangeIndex = exchangeIndex;
+            await writeLedger(ledger);
+          },
         });
+        order.venueExchangeIndex = live.exchangeIndex;
         if (live.filledCount > 0) {
           Object.assign(order, {
             status: 'open', filledCount: live.filledCount, quantity: live.filledCount,
@@ -2676,8 +2696,13 @@ async function runLongShotExits(bidFor: OwnedSideBid, ledger: Ledger): Promise<b
           ticker: order.contractId, positionSide: order.side,
           minimumPriceCents: decision.limitPriceCents, count: decision.count,
           clientOrderId: order.exitClientOrderId,
-          onAccepted: async (venueOrderId) => { order.exitVenueOrderId = venueOrderId; await writeLedger(ledger); },
+          onAccepted: async (venueOrderId, exchangeIndex) => {
+            order.exitVenueOrderId = venueOrderId;
+            order.exitVenueExchangeIndex = exchangeIndex;
+            await writeLedger(ledger);
+          },
         });
+        order.exitVenueExchangeIndex = exit.exchangeIndex;
         order.exitPending = false;
         if (exit.filledCount <= 0) continue;
         const settlement = targetExitSettlement({

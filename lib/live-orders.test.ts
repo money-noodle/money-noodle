@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { backOffValidKalshiPrice, confirmKalshiCancellation, floorToValidKalshiPrice, kalshiOrderBookSide, kalshiTakerEntryOrderBody, selectedSidePriceFromYes, yesPriceFromSelectedSide } from './live-orders';
+import {
+  backOffValidKalshiPrice, confirmKalshiCancellation, floorToValidKalshiPrice,
+  kalshiExitOrderBody, kalshiMakerAmendOrderBody, kalshiMakerEntryOrderBody,
+  kalshiOrderBookSide, kalshiTakerEntryOrderBody, selectedSidePriceFromYes,
+  stableKalshiExchangeIndex, validateKalshiExchangeIndex, validateKalshiMarketWireIdentity,
+  yesPriceFromSelectedSide,
+} from './live-orders';
 
 const tapered = [
   { start: '0.0000', end: '0.1000', step: '0.0010' },
@@ -48,11 +54,47 @@ describe('Kalshi binary side translation', () => {
     expect(selectedSidePriceFromYes(0.77, 'DOWN')).toBeCloseTo(0.23);
   });
 
-  it('builds price-capped IOC taker entries on the correct signed book side', () => {
-    const up = kalshiTakerEntryOrderBody({ ticker: 'UP', positionSide: 'UP', selectedLimit: 0.23, count: 0.25, clientOrderId: 'up' });
-    const down = kalshiTakerEntryOrderBody({ ticker: 'DOWN', positionSide: 'DOWN', selectedLimit: 0.23, count: 0.25, clientOrderId: 'down' });
-    expect(up).toMatchObject({ side: 'bid', price: '0.2300', time_in_force: 'immediate_or_cancel', post_only: false, reduce_only: false });
-    expect(down).toMatchObject({ side: 'ask', price: '0.7700', time_in_force: 'immediate_or_cancel', post_only: false, reduce_only: false });
+  it('builds every entry, amend, and exit wire body with the exact nonzero exchange index', () => {
+    const common = { ticker: 'UP', positionSide: 'UP' as const, selectedLimit: 0.23, count: 0.25, exchangeIndex: 2 };
+    const up = kalshiTakerEntryOrderBody({ ...common, clientOrderId: 'up' });
+    const down = kalshiTakerEntryOrderBody({ ...common, ticker: 'DOWN', positionSide: 'DOWN', clientOrderId: 'down' });
+    const maker = kalshiMakerEntryOrderBody({ ...common, clientOrderId: 'maker' });
+    const amend = kalshiMakerAmendOrderBody(common);
+    const exit = kalshiExitOrderBody({ ...common, positionSide: 'DOWN', clientOrderId: 'exit' });
+    expect(up).toMatchObject({ side: 'bid', price: '0.2300', time_in_force: 'immediate_or_cancel', post_only: false, reduce_only: false, exchange_index: 2 });
+    expect(down).toMatchObject({ side: 'ask', price: '0.7700', time_in_force: 'immediate_or_cancel', post_only: false, reduce_only: false, exchange_index: 2 });
+    expect(maker).toMatchObject({ side: 'bid', price: '0.2300', time_in_force: 'good_till_canceled', post_only: true, reduce_only: false, exchange_index: 2 });
+    expect(amend).toEqual({ ticker: 'UP', side: 'bid', price: '0.2300', count: '0.25', exchange_index: 2 });
+    expect(exit).toMatchObject({ side: 'bid', price: '0.7700', time_in_force: 'immediate_or_cancel', post_only: false, reduce_only: true, exchange_index: 2 });
+  });
+});
+
+describe('Kalshi exchange-index target integrity', () => {
+  it('accepts only an exact active ticker with a non-negative safe-integer index', () => {
+    expect(validateKalshiMarketWireIdentity('KXBTC-TEST', {
+      ticker: 'KXBTC-TEST', status: 'active', exchange_index: 2,
+    })).toEqual({ ticker: 'KXBTC-TEST', exchangeIndex: 2 });
+  });
+
+  it.each([undefined, '2', 2.5, -1, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects malformed exchange index %s',
+    (value) => expect(() => validateKalshiExchangeIndex(value)).toThrow('invalid exchange_index'),
+  );
+
+  it('rejects mismatched, missing, and inactive exact-market identity', () => {
+    expect(() => validateKalshiMarketWireIdentity('KXBTC-TEST', undefined)).toThrow('did not match');
+    expect(() => validateKalshiMarketWireIdentity('KXBTC-TEST', {
+      ticker: 'KXETH-TEST', status: 'active', exchange_index: 2,
+    })).toThrow('did not match');
+    expect(() => validateKalshiMarketWireIdentity('KXBTC-TEST', {
+      ticker: 'KXBTC-TEST', status: 'closed', exchange_index: 2,
+    })).toThrow('is not active');
+  });
+
+  it('retains one index through a transaction and fails closed if a refresh changes it', () => {
+    expect(stableKalshiExchangeIndex(undefined, 2)).toBe(2);
+    expect(stableKalshiExchangeIndex(2, 2)).toBe(2);
+    expect(() => stableKalshiExchangeIndex(2, 3)).toThrow('changed from 2 to 3');
   });
 });
 
