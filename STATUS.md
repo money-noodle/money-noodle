@@ -6,11 +6,10 @@
 > **Operational-state warning:** this document records dated snapshots; it is not a live interlock or the
 > authority for whether funded execution is running. Before any operational action, read the authenticated
 > Automation surface and `data/trading-control.json`. At the latest operational snapshot, the control record
-> updated at 2026-08-25T07:30:30.583Z was active / `live`, revision 6,611, with 2,094¢ available, zero
-> reserved, and operator intent active after guarded recovery from a system suspension. The local SOL attempt
-> resolved rejected with no accepted venue ID or authoritative fill. The simultaneous unmatched venue position was
-> acceptable activity created outside Money Noodle, not an outcome of that attempt. Reconciliation completed READY
-> after the external mismatch disappeared. That state may change after publication.
+> updated at 2026-08-25T07:55:18.711Z was active / `live`, revision 6,619, with 2,094¢ available, zero
+> reserved, and operator intent active. The external-position ownership correction was loaded through a quiescent
+> pause/drain and built-worker restart; startup full reconciliation completed READY at
+> 2026-08-25T07:55:02.621Z before the explicit Resume. That state may change after publication.
 
 ## Executive Summary
 
@@ -26,11 +25,36 @@ A second policy runs on the same market — the long-shot round trip, detailed i
 | --- | --- |
 | Dashboard and public paper track record | Functional locally and hosted; bounded summary/full-report split implemented. Managed Postgres access recovered and durable production projections returned 200 after the 2026-08-22 deployment. |
 | Forecast and performance tracking | Collection is implemented; the 2026-08-22 interleaved-writer corruption was repaired into checksum-valid, content-addressed v3 after restoring 88 qualified archived rows. Automatic v3 seals and a 138-file independent Scaleway restore passed on 2026-08-24; aggregate economic conclusions still require recalculation. |
-| Live execution | Kalshi live-capable; repeated-episode identity is repaired under v6. After READY/zero-reserved F2 maintenance, the maintainer explicitly resumed funded automation; the latest dated snapshot is active with no blocker. |
-| Paper execution | Continuous under neutral v6; exact prospective pairing is collecting. F1 is complete and the built F2 timing observer is loaded, but its evidence clock awaits the first eligible durable paper maker decision. |
+| Live execution | Kalshi live-capable; repeated-episode identity is repaired under v6. Current-position reconciliation now claims only open or unresolved exact-contract local lifecycles, while genuine overlap remains fail-closed. The latest dated snapshot is active with no blocker. |
+| Paper execution | Continuous under neutral v6; exact prospective pairing is collecting. F1 is complete and F2 began at 2026-08-25T06:47:41.724Z; its first two-window smoke passed below the 10-window gate. |
 | Model evaluation | Evaluator v2 remains barred from promotion and production remains Blend 0.4. Phase 2 prospective `forecast-candidate-registry-v1` collection is active locally from 2026-08-25T03:17:17.456Z; it has no promotion or order authority. Exact-provider confirmed-signal evaluation is queued after the base final review, followed strictly by venue-candidate, portfolio-selection, live-authorization, and attempt/outcome evaluation. Automatic evaluator-v2 checkpoints remain retired from the worker. |
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
 | Operational safety | Collision-resistant bounded live IDs, exact reconciliation ownership, quiescent drain, account reconciliation, kill switch, and budget/risk ceilings are implemented. Runtime readiness and operator state must be read from the live control surfaces named above, not inferred from this table. |
+
+### External venue positions no longer inherit rejected local ownership, 2026-08-25
+
+[`docs/external-venue-position-ownership-design.md`](docs/external-venue-position-ownership-design.md) corrects the
+exact-contract ownership boundary exposed by acceptable BNB and SOL positions created outside Money Noodle. The
+previous current-position check treated every future-closing local row as an owner, including authoritatively
+rejected and unfilled attempts. It could therefore compare an external venue position against local open quantity
+zero and hold funded operation suspended until contract close.
+
+`reconcileExecutionLedger` now claims a future exact ticker only while a local live Kalshi entry is `open`,
+`pending_reservation`, `uncertain`, or exit-pending. Rejected, unfilled, sold, won, lost, and invalid rows do not own
+current position. Pending and uncertain rows still claim the ticker with expected quantity zero, and open rows
+still require exact signed venue quantity, so a lost response, hidden fill, overlapping external position, or exit
+contradiction remains fail-closed. Unrelated resting orders, duplicate identity, fill/reservation ceilings, venue
+cash, global risk, and all budget/accounting behavior are unchanged. External activity receives no local ledger or
+P&L authority.
+
+The status/side fault grid passed 31 focused reconciliation tests and the complete repository passed typecheck,
+147 files / 1,156 tests, lint with zero errors / 37 inherited warnings, production build, execution-ledger v9
+verification over 4,653 orders, and `git diff --check`. Activation used manual pause/drain at revision 6,617 with
+zero reservations and READY full reconciliation; the built worker completed startup full reconciliation READY at
+revision 6,618 / 2026-08-25T07:55:02.621Z. The maintainer-approved explicit Resume set active revision 6,619 at
+2026-08-25T07:55:18.711Z. The first post-restart periodic incremental reconciliation completed READY with no
+blocker at 2026-08-25T08:00:04.766Z. Simultaneous external and Money Noodle ownership of one exact ticker remains
+unsupported and blocking.
 
 ### Paper settlement operationally healthy but last-day economics negative, 2026-08-25
 
@@ -146,9 +170,9 @@ predict that provider response. There were zero accepted live makers and zero po
 recall is undefined and the 10-window wiring gate remains closed.
 
 Attribution correction: the simultaneous unmatched BNB and SOL venue positions were acceptable activity created
-outside Money Noodle, not outcomes of the local `market_not_found` attempts. The current account-wide reconciler
-cannot causally own that external activity, so it remained fail-closed until each mismatch disappeared and then ran
-guarded auto-resume. No local accepted venue ID or fill was recovered. The overlap is not evidence of a Money Noodle
+outside Money Noodle, not outcomes of the local `market_not_found` attempts. The pre-correction account-wide
+reconciler retained rejected local ticker ownership, so it remained fail-closed until each external mismatch
+disappeared and then ran guarded auto-resume. No local accepted venue ID or fill was recovered. The overlap is not evidence of a Money Noodle
 accounting contradiction or of paper calibration behavior. Full method, counts, timing, and caveats:
 [`reports/paper-execution-timing-smoke-2026-08-25.md`](reports/paper-execution-timing-smoke-2026-08-25.md).
 Continue F2 unchanged to 10 independent windows; no model or policy change is authorized.

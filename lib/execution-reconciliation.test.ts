@@ -198,6 +198,55 @@ describe('Kalshi execution ledger reconciliation', () => {
     expect(result.issues.join(' ')).toContain('does not match local open quantity');
   });
 
+  it.each(['rejected', 'unfilled', 'won', 'lost', 'sold', 'invalid'] as const)(
+    'does not let a future %s row claim an external same-ticker position',
+    (status) => {
+      const result = reconcileExecutionLedger([local({ status })], snapshot({
+        positions: [{ ticker: 'KXBTC-TEST', quantity: 1.25, exposureDollars: 0.4 }],
+      }), now);
+      expect(result.issues).toEqual([]);
+      expect(result.venueManagedPositions).toBe(0);
+    },
+  );
+
+  it.each(['pending_reservation', 'uncertain'] as const)(
+    'keeps a fresh %s row fail-closed against an external same-ticker position',
+    (status) => {
+      const freshNow = Date.parse('2026-01-01T00:01:10.000Z');
+      const result = reconcileExecutionLedger([local({ status })], snapshot({
+        positions: [{ ticker: 'KXBTC-TEST', quantity: 1.25, exposureDollars: 0.4 }],
+      }), freshNow);
+      expect(result.issues.join(' ')).toContain('does not match local open quantity 0.00');
+      expect(result.venueManagedPositions).toBe(1);
+    },
+  );
+
+  it('keeps an exit-pending row in current position ownership', () => {
+    const result = reconcileExecutionLedger([local({
+      status: 'rejected', exitPending: true, exitRequestedAt: '2026-01-01T00:04:50.000Z',
+    })], snapshot({
+      positions: [{ ticker: 'KXBTC-TEST', quantity: 0.2, exposureDollars: 0.058 }],
+    }), now);
+    expect(result.issues.join(' ')).toContain('does not match local open quantity 0.00');
+    expect(result.venueManagedPositions).toBe(1);
+  });
+
+  it('does not let a rejected ticker hide a contradiction on an actively owned ticker', () => {
+    const other = local({
+      id: `live:ETH:${closesAt}`, clientOrderId: `live:ETH:${closesAt}`, contractId: 'KXETH-TEST',
+      status: 'open', venueOrderId: 'venue-eth', quantity: 0.2, filledCount: 0.2,
+    });
+    const result = reconcileExecutionLedger([local({ status: 'rejected' }), other], snapshot({
+      positions: [
+        { ticker: 'KXBTC-TEST', quantity: 1.25, exposureDollars: 0.4 },
+        { ticker: 'KXETH-TEST', quantity: 0.1, exposureDollars: 0.03 },
+      ],
+    }), now);
+    expect(result.issues.join(' ')).not.toContain('KXBTC-TEST');
+    expect(result.issues.join(' ')).toContain('KXETH-TEST: Kalshi position 0.10 does not match local open quantity 0.20');
+    expect(result.venueManagedPositions).toBe(1);
+  });
+
   it('blocks for unrelated resting orders rather than canceling or ignoring them', () => {
     const manual = { ...venueOrder, orderId: 'manual', clientOrderId: 'manual-order', status: 'resting', remainingCount: 0.3 };
     const result = reconcileExecutionLedger([], snapshot({ restingOrders: [manual] }), now);

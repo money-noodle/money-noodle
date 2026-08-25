@@ -135,9 +135,11 @@ I/O never sits inside the shared ledger serializer.
   and every normal readiness check clear.
 - Startup/manual/drain failures remain blocking and never fabricate restart safety.
 - Paper, research, and terminal settlement do not inherit live reconciliation failure.
-- Current cash, positions, resting orders, malformed rows, incomplete cursors, duplicate venue ownership,
-  overfill, reservation-ceiling violations, and unrelated resting orders retain their existing fail-closed
-  checks.
+- Current cash, positions claimed by a local open/pending/uncertain/exit-pending lifecycle, resting orders,
+  malformed rows, incomplete cursors, duplicate venue ownership, overfill, reservation-ceiling violations, and
+  unrelated resting orders retain fail-closed checks. A terminal or authoritatively rejected local row does not
+  claim an exact ticker until close; acceptable external position activity remains outside the local ledger. See
+  `external-venue-position-ownership-design.md`.
 
 ## 7. Scope boundaries
 

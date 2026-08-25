@@ -47,6 +47,14 @@ function fillTotals(fills: KalshiFillRecord[], side: PaperOrder['side']): { coun
 
 const isTerminal = (status: PaperOrder['status']) => status === 'won' || status === 'lost' || status === 'invalid' || status === 'sold';
 
+/** A local lifecycle row claims current venue position only while it can still own exposure. A rejected
+ * or unfilled attempt is not an owner merely because its contract has not closed yet. */
+function claimsCurrentVenuePosition(order: PaperOrder, nowMs: number): boolean {
+  return Date.parse(order.closesAt) > nowMs
+    && (order.status === 'open' || order.status === 'pending_reservation'
+      || order.status === 'uncertain' || order.exitPending === true);
+}
+
 function realizedEntryPortion(order: PaperOrder, orders: PaperOrder[]): {
   quantity: number; purchaseCents: number; feeCents: number; stakeCents: number;
   exitGrossProceedsCents: number; exitFeeCents: number;
@@ -249,12 +257,14 @@ export function reconcileExecutionLedger(localOrders: PaperOrder[], snapshot: Ka
   for (const resting of snapshot.restingOrders) issues.push(`${resting.orderId}: unrelated resting Kalshi order (${resting.clientOrderId || 'no client id'}) must be reviewed before automation resumes.`);
 
   const expectedByTicker = new Map<string, number>();
-  for (const order of orders.filter((item) => item.executionMode === 'live' && item.venue === 'kalshi' && item.status === 'open' && Date.parse(item.closesAt) > nowMs)) {
+  for (const order of orders.filter((item) => item.executionMode === 'live' && item.venue === 'kalshi'
+    && item.status === 'open' && claimsCurrentVenuePosition(item, nowMs))) {
     const signedQuantity = order.side === 'UP' ? order.quantity : -order.quantity;
     expectedByTicker.set(order.contractId, (expectedByTicker.get(order.contractId) ?? 0) + signedQuantity);
   }
   let venueManagedPositions = 0;
-  const currentManagedTickers = new Set(localLive.filter((order) => Date.parse(order.closesAt) > nowMs).map((order) => order.contractId));
+  const currentManagedTickers = new Set(localLive.filter((order) => claimsCurrentVenuePosition(order, nowMs))
+    .map((order) => order.contractId));
   for (const ticker of currentManagedTickers) {
     const expected = expectedByTicker.get(ticker) ?? 0;
     const actual = snapshot.positions.find((position) => position.ticker === ticker)?.quantity ?? 0;

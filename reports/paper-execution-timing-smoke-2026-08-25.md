@@ -7,6 +7,9 @@
 > **Attribution correction:** the unmatched venue positions observed during this watch were created outside Money
 > Noodle and were acceptable operator activity. Temporal overlap did not make them outcomes of Money Noodle's
 > `market_not_found` attempts. The original monitoring interpretation incorrectly joined those events causally.
+> A subsequent ownership correction now prevents a rejected local attempt from claiming that external position;
+> genuine open or unresolved same-ticker overlap remains fail-closed. See
+> `docs/external-venue-position-ownership-design.md`.
 
 ## Question and method
 
@@ -87,10 +90,12 @@ Two distinct event families overlapped and must not be joined causally:
    identified these as acceptable orders created outside Money Noodle—not hidden outcomes of the two local create
    attempts.
 
-Because reconciliation is account-wide and does not own those external causal records, it suspended until the
-external position mismatches disappeared: READY at 2026-08-25T07:00:30Z for BNB and at
-2026-08-25T07:30:30Z for SOL, followed by guarded auto-resume. That is expected fail-closed behavior under the
-current ownership model, not evidence of a Money Noodle accounting contradiction.
+The then-current position check let any future-closing local row claim its ticker even after rejection. It therefore
+suspended until the external position mismatches disappeared: READY at 2026-08-25T07:00:30Z for BNB and at
+2026-08-25T07:30:30Z for SOL, followed by guarded auto-resume. This was not evidence of a Money Noodle accounting
+contradiction, but the rejected-row ownership scope was unnecessarily broad. The later approved correction limits
+current-position ownership to open, pending-reservation, uncertain, or exit-pending rows; it does not permit true
+same-ticker ownership overlap.
 
 The final local attempt rows are rejected with no accepted venue ID or authoritative fill, reservations returned to
 zero, and control revision 6,611 was active with 2,094¢ available. The timing observer logged no runtime error. Its
