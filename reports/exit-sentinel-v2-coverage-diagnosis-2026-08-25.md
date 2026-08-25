@@ -1,10 +1,11 @@
 # Exit-sentinel v2 coverage diagnosis — 2026-08-25
 
-> **Finding:** the published 68.0% live / 69.2% paper completeness is primarily a denominator defect, not public-
-> evidence availability. V2 classifies maintenance cycles at or after contract close as unavailable exit-evaluation
+> **Finding:** the initial 68.0% live / 69.2% paper completeness was primarily a denominator defect, not public-
+> evidence availability. V2 classified maintenance cycles at or after contract close as unavailable exit-evaluation
 > opportunities while waiting for settlement. An exit cannot execute after close, and delayed outcome publication
-> can add many such false misses. Published coverage and every `reviewUnlocked` flag remain unchanged pending an
-> approved measurement-semantics repair; no exit or funded behavior changes.
+> can add many such false misses. The maintainer approved Option A on 2026-08-25: v2 now counts only exact pre-close
+> evaluator opportunities, producing 96.0% live / 90.38% paper coverage at the fixed diagnostic boundary. Every
+> `reviewUnlocked` flag remains false; no exit or funded behavior changes.
 
 ## Question and reproducible method
 
@@ -77,7 +78,9 @@ non-opportunities from the denominator, gives:
 | Live | 48 / 50 | **96.00%** | 14 / 16 | 2 |
 | Paper | 47 / 52 | **90.38%** | 11 / 16 | 5 |
 
-This is not a revised official result. It proves that continuing unchanged does not measure the intended gate:
+At diagnosis time this was a mechanical counterfactual. After explicit approval it became the official v2
+opportunity denominator, without changing any underlying event. It proves that continuing unchanged did not
+measure the intended gate:
 future late fills will predictably fail when one post-close cycle is a large share of their short path, and a slow
 settlement can invalidate even a long, fully observed path.
 
@@ -105,20 +108,26 @@ windows. They are genuine unavailable evidence and should never be converted to 
 
 ## 5. Effect on economic review
 
-This diagnosis does not score the mechanically recovered positions or recompute candidate economics. Doing so
-before approving the correction would let a reporting defect silently change an efficacy cohort after outcomes
-were known. The official report remains:
+The diagnosis deliberately did not score the recovered positions before the maintainer chose the correction.
+After Option A was approved, the same pure report applied the close-bounded denominator to all arms. The stateful
+runtime report recalculated at **2026-08-25T16:48Z** contained 48 complete live positions across 36 windows and 47
+complete paper positions across 39 windows:
 
-- live: 34 complete positions / 30 windows;
-- paper: 36 complete positions / 31 windows;
-- every candidate `reviewUnlocked: false`.
+| Candidate | Live incremental cash | Live clustered mean ± SE | Live divergences | Paper incremental cash | Paper clustered mean ± SE | Paper divergences |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| margin 3¢ | +172.2262¢ | +15.07pp ±10.04pp | 12 | +19.5370¢ | +1.99pp ±2.23pp | 15 |
+| margin 5¢ | +196.4662¢ | +17.31pp ±9.93pp | 12 | +25.5140¢ | +2.55pp ±2.35pp | 12 |
+| confirm 2 | +99.8752¢ | +7.53pp ±8.84pp | 9 | −136.8080¢ | −7.04pp ±4.43pp | 11 |
+| trailing 50/35 | +38.4622¢ | +2.98pp ±5.87pp | 11 | +11.7980¢ | +7.96pp ±6.07pp | 17 |
 
-Even the mechanical coverage view remains below the separate 60-window and 20-divergent-window requirements, so
-correcting this defect would not immediately authorize review or production change.
+Coverage now passes its isolated 90% threshold, but no track has 60 complete windows or 20 divergent windows.
+The table is uncorrected interim evidence, not a Holm result; live remains optimistic bid replay, and the approved
+outcome-known denominator correction materially changed which positions could be scored. Every candidate remains
+`reviewUnlocked: false`. The correction therefore does not authorize review or production change.
 
-## 6. Repair options requiring approval
+## 6. Decision and implementation
 
-### Option A — correct v2 opportunity semantics
+### Option A — correct v2 opportunity semantics — **approved 2026-08-25**
 
 Amend v2 so an evaluation opportunity is classified only when:
 
@@ -138,10 +147,10 @@ Implementation would:
 7. keep all review and promotion locks unchanged.
 
 This matches the approved design's “actual evaluator opportunities” language and repairs a measurement invariant,
-not an economic threshold. Because it raises historical v2 coverage after outcomes are visible, it still requires
-an explicit written amendment and review before code.
+not an economic threshold. Because it raises historical v2 coverage after outcomes are visible, implementation
+followed the maintainer's explicit approval and the written §10 design amendment before code.
 
-### Option B — start a new evidence generation
+### Option B — start a new evidence generation — not selected
 
 Leave v2 reporting unchanged, implement the same close-bounded semantics as v3, and reset prospective evidence.
 This is maximally conservative against retrospective cohort changes but discards 98%+ valid pre-close observation
@@ -155,6 +164,7 @@ remains selected by non-executable post-close events.
 
 ## Decision boundary
 
-The diagnosis is complete. No store, report, candidate, exit, order, capital, control, or runtime behavior changed.
-The next step is maintainer agreement on Option A or B, followed by a design amendment before implementation.
-Nothing here is financial advice.
+The diagnosis and approved accounting repair are complete. Existing store and journal events were not migrated or
+backfilled; the report now omits only timestamp-proven non-opportunities, and future maintenance does not append
+them. Candidate observations at or after close are rejected defensively. No candidate, production exit, order,
+capital, control, reconciliation, or operator-intent behavior changed. Nothing here is financial advice.

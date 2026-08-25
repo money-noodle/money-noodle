@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   EXIT_CANDIDATE_IDS, advanceExitCandidateStates, appendExitEvaluationCycle, appendExitSentinelObservation,
   buildExitPolicySentinelReport, exitPolicySentinelFromOrder, exitSentinelObservation,
-  exitSentinelPathComplete, holmSignificantExitCandidates, validExitIocSimulation,
+  exitSentinelPathComplete, holmSignificantExitCandidates, isExitEvaluationOpportunity, validExitIocSimulation,
   type ExitCandidateId, type ExitCandidateReport, type ExitCandidateState, type ExitSentinelObservation,
 } from './exit-policy-sentinel';
 import { EDGE_BINARY_BUY, LONG_SHOT_ROUND_TRIP } from './strategy-registry';
@@ -141,20 +141,53 @@ describe('exit sentinel evidence', () => {
     expect(exitPolicySentinelFromOrder(order({ strategyId: LONG_SHOT_ROUND_TRIP }), observation().at)).toBeNull();
   });
 
-  it('uses classified evaluator-cycle coverage rather than elapsed wall-clock gaps', () => {
+  it('uses only classified evaluator opportunities before exact contract close', () => {
     let sentinel = exitPolicySentinelFromOrder(order(), observation().at)!;
     sentinel = appendExitSentinelObservation(sentinel, observation({ secondsRemaining: 50 }));
     sentinel = appendExitEvaluationCycle(sentinel, { at: '2026-08-20T00:00:10Z', classification: 'observed' });
     sentinel = appendExitEvaluationCycle(sentinel, { at: '2026-08-20T00:00:50Z', classification: 'observed' });
-    sentinel.resolvedAt = '2026-08-20T00:01:01Z';
+    expect(isExitEvaluationOpportunity(sentinel, sentinel.positionOpenedAt)).toBe(true);
+    expect(isExitEvaluationOpportunity(sentinel, sentinel.closesAt)).toBe(false);
+    expect(isExitEvaluationOpportunity(sentinel, '2026-08-19T23:59:59.999Z')).toBe(false);
+
+    const unresolved = { ...sentinel };
+    expect(appendExitEvaluationCycle(unresolved, {
+      at: sentinel.closesAt, classification: 'unavailable',
+    })).toBe(unresolved);
+    expect(appendExitSentinelObservation(unresolved, observation({
+      at: sentinel.closesAt, secondsRemaining: 0, netLiquidationCents: 100,
+    }))).toBe(unresolved);
+
+    // Historical journal bytes remain immutable. Defensive reporting excludes their post-close
+    // non-opportunities, so delayed settlement publication cannot dilute an otherwise complete path.
+    sentinel.evaluationCycles = [...sentinel.evaluationCycles,
+      { at: sentinel.closesAt, classification: 'unavailable' },
+      { at: '2026-08-20T00:01:15Z', classification: 'unavailable' }];
+    sentinel.resolvedAt = '2026-08-20T00:01:16Z';
     sentinel.outcome = 'UP';
     sentinel.holdPnlCents = 40;
     expect(exitSentinelPathComplete(sentinel)).toBe(true);
-    const incomplete = appendExitEvaluationCycle({ ...sentinel, resolvedAt: undefined }, {
+
+    const incomplete = appendExitEvaluationCycle({
+      ...sentinel, resolvedAt: undefined,
+      evaluationCycles: sentinel.evaluationCycles.filter((cycle) => isExitEvaluationOpportunity(sentinel, cycle.at)),
+    }, {
       at: '2026-08-20T00:00:55Z', classification: 'unavailable',
     });
     incomplete.resolvedAt = sentinel.resolvedAt;
     expect(exitSentinelPathComplete(incomplete)).toBe(false);
+  });
+
+  it('keeps missing paper trigger-time IOC evidence incomplete after close bounding', () => {
+    let sentinel = exitPolicySentinelFromOrder(order({ executionMode: 'paper' }), observation().at)!;
+    sentinel = appendExitSentinelObservation(sentinel, observation());
+    sentinel = appendExitEvaluationCycle(sentinel, { at: observation().at, classification: 'observed' });
+    sentinel.evaluationCycles.push({ at: sentinel.closesAt, classification: 'unavailable' });
+    sentinel.resolvedAt = '2026-08-20T00:01:01Z';
+    sentinel.outcome = 'UP';
+    sentinel.holdPnlCents = 40;
+    expect(sentinel.candidateStates['strict-value-margin3c-v1'].trigger).toBeDefined();
+    expect(exitSentinelPathComplete(sentinel)).toBe(false);
   });
 
   it('scores paper candidate exits from depth-bounded partial IOC proceeds plus the held remainder', () => {

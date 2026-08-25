@@ -290,10 +290,21 @@ export function exitPolicySentinelFromOrder(
   };
 }
 
+export function isExitEvaluationOpportunity(
+  sentinel: Pick<ExitPolicySentinel, 'positionOpenedAt' | 'closesAt'>, at: string,
+): boolean {
+  const openedAtMs = Date.parse(sentinel.positionOpenedAt);
+  const closesAtMs = Date.parse(sentinel.closesAt);
+  const atMs = Date.parse(at);
+  return Number.isFinite(openedAtMs) && Number.isFinite(closesAtMs) && Number.isFinite(atMs)
+    && openedAtMs <= atMs && atMs < closesAtMs;
+}
+
 export function appendExitSentinelObservation(
   sentinel: ExitPolicySentinel, observation: ExitSentinelObservation,
 ): ExitPolicySentinel {
-  if (sentinel.resolvedAt || sentinel.invalidReason || sentinel.observations.some((item) => item.at === observation.at)) return sentinel;
+  if (sentinel.resolvedAt || sentinel.invalidReason || !isExitEvaluationOpportunity(sentinel, observation.at)
+    || sentinel.observations.some((item) => item.at === observation.at)) return sentinel;
   const last = sentinel.observations.at(-1);
   if (last && Date.parse(observation.at) < Date.parse(last.at)) return sentinel;
   return {
@@ -306,16 +317,19 @@ export function appendExitSentinelObservation(
 export function appendExitEvaluationCycle(
   sentinel: ExitPolicySentinel, cycle: ExitEvaluationCycle,
 ): ExitPolicySentinel {
-  if (sentinel.resolvedAt || sentinel.invalidReason || sentinel.evaluationCycles.some((item) => item.at === cycle.at)) return sentinel;
+  if (sentinel.resolvedAt || sentinel.invalidReason || !isExitEvaluationOpportunity(sentinel, cycle.at)
+    || sentinel.evaluationCycles.some((item) => item.at === cycle.at)) return sentinel;
   const last = sentinel.evaluationCycles.at(-1);
   if (last && Date.parse(cycle.at) < Date.parse(last.at)) return sentinel;
   return { ...sentinel, evaluationCycles: [...sentinel.evaluationCycles, cycle] };
 }
 
 export function exitSentinelPathComplete(sentinel: ExitPolicySentinel): boolean {
-  if (!sentinel.resolvedAt || sentinel.invalidReason || !sentinel.evaluationCycles.length) return false;
-  const observedCycles = sentinel.evaluationCycles.filter((cycle) => cycle.classification === 'observed').length;
-  if (observedCycles / sentinel.evaluationCycles.length + 1e-12 < EXIT_POLICY_MINIMUM_COVERAGE) return false;
+  if (!sentinel.resolvedAt || sentinel.invalidReason) return false;
+  const evaluationCycles = sentinel.evaluationCycles.filter((cycle) => isExitEvaluationOpportunity(sentinel, cycle.at));
+  if (!evaluationCycles.length) return false;
+  const observedCycles = evaluationCycles.filter((cycle) => cycle.classification === 'observed').length;
+  if (observedCycles / evaluationCycles.length + 1e-12 < EXIT_POLICY_MINIMUM_COVERAGE) return false;
   if (sentinel.executionMode === 'paper') {
     for (const state of Object.values(sentinel.candidateStates)) {
       if (state.trigger && !state.trigger.exitIocSimulation?.evidenceComplete) return false;

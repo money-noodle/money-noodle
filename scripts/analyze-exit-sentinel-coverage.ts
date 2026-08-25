@@ -1,17 +1,18 @@
 /**
  * Measure: active-generation exit-sentinel path coverage, split into genuine pre-close evaluator gaps,
  * non-opportunity cycles at/after contract close, and paper trigger-time depth gaps.
- * Deciding correction: this script does not change the published report; it shows the mechanical counterfactual
- * where cycles at or after the exact UTC close are excluded because an exit can no longer execute then.
+ * Deciding correction: compare the legacy all-cycle denominator with the approved close-bounded v2 semantics,
+ * where only cycles from position opening up to (but not including) exact UTC close are evaluator opportunities.
  * Main biases: it reads only locally durable events, cannot explain a public quote that was never returned, and
- * the counterfactual may diagnose a reporting defect but can never promote an exit candidate.
+ * the denominator comparison diagnoses coverage only and can never promote an exit candidate.
  */
 import 'server-only';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ENTRY_EXECUTION_POLICY_VERSION } from '../lib/entry-execution-policy';
 import {
-  EXIT_POLICY_MINIMUM_COVERAGE, exitSentinelPathComplete, type ExitPolicySentinel,
+  EXIT_POLICY_MINIMUM_COVERAGE, exitSentinelPathComplete, isExitEvaluationOpportunity,
+  type ExitPolicySentinel,
 } from '../lib/exit-policy-sentinel';
 import {
   replayExitPolicySentinelEvents, type ExitPolicySentinelEvent, type ExitPolicySentinelStore,
@@ -27,6 +28,16 @@ const journalLines = (await readFile(path.join(dataDir, 'exit-policy-sentinels-v
   .split('\n').filter(Boolean);
 const events = journalLines.map((line) => JSON.parse(line) as ExitPolicySentinelEvent);
 const sentinels = replayExitPolicySentinelEvents(snapshot.sentinels, events);
+const recordedCyclesById = new Map(snapshot.sentinels.map((sentinel) => [sentinel.id, [...sentinel.evaluationCycles]]));
+for (const event of events) {
+  if (event.op !== 'evaluation-cycle') continue;
+  const cycles = recordedCyclesById.get(event.id) ?? [];
+  if (!cycles.some((cycle) => cycle.at === event.value.at)) cycles.push(event.value);
+  recordedCyclesById.set(event.id, cycles);
+}
+const withRecordedCycles = (sentinel: ExitPolicySentinel): ExitPolicySentinel => ({
+  ...sentinel, evaluationCycles: recordedCyclesById.get(sentinel.id) ?? sentinel.evaluationCycles,
+});
 const ledger = await readExecutionLedger();
 const orderIds = new Set(ledger.orders.map((order: { id: string }) => order.id));
 const executionPolicyVersions: Record<ExecutionMode, string> = {
@@ -42,16 +53,13 @@ function triggerMissingPaperBook(sentinel: ExitPolicySentinel): string[] {
 }
 
 function precloseCycles(sentinel: ExitPolicySentinel) {
-  const closeMs = Date.parse(sentinel.closesAt);
-  return sentinel.evaluationCycles.filter((cycle) => Date.parse(cycle.at) < closeMs);
+  return sentinel.evaluationCycles.filter((cycle) => isExitEvaluationOpportunity(sentinel, cycle.at));
 }
 
-function adjustedComplete(sentinel: ExitPolicySentinel): boolean {
-  if (!sentinel.resolvedAt || sentinel.invalidReason) return false;
-  const cycles = precloseCycles(sentinel);
-  if (!cycles.length) return false;
-  const observed = cycles.filter((cycle) => cycle.classification === 'observed').length;
-  return observed / cycles.length + 1e-12 >= EXIT_POLICY_MINIMUM_COVERAGE
+function legacyPathComplete(sentinel: ExitPolicySentinel): boolean {
+  if (!sentinel.resolvedAt || sentinel.invalidReason || !sentinel.evaluationCycles.length) return false;
+  const observed = sentinel.evaluationCycles.filter((cycle) => cycle.classification === 'observed').length;
+  return observed / sentinel.evaluationCycles.length + 1e-12 >= EXIT_POLICY_MINIMUM_COVERAGE
     && triggerMissingPaperBook(sentinel).length === 0;
 }
 
@@ -61,17 +69,18 @@ function summarize(mode: ExecutionMode) {
     && sentinel.executionPolicyVersion === executionPolicyVersions[mode]);
   const resolved = positions.filter((sentinel) => sentinel.resolvedAt && sentinel.holdPnlCents !== undefined
     && !sentinel.invalidReason && orderIds.has(sentinel.orderId));
-  const complete = resolved.filter(exitSentinelPathComplete);
-  const incomplete = resolved.filter((sentinel) => !exitSentinelPathComplete(sentinel));
-  const allCycles = resolved.flatMap((sentinel) => sentinel.evaluationCycles.map((cycle) => ({ sentinel, cycle })));
+  const legacyComplete = resolved.filter((sentinel) => legacyPathComplete(withRecordedCycles(sentinel)));
+  const closeBoundedComplete = resolved.filter(exitSentinelPathComplete);
+  const legacyIncomplete = resolved.filter((sentinel) => !legacyPathComplete(withRecordedCycles(sentinel)));
+  const allCycles = resolved.flatMap((sentinel) => withRecordedCycles(sentinel).evaluationCycles
+    .map((cycle) => ({ sentinel, cycle })));
   const postClose = allCycles.filter(({ sentinel, cycle }) => Date.parse(cycle.at) >= Date.parse(sentinel.closesAt));
-  const preClose = allCycles.filter(({ sentinel, cycle }) => Date.parse(cycle.at) < Date.parse(sentinel.closesAt));
-  const adjusted = resolved.filter(adjustedComplete);
+  const preClose = allCycles.filter(({ sentinel, cycle }) => isExitEvaluationOpportunity(sentinel, cycle.at));
   return {
     positions: positions.length,
     resolvedPositions: resolved.length,
-    publishedCompletePositions: complete.length,
-    publishedCoverage: resolved.length ? complete.length / resolved.length : 0,
+    legacyCompletePositions: legacyComplete.length,
+    legacyCoverage: resolved.length ? legacyComplete.length / resolved.length : 0,
     cycles: {
       total: allCycles.length,
       preClose: preClose.length,
@@ -81,12 +90,13 @@ function summarize(mode: ExecutionMode) {
       postCloseObserved: postClose.filter(({ cycle }) => cycle.classification === 'observed').length,
       postCloseUnavailable: postClose.filter(({ cycle }) => cycle.classification === 'unavailable').length,
     },
-    mechanicalCounterfactualExcludingPostClose: {
-      completePositions: adjusted.length,
-      coverage: resolved.length ? adjusted.length / resolved.length : 0,
-      authority: 'diagnostic only; published coverage and reviewUnlocked remain unchanged',
+    approvedCloseBoundedCoverage: {
+      completePositions: closeBoundedComplete.length,
+      coverage: resolved.length ? closeBoundedComplete.length / resolved.length : 0,
+      authority: 'official v2 reporting semantics approved 2026-08-25',
     },
-    incompletePositions: incomplete.map((sentinel) => {
+    legacyIncompletePositions: legacyIncomplete.map((currentSentinel) => {
+      const sentinel = withRecordedCycles(currentSentinel);
       const preClose = precloseCycles(sentinel);
       const preCloseObserved = preClose.filter((cycle) => cycle.classification === 'observed').length;
       const postClose = sentinel.evaluationCycles.filter((cycle) => Date.parse(cycle.at) >= Date.parse(sentinel.closesAt));
@@ -105,7 +115,7 @@ function summarize(mode: ExecutionMode) {
         postCloseCycles: postClose.length,
         postCloseUnavailable: postClose.filter((cycle) => cycle.classification === 'unavailable').length,
         missingPaperTriggerBookEvidence: triggerMissingPaperBook(sentinel),
-        adjustedComplete: adjustedComplete(sentinel),
+        closeBoundedComplete: exitSentinelPathComplete(sentinel),
       };
     }),
   };

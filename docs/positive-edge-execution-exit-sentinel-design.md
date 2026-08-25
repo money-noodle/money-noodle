@@ -285,7 +285,45 @@ attempt timing, order authority, sizing, reservations, or reconciliation. The ex
 window, 90%-coverage, Holm-corrected, track-separated review lock remains in force. Any later promotion is a
 separate manual policy-version and capital/downside decision.
 
-## 10. Explicitly unchanged
+## 10. Exit-sentinel v2 close-bounded opportunity amendment (approved 2026-08-25)
+
+The maintainer approved Option A from
+[`reports/exit-sentinel-v2-coverage-diagnosis-2026-08-25.md`](../reports/exit-sentinel-v2-coverage-diagnosis-2026-08-25.md).
+The diagnosis replayed 6,333 immutable events and found that v2 classified 120 live and 91 paper maintenance
+cycles at or after exact contract close as unavailable while waiting for outcome publication. An exit cannot
+execute then. Those events made position completeness depend on settlement latency and late-entry path length
+rather than public evidence available to an evaluator.
+
+For v2, an **actual evaluator opportunity** is now defined exactly as:
+
+```text
+positionOpenedAt <= cycle.at < closesAt
+```
+
+The lower and upper bounds use authoritative UTC timestamps. A cycle exactly at close is not eligible. The pure
+path-completeness calculation defensively applies this predicate to both existing and future events; normal
+maintenance also stops appending new cycle events outside it. Candidate observations outside the same opportunity
+window are rejected so they cannot move first-to-fire state. No elapsed worker interval is synthesized: worker
+downtime still creates no fictional opportunity, while an actual pre-close evaluator cycle with missing public
+evidence remains explicitly unavailable.
+
+No migration rewrites the existing snapshot or append-only journal; ordinary owner-only compaction remains
+unchanged. This is the one narrow exception to the prior “Explicitly unchanged”
+statement that historical v2 records would not be reinterpreted: approved reporting omits only timestamp-proven
+non-opportunities already present in v2. It does not add an observation, fill, trigger, outcome, or P&L; it does not
+remove a genuine pre-close unavailable cycle; and missing exact paper IOC book evidence at a first trigger remains
+incomplete. A position enrolled only after close has zero eligible cycles and remains incomplete.
+
+The correction is an accounting invariant for evidence eligibility, not an economic promotion. It does not score
+new arms, change candidate thresholds, or unlock review by itself. The 60-window, 20-divergent-window,
+90%-coverage, positive exact-cash, positive clustered-mean, Holm-corrected, and simultaneous live/paper gates all
+remain unchanged. Runtime exits, order authority, money, reconciliation, operator intent, and the production
+`strict-value-v1` policy are untouched.
+
+Required regression evidence pins the lower bound, exact-close exclusion, delayed-settlement invariance, retention
+of genuine pre-close misses, paper trigger-book failure, immutable journal replay, and detached source isolation.
+
+## 11. Explicitly unchanged
 
 - Live remains running and armed under existing operator intent.
 - Entry rules and the paper/live mirror do not change.

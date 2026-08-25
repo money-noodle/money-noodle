@@ -3,7 +3,8 @@ import { appendFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/pr
 import path from 'node:path';
 import {
   EXIT_POLICY_SENTINEL_VERSION, appendExitEvaluationCycle, appendExitSentinelObservation,
-  buildExitPolicySentinelReport, exitPolicySentinelFromOrder, exitSentinelObservation, validExitIocSimulation,
+  buildExitPolicySentinelReport, exitPolicySentinelFromOrder, exitSentinelObservation,
+  isExitEvaluationOpportunity, validExitIocSimulation,
   type ExitEvaluationCycle, type ExitPolicySentinel, type ExitPolicySentinelReport, type ExitSentinelObservation,
 } from './exit-policy-sentinel';
 import { ENTRY_EXECUTION_POLICY_VERSION } from './entry-execution-policy';
@@ -301,6 +302,7 @@ export function maintainExitPolicySentinels(cycle: ExitPolicySentinelMaintenance
 
     for (const sentinel of store.sentinels) {
       if (sentinel.resolvedAt || sentinel.invalidReason
+        || !isExitEvaluationOpportunity(sentinel, cycle.observedAt)
         || sentinel.evaluationCycles.some((item) => item.at === cycle.observedAt)) continue;
       const evaluationCycle: ExitEvaluationCycle = {
         at: cycle.observedAt,

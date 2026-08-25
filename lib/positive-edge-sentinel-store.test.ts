@@ -66,14 +66,17 @@ describe('append-only sentinel event replay', () => {
       ...first.observations[0], at: '2026-08-20T00:00:12Z', netLiquidationCents: 70,
       unrealizedPnlCents: 10, secondsRemaining: 48,
     };
+    const atClose = { ...second, at: first.closesAt, secondsRemaining: 0 };
     const state = { ...first, production: { status: 'strict-exit' as const, policy: 'strict-value-v1' } };
     const resolution = { ...state, outcome: 'UP' as const, holdPnlCents: 40, resolvedAt: '2026-08-20T00:01:01Z' };
     const replayed = replayExitPolicySentinelEvents([], [
       { op: 'position', value: first },
       { op: 'observation', id: first.id, value: second },
       { op: 'observation', id: first.id, value: second },
+      { op: 'observation', id: first.id, value: atClose },
       { op: 'evaluation-cycle', id: first.id, value: { at: second.at, classification: 'observed' } },
       { op: 'evaluation-cycle', id: first.id, value: { at: second.at, classification: 'observed' } },
+      { op: 'evaluation-cycle', id: first.id, value: { at: first.closesAt, classification: 'unavailable' } },
       { op: 'state', value: state },
       { op: 'resolution', value: resolution },
     ]);
