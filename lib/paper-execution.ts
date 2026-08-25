@@ -34,6 +34,9 @@ function recordSwitchSkip(classification: LiveSkipClass, reason: string, incumbe
     .catch((error) => console.error('Live skip journal write failed:', error));
 }
 import { PAPER_MANAGED_MAKER_EXECUTION_VERSION, simulateManagedPaperMaker, type PaperMakerSimulationResult } from './paper-maker-simulation';
+import {
+  observePaperFinalEvidenceGrace, recordPaperFinalEvidenceUnavailable, startPaperExecutionTimingObservers,
+} from './paper-execution-timing-observer';
 import { isPaperFillCalibration, type PaperFillCalibration } from './paper-fill-calibration';
 import { getActivePaperFillCalibration } from './paper-fill-calibration-store';
 import { isFreshCalculationTimestamp } from './freshness';
@@ -1118,6 +1121,9 @@ async function managePaperMakerOrder(order: PaperOrder, ledger: Ledger): Promise
     });
     managedRun.succeed();
     applyPaperMakerSimulation(order, result, ledger);
+    // Detached and post-horizon: this can delay only its own evidence write, never paper accounting.
+    void observePaperFinalEvidenceGrace(order, result)
+      .catch((error) => console.error('Paper final-evidence grace observation failed:', error));
   } catch (error) {
     quoteRun.fail(error);
     managedRun.fail(error);
@@ -1129,6 +1135,7 @@ async function managePaperMakerOrder(order: PaperOrder, ledger: Ledger): Promise
       at: order.makerCompletedAt, event: 'paper_expired', limitPrice: order.initialSubmittedPrice,
       filledCount: 0, remainingCount: 0, reason: order.reason,
     }];
+    recordPaperFinalEvidenceUnavailable(order, order.reason);
     ledger.paperBudget.availableCents += reservedCents;
   }
 }
@@ -2415,6 +2422,9 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
   // longer starve a twelve-second paper order of every intermediate observation.
   if (startedPaperOrders.length) {
     await writeLedger(ledger);
+    // Exact prospective intent is durable before optional public timing reads begin. The observer owns
+    // a separate capped journal and cannot alter this order or its reservation.
+    startPaperExecutionTimingObservers(startedPaperOrders);
     for (const order of startedPaperOrders) void recordMakerRestrictionOrder(order)
       .catch((error) => console.error('Paper maker restriction sentinel decision write failed:', error));
   }

@@ -1,9 +1,10 @@
 # Paper execution fidelity v2 design
 
-> **Status:** approved in prose by the maintainer on 2026-08-25. Phase F1 engineering parity is implemented in
-> this change. Phases F2–F4 remain unactivated and require their preceding written milestone review. This program
-> changes no funded execution, buy rule, portfolio rule, live authority, settlement outcome, or bankroll
-> accounting by itself.
+> **Status:** approved in prose by the maintainer on 2026-08-25. Phase F1 engineering parity is complete. Phase
+> F2's detached implementation is complete but its prospective clock is not active until the built persistent worker
+> starts it and writes the first decision. Phases F3–F4 remain unactivated and require their preceding written
+> milestone review. This program changes no funded execution, buy rule, portfolio rule, live authority, settlement
+> outcome, or bankroll accounting by itself.
 
 ## 0. Decision
 
@@ -129,17 +130,23 @@ paper intent
   → accepted or post-only race
 ```
 
-The fixed delays and one candidate identity are committed before outcomes are inspected. The candidate uses only
-public exact-contract quotes. It never reads `venueOrderId`, live status, or authoritative fills to choose its
-state. Live acceptance is joined afterward only as the scoring target.
+The fixed generation is `paper-execution-timing-shadow-v1`: 400ms from durable observer start to its create quote,
+then 250ms from completion of that read to its acknowledgement quote. It makes one attempt; it does not silently
+copy live's three-attempt retry chain. These values and the candidate identity are committed before prospective
+outcomes are inspected. The candidate uses only public exact-contract quotes. It never reads `venueOrderId`, live
+status, or authoritative fills to choose its state. Live acceptance is joined afterward only as the scoring target.
 
-Optional reads have a dedicated low-priority cap, no retry, short timeout, and explicit `unavailable`. Exhaustion
-or error drops evidence rather than delaying paper management, signed order work, reconciliation, or settlement.
+Optional reads have a hard cap of six maker intents per calculation and three requests per assigned intent: two
+one-request exact price/range quotes and one final trade-history read. Overflow, public backoff, malformed evidence,
+or error is explicit `unavailable`; there is no retry. The continuously saturated upper bound is 18 reads per
+calculation (1.2/s across 15 seconds), while the inspected 160-maker day implies 480/day (about 0.006/s). Evidence
+starts only after the paper intent/reservation ledger write and is never awaited by paper management. Exhaustion or
+error drops evidence rather than delaying paper management, signed order work, reconciliation, or settlement.
 
 ### 4.2 Read-after-horizon shadow
 
-Keep the executable horizon exactly 12 seconds, then perform one low-priority final public trade-history read after
-an approximately three-second grace. The simulated order is already expired during the grace.
+Keep the executable horizon exactly 12 seconds, then perform one final public trade-history read after an exact
+three-second grace. The simulated order is already expired during the grace.
 
 A recovered print is eligible only when:
 
@@ -211,7 +218,7 @@ does not change funded execution. A null review leaves neutral v6 active and is 
 | Phase | Primary paths |
 | --- | --- |
 | F1 | `lib/paper-fill-calibration.ts`, `lib/paper-maker-simulation.ts`, `lib/paper-maker-fill.test.ts`, corrected paper analyzers and report |
-| F2 | new detached timing-candidate module/store, bounded public-read integration, pure event-time replay tests |
+| F2 | `lib/paper-execution-timing-shadow.ts`, `lib/paper-execution-timing-shadow-store.ts`, `lib/paper-execution-timing-observer.ts`, isolation/pure/store tests, and `scripts/analyze-paper-execution-timing.mjs` |
 | F3 | detached queue-family replay/store and held-out analyzer; no paper accounting imports |
 | F4 | combined shadow evaluator, immutable review manifest, and only after approval a new execution generation |
 

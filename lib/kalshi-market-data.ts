@@ -96,6 +96,17 @@ export function parseKalshiTradePrints(value: unknown): KalshiTradePrint[] {
   });
 }
 
+/** One-request exact-contract maker quote for detached timing evidence; intentionally omits depth. */
+export async function fetchKalshiManagedMakerPriceQuote(ticker: string, side: PositionSide): Promise<ManagedMakerQuote> {
+  const response = await publicKalshiJson<KalshiMarketResponse>(`/markets/${encodeURIComponent(ticker)}`);
+  const market = response.market;
+  const yesBid = Number(market?.yes_bid_dollars), yesAsk = Number(market?.yes_ask_dollars);
+  if (!market || !Number.isFinite(yesBid) || !Number.isFinite(yesAsk) || yesBid <= 0 || yesAsk <= yesBid) {
+    throw new Error('Kalshi did not return a usable exact-contract bid/ask for timing observation.');
+  }
+  return selectedManagedMakerQuote({ yesBid, yesAsk, side, ranges: market.price_ranges });
+}
+
 /** Fresh exact-contract quote plus awaited depth for the independent paper manager. */
 export async function fetchKalshiManagedMakerQuote(ticker: string, side: PositionSide): Promise<ManagedMakerQuote> {
   const [response, orderBook] = await Promise.all([

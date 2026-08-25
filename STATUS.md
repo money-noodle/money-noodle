@@ -6,10 +6,11 @@
 > **Operational-state warning:** this document records dated snapshots; it is not a live interlock or the
 > authority for whether funded execution is running. Before any operational action, read the authenticated
 > Automation surface and `data/trading-control.json`. At the latest operational snapshot, the control record
-> updated at 2026-08-25T03:18:22.050Z was active / `live`, revision 6,456, with 2,093¢ available,
-> 28¢ reserved in one reconciled open position, +121¢ current-epoch whole-cent P&L, and operator intent active
-> after an explicit operator resume. Manual startup reconciliation completed READY at 2026-08-25T03:18:21.726Z
-> with no blockers. That state may change after publication.
+> updated at 2026-08-25T06:29:04.715Z was system-paused / `live`, revision 6,563, with operator intent still active,
+> 2,064¢ available and 30¢ reserved. Reconciliation reported venue position −1.89 on
+> `KXBTC15M-26AUG250230-30` against local open quantity 0.00. This contradiction blocks restart/F2 activation and
+> must be resolved by the authoritative reconciliation/ownership path, not by editing a ledger. That state may
+> change after publication.
 
 ## Executive Summary
 
@@ -25,8 +26,8 @@ A second policy runs on the same market — the long-shot round trip, detailed i
 | --- | --- |
 | Dashboard and public paper track record | Functional locally and hosted; bounded summary/full-report split implemented. Managed Postgres access recovered and durable production projections returned 200 after the 2026-08-22 deployment. |
 | Forecast and performance tracking | Collection is implemented; the 2026-08-22 interleaved-writer corruption was repaired into checksum-valid, content-addressed v3 after restoring 88 qualified archived rows. Automatic v3 seals and a 138-file independent Scaleway restore passed on 2026-08-24; aggregate economic conclusions still require recalculation. |
-| Live execution | Kalshi live-capable; repeated-episode identity and known ledger damage are repaired under v6. The operator explicitly resumed live after READY manual reconciliation; the latest dated snapshot above was active with one reconciled reserved open position and no readiness blocker. |
-| Paper execution | Continuous and independently accounted under neutral v6; exact prospective pairing is collecting. Fidelity Phase F1 now proves neutral queue-reset parity and separates acceptance, accepted-order queue, and settlement attribution; timing/queue candidate shadows remain unactivated. |
+| Live execution | Kalshi live-capable; repeated-episode identity is repaired under v6. The latest dated snapshot above is system-paused on a venue/local position contradiction with 30¢ reserved; do not infer readiness from older READY snapshots. |
+| Paper execution | Continuous on the existing worker under neutral v6; exact prospective pairing is collecting. Fidelity F1 is complete and F2 timing shadows are implemented in the repository but remain unactivated pending a restart-safe reconciliation state. |
 | Model evaluation | Evaluator v2 remains barred from promotion and production remains Blend 0.4. Phase 2 prospective `forecast-candidate-registry-v1` collection is active locally from 2026-08-25T03:17:17.456Z; it has no promotion or order authority. Exact-provider confirmed-signal evaluation is queued after the base final review, followed strictly by venue-candidate, portfolio-selection, live-authorization, and attempt/outcome evaluation. Automatic evaluator-v2 checkpoints remain retired from the worker. |
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
 | Operational safety | Collision-resistant bounded live IDs, exact reconciliation ownership, quiescent drain, account reconciliation, kill switch, and budget/risk ceilings are implemented. Runtime readiness and operator state must be read from the live control surfaces named above, not inferred from this table. |
@@ -84,8 +85,36 @@ The corrected calibration analyzer now excludes open rows and narrows queue scor
 same-quantity maker pairs. The rolling settlement analyzer separately reports acceptance attribution, comparable
 queue fidelity, six-read coverage, public-read latency, and consuming-print observation lag. Phase F1 validation
 passed typecheck, 145 test files / 1,136 tests, lint with 37 inherited warnings and no errors, execution-ledger v9
-verification over 4,626 rows, and `git diff --check`. F2 remains a proposal requiring separate
-implementation review and does not yet add requests or evidence storage.
+verification over 4,626 rows, and `git diff --check`. Those gates authorized only the separate F2 implementation
+recorded below; they did not activate an evidence clock.
+
+### Paper-execution timing shadow implemented but activation blocked, 2026-08-25
+
+Phase F2 is implemented under immutable `paper-execution-timing-shadow-v1`: one exact public maker-price quote
+400ms after detached observer start, a second 250ms after the first completes, and one trade-history read three
+seconds after the unchanged 12-second executable horizon. The final replay admits only prints whose venue event
+time lies inside that horizon and applies each against the limit and queue then in force. The shadow stores bounded
+public prints and independent acceptance/grace results in its own append-only journal; it never reads live status or
+fills to choose, never mutates a paper order, and is absent from policy, portfolio, sizing, budget, settlement,
+reconciliation, live orders, and public projection. `npm run analyze:paper-execution-timing` reports exact-pair
+identity, acceptance confusion, decision/acceptance/grace coverage, read latency, and replay differences without
+writing data.
+
+Optional traffic is capped at six maker intents per calculation and three no-retry public requests each. Overflow,
+backoff, malformed evidence, and request failures become unavailable. The continuously saturated upper bound is 18
+reads/calculation (1.2/s across 15 seconds); the inspected 160-maker day implies about 480/day (0.006/s average).
+The canonical traffic inventory is updated in
+[`docs/venue-traffic-and-rate-limits.md`](docs/venue-traffic-and-rate-limits.md).
+
+The implementation passed its pure event-time, exact-horizon, wrong-aggressor, duplicate-print, fixed-delay,
+request-cap, immutable-order, append/reload, source-isolation, and durable-intent-before-observer tests. Typecheck,
+147 test files / 1,146 tests, lint with zero errors / 37 inherited warnings, the production build, and execution-
+ledger v9 verification over 4,639 rows passed. However, the running worker has not loaded it and the prospective
+store remains absent. At the attempted activation boundary,
+control revision 6,563 was system-paused with 30¢ reserved because reconciliation found venue position −1.89 for
+`KXBTC15M-26AUG250230-30` while local open quantity was 0.00. No restart, manual resume, ledger edit, or F2 evidence
+activation was attempted across that contradiction. F2's clock starts only after authoritative ownership is
+restart-safe, the built worker starts, and the first timing decision is durably appended.
 
 ### Opportunity decision introduction and UI vocabulary aligned, 2026-08-24
 

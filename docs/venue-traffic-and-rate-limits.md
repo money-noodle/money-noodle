@@ -31,6 +31,7 @@ suppress them between TTLs.
 | --- | --- | --- | --- | --- |
 | **Kalshi** public | `/markets?series_ticker=<series>&limit=10` | 12s (`kalshiCacheMs`) | **1 per asset** = 7 | N assets |
 | Kalshi public (on-demand) | order-book monitor ladder | 2s while one operator panel expanded | 1 | at most 1 expanded card |
+| Kalshi public (prospective F2 shadow) | exact maker-price quote twice + one final trade-history read | only a newly durable paper maker; 400ms/250ms timing + 3s post-horizon evidence grace | 3 per observed intent | at most 6 intents/calculation; no retry; overflow unavailable |
 | Kalshi signed (exact pre-submit / manager) | exact-contract quote/depth/trade | on-demand / bounded | per-ticker, single-flight | depends on entries |
 | Kalshi signed (reconciliation) | cutoff, cash, nonzero positions, order/fill delta, resting twice, exact active order/fills | 5 min + event | 7 base reads + bounded active IDs | live-enabled only |
 | Kalshi signed (full reconciliation) | cash, nonzero positions, current-tier orders/fills, resting twice | startup/manual/drain | 6 base reads + current-tier pages/cancellation refresh | explicit barrier only |
@@ -61,6 +62,13 @@ same tick): Kalshi 7 + Poly 8 + Kraken 15 (8 fast + 7 weekly) + CoinGecko 1 + ne
 in one 15s cycle ≈ 2.1/s average over that tick**. That is 3.5% of Kalshi's 20/s sustained and 3.5% of
 its 60/s burst for the Kalshi share (7); from the public-read capacity standpoint the quote loop is far
 from the binding constraint.
+
+The F2 paper timing shadow adds at most 18 public reads in one calculation: six create quotes, six acknowledgement
+quotes, and six final history reads separated across its approximately 15-second lifecycle. That is at most 1.2
+requests/s if every calculation is continuously saturated and each six-request sub-burst consumes 10% of the
+60-request venue bucket. The inspected last-day 160 paper makers imply 480 reads/day, approximately 0.006/s on
+average. No retry is permitted; cap overflow or public backoff records unavailable evidence. This accounting is an
+upper bound, not permission for later candidates to reuse the capacity.
 
 **The real pressure points are signed Kalshi reads**, not the public quote loop. Full startup/manual/drain
 reconciliation reads cash, nonzero positions, current-live-tier orders/fills, and resting orders, paginated at
@@ -126,6 +134,9 @@ separately, because the hourly case shows they diverge.
 
 ## Change log
 
+- 2026-08-25 · Added the prospective F2 paper timing shadow: three public reads per observed paper maker, capped
+  at six intents/calculation, no retries; at most 18 reads/calculation or 1.2/s continuously saturated, with the
+  inspected 160-maker day implying about 0.006/s average.
 - 2026-08-23 · Replaced five-minute full-live-tier pagination with seven-base-read incremental reconciliation
   plus bounded exact active IDs; retained full current-tier pagination at startup/manual/drain barriers.
 - 2026-08-21 · Created as the canonical per-venue traffic/rate-limit/recovery reference to support the
