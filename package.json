@@ -60,6 +60,7 @@
     "analyze:window-consensus": "node scripts/analyze-window-consensus.mjs",
     "analyze:entry-admission-v22": "node --max-old-space-size=8192 --expose-gc scripts/analyze-entry-admission-v22.mjs",
     "analyze:walk-forward-review": "NODE_OPTIONS=--max-old-space-size=8192 JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/analyze-walk-forward-review.ts",
+    "analyze:forecast-candidates": "NODE_OPTIONS=--max-old-space-size=8192 JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/analyze-forecast-candidate-collection.ts",
     "evaluate:walk-forward-offline": "NODE_OPTIONS=--max-old-space-size=8192 JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/lib/server-only-stub.ts\\\"}\" jiti scripts/run-walk-forward-evaluation-offline.ts"
   },
   "dependencies": {

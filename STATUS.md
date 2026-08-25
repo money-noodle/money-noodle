@@ -1,14 +1,15 @@
 # Money Noodle - Implementation Status
 
-> Living status document. Updated 2026-08-24.
+> Living status document. Updated 2026-08-25.
 > Product requirements and architecture decisions live in [SPEC.md](SPEC.md).
 >
 > **Operational-state warning:** this document records dated snapshots; it is not a live interlock or the
 > authority for whether funded execution is running. Before any operational action, read the authenticated
 > Automation surface and `data/trading-control.json`. At the latest operational snapshot, the control record
-> updated at 2026-08-22T23:13:04.788Z was active / `live`, revision 5,552, with 2,086¢ available,
-> 0¢ reserved, +86¢ current-epoch whole-cent P&L, and operator intent active after an explicit operator resume.
-> Periodic reconciliation last completed READY at 2026-08-22T23:20:18.907Z. That state may change after publication.
+> updated at 2026-08-25T03:18:22.050Z was active / `live`, revision 6,456, with 2,093¢ available,
+> 28¢ reserved in one reconciled open position, +121¢ current-epoch whole-cent P&L, and operator intent active
+> after an explicit operator resume. Manual startup reconciliation completed READY at 2026-08-25T03:18:21.726Z
+> with no blockers. That state may change after publication.
 
 ## Executive Summary
 
@@ -24,11 +25,70 @@ A second policy runs on the same market — the long-shot round trip, detailed i
 | --- | --- |
 | Dashboard and public paper track record | Functional locally and hosted; bounded summary/full-report split implemented. Managed Postgres access recovered and durable production projections returned 200 after the 2026-08-22 deployment. |
 | Forecast and performance tracking | Collection is implemented; the 2026-08-22 interleaved-writer corruption was repaired into checksum-valid, content-addressed v3 after restoring 88 qualified archived rows. Automatic v3 seals and a 138-file independent Scaleway restore passed on 2026-08-24; aggregate economic conclusions still require recalculation. |
-| Live execution | Kalshi live-capable; repeated-episode identity and known ledger damage are repaired under v6. The operator explicitly resumed live after READY manual reconciliation; the latest dated snapshot above remained active with zero reservations and READY periodic reconciliation. |
+| Live execution | Kalshi live-capable; repeated-episode identity and known ledger damage are repaired under v6. The operator explicitly resumed live after READY manual reconciliation; the latest dated snapshot above was active with one reconciled reserved open position and no readiness blocker. |
 | Paper execution | Continuous and independently accounted under v6; three-episode generation ownership is repaired, exact prospective four-cell pairing is collecting, and fills remain conservative pending an exact queue-calibration held-out fit |
-| Model evaluation | Evaluator v2 remains barred from promotion and production remains Blend 0.4. Automatic in-process checkpoints are retired; checkpoint 1,300 is now due through the explicit paused/stopped offline command. |
+| Model evaluation | Evaluator v2 remains barred from promotion and production remains Blend 0.4. Phase 2 prospective `forecast-candidate-registry-v1` collection is active locally from 2026-08-25T03:17:17.456Z; it has no promotion or order authority. Automatic evaluator-v2 checkpoints remain retired from the worker. |
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
 | Operational safety | Collision-resistant bounded live IDs, exact reconciliation ownership, quiescent drain, account reconciliation, kill switch, and budget/risk ceilings are implemented. Runtime readiness and operator state must be read from the live control surfaces named above, not inferred from this table. |
+
+### Opportunity decision introduction and UI vocabulary aligned, 2026-08-24
+
+[`docs/live-opportunity-decision-flow.md`](docs/live-opportunity-decision-flow.md) now provides the short ordered
+introduction to the edge strategy's seven states: market observation, base signal, confirmed signal, venue
+candidate, provisional portfolio selection, live authorization, and authoritative attempt/outcome. It follows
+runtime order, points to the owning symbols, and explicitly records the current provider-agnostic persistence,
+pre-gate portfolio read model, and funding-after-provisional-ranking seams so later refinement starts from actual
+behavior rather than an idealized reconstruction.
+
+The dashboard now calls the complete searchable grid **Current markets**, labels portfolio state as provisional,
+and distinguishes base signals from confirmed or attempted signals. Its no-signal explanation names the complete
+base-policy categories rather than claiming price alone rejected every market. The README links the introduction
+and corrects its stale v22 price range to 10–75¢. These are documentation and presentation changes only: no
+forecast, buy policy, persistence, portfolio, route, sizing, budget, reconciliation, or order behavior changed.
+
+### Pure production forecast boundary established, 2026-08-24
+
+Phase 1 of [`docs/forecast-model-and-evaluator-v3-design.md`](docs/forecast-model-and-evaluator-v3-design.md) is
+implemented. `lib/forecast-model.ts` now owns the versioned, venue-independent Blend 0.4 arithmetic: basis
+log-odds weighting, bounded per-term slow tilt, aggregate scaling, temperature, and final probability caps.
+`buildPrediction` still owns source acquisition, explanations, confidence, and the separate venue-informed
+comparison, while exact calibration replay calls the same pure probability combiner rather than reconstructing
+that arithmetic independently.
+
+The production constants, `MODEL_VERSION`, buy policy, factor values, confidence, and all money paths are
+unchanged. A frozen pre-extraction formula test spans missing/flat/positive/negative basis, remaining-time and
+volatility cases, slow-tilt cap boundaries, and candidate weighting at `1e-12`; exact dashboard replay and all
+invariants remain green. Validation passed typecheck, 142 test files / 1,127 tests, and the Next.js production
+build. Phase 2 candidate collection is now implemented below; uncertainty inputs, evaluator v3, simulated
+execution, and final review remain unimplemented and milestone-gated by the design document.
+
+### Prospective forecast candidate family activated, 2026-08-25
+
+Phase 2 of [`docs/forecast-model-and-evaluator-v3-design.md`](docs/forecast-model-and-evaluator-v3-design.md) began
+prospective local collection at **2026-08-25T03:17:17.456Z** under immutable
+`forecast-candidate-registry-v1`. Every new forecast issuance stamps the exact production control, the previously
+locked 0.65-basis/0.5-slow hypothesis, exact settlement-average mechanics, basis-only, production-capped intraday,
+and half-slow candidates. Each available arm independently selects from funded-capable actionable sides through
+the shared v22 fee-aware policy; model/provider/policy versions, active maximum-edge and DOWN controls, confidence,
+probability, best quote, admitted entry, and qualify/refuse result are durable beside exact contract provenance.
+No candidate is imported or read by policy, persistence, portfolio, execution style, sizing, budget, reconciliation,
+or order modules; `lib/forecast-candidate-isolation.test.ts` protects that boundary.
+
+The first runtime smoke read found **8 issuance rows in 1 open settlement window**, all 8 carrying the complete
+six-arm family, all 48 arm calculations available, all actionable candidate quotes narrowed to the funded-capable
+provider, and maximum production-control replay error **0**. This is wiring evidence only, not efficacy. Run
+`npm run analyze:forecast-candidates` for current independent-window, exact-family, availability, and
+venue-specific outcome coverage. The gates remain 10 windows for smoke, 100 closed windows with at least 95%
+production funded-outcome coverage, and 300 closed windows with at least 90% availability for every retained arm;
+continuous collection makes the final count nominally about 75 hours, but outages and missing outcomes extend it.
+
+Activation used a quiescent funded restart: operator intent was withdrawn, the execution queue drained, and
+manual full reconciliation passed before shutdown. The production build started locally at 2026-08-25T03:17:11Z;
+a second manual full reconciliation completed READY at 2026-08-25T03:18:21.726Z, and the operator intent was
+explicitly resumed at 2026-08-25T03:18:22.050Z with one reconciled open position, no blockers, and collection
+continuing. Production Blend 0.4, buy policy v22, execution, capital, and every live authority are unchanged.
+Validation passed typecheck, 145 test files / 1,133 tests, lint with 37 warnings and no errors, and the Next.js
+production build.
 
 ### Object archive restored independently and rebuildable caches reclaimed, 2026-08-24
 

@@ -3,6 +3,7 @@ import { appendFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/pr
 import path from 'node:path';
 import { contractProvenanceRef } from './contract-provenance';
 import { getContractProvenanceRegistry, recordContractProvenance } from './contract-provenance-store';
+import { evaluateForecastCandidates } from './forecast-candidates';
 import { bestEntry, directionalLikelihood, qualifiesAsBuyEdge, venueEntryOptions, BUY_POLICY_VERSION } from './prediction-policy';
 import { summarizePerformance } from './performance';
 import {
@@ -342,6 +343,7 @@ function newTrackedForecast(prediction: Prediction, modelVersion: string, observ
     basisPercent: prediction.basis?.basisPercent,
     basisProbabilityUp: prediction.basis?.probabilityUp,
     calibrationReplay: prediction.calibrationReplay,
+    candidateEvaluation: evaluateForecastCandidates(prediction),
     cycleRegime: prediction.cycleRegime,
     quoteTrajectorySpread: qualified && prediction.quoteTrajectorySpread
       ? cloneQuoteTrajectorySpreadObservation(prediction.quoteTrajectorySpread) : undefined,

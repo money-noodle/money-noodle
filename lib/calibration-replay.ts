@@ -1,9 +1,11 @@
-import { basisProbability, clampProbability, logit, normalCdf, normalInverseCdf, sigmoid } from './basis-model';
+import { basisProbability, clampProbability, logit, normalCdf, normalInverseCdf } from './basis-model';
+import { combineForecastProbability, PRODUCTION_FORECAST_MODEL } from './forecast-model';
 import type { CalibrationReplaySnapshot, ConfidenceReplayInput, ContractBasis, TrackedForecast, WalkForwardParameters } from './types';
 
 export const CALIBRATION_REPLAY_VERSION = 'calibration-replay-v1';
-export const PRODUCTION_BASIS_LOG_ODDS_WEIGHT = 0.55;
-export const PRODUCTION_PROBABILITY_CAP = 0.03;
+/** Compatibility exports for manifests and existing analysis code; the production literals live once. */
+export const PRODUCTION_BASIS_LOG_ODDS_WEIGHT = PRODUCTION_FORECAST_MODEL.basisLogOddsWeight;
+export const PRODUCTION_PROBABILITY_CAP = PRODUCTION_FORECAST_MODEL.probabilityFloor;
 
 /**
  * Estimate quality as an explicit parameter set rather than an expression.
@@ -61,10 +63,10 @@ export function replayConfidence(input: ConfidenceReplayInput, parameters: Confi
 }
 
 export const PRODUCTION_REPLAY_PARAMETERS: Pick<WalkForwardParameters, 'temperature' | 'basisWeight' | 'volatilityScale' | 'slowTiltScale' | 'probabilityCap'> = {
-  temperature: 1,
+  temperature: PRODUCTION_FORECAST_MODEL.temperature,
   basisWeight: PRODUCTION_BASIS_LOG_ODDS_WEIGHT,
   volatilityScale: 1,
-  slowTiltScale: 1,
+  slowTiltScale: PRODUCTION_FORECAST_MODEL.slowTiltScale,
   probabilityCap: PRODUCTION_PROBABILITY_CAP,
 };
 
@@ -88,9 +90,16 @@ export function replayCalibrationProbability(
   parameters: Pick<WalkForwardParameters, 'temperature' | 'basisWeight' | 'volatilityScale' | 'slowTiltScale' | 'probabilityCap'>,
 ): number {
   const basis = scaledBasisProbability(snapshot, parameters.volatilityScale);
-  const basisLogOdds = basis === undefined ? 0 : logit(basis) * parameters.basisWeight;
-  const totalLogOdds = (basisLogOdds + snapshot.slowTiltLogOdds * parameters.slowTiltScale) * parameters.temperature;
-  return clampProbability(sigmoid(totalLogOdds), parameters.probabilityCap, 1 - parameters.probabilityCap);
+  return combineForecastProbability({
+    basisProbabilityUp: basis,
+    slowTiltLogOdds: snapshot.slowTiltLogOdds,
+  }, {
+    basisLogOddsWeight: parameters.basisWeight,
+    slowTiltScale: parameters.slowTiltScale,
+    temperature: parameters.temperature,
+    probabilityFloor: parameters.probabilityCap,
+    probabilityCeiling: 1 - parameters.probabilityCap,
+  }).probabilityUp;
 }
 
 export function createCalibrationReplaySnapshot(input: {

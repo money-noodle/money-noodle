@@ -589,6 +589,42 @@ export interface NewsItem {
   score: number;
 }
 
+export interface ForecastCandidateEntryObservation {
+  venue: 'polymarket' | 'kalshi';
+  side: PositionSide;
+  price: number;
+  feeRate: number;
+  probability: number;
+  netEdge: number;
+}
+
+/** One prospectively stamped probability candidate. Observation only: no execution code may read it. */
+export interface ForecastCandidateDecision {
+  candidateId: string;
+  candidateModelVersion: string;
+  status: 'available' | 'unavailable';
+  probabilityUp?: number;
+  replayError?: number;
+  /** Highest-EV funded-capable quote, even when an admission gate refuses it. */
+  bestOption?: ForecastCandidateEntryObservation;
+  /** Best option after side-probability, price-band, edge-cap, and DOWN-control admission. */
+  selectedEntry?: ForecastCandidateEntryObservation;
+  qualified?: boolean;
+  unavailableReason?: string;
+}
+
+/** Immutable issuance-time candidate family and the policy controls it actually observed. */
+export interface ForecastCandidateEvaluation {
+  registryVersion: string;
+  providerRegistryVersion: string;
+  productionModelVersion: string;
+  policyVersion: string;
+  maximumNetEdge: number;
+  downEntryEnabled: boolean;
+  confidence: number;
+  decisions: ForecastCandidateDecision[];
+}
+
 export interface TrackedForecast {
   id: string;
   cycleId?: string;
@@ -620,6 +656,8 @@ export interface TrackedForecast {
   basisPercent?: number;
   basisProbabilityUp?: number;
   calibrationReplay?: CalibrationReplaySnapshot;
+  /** Prospective candidate probabilities and independent funded-side decisions; never consumed by trading. */
+  candidateEvaluation?: ForecastCandidateEvaluation;
   /** Observation-only path state available at issuance. */
   cycleRegime?: CycleRegimeFeatures;
   /** Absent on legacy and unqualified rows; never default absence to a flat path. */

@@ -1,5 +1,5 @@
-import { basisProbability, clampProbability, impliedVolatility, logit, realizedVolatility, resolveVolatility, sigmoid } from './basis-model';
-import { PRODUCTION_BASIS_LOG_ODDS_WEIGHT, PRODUCTION_PROBABILITY_CAP, createCalibrationReplaySnapshot } from './calibration-replay';
+import { clampProbability, impliedVolatility, logit, realizedVolatility, resolveVolatility, sigmoid } from './basis-model';
+import { createCalibrationReplaySnapshot } from './calibration-replay';
 import { compareContractTargets } from './contract-provenance';
 import { cached, recordOracleHistory, recordPriceHistory, recordVenueHistory, type OracleSnapshot, type PriceSnapshot, type VenueSnapshot } from './cache';
 import { collectorStatus } from './collector-state';
@@ -7,6 +7,7 @@ import { recordCyclePathObservations } from './cycle-path-store';
 import { fetchCoinSnapshots, fetchCryptoNews, fetchKalshiQuotes, fetchPolymarketQuotes, fetchPriceSeries, fetchSeasonalHistory, type ContractReference, type CoinSnapshot, type PriceSeries } from './feeds';
 import { DATA_FRESHNESS } from './freshness';
 import { getPerformanceSummary } from './forecast-tracker';
+import { evaluateForecastBasis, evaluateForecastModel, PRODUCTION_FORECAST_MODEL } from './forecast-model';
 import { estimateMakerTouch } from './maker-fill-model';
 import { readPromotionLedger } from './model-promotion-store';
 import { summarizePerformance } from './performance';
@@ -29,18 +30,13 @@ export const MODEL_VERSION = 'Blend 0.4';
 // The tradeable forecast is venue-independent: edge is measured against the venue price, so mixing
 // that price into the forecast would shrink the disagreement the desk exists to trade. The venue is
 // blended only into a separate reference figure used for comparison and calibration benchmarking.
-// One definition, shared with the replay path and the published policy manifest. It was previously
-// declared here as a second literal 0.55 beside the exported one; they agreed by coincidence, and the
-// manifest quoted a third literal of its own, so a change to any of them would have left the desk
-// describing a weight it was not using.
-const BASIS_LOG_ODDS_WEIGHT = PRODUCTION_BASIS_LOG_ODDS_WEIGHT;
+// One pure definition is shared by production and replay. Dashboard owns inputs and explanations; the model
+// owns the venue-independent probability arithmetic.
 /** Tradeable probability is clamped this far from certainty at both ends. */
-export const MIN_TRADEABLE_PROBABILITY = PRODUCTION_PROBABILITY_CAP;
-export const MAX_TRADEABLE_PROBABILITY = 1 - PRODUCTION_PROBABILITY_CAP;
+export const MIN_TRADEABLE_PROBABILITY = PRODUCTION_FORECAST_MODEL.probabilityFloor;
+export const MAX_TRADEABLE_PROBABILITY = PRODUCTION_FORECAST_MODEL.probabilityCeiling;
 const VENUE_LOG_ODDS_WEIGHT = 0.30;
 const VENUE_ONLY_LOG_ODDS_WEIGHT = 0.80;
-const TILT_SCALE = 0.8;
-const MAX_TILT_LOG_ODDS = 0.4;
 const clamp = (value: number, min = -1, max = 1) => Math.min(max, Math.max(min, value));
 const direction = (score: number): Direction => score > 0.08 ? 'bullish' : score < -0.08 ? 'bearish' : 'neutral';
 const pct = (value: number) => `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
@@ -56,7 +52,7 @@ function makeFactor(input: Omit<Factor, 'direction' | 'contribution'>): Factor {
 
 /** Slow features may only nudge a 15-minute forecast, and only in proportion to their own confidence. */
 function tilt(input: Omit<Factor, 'direction' | 'contribution'>): WeightedFactor {
-  return { factor: makeFactor(input), logOdds: input.score * input.weight * input.confidence * TILT_SCALE };
+  return { factor: makeFactor(input), logOdds: input.score * input.weight * input.confidence };
 }
 
 function seasonalFactor(symbol: string, history: PriceSnapshot[], weeklyHistory: ChartPoint[] = []): Factor {
@@ -173,9 +169,9 @@ export function buildPrediction(coin: CoinSnapshot, market: MarketQuote | undefi
     realizedVolatility(minuteCloses, 60),
     realizedVolatility(oracleSamples.map((point) => point.prices[coin.symbol]), oracleSpacingSeconds),
   ]);
-  const basisResult = referencePrice && volatility
-    ? basisProbability({ referencePrice, currentPrice, secondsRemaining, volatilityPerSecond: volatility.perSecond, volatilitySamples: volatility.samples })
-    : null;
+  const basisResult = evaluateForecastBasis(referencePrice && volatility
+    ? { referencePrice, currentPrice, secondsRemaining, volatilityPerSecond: volatility.perSecond, volatilitySamples: volatility.samples }
+    : undefined);
   const basis: ContractBasis | undefined = basisResult && referencePrice ? {
     referencePrice, currentPrice, referenceSource: reference?.referenceSource ?? 'Kalshi floor strike',
     basisPercent: (currentPrice / referencePrice - 1) * 100,
@@ -203,7 +199,7 @@ export function buildPrediction(coin: CoinSnapshot, market: MarketQuote | undefi
   const basisFactor = makeFactor({
     id: 'basis', label: 'Contract basis', eyebrow: basis ? `${pct(basis.basisPercent)} vs open · ${Math.round(secondsRemaining)}s left` : 'Reference price unavailable',
     score: basis ? clamp((basis.probabilityUp - 0.5) * 2) : 0,
-    weight: BASIS_LOG_ODDS_WEIGHT,
+    weight: PRODUCTION_FORECAST_MODEL.basisLogOddsWeight,
     confidence: basis ? clamp(0.4 + Math.min(1, basis.volatilitySamples / 60) * 0.4 + (1 - Math.min(1, secondsRemaining / 900)) * 0.2, 0.3, 1) : 0.1,
     summary: basis
       ? `${basis.basisPercent >= 0 ? 'Above' : 'Below'} the settlement reference by ${Math.abs(basis.basisPercent).toFixed(3)}% (${basis.zScore >= 0 ? '+' : ''}${basis.zScore.toFixed(2)}σ)`
@@ -247,24 +243,24 @@ export function buildPrediction(coin: CoinSnapshot, market: MarketQuote | undefi
       detail: 'Retained only as background context. A persistent yearly return previously imposed a standing directional bias on every 15-minute forecast.',
       source: 'CoinGecko', available: true,
     }),
-    (() => { const factor = seasonalFactor(coin.symbol, history, weeklyHistory); return { factor, logOdds: factor.score * factor.weight * factor.confidence * TILT_SCALE }; })(),
-    (() => { const factor = newsFactor(coin, news); return { factor, logOdds: factor.score * factor.weight * factor.confidence * TILT_SCALE }; })(),
+    (() => { const factor = seasonalFactor(coin.symbol, history, weeklyHistory); return { factor, logOdds: factor.score * factor.weight * factor.confidence }; })(),
+    (() => { const factor = newsFactor(coin, news); return { factor, logOdds: factor.score * factor.weight * factor.confidence }; })(),
   ];
 
-  const basisLogOdds = basis ? logit(basis.probabilityUp) * BASIS_LOG_ODDS_WEIGHT : 0;
+  const forecastModel = evaluateForecastModel({
+    basisProbabilityUp: basis?.probabilityUp,
+    slowTerms: tilts.map((item) => ({ id: item.factor.id, baseLogOdds: item.logOdds })),
+  });
   const venueLogOdds = liveVenueProbabilities.length ? logit(venueProbability) * (basis ? VENUE_LOG_ODDS_WEIGHT : VENUE_ONLY_LOG_ODDS_WEIGHT) : 0;
-  const rawTilt = tilts.reduce((sum, item) => sum + item.logOdds, 0);
-  const tiltLogOdds = Math.max(-MAX_TILT_LOG_ODDS, Math.min(MAX_TILT_LOG_ODDS, rawTilt));
-  const tiltScaling = rawTilt === 0 ? 1 : tiltLogOdds / rawTilt;
+  const slowTerms = new Map(forecastModel.slowTerms.map((item) => [item.id, item.logOdds]));
   const weighted: WeightedFactor[] = [
-    { factor: basisFactor, logOdds: basisLogOdds },
+    { factor: basisFactor, logOdds: forecastModel.basisLogOdds },
     { factor: marketFactor, logOdds: venueLogOdds },
-    ...tilts.map((item) => ({ factor: item.factor, logOdds: item.logOdds * tiltScaling })),
+    ...tilts.map((item) => ({ factor: item.factor, logOdds: slowTerms.get(item.factor.id) ?? 0 })),
   ];
-  // The tradeable estimate excludes the venue term entirely.
-  const independentLogOdds = weighted.filter((item) => item.factor.id !== 'market').reduce((sum, item) => sum + item.logOdds, 0);
-  const totalLogOdds = weighted.reduce((sum, item) => sum + item.logOdds, 0);
-  const probability = clampProbability(sigmoid(independentLogOdds), MIN_TRADEABLE_PROBABILITY, MAX_TRADEABLE_PROBABILITY);
+  // The tradeable estimate excludes the venue term entirely; only the separate comparison adds it.
+  const totalLogOdds = forecastModel.basisLogOdds + forecastModel.slowTiltLogOdds + venueLogOdds;
+  const probability = forecastModel.probabilityUp;
   const blendedProbabilityUp = clampProbability(sigmoid(totalLogOdds), MIN_TRADEABLE_PROBABILITY, MAX_TRADEABLE_PROBABILITY);
   // Each contribution is the exact marginal effect of removing that term from the blended reference.
   for (const item of weighted) item.factor.contribution = (blendedProbabilityUp - clampProbability(sigmoid(totalLogOdds - item.logOdds), MIN_TRADEABLE_PROBABILITY, MAX_TRADEABLE_PROBABILITY)) * 100;
@@ -286,8 +282,8 @@ export function buildPrediction(coin: CoinSnapshot, market: MarketQuote | undefi
   // and can verify its own replay against the value production actually used.
   const calibrationReplay = createCalibrationReplaySnapshot({
     basis,
-    slowTiltLogOdds: tiltLogOdds,
-    slowTerms: tilts.map((item) => ({ id: item.factor.id, logOdds: item.logOdds * tiltScaling })),
+    slowTiltLogOdds: forecastModel.slowTiltLogOdds,
+    slowTerms: forecastModel.slowTerms,
     productionProbabilityUp: probability,
     confidence: {
       productionConfidence: confidence,
