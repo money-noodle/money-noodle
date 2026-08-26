@@ -1,15 +1,20 @@
 name: CI
 
+# Every branch runs CI, so an agent gets a verdict from a plain push and never
+# has to open a pull request to find out whether the work is sound.
 on:
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
 
 permissions:
   contents: read
 
+# Keyed on the branch name rather than the ref: a pull request's `push` and
+# `pull_request` events name the same branch and therefore share a group, so the
+# pair collapses to one run instead of billing the branch twice.
 concurrency:
-  group: verify-${{ github.workflow }}-${{ github.ref }}
+  group: verify-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
