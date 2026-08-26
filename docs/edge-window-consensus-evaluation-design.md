@@ -99,7 +99,7 @@ state: "evaluated N candidates over W windows; the top cell is best-of-N, not a 
 
 ## 5. Decision statistic and bar
 
-- **Cluster** on settlement window (SPEC §5.1) — never rows.
+- **Cluster** on settlement window as required by `spec/forecasting-and-evidence.md` “Forecast target and accuracy measurement” — never rows.
 - Candidate must beat BOTH:
   - the live rule's win rate / net within the **same regime** (a window/period tagged by cycle-regime, not
     pooled across the 0–56% daily spread), and
@@ -108,7 +108,7 @@ state: "evaluated N candidates over W windows; the top cell is best-of-N, not a 
   book, consistent with the long-shot review bar).
 - **Frequency gate**: candidate must fire ≥ ~3 decisions/day at deployed stake, else rejected regardless of
   win rate. Rate-without-capital is not an edge under the 2,000¢ budget.
-- Promotion is manual, versioned, SPEC §12.5. The sentinel itself is observation-only and can never make
+- Promotion is manual and versioned under `spec/policy-and-track-separation.md` §12.5. The sentinel itself is observation-only and can never make
   itself promotable (same rule as quote-trajectory).
 
 ## 6. Revisit cadence (longer-term review)
@@ -119,7 +119,7 @@ state: "evaluated N candidates over W windows; the top cell is best-of-N, not a 
 - **Monthly**: walk-forward-style review of the full decision history clustered by regime, with the
   multiple-comparison count stated each time.
 - Every review: candidates, window sets, n, win rate, net, trades/day, MC count. Null results written up.
-- Nothing auto-promotes; promotion is a manual SPEC §12.5 act.
+- Nothing auto-promotes; promotion is a manual act under `spec/policy-and-track-separation.md` §12.5.
 
 ## 7. Decisions recorded 2026-08-20 (maintainer)
 

@@ -43,6 +43,8 @@ new archive instead.
 ## Maintenance rules
 
 - Keep root `STATUS.md` below 3,000 words and 30 KiB. Replace stale projections; do not append a delivery diary.
+- Keep its projection-critical source fingerprint current after reviewing changes to the source owners selected by
+  `scripts/verify-status-structure.mjs`; the fingerprint detects bounded drift but does not prove all prose current.
 - Keep `status/roadmap.md` below 5,000 words and 50 KiB. It describes sequencing, not requirements or acceptance.
 - Give every quantitative root-status claim a date, sample size, and material caveat, normally by linking its report.
 - Move superseded status prose into a new immutable archive before removing it when its exact historical wording is

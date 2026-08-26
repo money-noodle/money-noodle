@@ -1,7 +1,7 @@
 # Open decisions
 
-> **Status:** Normative · **Parent:** [`SPEC.md`](../SPEC.md) · **Structurally verified:** 2026-08-25  
-> **Canonical for:** unresolved product, provider, security, model, policy, and operational decisions.  
+> **Status:** Canonical unresolved-decision index · **Authority:** Non-authorizing · **Parent:** [`SPEC.md`](../SPEC.md) · **Structurally verified:** 2026-08-26
+> **Canonical for:** unresolved product, provider, security, model, policy, and operational questions.
 > **Read with:** [`SPEC.md`](../SPEC.md) and whichever domain module owns the eventual decision.
 >
 > This module contains requirements extracted from the former monolithic `SPEC.md`. Product behavior was not

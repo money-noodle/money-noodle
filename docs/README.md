@@ -16,10 +16,13 @@ authoritative for current behavior.
 
 Implementation is a separate axis: **Not started**, **Partial**, **Complete**, **Removed**, or **Not applicable**.
 A document can be accepted while implementation remains partial, or retired after a completed experiment.
+Every Proposed, Superseded, Retired, or Exploratory document also carries a controlled **Current use** field near
+its title. That field governs how an agent may use historical body text; confident old prose cannot restore authority.
 
 Designs explain how and why. They never silently override the canonical specification, current runtime controls,
-or code. Apparent conflicts must be resolved explicitly. Run `npm run verify:docs` after changing this index or a
-top-level document.
+or code. Apparent conflicts must be resolved explicitly. Current design bodies name canonical modules rather than
+using ambiguous root-spec-plus-number citations, and their cited source paths are verified. Run `npm run verify:docs` after
+changing this index or a top-level document.
 
 ## Domain and workstream routing
 

@@ -40,11 +40,23 @@ const archiveManifest = [
   },
 ];
 const originalStatusSha256 = 'be7d8ed9b721fb9a72f212d0091950c6bbb22c2f6b927c6be8094e8b100afdf0';
+const projectionCriticalSources = [
+  'src/lib/dashboard.ts',
+  'src/lib/prediction-policy.ts',
+  'src/lib/entry-execution-policy.ts',
+  'src/lib/entry-sizing-policy.ts',
+  'src/lib/paper-fill-calibration.ts',
+  'src/lib/policy-manifest.ts',
+  'src/lib/trading-provider-registry.ts',
+  'src/lib/market-registry.ts',
+  'src/lib/strategy-registry.ts',
+];
 const errors = [];
 const currentFiles = [statusFile, indexFile, roadmapFile];
 const contents = new Map(currentFiles.map((file) => [file, readFileSync(file, 'utf8')]));
 
 verifyCurrentProjection();
+verifyProjectionSourceFingerprint();
 verifyActiveIdentityProjection();
 verifyArchive();
 verifyLocalLinks();
@@ -87,6 +99,24 @@ function verifyCurrentProjection() {
   if (!/^> \*\*Status:\*\* Non-normative planning projection/m.test(roadmap)) {
     errors.push('status/roadmap.md is missing its non-normative status metadata');
   }
+}
+
+function verifyProjectionSourceFingerprint() {
+  const expected = projectionSourceFingerprint();
+  const actual = contents.get(statusFile).match(/^> \*\*Projection-critical source fingerprint:\*\* `sha256:([a-f0-9]{64})`$/m)?.[1];
+  if (actual !== expected) {
+    errors.push(`STATUS.md projection-critical source fingerprint is ${actual ?? 'missing'}, expected ${expected}`);
+  }
+}
+
+function projectionSourceFingerprint() {
+  const hash = createHash('sha256');
+  for (const source of projectionCriticalSources) {
+    hash.update(`${source}\0`);
+    hash.update(readFileSync(join(repoRoot, source)));
+    hash.update('\0');
+  }
+  return hash.digest('hex');
 }
 
 /** Compare only exact identities with one clear source owner; prose measurements remain human projections. */

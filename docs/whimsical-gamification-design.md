@@ -3,6 +3,7 @@
 > **Document type:** Product design
 > **Design status:** Exploratory
 > **Implementation:** Not applicable
+> **Current use:** Directional exploration only — further design and specification approval are required before implementation.
 > **Created:** 2026-08-22
 > **Canonical requirements:** None — proposal or exploration only
 > **Decision record:** None — no accepted product decision

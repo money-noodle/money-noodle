@@ -3,13 +3,14 @@
 > **Document type:** Evaluation design
 > **Design status:** Retired
 > **Implementation:** Removed
+> **Current use:** Historical evidence only — current mirror attribution uses the accepted paper/live fidelity designs.
 > **Created:** 2026-08-18
 > **Canonical requirements:** [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
 > **Decision record:** Legacy — no single archived row names this design; see [`spec/decision-log.md`](../spec/decision-log.md)
 > **Design index:** [`docs/README.md`](README.md)
 
 > Design document, 2026-08-18. Agreed in prose with the maintainer before any code. It adds durable
-> per-intent fill observation to `persistence-two-consecutive-v1` (SPEC §12.5, §706) and retires a
+> per-intent fill observation to `persistence-two-consecutive-v1` under `spec/policy-and-track-separation.md` §12.5 and retires a
 > reported number that cannot be wrong.
 >
 > **No policy change follows from this.** It is instrumentation on an observation-only evidence store. It
@@ -220,7 +221,7 @@ other surfaces still compute.
 Nothing. It produces the missing input to `persistence-two-consecutive-v1`'s first review; it does not
 conduct that review, and it does not promote anything. Promotion remains a manual act recorded in an
 immutable ledger, requiring committed sentinel evidence, the stated minimum of independent settlement
-windows, a clustered return clearing a stated threshold, and a written reason (AGENTS §7, SPEC §12.5).
+windows, a clustered return clearing a stated threshold, and a written reason (`AGENTS.md` §7 and `spec/policy-and-track-separation.md` §12.5).
 
 Review timing is the maintainer's call, taken daily against the accruing cohort.
 

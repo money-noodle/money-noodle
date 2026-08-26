@@ -90,7 +90,7 @@ document rather than a one-line change.
 ## 5. Why nothing caught it
 
 The mirror invariant governs the entry **rule** layer — it asserts that layer takes no execution mode
-(`src/lib/mirror-invariant.test.ts`). Tracks are *permitted* to differ in fill model, budget and sizing; SPEC
+(`src/lib/mirror-invariant.test.ts`). Tracks are *permitted* to differ in fill model, budget and sizing; `spec/policy-and-track-separation.md`
 §12.3 says so deliberately. This divergence hid inside that permission.
 
 It arrived with the 2026-08-14 mirror alignment (`6c58054`, "Execute paper as a maker so the mirror

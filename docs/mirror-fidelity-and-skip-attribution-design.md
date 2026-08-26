@@ -8,7 +8,7 @@
 > **Decision record:** [`DEC-20260820-08`](../spec/decisions/decision-id-map.json)
 > **Design index:** [`docs/README.md`](README.md)
 
-**Status:** implemented 2026-08-20. Supersedes nothing; completes SPEC §12.8 step 2 and closes two
+**Status:** implemented 2026-08-20. Supersedes nothing; completes `spec/policy-and-track-separation.md` §12.8 step 2 and closes two
 modelled asymmetries in the paper mirror.
 
 **Departure from process, recorded rather than buried.** AGENTS.md asks for the design doc before the
@@ -20,7 +20,7 @@ code was written.
 ## 0. What this is for
 
 The 2026-08-20 divergence review found four channels separating live from paper, and a fifth problem
-underneath them: none of the four could be attributed from durable data. SPEC §12.3 promises that
+underneath them: none of the four could be attributed from durable data. `spec/policy-and-track-separation.md` §12.3 promises that
 `paper − live` "decomposes into fill drag, limit drag, and stop drag". It did not. Reconstructing the
 largest channel — live spending 12 of 24 hours risk-stopped on 2026-08-19 while paper kept trading —
 required joining the trading control audit against the order ledger by hand.
@@ -31,7 +31,7 @@ This change does three things and deliberately does not do a fourth.
 | --- | --- | --- |
 | 1 | Durable per-window live skip journal with a typed class | Makes all channels countable |
 | 2 | Paper standalone exit simulates its own IOC | Closes the largest modelled asymmetry |
-| 3 | Paper entry takes the route the execution policy chooses | Closes a SPEC §12.2 conformance gap |
+| 3 | Paper entry takes the route the execution policy chooses | Closes a `spec/policy-and-track-separation.md` §12.2 conformance gap |
 | 4 | **Not done on purpose:** paper does not obey live's risk stops | Must stay open — see §3 |
 
 ## 1. Live skip attribution
@@ -168,7 +168,7 @@ are never pooled.
 
 ## 3. Paper entry route
 
-SPEC §12.2 specifies the paper mirror as an "independent maker simulation with the same versioned episode
+`spec/policy-and-track-separation.md` §12.2 specifies the paper mirror as an "independent maker simulation with the same versioned episode
 boundary **and route decision**". The code did not do the route part: `entryExecutionDecision` was called
 only inside `runLive`, and `applyPaperMakerSimulation` hardcoded `liquidityRole = 'maker'`. Every one of
 556 paper edge orders was a maker; live had 15 takers. The high-edge IOC route that the whole v4/v5
@@ -186,7 +186,7 @@ that never rests.
 
 ## 4. Channel 1 stays open, on purpose
 
-Paper does not obey live's risk stops, hourly ceilings, or reconciliation gate, and must not. SPEC §12.3
+Paper does not obey live's risk stops, hourly ceilings, or reconciliation gate, and must not. `spec/policy-and-track-separation.md` §12.3
 lists these as deliberately per-track: paper's entire value in this channel is measuring **what the stop
 cost**. Making the tracks symmetric here would delete the measurement. What was missing was never
 symmetry — it was the label, and §1 supplies it.

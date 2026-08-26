@@ -81,6 +81,7 @@ The portfolio dialog can monitor a public Polymarket wallet or use a server-only
 
 ```bash
 npm run dev
+npm run agent:context -- src/lib/example.ts --task "describe the change"
 npm run typecheck
 npm run build
 npm start

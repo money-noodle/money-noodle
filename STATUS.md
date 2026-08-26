@@ -1,6 +1,7 @@
 # Money Noodle — Current Implementation Status
 
 > **Projection date:** 2026-08-26 · **Status:** Current implementation projection
+> **Projection-critical source fingerprint:** `sha256:81bae0d796b0510c0b4113162d0b611bc916fecbf05ed797feb39be8762c1ac5`
 > **Requirements:** [`SPEC.md`](SPEC.md) · **Design lifecycle:** [`docs/README.md`](docs/README.md)
 > **Status index and archives:** [`status/README.md`](status/README.md) · **Roadmap:** [`status/roadmap.md`](status/roadmap.md)
 >
@@ -40,7 +41,7 @@ indexed by [`status/README.md`](status/README.md).
 | Storage | Forecast storage v3 uses one owning writer, immutable content-addressed shards/rollups, checksums, journal replay, and publish-last generations. Execution ledger v9 keeps money/control rows hot and hydrates immutable terminal evidence from verified batches. Atomic stores and append-only journals retain owner boundaries. |
 | Archive and restore | Local-only object archival, full read-back checksum verification, manifests, independent restore, disk-capacity checks, and rebuildable Next-cache cleanup are implemented. Remote-primary deletion is not authorized. |
 | Hosted runtime | Hosted deployment is stateless and reads only bounded sanitized paper projections. It has no credentials, collection, reconciliation, ledger-write, control, or funded order authority. |
-| Governance | Versioned registries, policy manifest, immutable model-promotion ledger, canonical modular specification, controlled design/status lifecycles, stable requirement/decision IDs, workstream design routing, and CI documentation/application gates are implemented. `AGENTS.md` remains one bounded always-loaded guide with stable historical citations and explicit change routing; `verify:agents` checks its code citations and canonical authority restatement. |
+| Governance | Versioned registries, policy manifest, immutable model-promotion ledger, canonical modular specification, controlled design/status lifecycles, stable requirement/decision IDs, deterministic task preflight, critical requirement-to-source/test navigation, workstream design routing, and CI documentation/application gates are implemented. `AGENTS.md` remains one bounded always-loaded guide; the verifiers check its citations, routed context, current-design source pointers, canonical authority restatement, and the projection-critical source fingerprint above. |
 
 ## Active identities
 

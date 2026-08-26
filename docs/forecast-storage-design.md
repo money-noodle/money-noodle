@@ -3,6 +3,7 @@
 > **Document type:** Architecture design
 > **Design status:** Accepted
 > **Implementation:** Complete
+> **Current use:** Sharding and rollup algebra only — publication and writer ownership use [`forecast-storage-generation-repair-design.md`](forecast-storage-generation-repair-design.md).
 > **Created:** 2026-08-14
 > **Canonical requirements:** [`spec/storage-and-architecture.md`](../spec/storage-and-architecture.md)
 > **Decision record:** [`DEC-20260820-07`](../spec/decisions/decision-id-map.json)

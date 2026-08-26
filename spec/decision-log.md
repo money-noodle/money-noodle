@@ -3,7 +3,8 @@
 > **Status:** Normative index and current ledger · **Parent:** [`SPEC.md`](../SPEC.md) · **Updated:** 2026-08-26
 > **Canonical for:** accepted decision history, archive routing, and architecture decision records.
 >
-> Current decisions are appended here newest first. Historical entries move to immutable range archives without
+> Current decisions are grouped by newest date first. Within one date, row order is editorial/dependency order rather
+> than chronology; permanent IDs identify decisions. Historical entries move to immutable range archives without
 > rewriting their text. Detailed requirements remain canonical in their domain modules; a decision record explains
 > why, but does not silently override those requirements.
 
@@ -24,6 +25,7 @@
 
 | Date | Decision |
 |---|---|
+| 2026-08-26 | **DEC-20260826-07** — Add a deterministic read-only agent preflight and verified critical requirement-to-source/test navigation; require controlled current-use metadata for non-current designs; reject ambiguous root-spec section citations and stale current-design source paths; and bind the current status projection to a fingerprint of its active-identity source owners. Generated routing and traceability remain advisory, partial coverage stays explicit, and no product, policy, forecast, capital, execution, reconciliation, deployment, or funded authority changes. See ADR-0006. |
 | 2026-08-26 | **DEC-20260826-06** — Keep canonical modules normative, add stable requirement and ordinary-decision identifiers, route designs by domain/workstream as well as lifecycle, strengthen mechanically provable authority/status checks, and split compound funded rules into atomic requirement blocks. Preserve `AGENTS.md` content and numbering, immutable archives, product behavior, policy, capital, execution, reconciliation, deployment, and funded authority. See ADR-0005. |
 | 2026-08-26 | **DEC-20260826-02** — Verify the always-loaded agent guidance and require module-qualified citation. `npm run verify:agents` governs `AGENTS.md`, `README.md`, and `reports/README.md` in CI: cited paths must resolve, an identifier cited beside a module path must be bound by that module, `AGENTS.md` stays under 3,000 words, links and anchors resolve, and every report is indexed exactly once and link-checked. This caught a `§0` pointer to `lib/target-exit-policy.ts`, deleted with the long-shot retirement. All four verifiers now reject absolute-path links, which resolved on the authoring machine and failed only in CI. `SPEC.md` becomes canonical for document authority with `AGENTS.md` holding an always-loaded restatement that loses on divergence; `README.md` is ranked as human orientation only and its duplicated implementation claims were removed in favor of `STATUS.md`. Open decisions gain permanent `OD-<n>` identifiers. Agents must watch CI to completion after a push (`gh run watch`) and report the outcome, because absolute paths, case-sensitive filenames, and other Linux-runner differences cannot reproduce on a macOS worktree. Documentation organization and verification only: no product, policy, capital, execution, reconciliation, deployment, or funded authority changed. See ADR-0004. |
 | 2026-08-26 | **DEC-20260826-03** — Use one read-only order-attribution vocabulary across signed open-order, decision-history, and performance surfaces: track, provider, provider variant, market, forecast model, buy policy, and execution policy. Provider and market may use their canonical historical normalization; missing variants and policy identities remain explicitly `unattributed`. Filters select presentation cohorts only, preserve separate live/paper denominators, do not rewrite history, and gain no forecast, ranking, execution, budget, reconciliation, capability, or promotion authority. See [`docs/provider-policy-attribution-visibility-design.md`](../docs/provider-policy-attribution-visibility-design.md). |
@@ -41,6 +43,7 @@
 | [`ADR-0003`](decisions/ADR-0003-current-status-projection-and-immutable-archives.md) | Accepted | Keep root status current and compact, separate roadmap sequencing, and preserve historical status in verified immutable archives. |
 | [`ADR-0004`](decisions/ADR-0004-verified-agent-guidance-and-citation.md) | Accepted | Verify the always-loaded agent guidance against the code it cites, rank `README.md`, and require module-qualified section citation. |
 | [`ADR-0005`](decisions/ADR-0005-agent-context-and-requirement-traceability.md) | Accepted | Keep canonical modules normative, add stable requirement/decision handles, improve design routing, and strengthen semantic documentation checks. |
+| [`ADR-0006`](decisions/ADR-0006-deterministic-agent-preflight-and-traceability.md) | Accepted | Add deterministic task preflight, critical requirement-to-source/test navigation, lifecycle-aware design checks, and status source provenance. |
 
 ### Immutable archives
 

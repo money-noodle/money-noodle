@@ -3,6 +3,7 @@
 > **Document type:** Architecture design
 > **Design status:** Proposed
 > **Implementation:** Not started
+> **Current use:** Review only — no implementation authority.
 > **Created:** 2026-08-22
 > **Canonical requirements:** None — proposal or exploration only
 > **Decision record:** None — no accepted product decision
@@ -420,7 +421,7 @@ Normalized venue terms (fees, ticks, quantity, sessions) are inputs; policy modu
 
 Paper and live evaluate the same immutable rule, portfolio action, and relative-sizing plan for a strategy.
 Track enters only at the capital and execution boundary, where actual bankroll, quantity, fills, rate limits,
-risk stops, and reconciliation may differ as required by SPEC §12.3. Policies that intentionally differ define
+risk stops, and reconciliation may differ as required by `spec/policy-and-track-separation.md` §12.3. Policies that intentionally differ define
 separate `strategyId` or policy versions; they are never smuggled through a `mode` argument.
 
 #### Strategy contract

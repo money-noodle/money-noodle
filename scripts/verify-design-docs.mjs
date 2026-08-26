@@ -39,6 +39,8 @@ const metadata = new Map();
 for (const file of designFiles) verifyMetadata(file);
 verifyIndex();
 verifyLinks();
+verifyCurrentSourcePaths();
+verifyLegacySpecCitations();
 
 if (errors.length > 0) {
   console.error(`Design-document verification failed with ${errors.length} error(s):`);
@@ -60,11 +62,12 @@ console.log(
 
 function verifyMetadata(file) {
   const text = readFileSync(file, 'utf8');
-  const head = text.split('\n').slice(0, 14).join('\n');
+  const head = text.split('\n').slice(0, 16).join('\n');
   const value = {
     type: field(head, 'Document type'),
     status: field(head, 'Design status'),
     implementation: field(head, 'Implementation'),
+    currentUse: field(head, 'Current use'),
     created: field(head, 'Created'),
     canonical: field(head, 'Canonical requirements'),
     decision: field(head, 'Decision record'),
@@ -88,6 +91,15 @@ function verifyMetadata(file) {
   if (['Accepted', 'Retired', 'Superseded'].includes(value.status)) {
     if (!hasCanonicalLink) errors.push(`${display(file)} is ${value.status} without canonical requirement links`);
     if (!hasDecisionAuthority) errors.push(`${display(file)} is ${value.status} without an exact or explicitly legacy decision record`);
+  }
+  const currentUsePattern = {
+    Proposed: /^Review only —/,
+    Superseded: /^Historical only —/,
+    Retired: /^Historical .*only —/,
+    Exploratory: /^(?:Idea reference|Directional exploration) only —/,
+  }[value.status];
+  if (currentUsePattern && !currentUsePattern.test(value.currentUse)) {
+    errors.push(`${display(file)} is ${value.status} without controlled Current use metadata`);
   }
   if (value.status === 'Proposed') {
     if (value.implementation !== 'Not started') errors.push(`${display(file)} is proposed but implementation is ${value.implementation}`);
@@ -143,6 +155,29 @@ function verifyLinks() {
       if (!targetAnchors.has(decodeURIComponent(rawFragment))) {
         errors.push(`${display(file)} links to missing anchor ${destination}`);
       }
+    }
+  }
+}
+
+function verifyCurrentSourcePaths() {
+  for (const file of designFiles) {
+    const value = metadata.get(file);
+    if (!['Accepted', 'Proposed', 'Reference'].includes(value.status)) continue;
+    const text = readFileSync(file, 'utf8');
+    for (const match of text.matchAll(/`((?:src|scripts|db)\/[^`\s]+)`/g)) {
+      const cited = match[1].replace(/[),.;:]+$/, '');
+      if (cited.includes('*') || cited.includes('<') || cited.includes('>')) continue;
+      if (!exists(join(repoRoot, cited))) errors.push(`${display(file)} cites missing current source path \`${cited}\``);
+    }
+  }
+}
+
+function verifyLegacySpecCitations() {
+  for (const file of designFiles) {
+    const text = readFileSync(file, 'utf8');
+    for (const match of text.matchAll(/\bSPEC(?:\.md)?\s*§[0-9][0-9a-z.]*/g)) {
+      const line = text.slice(0, match.index).split('\n').length;
+      errors.push(`${display(file)}:${line} uses ambiguous ${match[0]}; name the canonical spec/<module>.md`);
     }
   }
 }

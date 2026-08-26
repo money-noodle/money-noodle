@@ -3,6 +3,7 @@
 > **Document type:** Execution design
 > **Design status:** Superseded
 > **Implementation:** Complete
+> **Current use:** Historical only — current route and sizing identities come from their owning source modules.
 > **Created:** 2026-08-19
 > **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
 > **Decision record:** [`DEC-20260819-02`](../spec/decisions/decision-id-map.json)

@@ -3,6 +3,7 @@
 > **Document type:** Execution design
 > **Design status:** Retired
 > **Implementation:** Complete
+> **Current use:** Historical evidence only — the pilot is closed and grants no current route authority.
 > **Created:** 2026-08-24
 > **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
 > **Decision record:** [`DEC-20260824-01`](../spec/decisions/decision-id-map.json)
@@ -133,7 +134,7 @@ live and paper receive the same deterministic arm.
 - paper treatment uses the current displayed-depth IOC fill model;
 - paper bankroll and live capital remain independent;
 - a live capacity withholding may make live execute its control while paper still simulates the assigned
-  treatment. That difference is stamped and is execution/capital, permitted by SPEC §12.3.
+  treatment. That difference is stamped and is execution/capital, permitted by `spec/policy-and-track-separation.md` §12.3.
 
 Neither track reads the other track's fill. Actual live, independent paper, and optimistic ask benchmarks remain
 separate in every report.

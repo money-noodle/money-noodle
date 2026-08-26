@@ -10,7 +10,7 @@
 
 > **Approved 2026-08-21** · Decisions locked: T-only, 8pp edge floor, 3/2/1 caps, 60s cadence,
 > cross-market exposure ignored, strike-grid helper, all ten assets. · Status: design, implementation
-> pending. Product/architecture truth lives in `SPEC.md §3.6` (markets & keying), `market-registry.ts`,
+> pending. Product/architecture truth lives in `spec/trading-risk-and-budget.md` §3.6 (markets & keying), `market-registry.ts`,
 > `strategy-registry.ts`, `policy-manifest.ts`, and `basis-model.ts`. This document is the pre-code
 > agreement for adding a second market: what the market is, how the contracts differ, and every
 > registry/policy/store seam that must grow a case.
@@ -85,7 +85,7 @@ Band probability = `Φ(z_high) − Φ(z_low)`.
 The model surface is therefore not a parameter change — it is a **new probability target family**
 (strike-threshold) sharing the same diffusion machinery. That is real, new forward code, not a tuning.
 
-## 3. Registry and keying (SPEC §3.6 compliance)
+## 3. Registry and keying (`spec/trading-risk-and-budget.md` §3.6 compliance)
 
 The four keying axes must stay intact. A second market is **additive**, keyed by `marketId`.
 
@@ -173,7 +173,7 @@ ticker.
 
 **Cross-market exposure is deliberately ignored (operator decision, 2026-08-21).** The 15m and 1h
 markets are separate instruments with different settlement semantics and different horizons, and each
-market's caps bind **within that market only** — exactly as SPEC §3.6 already keys them. Concretely:
+market's caps bind **within that market only** — exactly as `spec/trading-risk-and-budget.md` §3.6 already keys them. Concretely:
 
 - No new same-underlying aggregation rule across `crypto-15m` and `crypto-1h`. A 15m BTC position and
   a 1h BTC position are two separate positions in two separate markets, each counting against its own
@@ -218,7 +218,7 @@ design if measurement shows the correlation is material.
   `false`. Fail closed.
 - **Paper shadow trading** on the 1h strike book keeps the mirror invariant: the entry rule takes no
   execution mode — identical rule for paper/live.
-- Live promotion is a separate manual act on committed sentinel evidence (`SPEC §12.5`), out of scope
+- Live promotion is a separate manual act on committed sentinel evidence (`spec/policy-and-track-separation.md` §12.5), out of scope
   for this design.
 
 ## 6. Index and oracle handling

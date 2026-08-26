@@ -43,6 +43,7 @@ verifyLocalLinks();
 verifyDecisionIndex();
 verifyDecisionIds();
 verifyRequirementIds();
+verifyTraceability();
 verifyOpenDecisionIds();
 
 if (errors.length > 0) {
@@ -277,6 +278,46 @@ function decisionRows(file) {
   }
   if (current !== undefined) errors.push(`${display(file)} contains an unterminated final decision row`);
   return rows;
+}
+
+function verifyTraceability() {
+  const file = join(specDir, 'traceability.json');
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(file, 'utf8'));
+  } catch (error) {
+    errors.push(`spec/traceability.json is unreadable: ${String(error)}`);
+    return;
+  }
+  if (manifest.version !== 1 || !Array.isArray(manifest.requirements)) {
+    errors.push('spec/traceability.json has an unsupported shape');
+    return;
+  }
+
+  const ids = new Set();
+  for (const entry of manifest.requirements) {
+    if (ids.has(entry.id)) errors.push(`spec/traceability.json maps ${entry.id} more than once`);
+    ids.add(entry.id);
+    if (!canonicalModules.includes(relative(specDir, join(repoRoot, entry.module ?? '')))) {
+      errors.push(`${entry.id ?? 'missing ID'} cites non-canonical module ${entry.module ?? 'missing'}`);
+      continue;
+    }
+    const moduleFile = join(repoRoot, entry.module);
+    if (!contents.get(moduleFile)?.includes(`<a id="${entry.id}"></a>`)) {
+      errors.push(`${entry.id} is not owned by ${entry.module}`);
+    }
+    if (!['full', 'partial'].includes(entry.coverage)) errors.push(`${entry.id} has invalid coverage ${entry.coverage ?? 'missing'}`);
+    if (entry.coverage === 'partial' && !entry.gap) errors.push(`${entry.id} is partial without an explicit gap`);
+    if (!Array.isArray(entry.sources) || entry.sources.length === 0) errors.push(`${entry.id} maps no source modules`);
+    if (!Array.isArray(entry.tests)) errors.push(`${entry.id} has no tests array`);
+    for (const source of entry.sources ?? []) {
+      if (!exists(join(repoRoot, source))) errors.push(`${entry.id} cites missing source ${source}`);
+    }
+    for (const test of entry.tests ?? []) {
+      if (!/\.test\.(ts|tsx|mjs)$/.test(test)) errors.push(`${entry.id} cites non-test path ${test}`);
+      if (!exists(join(repoRoot, test))) errors.push(`${entry.id} cites missing test ${test}`);
+    }
+  }
 }
 
 function verifyOpenDecisionIds() {

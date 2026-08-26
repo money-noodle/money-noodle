@@ -14,8 +14,10 @@ Money Noodle uses a hub-and-spoke specification with progressive disclosure:
 1. Read this root document first.
 2. Use the specification map below to identify every relevant domain module.
 3. Read each relevant module completely before proposing or implementing a change.
-4. Read `STATUS.md` for current implementation and measurements, then verify behavior in code.
-5. Update the canonical module, acceptance criteria, and decision record together when a requirement changes.
+4. Run `npm run agent:context -- <path...> --task "description"` when useful to list likely domains, designs,
+   source entry points, invariant tests, and records; its generated preflight is advisory and cannot replace this map.
+5. Read `STATUS.md` for current implementation and measurements, then verify behavior in code.
+6. Update the canonical module, acceptance criteria, and decision record together when a requirement changes.
 
 `SPEC.md` owns the product statement, global principles, document authority, and routing map. Each domain module
 owns its detailed requirements. Index summaries and compatibility pointers are not substitutes for the linked
@@ -80,7 +82,10 @@ is always loaded; if the two ever diverge, this table governs.
 
 Canonical modules contain durable requirements, not dated implementation progress or measurements. Completion is
 projected in `STATUS.md`, sequence in `status/roadmap.md`, evidence in reports, and rationale in designs and
-identified decisions. See [`ADR-0005`](spec/decisions/ADR-0005-agent-context-and-requirement-traceability.md).
+identified decisions. [`spec/traceability.json`](spec/traceability.json) is a verified, non-authoritative navigation
+map from selected load-bearing requirement IDs to source and tests. See
+[`ADR-0005`](spec/decisions/ADR-0005-agent-context-and-requirement-traceability.md) and
+[`ADR-0006`](spec/decisions/ADR-0006-deterministic-agent-preflight-and-traceability.md).
 
 <a id="req-global-product-statement"></a>
 

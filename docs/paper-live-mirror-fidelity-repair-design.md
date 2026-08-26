@@ -160,7 +160,7 @@ check remains narrowed to edge-policy open stake so retired foreign-strategy his
 false residual. It writes nothing unless explicitly run with `--write`; this repair requires no correction.
 
 Paper continues to ignore live operator pause, risk stops, hourly limits, reconciliation blocks, and live
-capital. That is the SPEC §12.3 mirror used to measure stop/limit drag. A literal operational live twin would
+capital. That is the `spec/policy-and-track-separation.md` §12.3 mirror used to measure stop/limit drag. A literal operational live twin would
 be an additional non-money lane and is out of scope here; replacing paper with it would delete the existing
 measurement.
 

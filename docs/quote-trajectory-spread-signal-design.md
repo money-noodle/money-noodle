@@ -32,7 +32,7 @@ The intended progression is deliberately split:
 4. write a separate candidate design fixing its horizon, threshold, population, counterfactual, exits,
    review bar, and deciding statistic;
 5. begin immutable first-to-fire sentinel collection only after that commitment; and
-6. permit only a manual, versioned policy promotion under SPEC §12.5.
+6. permit only a manual, versioned policy promotion under `spec/policy-and-track-separation.md` §12.5.
 
 Collection is not a policy candidate and can never make itself promotable.
 
@@ -313,7 +313,7 @@ No historical row is backfilled into committed evidence.
 
 ## 10. Promotion boundary
 
-Promotion criteria for generalized policy candidates remain an open decision in SPEC §13. This collection
+Promotion criteria for generalized policy candidates remain an open decision in `spec/open-decisions.md` §13. This collection
 must not smuggle in a threshold by calling a diagnostic review “promotable”. Sample count alone never
 promotes.
 

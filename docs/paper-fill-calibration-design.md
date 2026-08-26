@@ -62,7 +62,7 @@ net −19¢). The gap is **both**-digging:
 Channel (1) is the known **cancellation-blind** queue: `applyTradePrintsToPaperQueue` depletes
 `displayedAhead` only with aggressive opposite-taker prints. Real venue order can move forward when
 *earlier orders cancel* or *shared FIFO priority* advances, without a full displayed-book write. That
-is the documented mechanism (SPEC §12.3, `reports/paper-live-mirror-fidelity-2026-08-21.md` §2). No
+is the documented mechanism (`spec/policy-and-track-separation.md` §12.3, `reports/paper-live-mirror-fidelity-2026-08-21.md` §2). No
 retroactive re-fit is valid here: this change ships the machinery, a fresh v6 cohort, and asks the
 held-out analysis to say when a calibration is justified.
 
@@ -151,7 +151,7 @@ It reports instead:
   model refused, summed realized P&L;
 - the evaluator selects exactly the active paper execution cohort before creating its held-out split and
   reports the selected identity; it never pools v5, neutral v6, or an adopted v7+ generation;
-- no candidate is promoted — SPEC §12.5 requires the adopting cohort to have retained per-read/print
+- no candidate is promoted — `spec/policy-and-track-separation.md` §12.5 requires the adopting cohort to have retained per-read/print
   evidence for an honest validation split, and adoption is a manual act into a new cohort (v7 first).
 
 No grid is fit here, because a candidate `queueClearFraction` cannot be faithfully re-simulated from
@@ -160,7 +160,7 @@ ledger.
 
 ### What authorizes promotion
 
-Per SPEC §12.5 / AGENTS.md §5.5, no retrospective promotion: a candidate **will not auto-adopt**.
+Per `spec/policy-and-track-separation.md` §12.5 / `AGENTS.md` §5.5, no retrospective promotion: a candidate **will not auto-adopt**.
 The evaluator prints a candidate only when it clears the held-out band. **Adoption is a recorded
 manual act** that starts a new cohort (v6 → v7) and is written into `data/paper-fill-calibration.json`
 and the paper execution version history.
@@ -203,7 +203,7 @@ Always consumed by paper-only. Ask the maintainer to confirm:
 ## D. Explicit non-goals (unchanged)
 
 - Paper keeps ignoring live operator pause, risk stops, hourly caps, reconciliation blocks, live
-  capital — that is **SPEC §12.3 measurement of limit/stop drag**, not an execution twin.
+  capital — that is **`spec/policy-and-track-separation.md` §12.3 measurement of limit/stop drag**, not an execution twin.
 - No exact `queue_position_fp` request is added (signed-read budget contention; see §4 of
   `docs/paper-live-mirror-fidelity-repair-design.md`).
 - The paper P&L remains **independent**; matched-live overlay remains a separate, non-accounting

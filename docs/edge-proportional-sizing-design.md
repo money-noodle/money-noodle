@@ -3,6 +3,7 @@
 > **Document type:** Policy design
 > **Design status:** Superseded
 > **Implementation:** Not started
+> **Current use:** Historical only — current sizing comes from `src/lib/entry-sizing-policy.ts`.
 > **Created:** 2026-08-19
 > **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
 > **Decision record:** Legacy — no single archived row names this design; see [`spec/decision-log.md`](../spec/decision-log.md)
@@ -34,7 +35,7 @@ median edge keeps today's ticket exactly; a −5pp-to-2pp admission gets roughly
 decision gets three times it and no more.
 
 **Admission does not change.** The entry rule layer takes no sizing input and is untouched, so the
-mirror invariant (SPEC §12.3) holds by construction: this is capital, which §12.3 already lists as a
+mirror invariant (`spec/policy-and-track-separation.md` §12.3) holds by construction: this is capital, which §12.3 already lists as a
 permitted difference between tracks, applied identically to both.
 
 ## 2. Why

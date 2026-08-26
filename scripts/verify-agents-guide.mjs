@@ -32,6 +32,7 @@
  * per-paragraph heuristic rather than a parser.
  */
 
+import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, extname, join, relative, resolve } from 'node:path';
 
@@ -72,6 +73,7 @@ verifySymbolClaims();
 verifyLocalLinks();
 verifySectionCitations();
 verifyReportIndex();
+verifyAgentContextManifest();
 
 if (errors.length > 0) {
   console.error(`Agent guidance verification failed with ${errors.length} error(s):`);
@@ -196,6 +198,19 @@ function verifySectionCitations() {
       }
       line += block.split('\n').length + 1;
     }
+  }
+}
+
+function verifyAgentContextManifest() {
+  try {
+    execFileSync(process.execPath, [join(repoRoot, 'scripts/agent-context.mjs'), '--check'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+  } catch (error) {
+    const detail = error?.stderr?.trim() || error?.message || String(error);
+    errors.push(`agent context manifest self-check failed: ${detail}`);
   }
 }
 

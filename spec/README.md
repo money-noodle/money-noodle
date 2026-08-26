@@ -13,8 +13,12 @@ index. This folder contains detailed normative modules; this README deliberately
   measurement reports in [`../reports/`](../reports/).
 - Cite stable `req-<domain>-<name>` requirement IDs when available, otherwise named sections; never source lines.
   IDs are permanent and never reused even when wording moves.
+- [`traceability.json`](traceability.json) maps selected load-bearing IDs to source and tests for navigation only.
+  Missing or partial mapping is not permission to infer coverage, and the manifest never overrides requirement or code.
 - Keep dated implementation progress in `STATUS.md`, sequencing in `status/roadmap.md`, measurements in reports,
   and implementation rationale in designs/decisions. Canonical modules state durable required behavior.
+- `open-decisions.md` is a canonical non-authorizing index and `decision-log.md` is rationale/history; the remaining
+  mapped domain modules own normative requirements.
 - If canonical modules conflict, stop and resolve the conflict; do not guess which requirement wins.
 - Record accepted requirement changes in [`decision-log.md`](decision-log.md). Cite ordinary decisions by their
   permanent `DEC-YYYYMMDD-NN` ID and use an ADR for a load-bearing, cross-domain decision without rewriting its

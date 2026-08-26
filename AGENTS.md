@@ -18,6 +18,11 @@ Before touching money paths, read in order: `SPEC.md` → every relevant canonic
 including `spec/policy-and-track-separation.md` §12 → `STATUS.md` → the §0 map below → the relevant source. Read
 `status/roadmap.md` only for planning and `status/archive/*.md` only when history is material.
 
+Before editing, classify funded-path and durable-state impact, required records, and invariant tests. Run
+`npm run agent:context -- <path...> --task "description"` for a deterministic preflight, then verify its routing
+against `SPEC.md` and source; generated output is advisory and never authority. State the classification and read
+set when handing off or asking for approval.
+
 ## Orientation, authority, and change routing
 
 ### Required sources
@@ -30,7 +35,7 @@ loses to it on any divergence.
 | Source | Authority |
 | --- | --- |
 | `SPEC.md` | Product statement, global principles, authority, and canonical specification map. |
-| `spec/*.md` | Detailed normative requirements and decision history by domain. |
+| `spec/*.md` | Detailed normative requirements plus canonical decision and open-question indexes by domain. |
 | `STATUS.md` | Compact dated projection of what is implemented and most recently measured; never live operational authority. |
 | `status/roadmap.md` | Non-normative sequencing and pending work; never implementation authority. |
 | `status/archive/*.md` | Immutable historical status and superseded measurements; read only when history is material. |
@@ -238,6 +243,7 @@ text. Preserve `callProvider` prompt constraints unless the maintainer agrees ot
 
 ```bash
 npm run build        # compile; run before starting or restarting the server
+npm run agent:context -- <path...> --task "..." # read-only task routing/preflight
 npm run start        # how the server is run: the dashboard and the background collector
 npm run dev          # testing only — never the way the server is left running
 npm run typecheck    # tsc --noEmit

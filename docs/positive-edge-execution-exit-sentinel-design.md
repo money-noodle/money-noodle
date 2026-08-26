@@ -32,7 +32,7 @@ change:
   live/paper cohorts.
 
 Live and paper therefore continue unchanged. The new code, if approved, is an **evaluation lane** under
-SPEC §12. It may append evidence and resolve outcomes. It may not place, amend, cancel, size, reserve, gate,
+`spec/policy-and-track-separation.md` §12. It may append evidence and resolve outcomes. It may not place, amend, cancel, size, reserve, gate,
 or prioritize an order. No result may automatically change production.
 
 Maker and exit evidence remain separate. A maker restriction answers whether declining a production maker
@@ -69,7 +69,7 @@ The first generation contains two candidates, selected before prospective eviden
 
 They are scored independently, not combined into a third screened candidate. Unknown/non-finite input
 refuses in the candidate arm but cannot affect production. The pure candidate evaluator takes no execution
-mode; the same classification is stamped on matched live and paper intents, preserving SPEC §12.3.
+mode; the same classification is stamped on matched live and paper intents, preserving `spec/policy-and-track-separation.md` §12.3.
 
 The comparison population is all issued positive-edge strategy maker attempts stamped by the active
 execution policy after the sentinel start time, including pre-acceptance post-only races and accepted

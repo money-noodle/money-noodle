@@ -3,6 +3,7 @@
 > **Document type:** Architecture design
 > **Design status:** Proposed
 > **Implementation:** Not started
+> **Current use:** Review only — no implementation authority.
 > **Created:** 2026-08-22
 > **Canonical requirements:** None — proposal or exploration only
 > **Decision record:** None — no accepted product decision
@@ -580,7 +581,7 @@ The paper runtime is platform-owned, not copied into each personal tenant:
 - only `paper_manager` can send paper mutations; a paper command can never target a tenant cell;
 - a tenant live Pause/budget/depletion cannot pause paper, and a paper reset cannot mutate tenant state.
 
-SPEC §12.3 remains authoritative: a snapshot's production entry decision is identical across paper and every
+`spec/policy-and-track-separation.md` §12.3 remains authoritative: a snapshot's production entry decision is identical across paper and every
 live tenant cell. Tenant-specific budgets, positions, rate limits, venue account readiness, and real fills are
 capital/execution differences and must be recorded as typed per-tenant skips, not smuggled into the rule layer.
 

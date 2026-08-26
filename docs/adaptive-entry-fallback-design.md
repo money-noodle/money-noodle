@@ -3,6 +3,7 @@
 > **Document type:** Execution design
 > **Design status:** Superseded
 > **Implementation:** Removed
+> **Current use:** Historical only — current episodes use [`requalifying-entry-episodes-design.md`](requalifying-entry-episodes-design.md); the later bounded pilot is retired.
 > **Created:** 2026-08-19
 > **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
 > **Decision record:** [`DEC-20260819-08`](../spec/decisions/decision-id-map.json)
@@ -16,7 +17,7 @@
 >
 > Design agreed with the maintainer on 2026-08-19 before implementation. This changes funded execution,
 > not the buy rule. The mirror invariant remains intact: live and paper still make the same entry decision;
-> execution style and capital remain track-specific under SPEC §12.3.
+> execution style and capital remain track-specific under `spec/policy-and-track-separation.md` §12.3.
 
 ## 1. Decision
 

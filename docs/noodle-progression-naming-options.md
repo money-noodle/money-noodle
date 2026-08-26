@@ -3,6 +3,7 @@
 > **Document type:** Exploration
 > **Design status:** Exploratory
 > **Implementation:** Not applicable
+> **Current use:** Idea reference only — no selected names or product authority.
 > **Created:** 2026-08-22
 > **Canonical requirements:** None — proposal or exploration only
 > **Decision record:** None — no accepted product decision

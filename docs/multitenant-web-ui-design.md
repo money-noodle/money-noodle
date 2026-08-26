@@ -3,6 +3,7 @@
 > **Document type:** Product design
 > **Design status:** Proposed
 > **Implementation:** Not started
+> **Current use:** Review only — no implementation authority.
 > **Created:** 2026-08-22
 > **Canonical requirements:** None — proposal or exploration only
 > **Decision record:** None — no accepted product decision

@@ -1,0 +1,133 @@
+{
+  "version": 1,
+  "scope": "Load-bearing agent navigation only. Coverage labels describe mapping completeness, not proof that tests exhaust a prose requirement. Canonical requirements remain in SPEC.md and spec/*.md; code remains authoritative for behavior.",
+  "requirements": [
+    {
+      "id": "req-forecast-production-model",
+      "module": "spec/forecasting-and-evidence.md",
+      "coverage": "full",
+      "sources": ["src/lib/basis-model.ts", "src/lib/dashboard.ts"],
+      "tests": ["src/lib/basis-model.test.ts"]
+    },
+    {
+      "id": "req-forecast-issuance",
+      "module": "spec/forecasting-and-evidence.md",
+      "coverage": "full",
+      "sources": ["src/lib/prediction-policy.ts", "src/lib/policy-manifest.ts", "src/lib/forecast-storage.ts"],
+      "tests": ["src/lib/prediction-policy.test.ts", "src/lib/policy-manifest.test.ts", "src/lib/forecast-storage.test.ts"]
+    },
+    {
+      "id": "req-provider-registry-variants",
+      "module": "spec/providers-and-market-data.md",
+      "coverage": "full",
+      "sources": ["src/lib/trading-provider-registry.ts", "src/lib/market-registry.ts"],
+      "tests": ["src/lib/trading-provider-registry.test.ts", "src/lib/market-registry.test.ts"]
+    },
+    {
+      "id": "req-provider-contract-normalization",
+      "module": "spec/providers-and-market-data.md",
+      "coverage": "full",
+      "sources": ["src/lib/market-registry.ts", "src/lib/feeds.ts"],
+      "tests": ["src/lib/venue-target-integrity.test.ts", "src/lib/market-registry.test.ts"]
+    },
+    {
+      "id": "req-policy-mirror-invariant",
+      "module": "spec/policy-and-track-separation.md",
+      "coverage": "full",
+      "sources": ["src/lib/prediction-policy.ts", "src/lib/paper-execution.ts"],
+      "tests": ["src/lib/mirror-invariant.test.ts", "src/lib/paper-execution.test.ts"]
+    },
+    {
+      "id": "req-storage-local",
+      "module": "spec/storage-and-architecture.md",
+      "coverage": "full",
+      "sources": ["src/lib/cache.ts", "src/lib/forecast-storage.ts", "src/lib/execution-ledger-storage.ts"],
+      "tests": ["src/lib/forecast-storage.test.ts", "src/lib/execution-ledger-store.test.ts", "src/lib/forecast-writer-authority.test.ts"]
+    },
+    {
+      "id": "req-storage-architecture",
+      "module": "spec/storage-and-architecture.md",
+      "coverage": "full",
+      "sources": ["src/lib/dashboard.ts", "src/lib/task-cadence.ts", "src/lib/task-cadence-runtime.ts", "src/lib/runtime-environment.ts"],
+      "tests": ["src/lib/task-cadence-runtime.test.ts", "src/lib/reconciliation-scheduling-boundary.test.ts"]
+    },
+    {
+      "id": "req-trading-market-keying",
+      "module": "spec/trading-risk-and-budget.md",
+      "coverage": "full",
+      "sources": ["src/lib/market-registry.ts", "src/lib/provider-budget-policy.ts", "src/lib/strategy-registry.ts"],
+      "tests": ["src/lib/market-registry.test.ts", "src/lib/provider-budget-policy.test.ts", "src/lib/strategy-isolation.test.ts"]
+    },
+    {
+      "id": "req-trading-budget-model",
+      "module": "spec/trading-risk-and-budget.md",
+      "coverage": "full",
+      "sources": ["src/lib/budget-ledger.ts", "src/lib/provider-budget-policy.ts", "src/lib/budget-epoch.ts"],
+      "tests": ["src/lib/budget-ledger.test.ts", "src/lib/provider-budget-policy.test.ts", "src/lib/budget-epoch.test.ts"]
+    },
+    {
+      "id": "req-trading-pause-resume",
+      "module": "spec/trading-risk-and-budget.md",
+      "coverage": "full",
+      "sources": ["src/lib/trading-control.ts", "src/lib/execution-drain-state.ts", "src/lib/automation-resume-policy.ts"],
+      "tests": ["src/lib/execution-drain-state.test.ts", "src/lib/automation-resume-policy.test.ts"]
+    },
+    {
+      "id": "req-trading-paper-engine",
+      "module": "spec/trading-risk-and-budget.md",
+      "coverage": "full",
+      "sources": ["src/lib/paper-execution.ts", "src/lib/venue-fill.ts"],
+      "tests": ["src/lib/paper-execution.test.ts", "src/lib/venue-fill.test.ts", "src/lib/mirror-invariant.test.ts"]
+    },
+    {
+      "id": "req-trading-entry-route",
+      "module": "spec/trading-risk-and-budget.md",
+      "coverage": "full",
+      "sources": ["src/lib/entry-execution-policy.ts", "src/lib/entry-sizing-policy.ts", "src/lib/managed-maker.ts", "src/lib/live-orders.ts"],
+      "tests": ["src/lib/entry-execution-policy.test.ts", "src/lib/entry-sizing-policy.test.ts", "src/lib/live-orders.test.ts"]
+    },
+    {
+      "id": "req-trading-intent-identity",
+      "module": "spec/trading-risk-and-budget.md",
+      "coverage": "full",
+      "sources": ["src/lib/live-order-identity.ts", "src/lib/live-orders.ts", "src/lib/execution-ledger-storage.ts"],
+      "tests": ["src/lib/live-order-identity.test.ts", "src/lib/live-order-audit.test.ts", "src/lib/execution-ledger-store.test.ts"]
+    },
+    {
+      "id": "req-trading-cancellation",
+      "module": "spec/trading-risk-and-budget.md",
+      "coverage": "full",
+      "sources": ["src/lib/live-orders.ts", "src/lib/kalshi-reconciliation.ts"],
+      "tests": ["src/lib/cancellation-delay-integration.test.ts", "src/lib/kalshi-reconciliation.test.ts"]
+    },
+    {
+      "id": "req-trading-reconciliation",
+      "module": "spec/trading-risk-and-budget.md",
+      "coverage": "full",
+      "sources": ["src/lib/execution-reconciliation.ts", "src/lib/periodic-reconciliation.ts", "src/lib/reconciliation-checkpoint.ts", "src/lib/reconciliation-scope.ts"],
+      "tests": ["src/lib/execution-reconciliation.test.ts", "src/lib/periodic-reconciliation.test.ts", "src/lib/reconciliation-checkpoint.test.ts", "src/lib/reconciliation-scope.test.ts"]
+    },
+    {
+      "id": "req-trading-portfolio-switch",
+      "module": "spec/trading-risk-and-budget.md",
+      "coverage": "full",
+      "sources": ["src/lib/portfolio-policy.ts", "src/lib/switch-policy.ts", "src/lib/live-orders.ts"],
+      "tests": ["src/lib/portfolio-policy.test.ts", "src/lib/switch-policy.test.ts", "src/lib/switch-hysteresis.test.ts"]
+    },
+    {
+      "id": "req-trading-reduce-only-sells",
+      "module": "spec/trading-risk-and-budget.md",
+      "coverage": "full",
+      "sources": ["src/lib/exit-policy.ts", "src/lib/live-orders.ts"],
+      "tests": ["src/lib/exit-policy.test.ts", "src/lib/live-orders.test.ts", "src/lib/paper-exit-fill.test.ts"]
+    },
+    {
+      "id": "req-trading-security-controls",
+      "module": "spec/trading-risk-and-budget.md",
+      "coverage": "partial",
+      "sources": ["src/lib/auth.ts", "src/lib/live-orders.ts", "src/lib/runtime-environment.ts"],
+      "tests": ["src/lib/live-orders.test.ts"],
+      "gap": "Authentication, same-origin enforcement, and secret-response boundaries are distributed across route handlers and do not yet have one invariant test mapped to the full requirement family."
+    }
+  ]
+}

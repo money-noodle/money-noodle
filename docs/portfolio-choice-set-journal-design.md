@@ -9,7 +9,7 @@
 > **Design index:** [`docs/README.md`](README.md)
 
 > Approved 2026-08-19 after the corrected historical replay withdrew the apparent contract-selection
-> leak. This is an observation-only evaluation lane under SPEC §12. It changes no forecast, entry gate,
+> leak. This is an observation-only evaluation lane under `spec/policy-and-track-separation.md` §12. It changes no forecast, entry gate,
 > persistence rule, regime rule, retry, sizing, portfolio constraint, execution style, budget, order, or
 > exit behavior. Collection begins only when the built runtime initializes the v1 store; no historical
 > choice set is backfilled. The later full-cycle portfolio program is separately approved in
