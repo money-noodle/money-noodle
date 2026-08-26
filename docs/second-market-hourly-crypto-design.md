@@ -9,7 +9,7 @@
 > **Design index:** [`docs/README.md`](README.md)
 
 > **Approved 2026-08-21** · Decisions locked: T-only, 8pp edge floor, 3/2/1 caps, 60s cadence,
-> cross-market exposure ignored, strike-grid helper, all ten assets. · Status: design, implementation
+> cross-market exposure ignored, threshold-pair selection, all ten assets. · Status: design, implementation
 > pending. Product/architecture truth lives in `spec/trading-risk-and-budget.md` §3.6 (markets & keying), `market-registry.ts`,
 > `strategy-registry.ts`, `policy-manifest.ts`, and `basis-model.ts`. This document is the pre-code
 > agreement for adding a second market: what the market is, how the contracts differ, and every
@@ -67,7 +67,8 @@ ETH, HYPEUSD_RTI for HYPE) before the hourly close, compared to the contract's *
 - `KXBTC-26AUG2116-B80750`: Yes if between 80,700 and 80,799.99 (band, deferred).
 
 A window (e.g., 19:00→20:00Z) lists **one strike per ticker** and **many tickers per window**. The
-query surface is therefore a **grid**: asset × window × strike × side.
+venue listing is therefore a grid, but the Phase 1 candidate surface is not: discovery filters to the exact `T`
+above/below threshold pair for each asset/window and does not evaluate the deferred `B`-family strike grid.
 
 ### 2.2 The model consequence (the load-bearing difference)
 
@@ -284,9 +285,9 @@ All six open decisions are resolved; nothing remains un-decided.
 3. **Evaluation cadence — 60s**; no 15m warm-up/persistence copy.
 4. **Cross-market exposure — ignored.** Each market's caps bind within itself; 15m-UP + 1h-DOWN is
    permitted (different contracts, not "the same economic contract").
-5. **Strike admissible band — a "strike grid" helper** admitting strikes within a provisional ±N σ of
-   spot, N measured from the first hourly book sample, not assumed; at most one strike per
-   (asset, window).
+5. **Threshold-pair selection.** Discover the exact `T` above-strike and below-strike contracts for each
+   asset/window, retain each exact strike ticker in durable identity, and permit at most one position per
+   (asset, window). The `B`-family strike grid and a sigma-based strike-admissibility helper are out of scope.
 6. **T (threshold) only; band (`B`) deferred** — the band family needs two-sided pricing
    `P(A < close < B)` plus a width policy and is a separate Phase 2.
 
@@ -306,10 +307,14 @@ All six open decisions are resolved; nothing remains un-decided.
 - 2026-08-21 · Draft for review. Decided hourly-with-strikes; no 45m exists; all ten assets; CF
   index work; paper-first; slower cadence; new edge floor.
 - 2026-08-21 · Decisions locked after operator review: T-only (band deferred); 8pp edge floor;
-  3/2/1 caps per market; 60s cadence; cross-market exposure explicitly ignored; strike-grid helper.
+  3/2/1 caps per market; 60s cadence; cross-market exposure explicitly ignored; the initial plan still included a
+  strike-grid helper, which the contract-shape correction below superseded before implementation.
   The threshold-vs-band site-tile distinction and the daily-range scope note were added.
 - 2026-08-21 · **Corrected the candidate model**: the threshold surface is an up/down pair, not a
   strike grid (measured 188/300/75 contracts per window, only 2 T each for BTC/ETH/HYPE). Removed the
   over-built strike-grid helper; the portfolio rule is now one T position per (asset, window). Added
   an open verification item on the deep-wing pair. Also added §7.1 request-budget delta pointing at
   the new canonical `docs/venue-traffic-and-rate-limits.md`.
+- 2026-08-26 · Removed the remaining stale current-decision references to the superseded strike-grid helper and
+  clarified that the full venue listing is a grid while the Phase 1 candidate surface is the exact `T` threshold
+  pair. No market capability, policy, registry, or runtime behavior changed.
