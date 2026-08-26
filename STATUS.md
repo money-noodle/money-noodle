@@ -114,8 +114,8 @@ The only two incomplete winners were separately explained by after-close enrolme
 evidence. Candidate economics over complete paths are therefore not promotion-grade even if raw counts reach 60;
 every `reviewUnlocked` remains false. Historical generic unavailable events cannot be relabelled safely because
 they retain no rejected quote or reason. The evaluated option is a fresh prospective v3 event distinguishing
-`observed_executable`, `observed_non_executable`, and genuine `unavailable`; it requires maintainer approval and a
-written design before implementation.
+`observed_executable`, `observed_non_executable`, and genuine `unavailable`. The maintainer deferred that work on
+2026-08-26; v2 remains diagnostic-only, and no v3 design or implementation has started.
 
 The same read found 190 public exact-market Kalshi 429 messages across seven contracts in one 20:15Z window. That
 burst did not coincide with an incomplete exit position and F2 remained 100% available, so it is not assigned as
@@ -2412,13 +2412,15 @@ Interpretation: the newer exact ledger snapshot is slightly negative lifetime an
 
 ## Current Priorities
 
-1. **Continue untouched forecast Phase 2 to its 100- and 300-window gates.** The wiring review passed at 45 closed
-   windows; do not rank arms from survivor counts, start Phase 3, or begin confirmed-signal collection early.
-2. **Decide whether to design a prospective reasoned exit-v3 cycle.** V2 now conflates a fresh zero owned-side
-   bid with missing evidence, and every cycle-coverage incomplete position was a loss. Do not reinterpret old
-   generic events or review v2 efficacy. The evaluated v3 option records executable, known non-executable, and
-   genuinely unavailable states prospectively; all four arms and production `strict-value-v1` stay unchanged.
-   Separately design caller/time attribution for the observed public 429 burst before changing traffic cadence.
+1. **Continue untouched forecast Phase 2 to its 100- and 300-window gates.** The 2026-08-26T01:20Z read had 88/100
+   closed windows, 95.29% funded-provider outcome coverage, complete six-arm families, 100% candidate availability,
+   and zero replay error. The 458 unscoreable rows all lacked Kalshi contract provenance at issuance; no row with a
+   Kalshi contract lacked its funded outcome. At 100, explain this class in the written coverage review; do not rank
+   arms, start Phase 3, or begin confirmed-signal collection early.
+2. **Keep reasoned exit-v3 deferred.** V2 conflates a fresh zero owned-side bid with missing evidence, and every
+   cycle-coverage incomplete position was a loss. Do not reinterpret old generic events or review v2 efficacy.
+   No v3 design or implementation starts until the maintainer returns to it. All four arms and production
+   `strict-value-v1` stay unchanged; traffic-caller attribution is also deferred.
 3. **Continue maker-restriction v1 without tuning.** Live spread has 13/20 divergent windows and paper support is
    weak; spike has ten live divergences and is negative in paper. Counts, raw cash, and an isolated t-statistic do
    not bypass the locked joint gate.
