@@ -6,6 +6,9 @@
 > migration gate below is accepted and verified with live execution paused. The extensibility sections define
 > contracts for later work; they do not approve any new venue, market, instrument, model, strategy, or live
 > capability.
+>
+> **2026-08-26 amendment:** long-shot execution and public replication references below are historical.
+> That strategy is retired and must not be restored by an engine-separation implementation.
 
 ## 1. Decision proposed
 

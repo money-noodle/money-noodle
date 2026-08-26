@@ -325,9 +325,6 @@
       max-width: 96rem;
     }
   }
-  .mx-0\.5 {
-    margin-inline: calc(var(--spacing) * 0.5);
-  }
   .mx-auto {
     margin-inline: auto;
   }
@@ -600,9 +597,6 @@
   .min-h-screen {
     min-height: 100vh;
   }
-  .w-11 {
-    width: calc(var(--spacing) * 11);
-  }
   .w-12 {
     width: calc(var(--spacing) * 12);
   }
@@ -686,12 +680,6 @@
   }
   .min-w-\[38rem\] {
     min-width: 38rem;
-  }
-  .min-w-\[420px\] {
-    min-width: 420px;
-  }
-  .min-w-\[640px\] {
-    min-width: 640px;
   }
   .flex-1 {
     flex: 1;
@@ -1142,12 +1130,6 @@
     border-color: var(--primary);
     @supports (color: color-mix(in lab, red, red)) {
       border-color: color-mix(in oklab, var(--primary) 30%, transparent);
-    }
-  }
-  .border-primary\/40 {
-    border-color: var(--primary);
-    @supports (color: color-mix(in lab, red, red)) {
-      border-color: color-mix(in oklab, var(--primary) 40%, transparent);
     }
   }
   .border-transparent {
@@ -1642,12 +1624,6 @@
   .pb-5 {
     padding-bottom: calc(var(--spacing) * 5);
   }
-  .pl-1 {
-    padding-left: var(--spacing);
-  }
-  .pl-2 {
-    padding-left: calc(var(--spacing) * 2);
-  }
   .pl-4 {
     padding-left: calc(var(--spacing) * 4);
   }
@@ -1665,9 +1641,6 @@
   }
   .font-mono {
     font-family: var(--font-geist-mono);
-  }
-  .font-sans {
-    font-family: var(--font-geist-sans);
   }
   .text-3xl {
     font-size: var(--text-3xl);
@@ -1834,12 +1807,6 @@
       color: color-mix(in oklab, var(--loss) 80%, transparent);
     }
   }
-  .text-loss\/90 {
-    color: var(--loss);
-    @supports (color: color-mix(in lab, red, red)) {
-      color: color-mix(in oklab, var(--loss) 90%, transparent);
-    }
-  }
   .text-muted-foreground {
     color: var(--muted-foreground);
   }
@@ -1928,9 +1895,6 @@
   }
   .opacity-60 {
     opacity: 60%;
-  }
-  .opacity-70 {
-    opacity: 70%;
   }
   .opacity-100 {
     opacity: 100%;
@@ -2117,14 +2081,6 @@
         background-color: color-mix(in oklab, var(--muted) 40%, transparent);
       }
     }
-    .hover\:bg-primary\/10:hover {
-      background-color: var(--primary);
-    }
-    @supports (color: color-mix(in lab, red, red)) {
-      .hover\:bg-primary\/10:hover {
-        background-color: color-mix(in oklab, var(--primary) 10%, transparent);
-      }
-    }
     .hover\:bg-primary\/90:hover {
       background-color: var(--primary);
     }
@@ -2170,9 +2126,6 @@
     }
     .hover\:text-foreground:hover {
       color: var(--foreground);
-    }
-    .hover\:text-loss:hover {
-      color: var(--loss);
     }
     .hover\:underline:hover {
       text-decoration-line: underline;

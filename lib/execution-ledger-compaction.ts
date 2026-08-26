@@ -26,8 +26,6 @@ import {
 import { buildTradeTrackSummary, orderStrategyId } from './execution-report';
 import { makerCohortEvidence } from './entry-execution-policy';
 import { epochResults, lifetimeRealizedPnlCents } from './budget-epoch';
-import { longShotDailyNetLossCents, longShotFunding } from './long-shot-engine';
-import { longShotSettings } from './long-shot-policy';
 import { countFilledLiveVenueOrders } from './order-rate-limit';
 import { EDGE_BINARY_BUY, LONG_SHOT_ROUND_TRIP } from './strategy-registry';
 import type { ExecutionMode, PaperOrder, StrategyId } from './types';
@@ -110,13 +108,6 @@ function assertCompactControlEquivalence(before: PaperOrder[], compact: PaperOrd
   for (const since of [0, nowMs - 3_600_000, nowMs - 24 * 60 * 60_000]) {
     if (countFilledLiveVenueOrders(before, since) !== countFilledLiveVenueOrders(compact, since)) {
       throw new Error(`Execution compaction changed the live filled-order count since ${since}.`);
-    }
-  }
-  const settings = longShotSettings();
-  for (const mode of modes) {
-    if (!isDeepStrictEqual(longShotFunding(before, mode, 1_000, settings), longShotFunding(compact, mode, 1_000, settings))
-      || longShotDailyNetLossCents(before, mode, nowMs) !== longShotDailyNetLossCents(compact, mode, nowMs)) {
-      throw new Error(`Execution compaction changed ${mode} long-shot funding or daily loss.`);
     }
   }
 }

@@ -3,6 +3,9 @@
 > Status: **approved observability-only implementation.** Written 2026-08-20 after the maintainer asked to
 > centralize polling information in the UI. The runtime-loop separation and the no-policy-change boundary
 > were agreed in prose before this note and before code.
+>
+> **2026-08-26 amendment:** the long-shot entry, trailing, and target-exit clocks described historically
+> below were removed with that strategy. The active registry now exposes five tasks.
 
 ## 1. Decision
 

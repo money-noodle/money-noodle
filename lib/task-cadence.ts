@@ -1,9 +1,6 @@
 import { DATA_FRESHNESS, formatCadence } from './freshness';
 import { MAKER_MANAGEMENT_CHECKS, MAKER_MANAGEMENT_POLL_MS } from './managed-maker';
-import { TARGET_EXIT_POLL_MS } from './target-exit-policy';
-import { TRAILING_ENTRY_POLL_MS, TRAILING_FAST_LOOK_BUDGET } from './trailing-entry';
 
-export const LONG_SHOT_ENTRY_POLL_MS = 1_000;
 export const DEFAULT_RECONCILIATION_INTERVAL_MS = 5 * 60_000;
 export const MINIMUM_RECONCILIATION_INTERVAL_MS = 60_000;
 export const MAXIMUM_RECONCILIATION_INTERVAL_MS = 60 * 60_000;
@@ -13,9 +10,6 @@ export type TaskCadenceId =
   | 'edge-observation'
   | 'exact-pre-submit-quote'
   | 'managed-maker'
-  | 'long-shot-entry'
-  | 'long-shot-trailing'
-  | 'long-shot-target-exit'
   | 'reconciliation';
 
 export type TaskCadenceHealth = 'healthy' | 'running' | 'degraded' | 'idle' | 'unavailable';
@@ -92,31 +86,6 @@ export const TASK_CADENCE: readonly TaskCadenceDefinition[] = [
     activation: 'An accepted maker entry with a remaining quantity; live and paper managers run independently.',
     purpose: 'Walks a passive order toward its approved ceiling, then cancels and confirms every remainder.',
     requestCost: 'Bounded exact-contract quote, depth, trade, and fill reads; never broad candidate polling.',
-    workerOnly: true,
-  },
-  {
-    id: 'long-shot-entry', task: 'Long-shot ordinary entry watch', cadenceKind: 'interval',
-    cadenceMs: LONG_SHOT_ENTRY_POLL_MS, cadenceLabel: shortCadence(LONG_SHOT_ENTRY_POLL_MS),
-    activation: 'The strategy is enabled and a settlement window can still qualify; quiet ticks make no quote request.',
-    purpose: 'Finds low-mark entry candidates that a 15-second snapshot could miss.',
-    requestCost: 'One shared-cache quote per distinct eligible contract and ordinary look.',
-    workerOnly: true,
-  },
-  {
-    id: 'long-shot-trailing', task: 'Long-shot active trailing', cadenceKind: 'bounded',
-    cadenceMs: TRAILING_ENTRY_POLL_MS,
-    cadenceLabel: `${shortCadence(TRAILING_ENTRY_POLL_MS)}, at most ${TRAILING_FAST_LOOK_BUDGET} fast looks`,
-    activation: 'A qualifying side is still falling and remains inside its bounded fast-look budget.',
-    purpose: 'Waits for a cheap side to stop diminishing before the long-shot entry decision proceeds.',
-    requestCost: 'One shared-cache quote per watched contract/look; falls back to the ordinary cadence after the budget.',
-    workerOnly: true,
-  },
-  {
-    id: 'long-shot-target-exit', task: 'Long-shot target exit', cadenceKind: 'interval',
-    cadenceMs: TARGET_EXIT_POLL_MS, cadenceLabel: shortCadence(TARGET_EXIT_POLL_MS),
-    activation: 'At least one long-shot position is open; quiet ticks make no quote request.',
-    purpose: 'Watches the owned-side bid for a reduce-only IOC target exit.',
-    requestCost: 'One shared-cache quote per distinct open contract and side per look.',
     workerOnly: true,
   },
   {

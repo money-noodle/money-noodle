@@ -784,35 +784,30 @@ Step 1 had an immediate, intended consequence: **paper stopped trading XRP and b
 
 This design does not change any live entry rule, does not let a candidate place an order or hold a budget, does not alter sizing or the fill model, and does not bump the buy policy version when a candidate changes. Only promotion changes the production policy version, and only through the recorded, manual act described in §12.5.
 
-### 12.10 Second production policy: long-shot round trip
+### 12.10 Retired policy identity: long-shot round trip
 
-A second policy runs beside the edge policy on the same `crypto-15m` market. It buys a side whose executable
-Kalshi ask falls to a low mark early in the cycle and sells it through a resting reduce-only limit at a high
-mark before settlement. It consumes no `P(UP)`; the trigger is a venue price and a clock. Complete design,
-arithmetic, and the screening evidence behind every parameter are in
-[`docs/long-shot-policy-design.md`](docs/long-shot-policy-design.md).
+The long-shot round trip ran prospectively as a paper-only second policy on `crypto-15m`; its live lane was
+never armed. It bought a side whose executable Kalshi ask fell to a low mark early in the cycle and attempted
+a target exit before settlement without consuming `P(UP)`. Its complete historical design and parameter
+record remain in [`docs/long-shot-policy-design.md`](docs/long-shot-policy-design.md).
 
-The axis being added is a **policy**, keyed `strategyId` alongside `marketId` and `executionMode`. This
-preserves §12.3's mirror invariant — the rule layer gains no execution-mode parameter, and the invariant
-holds within each policy, so long-shot paper and long-shot live differ only in fill and capital. It also
-preserves the 2026-08-13 decision that the forecast model is keyed by market and never by strategy.
+**Retired 2026-08-26.** The frozen 12¢→97¢/600s v2 cohort completed 150 resolved attempts across 76 independent
+settlement windows. Exact paper P&L was −1,410.93¢ on 4,979¢ staked. The prospective hold arm measured
+−14.71% ±27.56pp clustered SE; the paired target-exit-minus-hold comparison was −2.47pp ±0.85pp and −98.93¢,
+with all 11 target-exited positions subsequently settling in the owned side. The broad hold interval does not
+refute every cheap-contract hypothesis, but neither this cohort nor the earlier wide screens supplied positive
+evidence worth a separate runtime lane. See
+[`reports/long-shot-v2-final-review-2026-08-26.md`](reports/long-shot-v2-final-review-2026-08-26.md).
 
-Candidates are disjoint from the edge policy's by construction: buy policy v17 requires `P(side) ≥ 55%` with
-net edge in `[5pp, 35pp]`, and a 10¢ ask against a 55% probability is a 45pp edge the max-edge ceiling
-rejects. These intents are **not** positive-edge buys under §3.7 and must never enter that track record,
-which exists to score model calculations and would be corrupted by rows carrying no model probability.
+Execution, high-frequency polling, evidence writes, Postgres projection, dashboard/API, strategy-specific
+estimators, and strategy-level budget splitting are removed. Provider → market remains the active allocation
+chain. No former strategy share is transferred into a higher edge-policy ceiling, and no edge forecast,
+entry, execution, exit, sizing, or capital rule changes.
 
-Two approaches, deliberately separated. The **round trip** executes in paper and live. **Buy-and-hold** on
-the identical trigger executes nothing: it is recorded as an immutable sentinel at trigger time — not
-derived from fills, which would inherit every selection bias of the executing lane — and is the exact HOLD
-arm of the round trip's exit decision, priced from the settled venue outcome as `action-counterfactual-v1`
-already does.
-
-Budget extends the existing chain by one level of the same shape, **provider → market → policy**, each a
-percentage of the level above summing to no more than 100%. Splitting budget does not split risk: position,
-same-window and correlation caps remain keyed by market and global across providers and policies, because
-risk is exposure to the underlying. The kill switch, reconciliation barrier, quiescent drain, hourly filled
-order ceiling and serialized live execution queue are venue and account properties and remain shared.
+`long-shot-round-trip` remains a recognized **retired historical `strategyId`**. Existing ledger rows,
+compaction groups, P&L, corrections, and reconciliation history must retain that identity and must never be
+normalized into `edge-binary-buy`. Worker-local evidence and the applied database migration remain historical
+records; retirement grants no authority to delete or rewrite them.
 
 ## 13. Open decisions
 
@@ -836,6 +831,7 @@ order ceiling and serialized live execution queue are venue and account properti
 
 | Date | Decision |
 |---|---|
+| 2026-08-26 | Retire `long-shot-round-trip-buy12-sell97-win600-v2` after its frozen prospective paper cohort reached 150 resolved attempts across 76 independent settlement windows. Exact P&L was −1,410.93¢ on 4,979¢ staked; hold was −14.71% ±27.56pp clustered SE, and the precommitted paired 97¢ exit-minus-hold result was −2.47pp ±0.85pp / −98.93¢, with all 11 exited positions later settling in the owned side. Remove long-shot paper/live execution, quote/trailing/target pollers, evidence writes, dashboard/API, Postgres replication, funding and estimation commands, and the strategy-level allocation layer. Retain the applied migration, durable evidence, and `long-shot-round-trip` as a retired ledger identity so historical accounting cannot enter the edge policy. Provider → market remains the active allocation chain; no former strategy share raises an edge limit, and no edge policy or capital rule changes. See `reports/long-shot-v2-final-review-2026-08-26.md`. |
 | 2026-08-25 | Clarify adaptive-regime presentation without changing its arithmetic, thresholds, state transitions, or authority. Name `negativeReturnConfidence` on user surfaces as **estimated negative-return probability**; state explicitly that an open gate permits entries and that pausing requires the configured probability threshold; label `weightedMeanEdge` as weighted recent fee-aware return; and show resolved-window count and warm-up minimum as separate quantities rather than a fraction that resembles capacity. Historical transition reasons remain immutable. This is presentation-only: production v22, the 99% pause/75% resume thresholds, 12-window warm-up, half-life, evidence, and every order path are unchanged. |
 | 2026-08-25 | Replace every hardcoded Kalshi event-order `exchange_index` with the exact venue-owned index from a signed active-market read immediately before submission. Validate exact ticker, active status, and non-negative safe-integer index without coercion or fallback; capture one index across maker create retries, require every management refresh to retain it, and inject it into maker create/amend, taker entry, and fresh-identity reduce-only exit bodies. Persist accepted entry/exit indexes as audit identity, but give them no policy, budget, reconciliation, or settlement authority. Missing, malformed, changed, mismatched, or inactive identity fails before another wire request; create transport uncertainty and reconciliation remain unchanged. This repairs 15 consecutive `market_not_found` creates after active contracts moved from the hardcoded index 0 to venue-reported index 2, but index 2 is evidence—not a new constant. See `docs/kalshi-exchange-index-wire-design.md`. |
 | 2026-08-25 | Narrow current Kalshi position ownership to local lifecycle rows that can still own exposure: `open`, `pending_reservation`, `uncertain`, or exit-pending before contract close. A rejected, unfilled, sold, won, lost, or invalid local attempt no longer claims an exact ticker merely because its close is in the future, so acceptable external positions cannot hold the entire desk suspended after authoritative local rejection. Preserve fail-closed comparison while any local exposure is open or unresolved; do not infer offsets, import external orders/fills into the ledger, permit unrelated resting orders, or change cash, reservation, exposure, identity, exit, startup/Resume, or guarded-recovery controls. Simultaneous external and Money Noodle ownership of one exact ticker remains unsupported and blocking. See `docs/external-venue-position-ownership-design.md`. |

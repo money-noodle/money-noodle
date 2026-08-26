@@ -1,8 +1,13 @@
 # Long-shot round-trip policy — design
 
-> Draft 1 · 2026-08-14 · Status: proposed, not implemented
-> Product scope and safety doctrine live in [`SPEC.md`](../SPEC.md). This document designs one new
-> trading policy and the evidence lane beside it. It changes no rule of the existing policy.
+> Draft 1 · 2026-08-14 · **Retired 2026-08-26**
+> Product scope and safety doctrine live in [`SPEC.md`](../SPEC.md). This is the preserved historical
+> design for a policy that was implemented paper-only and then removed after its precommitted review.
+> Final evidence and decision: [`reports/long-shot-v2-final-review-2026-08-26.md`](../reports/long-shot-v2-final-review-2026-08-26.md).
+>
+> Retirement removed execution, polling, evidence writes, strategy-level allocation, UI/API, Postgres
+> replication, and strategy-specific estimation tools. Durable history and the retired ledger identity
+> remain; no edge-policy rule or capital ceiling changed.
 
 ## 1. What this is
 

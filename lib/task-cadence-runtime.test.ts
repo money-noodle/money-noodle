@@ -26,11 +26,12 @@ describe('task cadence runtime health', () => {
     });
   });
 
-  it('reports the latest failure without making never-activated conditional tasks stale', () => {
-    const run = beginTaskCadenceRun('long-shot-target-exit', Date.parse('2026-08-20T11:59:59.000Z'));
+  it('reports the latest failure without making a never-activated on-demand task stale', () => {
+    const run = beginTaskCadenceRun('exact-pre-submit-quote', Date.parse('2026-08-20T11:59:59.000Z'));
     run.fail(new Error('quote unavailable'), Date.parse('2026-08-20T12:00:00.000Z'));
-    expect(status('long-shot-target-exit')).toMatchObject({ health: 'degraded', lastError: 'quote unavailable' });
-    expect(status('long-shot-entry', Date.parse('2026-08-21T12:00:00.000Z')).health).toBe('idle');
+    expect(status('exact-pre-submit-quote')).toMatchObject({ health: 'degraded', lastError: 'quote unavailable' });
+    resetTaskCadenceRuntimeForTests();
+    expect(status('exact-pre-submit-quote', Date.parse('2026-08-21T12:00:00.000Z')).health).toBe('idle');
   });
 
   it('degrades an always-expected edge clock only after its stale allowance', () => {

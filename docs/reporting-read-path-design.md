@@ -3,6 +3,9 @@
 > **Status: implemented.** Agreed 2026-08-22 after the local performance and hosted
 > projection incident. This is a reporting/read-model change only. It changes no forecast, entry rule,
 > execution route, fill, sizing, budget control, reconciliation, or live authority.
+>
+> **2026-08-26 amendment:** the long-shot report route, UI, and Postgres projection described historically
+> below were removed when that strategy retired. Historical order attribution remains in the shared ledger.
 
 ## 1. Incident and decision
 

@@ -58,7 +58,6 @@ describe('bounded reporting read paths', () => {
     expect(source('app/api/trading/history/route.ts')).toContain('includeArchivedEvidence: false');
     expect(source('app/api/trading/allocations/route.ts')).toContain('includeArchivedEvidence: false');
     expect(source('lib/public-paper-performance.ts')).toContain("strategyId: EDGE_BINARY_BUY, includeArchivedEvidence: false");
-    expect(source('lib/long-shot-projection.ts')).toContain("strategyId: LONG_SHOT_ROUND_TRIP, includeArchivedEvidence: false");
     expect(source('app/api/performance/route.ts')).toContain('getExecutionOrders()');
     const risk = source('lib/live-risk-store.ts');
     expect(risk).toContain('!runtime.activeMutation && runtime.committed');

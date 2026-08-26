@@ -2,26 +2,23 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { isAuthenticatedRequest } from '@/lib/auth';
 import { isStatelessDeployment, STATELESS_WORKER_MESSAGE } from '@/lib/runtime-environment';
 import { getProviderBudgets, providerBudget, updateProviderBudget } from '@/lib/provider-budget-store';
-import { strategyStartingCents } from '@/lib/strategy-budget-policy';
 import { allocationsValid } from '@/lib/provider-budget-policy';
-import { STRATEGIES, isStrategyId } from '@/lib/strategy-registry';
 import { MARKETS, isMarketId } from '@/lib/market-registry';
 import { TRADING_PROVIDER_IDS } from '@/lib/trading-provider-config-store';
 import { getTradingControl } from '@/lib/trading-control';
 import { getExecutionOrders } from '@/lib/paper-execution';
-import type { MarketAllocation, StrategyAllocation, TradingProviderId } from '@/lib/types';
+import type { MarketAllocation, TradingProviderId } from '@/lib/types';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * Budget allocation across provider, market, and strategy.
+ * Budget allocation across providers and markets.
  *
- * Reads are shaped as a tree so the UI renders from the registries rather than hardcoding today's single
- * provider and market. Writes re-fund: a strategy's percentage sets a new starting amount and opens a new
- * funding epoch, so its equity — and therefore its drawdown halt — restarts from what was just committed.
- * That is deliberate and is why this requires the same quiescent preconditions as every other budget
- * mutation. Nothing here can arm, resume, or place an order.
+ * Reads are shaped as a tree so the UI renders from the registries rather than hardcoding today's provider
+ * or market. The former strategy sub-allocation layer retired with the long-shot strategy; legacy fields
+ * remain parseable in durable history but this route neither returns nor writes them. A market-cap change
+ * still requires quiescent execution. Nothing here can arm, resume, or place an order.
  */
 async function blockers(): Promise<string[]> {
   const control = await getTradingControl();
@@ -60,23 +57,7 @@ export async function GET(request: NextRequest) {
             const allocation = budget?.allocations.find((item) => item.marketId === market.id);
             const percent = allocation?.percent ?? 0;
             const capCents = Math.floor(providerEquityCents * percent / 100);
-            return {
-              marketId: market.id,
-              name: market.name,
-              percent,
-              capCents,
-              strategies: STRATEGIES.map((strategy) => {
-                const funded = allocation?.strategies?.find((item) => item.strategyId === strategy.id);
-                return {
-                  strategyId: strategy.id,
-                  name: strategy.name,
-                  signalSource: strategy.signalSource,
-                  percent: funded?.percent ?? 0,
-                  startingCents: funded?.startingCents ?? 0,
-                  fundedAt: funded?.fundedAt ?? null,
-                };
-              }),
-            };
+            return { marketId: market.id, name: market.name, percent, capCents };
           }),
         };
       }),
@@ -93,8 +74,6 @@ interface AllocationPatch {
   marketId?: string;
   /** Market share of the provider. Omit to leave unchanged. */
   marketPercent?: number;
-  /** Strategy shares of that market. Every entry re-funds. */
-  strategies?: Array<{ strategyId: string; percent: number }>;
 }
 
 export async function PATCH(request: NextRequest) {
@@ -113,36 +92,18 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: 'Unknown provider.' }, { status: 400 });
     }
     if (!isMarketId(body.marketId)) return NextResponse.json({ error: 'Unknown market.' }, { status: 400 });
-    if (body.strategies?.some((item) => !isStrategyId(item.strategyId))) {
-      return NextResponse.json({ error: 'Unknown strategy.' }, { status: 400 });
-    }
-
     const providerId = body.providerId as TradingProviderId;
     const marketId = body.marketId;
-    const control = await getTradingControl();
     const budgets = await getProviderBudgets();
     const existing = providerBudget(budgets, providerId);
     if (!existing) return NextResponse.json({ error: `No ${providerId} budget to allocate.` }, { status: 400 });
 
     const current = existing.allocations.find((item) => item.marketId === marketId);
     const marketPercent = body.marketPercent ?? current?.percent ?? 0;
-    const capCents = Math.floor(control.control.startingBudgetCents * marketPercent / 100);
-    const fundedAt = new Date().toISOString();
-
-    // Every strategy write re-funds: a new starting amount and a new funding epoch, so equity and the
-    // drawdown halt restart from what was just committed rather than carrying a prior period's losses.
-    const strategies: StrategyAllocation[] | undefined = body.strategies
-      ? body.strategies.map((item) => ({
-        strategyId: item.strategyId as StrategyAllocation['strategyId'],
-        percent: item.percent,
-        startingCents: strategyStartingCents(capCents, item.percent),
-        fundedAt,
-      }))
-      : current?.strategies;
 
     const allocations: MarketAllocation[] = MARKETS
       .map((market) => market.id === marketId
-        ? { marketId, percent: marketPercent, ...(strategies ? { strategies } : {}) }
+        ? { marketId, percent: marketPercent }
         : existing.allocations.find((item) => item.marketId === market.id))
       .filter((item): item is MarketAllocation => Boolean(item));
 
@@ -154,8 +115,6 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({
       revision: next.revision,
       allocations: providerBudget(next, providerId)?.allocations ?? [],
-      refunded: Boolean(body.strategies),
-      fundedAt: body.strategies ? fundedAt : null,
     });
   } catch (error) {
     console.error('Allocation write failed:', error);

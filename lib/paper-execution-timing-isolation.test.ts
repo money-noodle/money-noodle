@@ -7,7 +7,7 @@ const source = (file: string) => readFileSync(path.join(process.cwd(), 'lib', fi
 const forbiddenReaders = [
   'prediction-policy.ts', 'signal-persistence.ts', 'portfolio-policy.ts',
   'entry-execution-policy.ts', 'entry-sizing-policy.ts', 'live-orders.ts', 'live-risk-policy.ts',
-  'trading-control.ts', 'provider-budget-store.ts', 'strategy-budget-policy.ts', 'budget-ledger.ts',
+  'trading-control.ts', 'provider-budget-store.ts', 'budget-ledger.ts',
   'execution-reconciliation.ts', 'periodic-reconciliation.ts', 'settlement-average.ts',
   'public-paper-performance.ts',
 ];

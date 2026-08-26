@@ -8,8 +8,9 @@ Code remains authoritative for behavior. The policy manifest records what has be
 decisions and why. Start from this document when orienting or refining the path, then follow the cited symbols
 before changing it.
 
-The second registered strategy has its own trigger and lifecycle. It does not pass through this forecast/edge
-pipeline; see [`lib/strategy-registry.ts`](../lib/strategy-registry.ts) and
+`edge-binary-buy` is the only active strategy. `long-shot-round-trip` remains registered only as a retired
+historical ledger identity; it has no trigger, lifecycle, allocation, or product surface. See
+[`lib/strategy-registry.ts`](../lib/strategy-registry.ts) and the preserved
 [`docs/long-shot-policy-design.md`](long-shot-policy-design.md).
 
 ## The seven states

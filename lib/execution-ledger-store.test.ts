@@ -67,14 +67,9 @@ describe('execution ledger commit cache', () => {
     expect(io.readFile).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps the one-second long-shot precheck on a bounded queued view', () => {
+  it('does not retain the retired one-second strategy precheck', () => {
     const source = readFileSync(new URL('./paper-execution.ts', import.meta.url), 'utf8');
-    const start = source.indexOf('async function longShotExitTick');
-    const end = source.indexOf('/** Started lazily from the collector cycle', start);
-    const tick = source.slice(start, end);
-    expect(tick).toContain('readLedgerView');
-    expect(tick).not.toContain('loadLedgerFromDisk');
-    expect(tick).not.toContain('getExecutionOrders');
+    expect(source).not.toMatch(/longShotExitTick|startLongShotExitPoller|startLongShotEntryPoller/);
   });
 
   it('derives scheduled control summaries inside the committed view instead of cloning the ledger', () => {

@@ -1,16 +1,15 @@
 # Money Noodle - Implementation Status
 
-> Living status document. Updated 2026-08-25.
+> Living status document. Updated 2026-08-26.
 > Product requirements and architecture decisions live in [SPEC.md](SPEC.md).
 >
 > **Operational-state warning:** this document records dated snapshots; it is not a live interlock or the
 > authority for whether funded execution is running. Before any operational action, read the authenticated
 > Automation surface and `data/trading-control.json`. At the latest operational snapshot, the control record
-> updated at 2026-08-26T01:15:08Z was active / `live`, revision 7,026, with 1,525¢ available, zero
-> reserved, and operator intent active. Periodic reconciliation completed READY at
-> 2026-08-26T01:15:08.438Z with no blocker. The adaptive gate was open and allowed entries. The maintainer
-> explicitly chose continued funded collection rather than Pause while the written economic gates mature. That
-> state may change after publication.
+> was active / `live`, revision 7,057, with 1,525¢ available, zero reserved, and operator intent active.
+> Startup full reconciliation completed READY at 2026-08-26T02:01:25.667Z with zero local/venue managed
+> positions, resting orders, or reservations. The maintainer explicitly chose continued funded collection
+> rather than Pause while the written economic gates mature. That state may change after publication.
 
 ## Executive Summary
 
@@ -20,7 +19,7 @@ The **repeated-episode order-identity defect found on 2026-08-20 was mechanicall
 
 A 2026-08-21 mirror review found that paper v4 first attempts were useful but its generation check suppressed every episode after episode 1. The defect was repaired under `paper-managed-execution-route-ioc-requalify3-v5`, with exact prospective four-cell pairing and bounded public trade/queue evidence; neutral calibration then advanced current paper execution to `paper-managed-execution-route-ioc-requalify3-calibrated-v6`. The closed v4 sample matched route and quantity 69/69 and fill/no-fill 79.7%, but captured only 62.5% of fills among 61 accepted paired live makers. Each generation remains separate and no history was rewritten. Paper does not feed funded execution, so no live order rule changed.
 
-A second policy runs on the same market — the long-shot round trip, detailed in the roadmap below. Its current 12¢→97¢/600s cohort is paper-only; live arming is false. The parameters were selected from a retrospective sweep and therefore define a new collection cohort rather than evidence-backed promotion. It relaxes none of the edge policy's constraints and changes no edge rule.
+The former long-shot round trip is **retired**. Its frozen 12¢→97¢/600s paper cohort completed 150 attempts across 76 independent windows, lost 1,410.93¢ exact on 4,979¢ staked, and measured the 97¢ exit at −98.93¢ versus holding. Its live lane was never armed. Execution, polling, collection, UI/API, estimators, and strategy-level allocation splitting are removed; historical ledger identity and durable evidence remain. The edge policy and capital ceilings are unchanged.
 
 | Area | Status |
 | --- | --- |
@@ -31,6 +30,16 @@ A second policy runs on the same market — the long-shot round trip, detailed i
 | Model evaluation | Evaluator v2 remains barred from promotion and production remains Blend 0.4. Phase 2's written wiring review passed at 45 closed windows with 5,169/5,169 complete-family rows and zero replay error; 100/300 gates remain closed. Confirmed-signal evaluation stays queued after the base final review, followed strictly by venue, portfolio, authorization, and lifecycle layers. |
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
 | Operational safety | Collision-resistant bounded live IDs, exact reconciliation ownership, quiescent drain, account reconciliation, kill switch, and budget/risk ceilings are implemented. Runtime readiness and operator state must be read from the live control surfaces named above, not inferred from this table. |
+
+### Long-shot v2 completed and the strategy is retired, 2026-08-26
+
+[`reports/long-shot-v2-final-review-2026-08-26.md`](reports/long-shot-v2-final-review-2026-08-26.md) records the fixed review at `2026-08-26T01:37:23.326Z`. The precommitted 60-window gate passed with 150/150 resolved paper attempts across 76 UTC settlement windows, complete trigger/peak/outcome coverage, zero unexecuted triggers, and no live attempts. Exact P&L was **−1,410.93¢** on 4,979¢ staked; whole-cent bankroll P&L was −1,415¢. Clustered round-trip return was −17.18% ±26.75pp SE and hold was −14.71% ±27.56pp SE.
+
+The primary paired exit comparison was **−2.47pp ±0.85pp per dollar / −98.93¢** across all 150 attempts. All 11 positions sold at the 97¢ target later settled in the owned side. This rejects the target-exit's value on the committed cohort. The hold estimate remains broad, so retirement is a negative-evidence plus complexity/load judgment rather than a claim that every possible cheap-contract strategy is disproven.
+
+Long-shot entry/exit/trailing pollers, paper/live execution, sentinel/candidate writes, Postgres replication, authenticated UI/API, funding command, and strategy-specific analysis tools are removed. Active allocation is again provider → market only; legacy strategy-allocation fields are dropped during runtime normalization and receive no read or write authority. `long-shot-round-trip` remains a retired registry identity for historical ledger, compaction, P&L, corrections, and reconciliation attribution. Durable worker files and the applied database migration were not deleted or rewritten. No edge forecast, admission, execution, exit, sizing, market, or capital setting changed.
+
+Validation passed typecheck, 133 test files / 998 tests, lint with zero errors / 26 inherited warnings, production build, and `git diff --check`. The generated route manifest omits `/api/long-shot`; the restarted worker returned HTTP 404 for it. Before activation, an unrelated BNB cancellation ambiguity correctly held a 30¢ reservation and system pause through contract close; periodic reconciliation then proved zero positions/orders/fills, released the reservation, and guarded-auto-resumed without manual mutation. The built worker restarted with operator intent unchanged and completed startup full reconciliation READY at revision 7,057 / `2026-08-26T02:01:25.667Z`, with 1,525¢ available and zero reservations or open positions. Obsolete local `MONEY_NOODLE_LONG_SHOT_*` settings were removed; Vercel's production environment contained no matching variables. Production deployment `dpl_AdJoZGjQ4ihWyQLEN3an8LMs8pqH` reached READY and was aliased to `https://noodle.money`; the homepage and compact paper summary returned HTTP 200 and `/api/long-shot` returned 404.
 
 ### Kalshi event-order routing now uses exact dynamic exchange identity, 2026-08-25
 
@@ -884,21 +893,12 @@ sustained; the binding constraints are the signed-read burst during reconciliati
 hourly grid **payload** (not request count). Kalshi has full throttle machinery; Polymarket, Kraken, and
 CoinGecko currently have none and rely on generic stale fallback — a readiness gap noted for future work.
 
-### Long-shot v2 will complete its untouched 60-window paper cohort, 2026-08-21
+### Long-shot v2's untouched collection commitment is complete, 2026-08-26
 
-The operator chose continued prospective collection rather than resource-based suspension. The authoritative
-review boundary is 60 independent settlement windows under `long-shot-hold-v2`, not the execution report's
-legacy 60-attempt indicator. Until then, `long-shot-round-trip-buy12-sell97-win600-v2` remains unchanged at
-12¢ entry, 97¢ exit, and at least 600 seconds remaining: no mark, trailing, sizing, gate, or cohort-identity
-change; no interim promotion, tuning, or economic stop; and long-shot live arming remains false. Ordinary
-safety controls retain authority to halt execution.
-
-The authenticated worker read at `2026-08-21T05:35:31.983Z` had 30 resolved paper attempts across 13
-independent windows, one hold win, zero target exits, and −763¢ exact realized P&L on 1,135¢ staked. Hold
-and round-trip were both −59.1% ±40.9pp clustered standard error because the exit had never fired. The
-interval remains broad, so this is not formal refutation; continuing collection records the agreed evidence
-boundary and is not an endorsement of the strategy. Paper equity was 1,482¢ with no reservation, while the
-separately gated live lane had zero v2 attempts and remained disarmed.
+The 2026-08-21 commitment below is preserved as the no-interim-tuning decision. The cohort subsequently
+passed its authoritative 60-window boundary with 150 resolved attempts across 76 windows and was retired
+under the final review linked above. It is no longer collecting, executable, allocatable, or visible in the
+product; live was never armed. Historical snapshots below remain dated evidence, not current runtime state.
 
 ### Terminal no-fill history labels no longer imply an active trade, 2026-08-21
 
@@ -2509,7 +2509,9 @@ Current follow-ups:
   coexistence copy and must remain untouched until the sharded layout verifies again and an independent
   restore/evaluator pass succeeds.
 
-### Long-shot round trip — implementation complete; v2 evidence collection open
+### Long-shot round trip — retired; historical implementation record
+
+**Current status (2026-08-26): retired and removed from runtime/product authority.** The remainder of this section preserves implementation history and dated evidence. Strategy-specific execution, collection, allocation, API/UI, and estimation tools no longer run; durable data and the retired ledger identity remain.
 
 Started 2026-08-14. A second policy on `crypto-15m`, running beside the edge policy. The launch cohort
 bought a side whose executable ask reached 10¢ with at least ten minutes left and sold through a one-second

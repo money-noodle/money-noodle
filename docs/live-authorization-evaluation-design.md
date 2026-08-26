@@ -84,7 +84,7 @@ They do not need to improve return. Removing or weakening one is outside this pr
 These cap loss or resource use and require explicit loss-envelope and operator-intent justification:
 
 - all-in per-purchase amount and maximum live stake;
-- provider, market, and strategy funding allocations;
+- provider and market funding allocations (the strategy sub-allocation layer retired on 2026-08-26);
 - available cash and whole-cent working-budget headroom;
 - global positions and correlated exposure;
 - hourly filled-order ceiling;
@@ -278,7 +278,7 @@ The final review reports separately:
 - complete-manifest and issued-intent coverage;
 - simultaneous and first-blocker attribution;
 - authority age and cadence gaps;
-- reservation, cash, exposure, and provider/market/strategy allocation agreement;
+- reservation, cash, exposure, and provider/market allocation agreement;
 - pause, drain, suspension, uncertainty, reconciliation, and auto-resume transitions;
 - availability withheld by each authority;
 - misplaced economic/lifecycle checks;

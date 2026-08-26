@@ -78,8 +78,8 @@ resting before/after) plus exact order/fill reads bounded by locally active or u
 run outside the execution-ledger serializer while reconciliation state fences new live exposure. Notifications
 of "read-limit backoff at startup" in STATUS trace to signed reads sharing the same 10-token pool as public
 quotes while the signed buckets also carry exact pre-submit and manager reads. **This is where the 600-token
-burst matters.** A busy live desk adds: per managed maker 6 checks × (quote+depth+trade+fill) reads over 12s,
-per long-shot open position a target-exit read each poll, and per trailing entry its bounded fast-look budget.
+burst matters.** A busy live desk adds per managed maker 6 checks × (quote+depth+trade+fill) reads over 12s.
+The former long-shot one-second entry/trailing/target reads were removed with that strategy on 2026-08-26.
 
 ## 4. What the hourly plan adds
 
@@ -134,6 +134,8 @@ separately, because the hourly case shows they diverge.
 
 ## Change log
 
+- 2026-08-26 · Removed the long-shot ordinary/trailing/target quote load after the strategy's final review;
+  no replacement reader was added.
 - 2026-08-26 · Recorded the 190-response public exact-market 429 burst across seven 20:15Z contracts. The existing
   log does not retain caller/time attribution, so dense long-shot watching is a source-based hypothesis rather than
   a settled cause. F2 remained 100% available and no incomplete exit-v2 position belonged to that window; see

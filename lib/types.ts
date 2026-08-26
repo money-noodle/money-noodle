@@ -36,18 +36,20 @@ export type TradingProviderImplementation = 'planned' | 'read-paper' | 'live';
 export type MarketId = 'crypto-15m' | 'crypto-spot';
 
 /**
- * A strategy is a complete way of deciding what to buy and when to sell, running on a market. Two exist:
- * the model-driven edge policy, and the long-shot round trip, which consumes no probability at all.
+ * A strategy is a complete way of deciding what to buy and when to sell, running on a market. The
+ * model-driven edge policy is active. The long-shot identity remains in this union only because durable
+ * historical ledger rows must never be reattributed after that strategy's 2026-08-26 retirement.
  *
- * Keyed separately from market and provider because it varies along its own axis (SPEC §12.10). Budget,
- * bankroll, P&L, loss stops, and operator intent are per strategy; exposure caps, the kill switch,
- * reconciliation, drain, and the venue order ceiling are not, because those are account properties.
+ * Keyed separately from market and provider because it varies along its own axis (SPEC §12.10). Historical
+ * P&L remains per strategy; account exposure, the kill switch, reconciliation, drain, and the venue order
+ * ceiling remain global.
  */
 export type StrategyId = 'edge-binary-buy' | 'long-shot-round-trip';
 
 export interface StrategyDescriptor {
   id: StrategyId;
   name: string;
+  status: 'active' | 'retired';
   /** Whether entries come from the forecast model or purely from venue price and clock. */
   signalSource: 'model-probability' | 'venue-price';
   description: string;
@@ -1128,27 +1130,6 @@ export interface BudgetControl {
 export interface MarketAllocation {
   marketId: MarketId;
   percent: number;
-  /**
-   * Strategies funded within this market. Absent means the whole market allocation belongs to
-   * `edge-binary-buy`, which is what every configuration written before 2026-08-15 meant.
-   */
-  strategies?: StrategyAllocation[];
-}
-
-/**
- * A strategy's share of one (provider, market) allocation. `percent` funds it once, at configuration
- * time; `startingCents` is the resulting cash and is what the strategy's own equity rolls forward from.
- *
- * The percentage is deliberately not re-applied continuously. Doing so would size one strategy's ticket
- * from the other's results — a run of edge-policy wins would raise the long-shot ticket, and its own
- * losses would only reach it diluted by its share, so the drawdown halt could never fire on the strategy
- * that earned it.
- */
-export interface StrategyAllocation {
-  strategyId: StrategyId;
-  percent: number;
-  startingCents: number;
-  fundedAt: string;
 }
 
 /**
@@ -1192,25 +1173,6 @@ export interface MarketFunding {
   reason: string;
 }
 
-/** What one strategy within a (provider, market) pair may commit right now, and whether it has halted. */
-export interface StrategyFunding {
-  strategyId: StrategyId;
-  marketId: MarketId;
-  mode: ExecutionMode;
-  percent: number;
-  /** Cash this strategy was funded with, which its equity rolls forward from. */
-  startingCents: number;
-  /** This strategy's own settled P&L, read from the shared ledger. */
-  realizedPnlCents: number;
-  /** starting + own realized P&L: the figure the ticket is sized from. */
-  equityCents: number;
-  /** This strategy's own open commitments. */
-  reservedCents: number;
-  spendableCents: number;
-  ticketCents: number;
-  halted: boolean;
-  reason: string;
-}
 
 export interface LiveRiskStatus {
   allowed: boolean;

@@ -385,11 +385,10 @@ export function buildTradeTrackSummary(
 /**
  * One strategy's realized trading record on one track.
  *
- * Narrowed by strategy as well as mode, per §4: the two strategies share one ledger because
- * reconciliation is account-wide, so every money figure read out of it has to re-narrow. Filtering by
- * mode alone blended the long-shot round trip into the edge policy's published track record — -1,167c
- * against the policy's own -890c across 30 foreign orders — and a blended figure describes neither
- * strategy. The long-shot has its own report in `buildLongShotReport`.
+ * Narrowed by strategy as well as mode, per §4: active and retired strategies share one historical ledger
+ * because reconciliation is account-wide, so every money figure read out of it must re-narrow. Filtering
+ * by mode alone once blended long-shot rows into the edge policy's published track record; retirement does
+ * not make that historical accounting boundary optional.
  */
 export function buildTradeRecord(orders: PaperOrder[], mode: ExecutionMode, strategyId: StrategyId = EDGE_BINARY_BUY): TradeTrackRecord {
   const mine = strategyOrders(orders, strategyId).filter((order) => order.executionMode === mode);

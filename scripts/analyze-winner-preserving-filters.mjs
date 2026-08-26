@@ -1,6 +1,6 @@
 /**
  * Tests whether the two pre-registered maker restrictions can avoid losing fills without excluding
- * production winners, and reports the paper-only long-shot loss separately.
+ * production winners.
  *
  *   npm run analyze:winner-preserving-filters
  *
@@ -183,30 +183,6 @@ const output = {
       }];
     })),
   },
-  longShotPaper: (() => {
-    const rows = orders.filter((order) => order.executionMode === 'paper'
-      && order.strategyId === 'long-shot-round-trip' && !order.id.includes(':exit:')
-      && ['won', 'lost', 'sold'].includes(order.status));
-    return {
-      settledAttempts: rows.length,
-      windows: new Set(rows.map((row) => row.closesAt)).size,
-      won: rows.filter((row) => row.status === 'won').length,
-      lost: rows.filter((row) => row.status === 'lost').length,
-      sold: rows.filter((row) => row.status === 'sold').length,
-      stakeCents: rows.reduce((sum, row) => sum + stakeFor(row), 0),
-      pnlCents: rows.reduce((sum, row) => sum + pnlFor(row), 0),
-      latestSettledConfiguration: (() => {
-        const active = rows.filter((row) => row.strategyPolicyVersion === 'long-shot-round-trip-buy12-sell97-win600-v1');
-        return {
-          settledAttempts: active.length,
-          windows: new Set(active.map((row) => row.closesAt)).size,
-          won: active.filter((row) => row.status === 'won').length,
-          pnlCents: active.reduce((sum, row) => sum + pnlFor(row), 0),
-          stakeCents: active.reduce((sum, row) => sum + stakeFor(row), 0),
-        };
-      })(),
-    };
-  })(),
 };
 
 console.log(JSON.stringify(output, null, 2));

@@ -15,7 +15,7 @@ import { observeEntryDirection } from './entry-direction-observation';
 import { evaluateEntrySizing } from './entry-sizing-policy';
 import { POST_EXIT_REENTRY_COOLDOWN_MS, evaluateExitPolicy } from './exit-policy';
 import { estimateMakerFill } from './maker-fill-model';
-import { fetchKalshiManagedMakerQuote, fetchKalshiQuote, fetchKalshiTradePrintsSince } from './kalshi-market-data';
+import { fetchKalshiManagedMakerQuote, fetchKalshiTradePrintsSince } from './kalshi-market-data';
 import { observeKalshiOrderBook } from './kalshi-depth';
 import { immediateBuyFill, immediateSellFill } from './ioc-fill-model';
 import type { LiveSkipClass } from './live-skip';
@@ -41,53 +41,9 @@ import { isPaperFillCalibration, type PaperFillCalibration } from './paper-fill-
 import { getActivePaperFillCalibration } from './paper-fill-calibration-store';
 import { isFreshCalculationTimestamp } from './freshness';
 import { selectedSideDepth } from './order-book-depth';
-import { selectedManagedMakerQuote } from './managed-maker';
 import { orderMarketId, orderProviderId, orderStrategyId } from './execution-report';
 import { EDGE_BINARY_BUY } from './strategy-registry';
-import { recordContractPaths, recordDenseContractQuote } from './contract-path-store';
-import { CONTRACT_PATH_FINE_BUCKET_MS } from './contract-path';
-import { backfillLongShotCandidates, resolveLongShotSettlements } from './long-shot-candidate-store';
-import { getHoldSentinels, updateHoldSentinelStore } from './hold-sentinel-store';
-import { HOLD_SENTINEL_VERSION } from './hold-sentinel';
-import { collectLongShotEvidence, holdSentinelFromStampedPaperOrder, longShotTrackStartingCents } from './long-shot-execution';
-import { evaluateLongShotEntry, longShotSettings, type LongShotSettings } from './long-shot-policy';
-import { LONG_SHOT_ROUND_TRIP } from './strategy-registry';
-import {
-  buildLongShotOrder, longShotDailyNetLossCents, longShotFunding, openLongShotPositions,
-} from './long-shot-engine';
-import {
-  TARGET_EXIT_POLL_MS, evaluateTargetExit, observePeakBid, targetExitPosition, targetExitSettlement,
-} from './target-exit-policy';
-import { cachedKalshiRead } from './kalshi-quote-cache';
-import {
-  TRAILING_ENTRY_POLL_MS, beginTrailingEntry, evaluateTrailingEntry, observeTrailingEntry,
-  trailingGainCents, trailingIsFast, type TrailingEntryState,
-} from './trailing-entry';
-import { LONG_SHOT_ENTRY_POLL_MS } from './task-cadence';
 import { beginTaskCadenceRun, recordTaskCadenceSuccess } from './task-cadence-runtime';
-
-/**
- * Entry cadence while nothing is being trailed, and the quote max-age at that cadence.
- *
- * Once a side qualifies, `TRAILING_ENTRY_POLL_MS` takes over for that contract: the pass looks four times
- * a second while a price is still falling, and buys when it stalls. The quote max-age is set just below
- * the poll interval so the timer governs the cadence rather than the cache occasionally serving the
- * previous tick's value.
- */
-const TRAILING_QUOTE_MAX_AGE_MS = TRAILING_ENTRY_POLL_MS - 50;
-
-/** Live trailing state per asset/window/side. Cleared when the entry resolves, abandons, or expires. */
-const trailing = new Map<string, TrailingEntryState>();
-
-/**
- * Contracts that reached the entry mark, watched densely until their window closes.
- *
- * Not the same population as the entry gate. The measurement that needs dense sampling is the *peak* —
- * whether a bid ever touched the exit mark — and that happens late in a cycle, usually near settlement,
- * long after the entry window shuts. Watching only while a contract is buyable would leave the biased
- * half of the path exactly as coarse as before.
- */
-const denseWatch = new Map<string, { symbol: string; closesAt: string }>();
 import { assetAdmitted } from './asset-exclusion';
 import { LEGACY_PAPER_BANKROLL_ID, nextPaperBankrollFunding, orderEpochId } from './budget-epoch';
 import { cycleRegimeFor } from './cycle-path-store';
@@ -103,7 +59,6 @@ import {
   type KalshiReconciliationSnapshot,
 } from './kalshi-reconciliation';
 import { adaptiveEntryEpisodeDecision, entryAttemptsForLogicalOrder, entryEpisodeId, makerAttemptId, makerRetryDecision, maximumLiveMakerAttempts, type MakerRetryDecision } from './maker-retry-policy';
-import { evaluateLiveRisk } from './live-risk-policy';
 import { liveBlockers, liveTradingEnabled, maxLiveOrdersPerHour, maxLiveStakeCents, placeKalshiBuy, placeKalshiSell, placeKalshiTakerBuy } from './live-orders';
 import { assertUniqueLiveEntryClientOrderId, liveEntryClientOrderId } from './live-order-identity';
 import { countFilledLiveVenueOrders } from './order-rate-limit';
@@ -126,7 +81,7 @@ import {
 } from './reconciliation-scope';
 import { getRegimeGateStatus, updateRegimeGate, type RegimeGateStatus, type RegimeSentinelCandidate } from './regime-gate-store';
 import { advanceSignalPersistence, evaluateSignalPersistence, evaluateSignalPersistenceIgnoringSpike, productionSignalPersistence, signalPersistenceAfter, type SignalEligibility, type SignalPersistenceState } from './signal-persistence';
-import { edgeSpikeGateEnabled, maximumEdgeSpike, spikeAdmits } from './edge-spike-policy';
+import { spikeAdmits } from './edge-spike-policy';
 import { EDGE_SPIKE_SENTINEL_VERSION, edgeSpikeSentinelId, type EdgeSpikeSentinel } from './edge-spike-sentinel';
 import { updateEdgeSpikeSentinels } from './edge-spike-sentinel-store';
 import { maintainMakerRestrictionSentinels, recordMakerRestrictionOrder } from './maker-restriction-sentinel-store';
@@ -311,7 +266,6 @@ function portfolioConstraints(): PortfolioConstraints {
 
 /** A fill at or above the $1 payout is a guaranteed loss, so it is refused regardless of policy. */
 import { MAX_FILLABLE_ASK, estimatePaperFill, venueFeeCents } from './venue-fill';
-import type { PaperFill } from './venue-fill';
 export { MAX_FILLABLE_ASK, estimatePaperFill, venueFeeCents } from './venue-fill';
 
 const baseOrderId = (prediction: Prediction, mode: ExecutionMode, side: PositionSide) => `${mode}:${prediction.symbol}:${side}:${prediction.market.closesAt}`;
@@ -722,8 +676,8 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
     id: orderId(prediction, mode, side, ledger), logicalOrderId: orderId(prediction, mode, side, ledger), attemptNumber: 1,
     clientOrderId: orderId(prediction, mode, side, ledger), executionMode: mode,
     marketId: DEFAULT_MARKET_ID,
-    // `buildOrder` is the edge policy's construction path; the long-shot policy builds its own orders and
-    // stamps its own id. Explicit on both sides so neither can fall through to a default.
+    // Explicit even with only one active strategy: retired long-shot rows remain in the shared ledger, so
+    // relying on a default here would make a future construction-path mistake an accounting mistake.
     strategyId: EDGE_BINARY_BUY,
     // Stamped at creation so a later reconfiguration cannot reattribute this order's P&L.
     // Each track records the funding that actually bought the order. Stamping live's epoch onto a paper
@@ -2381,12 +2335,6 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
   void Promise.resolve()
     .then(() => updateCalendarEvaluationStore(calendarEvaluationCycle(dashboard, ledger)))
     .catch((error) => console.error('Calendar evaluation collection failed:', error));
-  void recordContractPaths(dashboard.predictions ?? [])
-    // Candidate summaries are derived from the paths just recorded, then ungraded windows are asked of the
-    // venue. Both are observation only, both are detached, and neither may delay a cycle with money in it.
-    .then(() => backfillLongShotCandidates())
-    .then(() => resolveLongShotSettlements())
-    .catch((error) => console.error('Contract path collection failed:', error));
   void updateEdgeSpikeSentinels(edgeSpikeSentinelCycle(dashboard, ledger))
     .catch((error) => console.error('Edge spike sentinel collection failed:', error));
   void maintainMakerRestrictionSentinels(dashboard.generatedAt)
@@ -2394,14 +2342,6 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
   void maintainPortfolioChoiceSets(dashboard.generatedAt)
     .catch((error) => console.error('Portfolio choice-set maintenance failed:', error));
   const status = await getTradingControl();
-  // Long-shot evidence reconciliation only: trigger records come from the authoritative paper entry
-  // decision inside `runLongShot`. This detached pass recovers stamped decisions, observes peaks, and settles them.
-  void getHoldSentinels()
-    .then((existingSentinels) => collectLongShotEvidence({
-      dashboard, orders: ledger.orders, existingSentinels,
-    }))
-    .then((cycle) => updateHoldSentinelStore(cycle))
-    .catch((error) => console.error('Long-shot evidence collection failed:', error));
   changed = await observeAndExecuteStandaloneExits(dashboard, status, ledger) || changed;
   // Record current open-position observations first. The store queue then appends continuation evidence,
   // classifies this evaluator cycle, and only afterward resolves due positions. This remains detached
@@ -2447,571 +2387,10 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
   const liveManagement = runLive(dashboard, status, ledger, regimeGate, budgets, portfolioUpdate.audit);
   const [paperChanged, liveChanged] = await Promise.all([paperManagement, liveManagement]);
   changed = paperChanged || liveChanged || changed;
-  // The regular cycle owns exits only. Entries belong exclusively to `longShotEntryTick`, which refreshes
-  // the exact quote and requires trailing confirmation before either track reaches `runLongShot`.
-  changed = await runLongShotExits(dashboardBid(dashboard), ledger) || changed;
   if (changed || ledger.lastLiveSkip?.reason !== previousSkip) await writeLedger(ledger);
 }
 
-/**
- * Long-shot entries for one track.
- *
- * Deliberately separate from `runPaper`/`runLive` rather than threaded through them: the edge policy's
- * selection, persistence, entry episode, portfolio ranking, and regime gate are all specific to it, and
- * forcing a second policy through that path would change behaviour the mirror invariant depends on.
- *
- * Every account-wide protection still applies, because those are properties of the venue and the account
- * rather than of a policy: the kill switch and live arming through `liveBlockers`, the reconciliation
- * barrier, the drain, and the shared hourly filled-order ceiling.
- */
-async function runLongShot(
-  dashboard: DashboardData, status: TradingControlData, ledger: Ledger, mode: ExecutionMode,
-): Promise<boolean> {
-  const settings = longShotSettings();
-  if (!settings.enabled) return false;
-  if (!isFreshCalculationTimestamp(dashboard.generatedAt)) return false;
-  if (getExecutionDrainStatus().phase === 'draining') return false;
-
-  const allocation = (await getProviderBudgets({ revision: status.control.revision })).providers
-    .find((provider) => provider.providerId === 'kalshi')?.allocations
-    .find((item) => item.marketId === DEFAULT_MARKET_ID)?.strategies
-    ?.find((strategy) => strategy.strategyId === LONG_SHOT_ROUND_TRIP);
-  const startingCents = longShotTrackStartingCents({
-    mode,
-    marketCapCents: status.control.startingBudgetCents,
-    paperBankrollCents: ledger.paperBudget.startingCents,
-    configuredStartingCents: allocation?.startingCents,
-  });
-  // Equity counts only what this strategy earned since it was last funded. Re-funding sets a new starting
-  // amount, so carrying a prior period's losses across would report equity the operator never committed.
-  const funding = longShotFunding(ledger.orders, mode, startingCents, settings,
-    mode === 'live' ? Date.parse(allocation?.fundedAt ?? '') || 0 : 0);
-  if (funding.sizing.halted) return false;
-
-  if (mode === 'live') {
-    // Per-strategy arming, checked before the account-wide controls. Those say whether the desk is armed;
-    // this says whether this strategy is, and conflating them is what put three unintended live orders on
-    // the venue on 2026-08-15.
-    if (!settings.liveEnabled) return false;
-    if (liveBlockers().length || status.control.mode !== 'live' || status.control.state !== 'active') return false;
-    if (getKalshiReconciliationStatus().phase !== 'ready') return false;
-    if (evaluateLiveRisk(status.control, ledger.orders, process.env, LONG_SHOT_ROUND_TRIP).allowed === false) return false;
-    if (countFilledLiveVenueOrders(ledger.orders, Date.now() - 3_600_000) >= maxLiveOrdersPerHour()) return false;
-  }
-
-  const dailyNetLossCents = longShotDailyNetLossCents(ledger.orders, mode);
-  const open = openLongShotPositions(ledger.orders, mode);
-  let changed = false;
-
-  for (const prediction of dashboard.predictions) {
-    const quote = prediction.kalshi;
-    if (!quote?.live || !quote.ticker) continue;
-    for (const side of ['UP', 'DOWN'] as const) {
-      const ask = side === 'UP' ? quote.askUp : quote.askDown;
-      const oppositeAsk = side === 'UP' ? quote.askDown : quote.askUp;
-      if (!(ask > 0) || !(oppositeAsk > 0)) continue;
-
-      const generation = ledger.orders.filter((order) => orderStrategyId(order) === LONG_SHOT_ROUND_TRIP
-        && order.executionMode === mode && order.symbol === prediction.symbol
-        && order.closesAt === quote.closesAt && !order.id.includes(':exit:')).length + 1;
-
-      const decision = evaluateLongShotEntry({
-        symbol: prediction.symbol, side, askPrice: ask,
-        secondsRemaining: (Date.parse(quote.closesAt) - Date.now()) / 1000,
-        openSameAssetWindow: open.filter((order) => order.symbol === prediction.symbol && order.closesAt === quote.closesAt).length,
-        openSameSettlementWindow: open.filter((order) => order.closesAt === quote.closesAt).length,
-        entriesThisAssetWindow: generation - 1,
-        dailyNetLossCents,
-      }, funding.sizing, settings);
-      if (!decision.qualifies) continue;
-
-      const fill = estimatePaperFill(funding.sizing.ticketCents, ask, 'kalshi');
-      if (!fill) continue;
-
-      const trail = trailing.get(`${quote.ticker}:${side}`);
-      const order = buildLongShotOrder({
-        mode, symbol: prediction.symbol, side, contractId: quote.ticker, closesAt: quote.closesAt,
-        calculationAt: dashboard.generatedAt, entryAsk: ask, oppositeAsk,
-        entryGeneration: generation, exitMarkCents: settings.exitMarkCents, settings,
-        budgetEpochId: status.control.epochId, paperBankrollId: ledger.paperBudget.fundingId, fill,
-        firstTouchAskCents: trail?.firstTouchAskCents, trailingLooks: trail?.looks,
-      });
-      if (mode === 'paper') order.holdSentinelVersion = HOLD_SENTINEL_VERSION;
-      const decisionSentinel = mode === 'paper' ? holdSentinelFromStampedPaperOrder(order) : null;
-      // The strategy's own headroom binds before any shared cash does; the shared budget is charged only
-      // for live, where the cash is real. Unlike a policy disqualification, this operational refusal stays
-      // in the trigger-time hold sample.
-      if (fill.stakeCents > funding.headroomCents) {
-        if (decisionSentinel) {
-          const skippedSentinel = { ...decisionSentinel, executed: false,
-            skipReason: `Long-shot paper headroom ${funding.headroomCents}¢ is below the ${fill.stakeCents}¢ all-in ticket.` };
-          await updateHoldSentinelStore({
-            observedAt: skippedSentinel.observedAt, sentinels: [skippedSentinel], outcomes: {}, peakBids: {},
-          });
-        }
-        continue;
-      }
-      if (trail) {
-        order.reason = `Trailed ${trail.looks} look(s) from ${trail.firstTouchAskCents.toFixed(1)}¢; bought at ${(ask * 100).toFixed(1)}¢ for ${trailingGainCents(trail, ask * 100).toFixed(2)}¢.`;
-        // Cleared on the buy so a re-entry in the same window trails afresh rather than inheriting a
-        // best price from a position that has already been taken.
-        trailing.delete(`${quote.ticker}:${side}`);
-      }
-      order.entryCycleRegime = (await cycleRegimeFor(order.symbol, order.closesAt))?.regime;
-
-      if (mode === 'paper') {
-        // Taking a displayed ask is the entry, so a fill at that ask is the honest simulation. There is no
-        // maker queue to model here, which is precisely why this policy does not reuse the maker mirror.
-        Object.assign(order, {
-          status: 'open', filledCount: fill.quantity, liquidityRole: 'taker',
-          actualStakeCents: fill.stakeCents, actualPurchaseCents: fill.purchaseCents,
-          actualFeeCents: fill.feeCents, authoritativeFillPrice: ask,
-        } satisfies Partial<PaperOrder>);
-        ledger.orders.push(order);
-        changed = true;
-        // Durable order first. If the evidence write fails, the detached reconciler rebuilds only this
-        // prospectively version-stamped decision on its next pass; historical fills have no such stamp.
-        await writeLedger(ledger);
-        if (decisionSentinel) {
-          await updateHoldSentinelStore({
-            observedAt: decisionSentinel.observedAt, sentinels: [decisionSentinel], outcomes: {}, peakBids: {},
-          });
-        }
-        continue;
-      }
-
-      // Durable intent and reservation before submission, so a lost response leaves a record to reconcile
-      // rather than an untracked venue order.
-      ledger.orders.push(order);
-      await writeLedger(ledger);
-      await reserveTradingBudget(order.stakeCents, 'kalshi', order.id);
-      changed = true;
-      try {
-        const live = await placeKalshiTakerBuy({
-          ticker: order.contractId, positionSide: side,
-          maximumPriceCents: settings.entryMarkCents, count: fill.quantity,
-          clientOrderId: order.clientOrderId!,
-          onAccepted: async (venueOrderId, exchangeIndex) => {
-            order.venueOrderId = venueOrderId;
-            order.venueExchangeIndex = exchangeIndex;
-            await writeLedger(ledger);
-          },
-        });
-        order.venueExchangeIndex = live.exchangeIndex;
-        if (live.filledCount > 0) {
-          Object.assign(order, {
-            status: 'open', filledCount: live.filledCount, quantity: live.filledCount,
-            liquidityRole: live.liquidityRole, authoritativeFillPrice: live.averagePriceCents / 100,
-            actualPurchaseCents: live.filledCount * live.averagePriceCents,
-            actualFeeCents: live.feeCents,
-            actualStakeCents: live.filledCount * live.averagePriceCents + live.feeCents,
-            potentialPayoutCents: Math.round(live.filledCount * 100),
-          } satisfies Partial<PaperOrder>);
-        } else {
-          order.status = 'unfilled';
-          order.noFillReason = 'ioc_no_fill';
-          await releaseTradingBudget(order.stakeCents, 'kalshi', order.id);
-        }
-      } catch (error) {
-        // A definitively refused cap is a clean no-op. Anything else is ambiguous: retain the reservation,
-        // mark uncertain, and let authoritative reconciliation decide what actually happened.
-        const message = error instanceof Error ? error.message : String(error);
-        if (message.includes('Taker not submitted')) {
-          order.status = 'unfilled';
-          order.noFillReason = 'ioc_no_fill';
-          await releaseTradingBudget(order.stakeCents, 'kalshi', order.id);
-        } else {
-          order.status = 'uncertain';
-          order.reason = `Long-shot entry outcome is uncertain: ${message}`;
-          automaticReconciliationRequested = true;
-          await suspendTrading(`Long-shot entry outcome uncertain for ${order.id}.`);
-        }
-      }
-      await writeLedger(ledger);
-      return changed;
-    }
-  }
-  return changed;
-}
-
-/**
- * One pass of the long-shot exit poll. Sells at the mark, never below it.
- *
- * Kalshi refuses `reduce_only` with `good_till_canceled`, so this cannot be a resting order (SPEC decision
- * 2026-08-15). The submitted limit is the mark rather than the observed bid, so a quote that retreats
- * between observation and submission produces no fill instead of a worse one.
- */
-type OwnedSideBid = (order: PaperOrder) => number | undefined;
-
-/** Owned-side bid from the 15-second dashboard snapshot: bid(side) = 100 - ask(other side). */
-const dashboardBid = (dashboard: DashboardData): OwnedSideBid => (order) => {
-  const quote = dashboard.predictions.find((item) => item.kalshi?.ticker === order.contractId)?.kalshi;
-  if (!quote?.live) return undefined;
-  return (1 - (order.side === 'UP' ? quote.askDown : quote.askUp)) * 100;
-};
-
-async function runLongShotExits(bidFor: OwnedSideBid, ledger: Ledger): Promise<boolean> {
-  const settings = longShotSettings();
-  if (!settings.enabled) return false;
-  const draining = getExecutionDrainStatus().phase === 'draining';
-  let changed = false;
-
-  for (const mode of ['paper', 'live'] as const) {
-    for (const order of openLongShotPositions(ledger.orders, mode)) {
-      const bidCents = bidFor(order);
-      if (bidCents === undefined || !Number.isFinite(bidCents)) continue;
-      const peak = observePeakBid(order.peakOwnedSideBidCents, bidCents);
-      if (peak !== order.peakOwnedSideBidCents) { order.peakOwnedSideBidCents = peak; changed = true; }
-
-      const decision = evaluateTargetExit(targetExitPosition(order), {
-        exitMarkCents: order.exitTargetCents ?? settings.exitMarkCents,
-        ownedSideBidCents: bidCents, nowMs: Date.now(), draining,
-      });
-      if (decision.action !== 'sell') continue;
-
-      if (mode === 'paper') {
-        const feeCents = venueFeeCents('kalshi', decision.limitPriceCents, decision.count, 'taker');
-        const settlement = targetExitSettlement({
-          filledCount: decision.count, averagePriceCents: decision.limitPriceCents, feeCents,
-          entryQuantity: order.quantity, entryStakeCents: order.actualStakeCents ?? order.stakeCents,
-        });
-        Object.assign(order, {
-          status: 'sold', exitPrice: decision.limitPriceCents / 100, exitFeeCents: feeCents,
-          saleProceedsCents: settlement.proceedsCents, payoutCents: settlement.proceedsCents,
-          actualPnlCents: settlement.realizedPnlCents,
-          pnlCents: Math.floor(settlement.proceedsCents) - order.stakeCents,
-          settledAt: new Date().toISOString(),
-          reason: `Long-shot exit filled at the ${decision.limitPriceCents}¢ mark.`,
-        } satisfies Partial<PaperOrder>);
-        changed = true;
-        continue;
-      }
-
-      order.exitPending = true;
-      order.exitClientOrderId = `exit-${order.id}`;
-      order.exitRequestedAt = new Date().toISOString();
-      await writeLedger(ledger);
-      try {
-        const exit = await placeKalshiSell({
-          ticker: order.contractId, positionSide: order.side,
-          minimumPriceCents: decision.limitPriceCents, count: decision.count,
-          clientOrderId: order.exitClientOrderId,
-          onAccepted: async (venueOrderId, exchangeIndex) => {
-            order.exitVenueOrderId = venueOrderId;
-            order.exitVenueExchangeIndex = exchangeIndex;
-            await writeLedger(ledger);
-          },
-        });
-        order.exitVenueExchangeIndex = exit.exchangeIndex;
-        order.exitPending = false;
-        if (exit.filledCount <= 0) continue;
-        const settlement = targetExitSettlement({
-          filledCount: exit.filledCount, averagePriceCents: exit.averagePriceCents, feeCents: exit.feeCents,
-          entryQuantity: order.quantity, entryStakeCents: order.actualStakeCents ?? order.stakeCents,
-        });
-        // A partial fill is an ordinary outcome: the remainder keeps its own basis and stays open.
-        if (settlement.remainingQuantity > 0) {
-          order.quantity = settlement.remainingQuantity;
-          order.filledCount = settlement.remainingQuantity;
-          order.potentialPayoutCents = Math.round(settlement.remainingQuantity * 100);
-          order.actualStakeCents = (order.actualStakeCents ?? order.stakeCents) - settlement.costBasisCents;
-        } else {
-          Object.assign(order, {
-            status: 'sold', exitPrice: exit.averagePriceCents / 100, exitFeeCents: exit.feeCents,
-            saleProceedsCents: settlement.proceedsCents, payoutCents: settlement.proceedsCents,
-            actualPnlCents: settlement.realizedPnlCents,
-            pnlCents: Math.floor(settlement.proceedsCents) - order.stakeCents,
-            settledAt: new Date().toISOString(),
-          } satisfies Partial<PaperOrder>);
-        }
-        await settleTradingBudget(order.stakeCents, Math.max(0, Math.floor(settlement.proceedsCents)), 'kalshi', `${order.id}:long-shot-exit`);
-        changed = true;
-      } catch (error) {
-        order.exitPending = false;
-        order.status = 'uncertain';
-        order.reason = `Long-shot exit outcome is uncertain: ${error instanceof Error ? error.message : String(error)}`;
-        automaticReconciliationRequested = true;
-        await suspendTrading(`Long-shot exit outcome uncertain for ${order.id}.`);
-        changed = true;
-      }
-      await writeLedger(ledger);
-    }
-  }
-  return changed;
-}
-
-let longShotPollTimer: NodeJS.Timeout | undefined;
-let longShotPollRunning = false;
-let longShotEntryTimer: NodeJS.Timeout | undefined;
-let longShotEntryRunning = false;
-let latestDashboard: DashboardData | undefined;
-
-/**
- * Fresh both-sides quote for one contract, through the shared cache.
- *
- * One request rather than the two a managed-maker quote costs: the entry trigger reads only the asks and
- * has no use for a twenty-level book. `maxAgeMs` is the entry cadence, so a value fetched for the exit
- * poller or the cycle in the same second is reused instead of refetched.
- */
-async function longShotEntryQuote(ticker: string, maxAgeMs = LONG_SHOT_ENTRY_POLL_MS): Promise<{ askUp: number; askDown: number } | undefined> {
-  const quote = await cachedKalshiRead(`quote:${ticker}`, () => fetchKalshiQuote(ticker), { maxAgeMs });
-  // ask(DOWN) = 1 - bid(UP) on Kalshi's shared book.
-  return quote ? { askUp: quote.yesAsk, askDown: 1 - quote.yesBid } : undefined;
-}
-
-/**
- * One-second entry pass.
- *
- * The fifteen-second collector cycle reads quotes that are themselves on a fifteen-second cadence, so a
- * side that dips to the mark between two samples is invisible to it. Measured on 586 recorded episodes,
- * 87% persist beyond one sample and half beyond ninety seconds, so this is not expected to change the
- * entry count much on its own — the entry-window gate excludes 98% of cheap sides regardless. It earns its
- * place by removing duplicate fetching and by making a wider entry window affordable.
- *
- * Skipped entirely when no window is inside the entry gate, so the quiet majority of a cycle costs nothing.
- */
-/**
- * Polls every watched candidate at the entry cadence and records it densely.
- *
- * Detached from the trading path: this is evidence collection, and a slow venue read must not delay a
- * decision. Reads go through the shared cache, so a contract that is also being trailed or held is fetched
- * once rather than three times.
- */
-async function pollDenseWatch(settings: LongShotSettings): Promise<void> {
-  const now = Date.now();
-  await Promise.all([...denseWatch.entries()].map(async ([ticker, meta]) => {
-    if (now > Date.parse(meta.closesAt)) { denseWatch.delete(ticker); return; }
-    const quote = await longShotEntryQuote(ticker, LONG_SHOT_ENTRY_POLL_MS);
-    if (!quote) return;
-    await recordDenseContractQuote({
-      contractId: ticker, symbol: meta.symbol, closesAt: meta.closesAt,
-      askUpCents: quote.askUp * 100, askDownCents: quote.askDown * 100,
-    }, now);
-  }));
-  // Bounded so a runaway watch list cannot quietly consume the read budget.
-  if (denseWatch.size > settings.maximumOpenPerSettlementWindow * 4) {
-    const oldest = [...denseWatch.entries()].sort(([, a], [, b]) => Date.parse(a.closesAt) - Date.parse(b.closesAt))[0];
-    if (oldest) denseWatch.delete(oldest[0]);
-  }
-}
-
-async function longShotEntryTick(): Promise<void> {
-  if (longShotEntryRunning) return;
-  longShotEntryRunning = true;
-  const taskRun = beginTaskCadenceRun(longShotEntryIntervalMs === TRAILING_ENTRY_POLL_MS
-    ? 'long-shot-trailing' : 'long-shot-entry');
-  try {
-    const settings = longShotSettings();
-    if (!settings.enabled) return;
-    const dashboard = latestDashboard;
-    if (!dashboard || getExecutionDrainStatus().phase === 'draining') return;
-
-    // Ahead of the entry-eligibility check on purpose. A watched candidate is followed to settlement, long
-    // after it stops being buyable — and that later stretch is exactly where the peak happens and where
-    // the coarse path was blind. Returning early when nothing is currently buyable would stop the watch
-    // during the only period it exists for.
-    void pollDenseWatch(settings).catch((error) => console.error('Dense contract watch failed:', error));
-
-    // Only windows that could still qualify are worth a quote at all.
-    const eligible = (dashboard.predictions ?? []).filter((prediction) => {
-      const quote = prediction.kalshi;
-      if (!quote?.live || !quote.ticker) return false;
-      const remaining = (Date.parse(quote.closesAt) - Date.now()) / 1000;
-      return remaining >= settings.minimumSecondsRemaining;
-    });
-    if (!eligible.length) return;
-
-    // Quotes are refreshed outside the write queue; only the ledger mutation is queued, matching the exit
-    // poller and the 2026-08-14 decision that upstream waits must not sit inside the queue they serve.
-    // A contract being trailed within its fast-look budget is read at the trailing cadence; everything
-    // else at the ordinary one, which the cache absorbs without extra requests.
-    const refreshed = new Map<string, { askUp: number; askDown: number }>();
-    await Promise.all(eligible.map(async (prediction) => {
-      const ticker = prediction.kalshi!.ticker;
-      const watched = [...trailing.entries()]
-        .some(([key, state]) => key.startsWith(`${ticker}:`) && trailingIsFast(state));
-      const quote = await longShotEntryQuote(ticker, watched ? TRAILING_QUOTE_MAX_AGE_MS : LONG_SHOT_ENTRY_POLL_MS);
-      if (quote) refreshed.set(ticker, quote);
-    }));
-    if (!refreshed.size) return;
-
-    // **Record every eligible contract finely, not only the ones that got cheap.**
-    // These quotes have already been fetched for the entry decision above, so this costs no venue request
-    // at all — it records what would otherwise be discarded. Before this, fine sampling began only once a
-    // side fell below the entry mark, by which point the book is roughly 9c/91c: across 57 such windows,
-    // zero had the 20-80c range inside the fine region, so that range existed only at fifteen seconds.
-    // Detached and never awaited, like every other collection call on this path.
-    void Promise.all([...refreshed.entries()].map(([ticker, quote]) => {
-      const prediction = eligible.find((item) => item.kalshi!.ticker === ticker);
-      if (!prediction) return undefined;
-      return recordDenseContractQuote({
-        contractId: ticker, symbol: prediction.symbol, closesAt: prediction.kalshi!.closesAt,
-        askUpCents: quote.askUp * 100, askDownCents: quote.askDown * 100,
-      }, Date.now(), CONTRACT_PATH_FINE_BUCKET_MS);
-    })).catch((error) => console.error('Fine contract path recording failed:', error));
-
-    // A contract that reached the mark is followed to settlement from here, whether or not it is bought.
-    for (const prediction of eligible) {
-      const quote = prediction.kalshi!;
-      const refreshedQuote = refreshed.get(quote.ticker);
-      if (!refreshedQuote) continue;
-      const cheapest = Math.min(refreshedQuote.askUp, refreshedQuote.askDown) * 100;
-      if (cheapest > 0 && cheapest <= settings.entryMarkCents) {
-        denseWatch.set(quote.ticker, { symbol: prediction.symbol, closesAt: quote.closesAt });
-      }
-    }
-
-    // Trailing decides which of the qualifying sides may be bought this look. A side still getting
-    // cheaper is held back: a continuing fall is a trend, and this strategy needs a reversal.
-    const settingsNow = settings;
-    const buyable = new Set<string>();
-    for (const prediction of eligible) {
-      const ticker = prediction.kalshi!.ticker;
-      const quote = refreshed.get(ticker);
-      if (!quote) continue;
-      for (const side of ['UP', 'DOWN'] as const) {
-        const askCents = (side === 'UP' ? quote.askUp : quote.askDown) * 100;
-        const key = `${ticker}:${side}`;
-        const closed = Date.parse(prediction.kalshi!.closesAt);
-        const remaining = (closed - Date.now()) / 1000;
-        // Outside the window the candidate is gone; drop any trail rather than carrying it into a
-        // window it can no longer be bought in.
-        if (remaining < settingsNow.minimumSecondsRemaining) { trailing.delete(key); continue; }
-        if (!(askCents > 0) || askCents > settingsNow.entryMarkCents) { trailing.delete(key); continue; }
-
-        const existing = trailing.get(key);
-        if (!existing) { trailing.set(key, beginTrailingEntry(askCents, Date.now())); continue; }
-        const decision = evaluateTrailingEntry(existing, askCents, { entryMarkCents: settingsNow.entryMarkCents });
-        if (decision.action === 'buy') buyable.add(key);
-        else if (decision.action === 'abandon') trailing.delete(key);
-        else trailing.set(key, observeTrailingEntry(existing, askCents, Date.now()));
-      }
-    }
-    if (!buyable.size) return;
-
-    const priced: DashboardData = {
-      ...dashboard,
-      predictions: eligible
-        .filter((prediction) => (['UP', 'DOWN'] as const).some((side) => buyable.has(`${prediction.kalshi!.ticker}:${side}`)))
-        .map((prediction) => {
-          const quote = refreshed.get(prediction.kalshi!.ticker);
-          return quote ? { ...prediction, kalshi: { ...prediction.kalshi!, ...quote } } : prediction;
-        }),
-      // The entry rule requires a fresh calculation; these quotes were fetched a moment ago.
-      generatedAt: new Date().toISOString(),
-    };
-
-    const status = await getTradingControl();
-    await serializeLedgerMutation(async () => {
-      const ledger = await mutableLedger();
-      let changed = await runLongShot(priced, status, ledger, 'paper');
-      changed = await runLongShot(priced, status, ledger, 'live') || changed;
-      if (changed) await writeLedger(ledger);
-    });
-  } catch (error) {
-    taskRun.fail(error);
-    console.error('Long-shot entry poll failed:', error);
-  } finally {
-    taskRun.succeed();
-    longShotEntryRunning = false;
-    // A trail that started or ended this tick changes the cadence the next one should run at.
-    startLongShotEntryPoller();
-  }
-}
-
-/**
- * Runs at one second while nothing is being trailed and at the trailing cadence once something is.
- *
- * Rescheduled rather than always fast: watching four times a second costs four times the requests, and
- * only a contract that has actually reached the mark is worth that. A trail is usually seconds long,
- * so the fast cadence is rare and brief.
- */
-let longShotEntryIntervalMs = LONG_SHOT_ENTRY_POLL_MS;
-function startLongShotEntryPoller(): void {
-  if (!longShotSettings().enabled) return;
-  // Only a trail still inside its fast-look budget justifies the faster timer.
-  const wanted = [...trailing.values()].some((state) => trailingIsFast(state))
-    ? TRAILING_ENTRY_POLL_MS : LONG_SHOT_ENTRY_POLL_MS;
-  if (longShotEntryTimer && longShotEntryIntervalMs === wanted) return;
-  if (longShotEntryTimer) clearInterval(longShotEntryTimer);
-  longShotEntryIntervalMs = wanted;
-  longShotEntryTimer = setInterval(() => { void longShotEntryTick(); }, wanted);
-  longShotEntryTimer.unref?.();
-}
-
-/**
- * One-second exit poll for open long-shot positions.
- *
- * The fifteen-second collector cycle is too slow for this strategy: the whole premise is transient
- * excursions, and a round trip inside ninety seconds would be sampled six times rather than ninety.
- * A resting order would have removed the need to watch at all, but Kalshi refuses `reduce_only` with
- * `good_till_canceled` (SPEC decision 2026-08-15), so the watching has to be ours.
- *
- * Two properties keep this from destabilising the engine:
- *
- * - **Quotes are fetched outside the write queue.** Only the ledger mutation is queued, following the
- *   2026-08-14 decision that upstream waits must not sit inside the queue they serve — a slow venue read
- *   would otherwise delay every fifteen-second calculation behind it.
- * - **A tick never queues behind itself.** If a pass is still running the next one is dropped rather than
- *   accumulating, so a slow venue produces fewer polls instead of an unbounded backlog.
- */
-async function longShotExitTick(): Promise<void> {
-  if (longShotPollRunning) return;
-  longShotPollRunning = true;
-  const taskRun = beginTaskCadenceRun('long-shot-target-exit');
-  try {
-    if (getExecutionDrainStatus().phase === 'draining') return;
-    const open = await readLedgerView((ledger) => [
-      ...openLongShotPositions(ledger.orders, 'paper'), ...openLongShotPositions(ledger.orders, 'live'),
-    ]);
-    if (!open.length) return;
-
-    // One read per distinct contract and side, not per position: paper and live hold the same contract.
-    const wanted = new Map(open.map((order) => [`${order.contractId}:${order.side}`, order]));
-    const bids = new Map<string, number>();
-    await Promise.all([...wanted].map(async ([key, order]) => {
-      try {
-        // One request, sharing the entry pass's cache key. The exit compares a bid against the mark, and
-        // the owned-side bid is derived from the two YES prices — a managed-maker quote also fetches a
-        // twenty-level book, which this has no use for and which would double the cost of every tick.
-        const quote = await cachedKalshiRead(`quote:${order.contractId}`,
-          () => fetchKalshiQuote(order.contractId), { maxAgeMs: TARGET_EXIT_POLL_MS });
-        // Through the shared helper rather than re-derived here, so both sides stay on one tested rule.
-        if (quote) bids.set(key, selectedManagedMakerQuote({ ...quote, side: order.side }).bid * 100);
-      } catch {
-        // A transient quote failure is not a reason to sell or to stop; the next tick retries.
-      }
-    }));
-    if (!bids.size) return;
-
-    await serializeLedgerMutation(async () => {
-      const current = await mutableLedger();
-      if (await runLongShotExits((order) => bids.get(`${order.contractId}:${order.side}`), current)) {
-        await writeLedger(current);
-      }
-    });
-  } catch (error) {
-    taskRun.fail(error);
-    console.error('Long-shot exit poll failed:', error);
-  } finally {
-    taskRun.succeed();
-    longShotPollRunning = false;
-  }
-}
-
-/** Started lazily from the collector cycle, so it exists exactly where the collector does. */
-function startLongShotExitPoller(): void {
-  if (longShotPollTimer || !longShotSettings().enabled) return;
-  longShotPollTimer = setInterval(() => { void longShotExitTick(); }, TARGET_EXIT_POLL_MS);
-  // Never hold the process open on its own account.
-  longShotPollTimer.unref?.();
-}
-
 export function processPaperTradingCycle(dashboard: DashboardData): Promise<void> {
-  // The entry pass needs contract identities and the clock, not prices: it refreshes those itself.
-  latestDashboard = dashboard;
-  startLongShotExitPoller();
-  startLongShotEntryPoller();
   const operation = serializeLedgerMutation(() => processCycle(dashboard));
   return operation.then(() => {
     if (!automaticReconciliationRequested) return;

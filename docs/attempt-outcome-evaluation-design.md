@@ -126,7 +126,7 @@ program may attribute their realized paths but cannot silently move or combine t
 
 ### 3.4 Capital and risk ceilings
 
-Reserved stake, per-purchase authority, provider/market/strategy allocations, global exposure, and loss/rate
+Reserved stake, per-purchase authority, provider/market allocations, global exposure, and loss/rate
 limits arrive frozen from live authorization. This program verifies that the captured ceilings were obeyed; it
 cannot loosen or resize them. Any such change requires its own downside and capital design.
 

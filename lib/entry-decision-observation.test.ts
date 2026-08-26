@@ -53,9 +53,9 @@ describe('entry-decision-v2 is additive', () => {
  */
 describe('the recorded observations are isolated from anything that can move money', () => {
   const forbidden = [
-    'prediction-policy.ts', 'entry-execution-policy.ts', 'exit-policy.ts', 'target-exit-policy.ts',
+    'prediction-policy.ts', 'entry-execution-policy.ts', 'exit-policy.ts',
     'portfolio-policy.ts', 'live-orders.ts', 'venue-fill.ts', 'live-risk-policy.ts',
-    'switch-policy.ts', 'maker-retry-policy.ts', 'strategy-budget-policy.ts',
+    'switch-policy.ts', 'maker-retry-policy.ts',
   ];
 
   it('is read by no module on a pricing, sizing, gating, or execution path', () => {

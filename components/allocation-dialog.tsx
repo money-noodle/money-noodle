@@ -7,11 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 
-interface StrategyRow {
-  strategyId: string; name: string; signalSource: string;
-  percent: number; startingCents: number; fundedAt: string | null;
-}
-interface MarketRow { marketId: string; name: string; percent: number; capCents: number; strategies: StrategyRow[] }
+interface MarketRow { marketId: string; name: string; percent: number; capCents: number }
 interface ProviderRow {
   providerId: string; liveCapable: boolean; paperCapable: boolean; liveLimitCents: number; markets: MarketRow[];
 }
@@ -42,20 +38,12 @@ function MarketPanel({ provider, market, equityCents, blocked, onSaved }: {
   onSaved: () => void;
 }) {
   const [marketPercent, setMarketPercent] = useState(String(market.percent));
-  const [shares, setShares] = useState<Record<string, string>>(
-    Object.fromEntries(market.strategies.map((strategy) => [strategy.strategyId, String(strategy.percent)])),
-  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
   const capCents = Math.floor(equityCents * (Number(marketPercent) || 0) / 100);
-  const strategyTotal = Object.values(shares).reduce((sum, value) => sum + (Number(value) || 0), 0);
-  // The remainder is shown rather than auto-filled: lending one strategy another's headroom is what makes
-  // a split budget stop meaning anything.
-  const uncommittedPercent = Math.max(0, 100 - strategyTotal);
-  const overAllocated = strategyTotal > 100 || (Number(marketPercent) || 0) > 100;
-  const changed = Number(marketPercent) !== market.percent
-    || market.strategies.some((strategy) => Number(shares[strategy.strategyId]) !== strategy.percent);
+  const overAllocated = (Number(marketPercent) || 0) > 100;
+  const changed = Number(marketPercent) !== market.percent;
 
   async function save() {
     setSaving(true); setError('');
@@ -65,9 +53,6 @@ function MarketPanel({ provider, market, equityCents, blocked, onSaved }: {
         body: JSON.stringify({
           providerId: provider.providerId, marketId: market.marketId,
           marketPercent: Number(marketPercent),
-          strategies: market.strategies.map((strategy) => ({
-            strategyId: strategy.strategyId, percent: Number(shares[strategy.strategyId]) || 0,
-          })),
         }),
       });
       const body = await response.json() as { error?: string };
@@ -86,50 +71,22 @@ function MarketPanel({ provider, market, equityCents, blocked, onSaved }: {
       <PercentInput value={marketPercent} onChange={setMarketPercent} disabled={blocked} resultCents={capCents}/>
     </div>
 
-    <div className="mt-3 space-y-2 border-t pt-3">
-      {market.strategies.map((strategy) => {
-        const percent = Number(shares[strategy.strategyId]) || 0;
-        return <div key={strategy.strategyId} className="flex flex-wrap items-center justify-between gap-2">
-          <div className="min-w-0">
-            <p className="text-[10px]">{strategy.name}</p>
-            <p className="font-mono text-[8px] text-muted-foreground">
-              {strategy.signalSource === 'venue-price' ? 'venue price + clock' : 'model probability'}
-              {strategy.fundedAt ? ` · funded ${new Date(strategy.fundedAt).toLocaleString()}` : ' · never funded'}
-            </p>
-          </div>
-          <PercentInput value={shares[strategy.strategyId] ?? '0'}
-            onChange={(next) => setShares({ ...shares, [strategy.strategyId]: next })}
-            disabled={blocked} resultCents={Math.floor(capCents * percent / 100)}/>
-        </div>;
-      })}
-      <div className="flex items-center justify-between pt-1 text-[9px] text-muted-foreground">
-        <span>Uncommitted</span>
-        <span className="font-mono">{uncommittedPercent.toFixed(1)}% · {dollars(Math.floor(capCents * uncommittedPercent / 100))}</span>
-      </div>
-    </div>
-
     {overAllocated && <p className="mt-2 flex items-center gap-1 text-[10px] text-loss">
-      <AlertTriangle className="size-3"/>Shares must sum to at most 100%.
+      <AlertTriangle className="size-3"/>Market allocation must be at most 100%.
     </p>}
     {error && <p className="mt-2 text-[10px] text-loss">{error}</p>}
 
-    {changed && !blocked && !overAllocated && <p className="mt-2 flex items-start gap-1 text-[10px] leading-relaxed text-warn">
-      <AlertTriangle className="mt-0.5 size-3 shrink-0"/>
-      <span>Saving re-funds every strategy in this market: each one&apos;s equity restarts at the amount above,
-        and any drawdown halt clears. Results from the previous funding period are kept and reported separately.</span>
-    </p>}
-
     <Button className="mt-3 w-full" size="sm" disabled={blocked || saving || overAllocated || !changed} onClick={() => void save()}>
-      {saving ? <Loader2 className="animate-spin"/> : <Save/>}Re-fund {market.name}
+      {saving ? <Loader2 className="animate-spin"/> : <Save/>}Save {market.name} allocation
     </Button>
   </div>;
 }
 
 /**
- * Budget allocation across provider, market, and strategy.
+ * Budget allocation across providers and markets.
  *
- * Renders from the registries rather than today's single provider and market, so a second market or a
- * third strategy appears here without a UI change.
+ * Strategy-level splitting was retired with the long-shot strategy. Renders from the provider and market
+ * registries so a new venue or market remains data rather than hardcoded UI.
  */
 export function AllocationDialog({ variant = 'badge' }: { variant?: 'button' | 'badge' }) {
   const [data, setData] = useState<AllocationResponse | null>(null);
@@ -152,7 +109,7 @@ export function AllocationDialog({ variant = 'badge' }: { variant?: 'button' | '
   return <Dialog onOpenChange={(open) => { if (open) void load(); }}>
     <DialogTrigger asChild>
       {variant === 'badge'
-        ? <button type="button" title="Budget allocation across provider, market, and strategy" className={cn(inlineTrigger, 'text-[9px]')}>
+        ? <button type="button" title="Budget allocation across providers and markets" className={cn(inlineTrigger, 'text-[9px]')}>
             <Layers3 className="size-2.5 shrink-0"/>Allocation<ChevronDown className="size-2.5 shrink-0"/>
           </button>
         : <button type="button" className="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[10px] hover:bg-muted/40"><Layers3 className="size-3"/>Allocation</button>}
@@ -161,8 +118,8 @@ export function AllocationDialog({ variant = 'badge' }: { variant?: 'button' | '
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2 text-sm"><Layers3 className="size-4"/>Budget allocation</DialogTitle>
         <DialogDescription className="text-[11px]">
-          Cash sits with a provider, a percentage of it is committed to each market, and a percentage of
-          that market funds each strategy. Any remainder stays uncommitted rather than being shared out.
+          Cash sits with a provider, and a percentage of it is committed to each market. Any provider
+          remainder stays uncommitted.
         </DialogDescription>
       </DialogHeader>
 
@@ -209,8 +166,7 @@ export function AllocationDialog({ variant = 'badge' }: { variant?: 'button' | '
         })}
 
         <p className="text-[9px] leading-relaxed text-muted-foreground">
-          Percentages compound with equity, so a share grows with its wins and contracts in its own drawdown
-          without being edited. Revision {data.revision}.
+          Market percentages are hard ceilings; any unallocated provider share remains uncommitted. Revision {data.revision}.
         </p>
       </div>}
     </DialogContent>

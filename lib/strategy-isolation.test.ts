@@ -9,17 +9,14 @@ import { makerCohortEvidence } from './entry-execution-policy';
 import { currentEpochAttribution, evaluateLiveRisk, lifetimeLiveRealizedPnlCents } from './live-risk-policy';
 import { countFilledLiveVenueOrders } from './order-rate-limit';
 import { boundedTakerExperimentState } from './bounded-taker-experiment';
-import { DEFAULT_STRATEGY_ID, EDGE_BINARY_BUY, LONG_SHOT_ROUND_TRIP, isStrategyId, normalizeStrategyId, strategyDescriptor } from './strategy-registry';
+import { DEFAULT_STRATEGY_ID, EDGE_BINARY_BUY, LONG_SHOT_ROUND_TRIP, isActiveStrategyId, isStrategyId, normalizeStrategyId, strategyDescriptor } from './strategy-registry';
 import type { BudgetControl, PaperOrder } from './types';
 
 /**
- * SPEC §12.10: two strategies share one venue account and one order ledger, and must not share money.
- *
- * The ledger is deliberately not split into two files, because reconciliation is an account-wide concern:
- * a separate file would leave real resting orders unmatched and fail closed. The cost of that choice is
- * that every money aggregation has to re-narrow by strategy, and forgetting one is silent — long-shot
- * losses would trip the edge policy's breaker, or long-shot gains would mask edge losses, which is worse.
- * These tests pin the boundary in both directions.
+ * SPEC §12.10: historical strategies share one venue account and one order ledger, and must not share
+ * money even after one retires. The ledger is deliberately not split because reconciliation is account-wide.
+ * Every money aggregation must therefore continue to narrow by strategy so retired long-shot P&L can never
+ * trip or mask the active edge policy's controls.
  */
 const order = (id: string, pnl: number, patch: Partial<PaperOrder> = {}): PaperOrder => ({
   id, executionMode: 'live', symbol: 'BTC', venue: 'kalshi', contractId: 'TEST', side: 'UP',
@@ -57,9 +54,24 @@ describe('strategy registry', () => {
     expect(() => strategyDescriptor('something-else' as never)).toThrow();
   });
 
-  it('describes the long-shot policy as taking no model probability', () => {
-    expect(strategyDescriptor(LONG_SHOT_ROUND_TRIP).signalSource).toBe('venue-price');
-    expect(strategyDescriptor(EDGE_BINARY_BUY).signalSource).toBe('model-probability');
+  it('retains the long-shot identity for history without allocation authority', () => {
+    expect(strategyDescriptor(LONG_SHOT_ROUND_TRIP)).toMatchObject({ signalSource: 'venue-price', status: 'retired' });
+    expect(strategyDescriptor(EDGE_BINARY_BUY)).toMatchObject({ signalSource: 'model-probability', status: 'active' });
+    expect(isActiveStrategyId(LONG_SHOT_ROUND_TRIP)).toBe(false);
+    expect(isActiveStrategyId(EDGE_BINARY_BUY)).toBe(true);
+  });
+
+  it('keeps the retired strategy out of execution, collection, UI, and allocation writes', () => {
+    const execution = readFileSync(new URL('./paper-execution.ts', import.meta.url), 'utf8');
+    const collector = readFileSync(new URL('./background-collector.ts', import.meta.url), 'utf8');
+    const dashboard = readFileSync(new URL('../components/dashboard.tsx', import.meta.url), 'utf8');
+    const allocations = readFileSync(new URL('../app/api/trading/allocations/route.ts', import.meta.url), 'utf8');
+    const packageJson = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
+    expect(execution).not.toMatch(/runLongShot|longShotEntryTick|startLongShot/);
+    expect(collector).not.toContain('replicatePublicLongShot');
+    expect(dashboard).not.toContain('LongShotDialog');
+    expect(allocations).not.toContain('strategies');
+    expect(packageJson).not.toContain('long-shot');
   });
 });
 
