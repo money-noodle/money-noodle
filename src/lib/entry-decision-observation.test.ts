@@ -60,7 +60,7 @@ describe('the recorded observations are isolated from anything that can move mon
 
   it('is read by no module on a pricing, sizing, gating, or execution path', () => {
     for (const file of forbidden) {
-      const source = readFileSync(path.join(process.cwd(), 'lib', file), 'utf8');
+      const source = readFileSync(path.join(process.cwd(), 'src/lib', file), 'utf8');
       const reads = /entryDecision(\?)?\.(edgeSpike|cycleRegime|quoteTrajectorySpread)/.test(source)
         || /prediction(\?)?\.quoteTrajectorySpread/.test(source)
         || /order(\?)?\.quoteTrajectorySpread/.test(source);
@@ -69,7 +69,7 @@ describe('the recorded observations are isolated from anything that can move mon
   });
 
   it('is written by the edge policy order builder and nowhere else', () => {
-    const source = readFileSync(path.join(process.cwd(), 'lib', 'paper-execution.ts'), 'utf8');
+    const source = readFileSync(path.join(process.cwd(), 'src/lib', 'paper-execution.ts'), 'utf8');
     expect(source.match(/version: 'entry-decision-v2'/g)).toHaveLength(1);
     expect(source).toContain('edgeSpike: eligibility.edgeSpike');
     expect(source).toContain('cycleRegime: prediction.cycleRegime ? { ...prediction.cycleRegime } : undefined');
@@ -79,7 +79,7 @@ describe('the recorded observations are isolated from anything that can move mon
   });
 
   it('writes the v2 grid once before execution and advances the additive ledger envelope', () => {
-    const source = readFileSync(path.join(process.cwd(), 'lib', 'paper-execution.ts'), 'utf8');
+    const source = readFileSync(path.join(process.cwd(), 'src/lib', 'paper-execution.ts'), 'utf8');
     expect(source.match(/quoteTrajectorySpread: quoteTrajectoryForDecision/g)).toHaveLength(1);
     expect(source).toContain('interface Ledger { version: 8 | 9;');
     expect(source).not.toContain('interface Ledger { version: 7;');
@@ -90,7 +90,7 @@ describe('the recorded observations are isolated from anything that can move mon
   it('clones the regime features rather than aliasing the prediction it came from', () => {
     // The snapshot is immutable issuance evidence. Sharing the object would let a later cycle mutate a
     // recorded decision, which is the one thing a decision snapshot exists to prevent.
-    const source = readFileSync(path.join(process.cwd(), 'lib', 'paper-execution.ts'), 'utf8');
+    const source = readFileSync(path.join(process.cwd(), 'src/lib', 'paper-execution.ts'), 'utf8');
     expect(source).not.toContain('cycleRegime: prediction.cycleRegime,');
     expect(source).not.toContain('quoteTrajectorySpread: prediction.quoteTrajectorySpread,');
     expect(source).not.toContain('cloneQuoteTrajectorySpreadObservation(prediction.quoteTrajectorySpread)');

@@ -70,12 +70,12 @@ The present UI is correct for one local operator but encodes assumptions that ca
 
 | Current behavior | Target behavior |
 | --- | --- |
-| `lib/auth.ts` validates one 14-day HMAC cookie with no user identity or revocation. | A maintained OIDC/OAuth library, external identity provider, opaque server session, current user and membership lookup, revocation, and step-up. |
-| `app/login/page.tsx` accepts `AUTH_PASSWORD`. | Redirect-based OIDC sign-in; Money Noodle never receives or stores an application password. |
-| `app/page.tsx` passes `authenticated`, `deskAvailable`, and `stateless`. | Public research DTO plus an optional authenticated viewer/tenant capability DTO and independently projected runtime status. |
-| `components/dashboard.tsx` hides or shows controls from a boolean and changes polling from `stateless`. | Routes and controls derive from API capabilities, projection freshness, and task cadence. Polling semantics do not inspect deployment. |
+| `src/lib/auth.ts` validates one 14-day HMAC cookie with no user identity or revocation. | A maintained OIDC/OAuth library, external identity provider, opaque server session, current user and membership lookup, revocation, and step-up. |
+| `src/app/login/page.tsx` accepts `AUTH_PASSWORD`. | Redirect-based OIDC sign-in; Money Noodle never receives or stores an application password. |
+| `src/app/page.tsx` passes `authenticated`, `deskAvailable`, and `stateless`. | Public research DTO plus an optional authenticated viewer/tenant capability DTO and independently projected runtime status. |
+| `src/components/dashboard.tsx` hides or shows controls from a boolean and changes polling from `stateless`. | Routes and controls derive from API capabilities, projection freshness, and task cadence. Polling semantics do not inspect deployment. |
 | Private Route Handlers import account, budget, control, and reconciliation modules directly. | The web BFF calls the application/control API only. |
-| `components/account-dialog.tsx` tells the operator to add venue variables to `.env`. | Tenant-owned connection setup through typed OAuth, secret upload, wallet proof, or other registered methods. |
+| `src/components/account-dialog.tsx` tells the operator to add venue variables to `.env`. | Tenant-owned connection setup through typed OAuth, secret upload, wallet proof, or other registered methods. |
 | Local Next.js can be the worker; Vercel can only read a paper projection. | Next.js is stateless in every profile. A local application/control stack coordinates supervised local engines; a deployed stack coordinates cloud engines through the same database-backed API, command, projection, and lifecycle contracts. |
 | Sign out deletes a cookie that cannot be revoked elsewhere. | Sign out revokes the web session; the security page can revoke other sessions. Ordinary sign-out does not claim to pause a healthy cell. |
 
@@ -642,18 +642,18 @@ freshness or completeness guarantee.
 Exact names may change, but dependency direction may not:
 
 ```text
-app/(public)/*                         public research and auth entry
-app/(app)/app/*                       authenticated route shell and pages
-app/api/app/*                         thin same-origin BFF endpoints
-components/app-shell/*                navigation, user menu, capability-aware presentation
-components/profile/*                  profile and avatar UI
-components/connections/*              typed provider setup UI
-components/tenant/*                   private portfolio/control read models
-lib/app-contracts/*                    client-neutral DTO/operation schemas and generated client types
-lib/app-client/*                       transport-neutral fetch/query/state helpers; no Next or engine imports
-lib/web-auth/*                         server-only OIDC/session adapter
-lib/web-api/*                          server-only application API client and DTO validation
-lib/web-capabilities/*                 pure presentation helpers over server-issued capabilities
+src/app/(public)/*                         public research and auth entry
+src/app/(app)/app/*                       authenticated route shell and pages
+src/app/api/app/*                         thin same-origin BFF endpoints
+src/components/app-shell/*                navigation, user menu, capability-aware presentation
+src/components/profile/*                  profile and avatar UI
+src/components/connections/*              typed provider setup UI
+src/components/tenant/*                   private portfolio/control read models
+src/lib/app-contracts/*                    client-neutral DTO/operation schemas and generated client types
+src/lib/app-client/*                       transport-neutral fetch/query/state helpers; no Next or engine imports
+src/lib/web-auth/*                         server-only OIDC/session adapter
+src/lib/web-api/*                          server-only application API client and DTO validation
+src/lib/web-capabilities/*                 pure presentation helpers over server-issued capabilities
 ```
 
 Shared components receive DTOs, capabilities, clocks, navigation callbacks, and mutation interfaces as inputs;

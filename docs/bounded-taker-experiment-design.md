@@ -178,10 +178,10 @@ post-commit efficacy evidence.
 The execution ledger remains the single account ledger. No experiment money ledger or independently mutable
 counter is added.
 
-- `lib/bounded-taker-experiment.ts`: pure assignment, bounds, arm application, state, and report;
-- `lib/entry-execution-policy.ts`: v7 execution identity and bounded-treatment route type;
-- `lib/paper-execution.ts`: live/paper integration, exact fresh-rule recheck, cap reservation, and durable stamps;
-- `lib/types.ts`: append-only optional order provenance;
+- `src/lib/bounded-taker-experiment.ts`: pure assignment, bounds, arm application, state, and report;
+- `src/lib/entry-execution-policy.ts`: v7 execution identity and bounded-treatment route type;
+- `src/lib/paper-execution.ts`: live/paper integration, exact fresh-rule recheck, cap reservation, and durable stamps;
+- `src/lib/types.ts`: append-only optional order provenance;
 - authenticated `/api/performance`: read-only track-separated report;
 - the existing execution ledger: authoritative order, authorization, fill, P&L, and safety-stop evidence.
 

@@ -1504,7 +1504,7 @@ export interface LiveLedgerCorrection {
  * trajectory observation; v2 trajectory grids live at the owning-order level so they are not duplicated.
  * These values were already computed at decision time and thrown away; v1 rows simply lack them and must never be reinterpreted
  * as "the feature was absent". Every added field is reporting-only — nothing that prices, sizes, gates,
- * or trades may read them (`lib/entry-decision-observation.test.ts` asserts it).
+ * or trades may read them (`src/lib/entry-decision-observation.test.ts` asserts it).
  */
 export interface EntryDecisionSnapshot {
   version: 'entry-decision-v1' | 'entry-decision-v2';

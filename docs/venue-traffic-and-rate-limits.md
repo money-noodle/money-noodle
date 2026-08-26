@@ -11,18 +11,18 @@
 > Living reference · 2026-08-26. This is the single place that states, per venue, what traffic the
 > system produces, the worst case, and how a throttle is recovered. Every design that adds a subject
 > (a market, an asset, a cadence, a reader) must reconcile its numbers here before landing. It cites
-> code constants (`lib/freshness.ts`, `lib/task-cadence.ts`, `lib/kalshi-rate-limit.ts`,
-> `lib/kalshi-api.ts`, `lib/kalshi-quote-cache.ts`, `lib/cache.ts`) rather than restating behaviour
+> code constants (`src/lib/freshness.ts`, `src/lib/task-cadence.ts`, `src/lib/kalshi-rate-limit.ts`,
+> `src/lib/kalshi-api.ts`, `src/lib/kalshi-quote-cache.ts`, `src/lib/cache.ts`) rather than restating behaviour
 > from memory.
 
 ## 1. The load-bearing facts
 
 - **Kalshi is the only venue with purpose-built throttle machinery, but observed public bursts still exceed the
-  effective limit.** It has (a) a public-read backoff/pause (`lib/kalshi-rate-limit.ts`), (b) separate signed read and signed write buckets each
-  with 3-attempt 429-only retry (`lib/kalshi-api.ts`), and (c) a per-ticker single-flight quote cache
-  (`lib/kalshi-quote-cache.ts`) so the entry path, manager, and reports deduplicate.
+  effective limit.** It has (a) a public-read backoff/pause (`src/lib/kalshi-rate-limit.ts`), (b) separate signed read and signed write buckets each
+  with 3-attempt 429-only retry (`src/lib/kalshi-api.ts`), and (c) a per-ticker single-flight quote cache
+  (`src/lib/kalshi-quote-cache.ts`) so the entry path, manager, and reports deduplicate.
 - **Polymarket, Kraken, and CoinGecko have no 429 awareness at all.** Their failures are absorbed by
-  the generic `cached` wrapper (`lib/cache.ts`), which serves the previous value with a stale flag or,
+  the generic `cached` wrapper (`src/lib/cache.ts`), which serves the previous value with a stale flag or,
   on a cold cache, throws. A rate limit on these venues therefore presents as "stale data", not as a
   controlled backoff. That is a capability gap, not just a different flavour.
 - **Kalshi's token budget** (from the venue's basic tier, as encoded): 200 tokens/s refill, 600-token

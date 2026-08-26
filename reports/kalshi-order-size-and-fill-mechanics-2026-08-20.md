@@ -11,7 +11,7 @@ Reloaded `data/paper-orders.json` at **2026-08-20T15:47Z**: 3,014 rows, includin
 2026-08-08T21:12Z–2026-08-20T15:47Z. A read-only signed account read at **2026-08-20T16:09Z** returned
 1,655 venue order records and 1,696 fill records. Kalshi's current OpenAPI document and order documentation
 were re-fetched in this session. Public BTC, ETH, and DOGE books were read at 16:10Z and swept with
-`immediateBuyFill` (`lib/ioc-fill-model.ts`). No order was submitted, amended, or canceled.
+`immediateBuyFill` (`src/lib/ioc-fill-model.ts`). No order was submitted, amended, or canceled.
 
 The signed order response currently exposes 885 records whose client ID starts `live:`, fewer than the
 1,252 locally accepted entry rows. It is therefore authoritative for the orders it returned—and decisive
@@ -42,7 +42,7 @@ That separates two meanings of “size”:
   the touch must either walk to worse prices allowed by its limit or end partially filled.
 
 Kalshi publishes YES and NO bid ladders. A NO bid at `1−p` is economically the YES ask at `p`; the production
-mapping is `selectedSideDepth` (`lib/order-book-depth.ts`).
+mapping is `selectedSideDepth` (`src/lib/order-book-depth.ts`).
 
 ## 2. Maker evidence: queue ahead matters materially
 
@@ -99,7 +99,7 @@ These are mechanics examples, not stable liquidity estimates. The market-summary
 around the book reads, which is exactly why production refreshes the exact contract immediately before a
 submission.
 
-`placeKalshiTakerBuy` (`lib/live-orders.ts`) is more restrictive than the unconstrained illustration: its
+`placeKalshiTakerBuy` (`src/lib/live-orders.ts`) is more restrictive than the unconstrained illustration: its
 limit is the refreshed selected-side ask. It therefore takes only liquidity at that approved price; a
 larger request than the touch fills partially and cancels the rest rather than walking beyond the cap. The
 signed history contains one such taker entry: **1.00 of 10.56 contracts** filled, with the remainder canceled.
@@ -181,7 +181,7 @@ This is load-bearing and separate from the economic result.
 
 `placeKalshiBuy` gives a post-only acknowledgement-race retry the client ID
 `` `${input.clientOrderId.slice(0, 30)}-${createAttempt}` ``. All episodes for one
-asset/side/window share those first 30 characters. `clientMatches` in `lib/execution-reconciliation.ts`
+asset/side/window share those first 30 characters. `clientMatches` in `src/lib/execution-reconciliation.ts`
 recognizes the same truncated `-1`/`-2` form for every episode. Therefore a later episode's create-retry
 order can match every earlier local episode in the same window.
 

@@ -116,7 +116,7 @@ execution identity and held-out evidence to `data/paper-fill-calibration.json`.
 
 ## 5. Store
 
-`lib/paper-fill-calibration-store.ts` (atomic `${target}.${pid}.rand.tmp` → rename):
+`src/lib/paper-fill-calibration-store.ts` (atomic `${target}.${pid}.rand.tmp` → rename):
 
 ```ts
 interface PaperFillCalibrationStore {
@@ -169,13 +169,13 @@ and the paper execution version history.
 
 | Path | Change |
 | --- | --- |
-| `lib/paper-fill-calibration.ts` | pure model: bounded parameter, `applyQueueClearFraction`, versioning contract |
-| `lib/paper-fill-calibration-store.ts` | durable atomic store; read active calibration, manual adopt |
-| `lib/paper-maker-simulation.ts` | accept calibration input in the maker queue model; apply whenever a new queue is joined; no neutral behavior change |
-| `lib/paper-execution.ts` | load active calibration and pass through `managePaperMakerOrder`; bump paper version + record calibration on orders |
-| `lib/types.ts` | calibration field on orders; history store types |
+| `src/lib/paper-fill-calibration.ts` | pure model: bounded parameter, `applyQueueClearFraction`, versioning contract |
+| `src/lib/paper-fill-calibration-store.ts` | durable atomic store; read active calibration, manual adopt |
+| `src/lib/paper-maker-simulation.ts` | accept calibration input in the maker queue model; apply whenever a new queue is joined; no neutral behavior change |
+| `src/lib/paper-execution.ts` | load active calibration and pass through `managePaperMakerOrder`; bump paper version + record calibration on orders |
+| `src/lib/types.ts` | calibration field on orders; history store types |
 | `scripts/analyze-paper-fill-calibration.mjs` | held-out re-evaluation (read-only) |
-| `lib/paper-maker-fill.test.ts` | grid of queueClearFraction inputs on the pure model + a manager-level smoker; bounds honored; neutral reproduces today |
+| `src/lib/paper-maker-fill.test.ts` | grid of queueClearFraction inputs on the pure model + a manager-level smoker; bounds honored; neutral reproduces today |
 | `docs/paper-fill-calibration-design.md` | this document |
 | `STATUS.md` | record the model, cohort reset to v6, and the re-evaluation cadence |
 

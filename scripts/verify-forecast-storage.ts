@@ -3,8 +3,8 @@ import { readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   buildSummaryRollup, legacyRollupNeedsReseal, summarizeFromRollups, type ForecastSummaryRollup,
-} from '../lib/forecast-rollup';
-import { BUY_POLICY_VERSION } from '../lib/prediction-policy';
+} from '../src/lib/forecast-rollup';
+import { BUY_POLICY_VERSION } from '../src/lib/prediction-policy';
 import {
   FORECAST_STORAGE_VERSION,
   buildForecastStoragePlan,
@@ -12,9 +12,9 @@ import {
   verifyForecastStoragePlan,
   writeForecastStoragePlan,
   type ForecastStorageIndex,
-} from '../lib/forecast-storage';
-import { summarizePerformance } from '../lib/performance';
-import type { TrackedForecast } from '../lib/types';
+} from '../src/lib/forecast-storage';
+import { summarizePerformance } from '../src/lib/performance';
+import type { TrackedForecast } from '../src/lib/types';
 
 type ForecastJournalEvent =
   | { op: 'upsert'; forecast: TrackedForecast }

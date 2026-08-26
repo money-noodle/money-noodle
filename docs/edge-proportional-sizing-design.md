@@ -78,7 +78,7 @@ would not refuse it — `selectPortfolio` counts rows.
 So the caps have to become dollar-denominated **before** the sizing rule exists, not alongside it:
 
 - `PortfolioCandidate` gains the stake it would consume, and `PortfolioExposure` the stake it already
-  holds. `lib/global-exposure-caps.test.ts` currently asserts that `PortfolioExposure` exposes exactly
+  holds. `src/lib/global-exposure-caps.test.ts` currently asserts that `PortfolioExposure` exposes exactly
   `{ closesAt, symbol }` so no cap can be keyed per provider — that assertion has to be widened
   deliberately, with the reason recorded, rather than quietly relaxed (AGENTS §8).
 - Each of the three limits gains a cents ceiling alongside its count, and the **binding one is
@@ -130,7 +130,7 @@ weightings on data that had already been examined. The route to a decision:
    multiplier while the gate is fixed is the correct shape — sweeping both would let the search
    rediscover a policy by fitting it.
 2. **A minimum count of independent settlement windows** with the clustered return of the capped arm
-   above the flat arm, and the same drawdown discipline `lib/stake-expansion-policy.ts` already
+   above the flat arm, and the same drawdown discipline `src/lib/stake-expansion-policy.ts` already
    applies. Drawdown is the statistic that moves most here, and mean return is not sufficient.
 3. **A written promotion reason in the immutable ledger.** This is a manual act.
 

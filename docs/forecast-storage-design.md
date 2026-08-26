@@ -73,7 +73,7 @@ startup cost, and the evaluator, but they should be re-justified on those ground
 hot-path stall that has already been removed.
 
 **Still outstanding:** the same quadratic idiom appears at 16 other sites. Most group into many small
-buckets and are harmless, but `lib/forecast-storage.ts` groups every terminal row by day shard — few
+buckets and are harmless, but `src/lib/forecast-storage.ts` groups every terminal row by day shard — few
 buckets, tens of thousands of rows each — and would reintroduce this exact stall in the code meant to
 cure it. Fix that before the rollup path ships.
 
@@ -313,7 +313,7 @@ This is a **behaviour change on ties**, not only a gate fix. Those statistics pr
 order rows happened to occupy in the durable file, so they could shift across a compaction or a journal
 replay with no data change at all. They are now deterministic.
 
-**Implemented as** `compareSummaries` in `lib/forecast-storage.ts`, wired into
+**Implemented as** `compareSummaries` in `src/lib/forecast-storage.ts`, wired into
 `verifyForecastStoragePlan`: exact for anything countable, a combined absolute/relative
 `SUMMARY_FLOAT_TOLERANCE` (1e-12) for float aggregates, and output capped so a systematic divergence
 reports its shape rather than thousands of lines.
@@ -384,7 +384,7 @@ Each step is independently verifiable and independently revertable.
 **Done.**
 
 - **§1.1 quadratic grouping fix.** Removed the actual 9.6-second stall. `summarizePerformance` is 643 ms
-  with byte-identical output; the shared helper is `lib/group.ts`. This was the whole of the emergency.
+  with byte-identical output; the shared helper is `src/lib/group.ts`. This was the whole of the emergency.
 - **Plan builder and verification gate.** `buildForecastStoragePlan` / `verifyForecastStoragePlan` and
   `npm run verify:forecast-storage` reproduce the summary from a sharded plan.
 - **Full field-by-field gate, and the total ordering it required** (§4). The gate compares the whole

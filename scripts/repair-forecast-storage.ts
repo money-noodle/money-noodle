@@ -1,8 +1,8 @@
 import { copyFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { acquireForecastWriterLeaseAt } from '../lib/forecast-write-lock';
-import { loadForecastRecoverySource, recoverForecastRows } from '../lib/forecast-repair';
-import { buildForecastStoragePlan, verifyForecastStoragePlan, writeForecastStoragePlan } from '../lib/forecast-storage';
+import { acquireForecastWriterLeaseAt } from '../src/lib/forecast-write-lock';
+import { loadForecastRecoverySource, recoverForecastRows } from '../src/lib/forecast-repair';
+import { buildForecastStoragePlan, verifyForecastStoragePlan, writeForecastStoragePlan } from '../src/lib/forecast-storage';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const ACTIVE_ROOT = path.join(DATA_DIR, 'forecast-history-shards');

@@ -14,7 +14,7 @@
 
 ## 1. Problem and current evidence
 
-Every Kalshi event-order body in `lib/live-orders.ts` hardcodes `exchange_index: 0`: maker create, maker amend,
+Every Kalshi event-order body in `src/lib/live-orders.ts` hardcodes `exchange_index: 0`: maker create, maker amend,
 taker IOC entry, and reduce-only IOC exit. The exact market response already owns this field, but the signed
 pre-submit read discards it.
 
@@ -76,7 +76,7 @@ Pure maker-create, maker-amend, taker-entry, and reduce-only-exit body builders 
 `exchangeIndex` argument and place exactly that integer in `exchange_index`. Prices and counts remain fixed-decimal
 strings formatted only in these wire builders. No arithmetic or existing side conversion changes.
 
-The exact market identity and index are provider-specific mechanics and remain inside `lib/live-orders.ts`; they do
+The exact market identity and index are provider-specific mechanics and remain inside `src/lib/live-orders.ts`; they do
 not enter generic strategy, market registry, paper simulation, or prediction types beyond optional execution audit
 fields.
 

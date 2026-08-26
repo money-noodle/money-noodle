@@ -15,7 +15,7 @@ const moneyPath = [
 describe('forecast candidate isolation', () => {
   it('keeps observation-only candidates out of every decision and money module', () => {
     for (const file of moneyPath) {
-      const source = readFileSync(path.join(process.cwd(), 'lib', file), 'utf8');
+      const source = readFileSync(path.join(process.cwd(), 'src/lib', file), 'utf8');
       expect(source, file).not.toContain('forecast-candidates');
       expect(source, file).not.toContain('candidateEvaluation');
     }

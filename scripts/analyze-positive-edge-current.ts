@@ -19,13 +19,13 @@
  * - The report reloads durable forecasts and orders and is read-only. It writes no data and places no
  *   order. Historical contract-selection and take-the-ask controls remain in their named analyses.
  */
-import { ENTRY_EXECUTION_POLICY_VERSION } from '../lib/entry-execution-policy';
-import { buildMakerFillReport, buildTradeRecord } from '../lib/execution-report';
-import { getForecastHistory } from '../lib/forecast-tracker';
-import { getExecutionOrders } from '../lib/paper-execution';
-import { BUY_POLICY_VERSION } from '../lib/prediction-policy';
-import { EDGE_BINARY_BUY, normalizeStrategyId } from '../lib/strategy-registry';
-import type { MakerFillReport, PaperOrder, TradeTrackRecord } from '../lib/types';
+import { ENTRY_EXECUTION_POLICY_VERSION } from '../src/lib/entry-execution-policy';
+import { buildMakerFillReport, buildTradeRecord } from '../src/lib/execution-report';
+import { getForecastHistory } from '../src/lib/forecast-tracker';
+import { getExecutionOrders } from '../src/lib/paper-execution';
+import { BUY_POLICY_VERSION } from '../src/lib/prediction-policy';
+import { EDGE_BINARY_BUY, normalizeStrategyId } from '../src/lib/strategy-registry';
+import type { MakerFillReport, PaperOrder, TradeTrackRecord } from '../src/lib/types';
 
 const average = (values: number[]) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
 const orderStake = (order: PaperOrder) => order.actualStakeCents ?? order.stakeCents;

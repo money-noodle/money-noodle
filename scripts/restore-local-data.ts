@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { localArchiveConfig, readLocalArchiveState, restoreLocalArchive } from '../lib/local-data-archive';
+import { localArchiveConfig, readLocalArchiveState, restoreLocalArchive } from '../src/lib/local-data-archive';
 
 try { process.loadEnvFile(path.resolve(process.cwd(), '.env.local')); } catch { /* Credentials may already be inherited. */ }
 

@@ -92,7 +92,7 @@ describe('execution ledger v9 evidence boundary', () => {
       .toEqual(makerCohortEvidence(rows.map((item) => ({ ...item, executionMode: 'live' })), 0.4, 0.01));
 
     const hydrated = await readHydratedExecutionOrders(directory);
-    const scriptReader = await import('../scripts/lib/read-execution-ledger.mjs');
+    const scriptReader = await import('../../scripts/lib/read-execution-ledger.mjs');
     const scriptHydrated = await scriptReader.readExecutionLedger(directory);
     expect(scriptHydrated.orders).toEqual(hydrated);
     expect(hydrated.map((item) => item.positionObservations)).toEqual(rows.map((item) => item.positionObservations));

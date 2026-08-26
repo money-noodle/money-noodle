@@ -9,18 +9,18 @@
 import 'server-only';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { ENTRY_EXECUTION_POLICY_VERSION } from '../lib/entry-execution-policy';
+import { ENTRY_EXECUTION_POLICY_VERSION } from '../src/lib/entry-execution-policy';
 import {
   EXIT_POLICY_MINIMUM_COVERAGE, exitSentinelPathComplete, isExitEvaluationOpportunity,
   type ExitPolicySentinel,
-} from '../lib/exit-policy-sentinel';
+} from '../src/lib/exit-policy-sentinel';
 import {
   replayExitPolicySentinelEvents, type ExitPolicySentinelEvent, type ExitPolicySentinelStore,
-} from '../lib/exit-policy-sentinel-store';
-import { PAPER_MANAGED_MAKER_EXECUTION_VERSION } from '../lib/paper-maker-simulation';
-import { BUY_POLICY_VERSION } from '../lib/prediction-policy';
+} from '../src/lib/exit-policy-sentinel-store';
+import { PAPER_MANAGED_MAKER_EXECUTION_VERSION } from '../src/lib/paper-maker-simulation';
+import { BUY_POLICY_VERSION } from '../src/lib/prediction-policy';
 import { readExecutionLedger } from './lib/read-execution-ledger.mjs';
-import type { ExecutionMode } from '../lib/types';
+import type { ExecutionMode } from '../src/lib/types';
 
 const dataDir = path.resolve(process.cwd(), 'data');
 const snapshot = JSON.parse(await readFile(path.join(dataDir, 'exit-policy-sentinels-v2.json'), 'utf8')) as ExitPolicySentinelStore;

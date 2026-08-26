@@ -108,7 +108,7 @@ Nothing, per AGENTS §5.5. Concretely:
 - **§7's stall-filter figure should be read alongside this one.** Both are in the repo; the disagreement is
   the honest state of it.
 - **The quiet-market signal is worth collecting against, not trading on.** A sentinel arm costs nothing and
-  the design already has the machinery (`lib/hold-sentinel.ts`); a rule change on n=16 would not.
+  the design already has the machinery (`src/lib/hold-sentinel.ts`); a rule change on n=16 would not.
 
 ## Caveats, worst first
 

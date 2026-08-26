@@ -135,7 +135,7 @@ place an order, reserve money, mutate a budget, or alter reconciliation.
 ### 12.6 Storage and modules
 
 Policy definitions and scoring are pure. Candidate/sentinel stores are server-only, append-only in normal operation,
-and have no execution imports or authority. Production policy identity comes from `lib/policy-manifest.ts`; current
+and have no execution imports or authority. Production policy identity comes from `src/lib/policy-manifest.ts`; current
 implementation paths come from code rather than this specification.
 
 Every durable candidate row retains candidate version, production comparator version, forecast/model identity,

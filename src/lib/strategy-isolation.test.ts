@@ -66,7 +66,7 @@ describe('strategy registry', () => {
     const collector = readFileSync(new URL('./background-collector.ts', import.meta.url), 'utf8');
     const dashboard = readFileSync(new URL('../components/dashboard.tsx', import.meta.url), 'utf8');
     const allocations = readFileSync(new URL('../app/api/trading/allocations/route.ts', import.meta.url), 'utf8');
-    const packageJson = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
+    const packageJson = readFileSync(new URL('../../package.json', import.meta.url), 'utf8');
     expect(execution).not.toMatch(/runLongShot|longShotEntryTick|startLongShot/);
     expect(collector).not.toContain('replicatePublicLongShot');
     expect(dashboard).not.toContain('LongShotDialog');

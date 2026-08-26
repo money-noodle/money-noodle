@@ -61,7 +61,7 @@ cancellations would elevate the venue-mechanics issue; one recovered event does 
 
 1. **Forecast v3's first threshold seal is approaching.** The forecast journal grew from 6,378,107 to 9,170,124
    bytes, +2,792,017 bytes in one hour. The owning threshold is 50 MiB (`JOURNAL_COMPACTION_BYTES` in
-   `lib/forecast-tracker.ts`). At this one-hour rate it would arrive in roughly **15.5 hours**. The rate can vary,
+   `src/lib/forecast-tracker.ts`). At this one-hour rate it would arrive in roughly **15.5 hours**. The rate can vary,
    but this is the next integrity/availability gate because v3's first automatic seal and independent archive
    restore remain unobserved.
 2. **Offline evaluator checkpoint 1,300 is now due.** This is monitoring-only, not a live-readiness blocker. It

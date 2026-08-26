@@ -13,7 +13,7 @@
 
 ## 1. What exists today
 
-**Live has real funding epochs.** `nextBudgetEpoch` (`lib/budget-epoch.ts`) mints `epochId`,
+**Live has real funding epochs.** `nextBudgetEpoch` (`src/lib/budget-epoch.ts`) mints `epochId`,
 `epochSequence` and `epochStartedAt` on every reconfiguration of the trading control. Orders are stamped,
 and the id is load-bearing: `live-risk-policy` scopes drawdown by it, `stake-expansion-policy` scores per
 epoch, and `/api/performance` publishes `liveEpochs` and `liveLifetimePnlCents`.

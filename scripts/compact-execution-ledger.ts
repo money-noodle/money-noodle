@@ -2,8 +2,8 @@ import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import {
   compactExecutionLedgerAt, restoreExecutionLedgerMonolithAt, verifyExecutionLedgerAt,
-} from '../lib/execution-ledger-compaction';
-import { releaseForecastWriterLeaseForShutdown, serializeForecastMutation } from '../lib/forecast-write-lock';
+} from '../src/lib/execution-ledger-compaction';
+import { releaseForecastWriterLeaseForShutdown, serializeForecastMutation } from '../src/lib/forecast-write-lock';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 

@@ -8,8 +8,8 @@
  * live-fill evidence is scored here.
  */
 import 'server-only';
-import { summarizeForecastCandidateCollection } from '../lib/forecast-candidate-summary';
-import { getForecastHistory } from '../lib/forecast-tracker';
+import { summarizeForecastCandidateCollection } from '../src/lib/forecast-candidate-summary';
+import { getForecastHistory } from '../src/lib/forecast-tracker';
 
 const summary = summarizeForecastCandidateCollection(await getForecastHistory());
 console.log(JSON.stringify(summary, null, 2));

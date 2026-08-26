@@ -89,7 +89,7 @@ strictly worse portfolio than picking better among the ones already admitted.
 
 **The edge ceiling.** 9 and 17 decisions with intervals of ±137pp. Nothing can be concluded. This is the
 same cohort [edge-magnitude-2026-08-18.md](edge-magnitude-2026-08-18.md) found to be the most profitable
-band on the *admitted* population, and the same one the `MAX_NET_EDGE` comment in `lib/prediction-policy.ts`
+band on the *admitted* population, and the same one the `MAX_NET_EDGE` comment in `src/lib/prediction-policy.ts`
 refuses on a calibration inversion measured over 218 windows. This measurement is far too small to move
 that; it is reported because a silently omitted arm is worse than a wide one.
 
@@ -167,7 +167,7 @@ because there is no price-level premium to earn.
 ## 5. Capacity, which bounds everything above
 
 The live rule admits **1,970 decisions across 550 settlement times — a median of 3 and a mean of 3.6
-simultaneously**, against `DEFAULT_MAX_OPEN_POSITIONS` = 3 (`lib/portfolio-policy.ts`), and a live rate cap
+simultaneously**, against `DEFAULT_MAX_OPEN_POSITIONS` = 3 (`src/lib/portfolio-policy.ts`), and a live rate cap
 besides. Volume is not gate-limited; it is position-limited and fill-limited.
 
 The consequence is that the question "what else should we admit?" is second-order.

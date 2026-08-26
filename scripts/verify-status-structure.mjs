@@ -92,12 +92,12 @@ function verifyCurrentProjection() {
 /** Compare only exact identities with one clear source owner; prose measurements remain human projections. */
 function verifyActiveIdentityProjection() {
   const status = contents.get(statusFile);
-  const dashboard = readFileSync(join(repoRoot, 'lib/dashboard.ts'), 'utf8');
-  const predictionPolicy = readFileSync(join(repoRoot, 'lib/prediction-policy.ts'), 'utf8');
-  const executionPolicy = readFileSync(join(repoRoot, 'lib/entry-execution-policy.ts'), 'utf8');
-  const sizingPolicy = readFileSync(join(repoRoot, 'lib/entry-sizing-policy.ts'), 'utf8');
-  const paperCalibration = readFileSync(join(repoRoot, 'lib/paper-fill-calibration.ts'), 'utf8');
-  const strategyRegistry = readFileSync(join(repoRoot, 'lib/strategy-registry.ts'), 'utf8');
+  const dashboard = readFileSync(join(repoRoot, 'src/lib/dashboard.ts'), 'utf8');
+  const predictionPolicy = readFileSync(join(repoRoot, 'src/lib/prediction-policy.ts'), 'utf8');
+  const executionPolicy = readFileSync(join(repoRoot, 'src/lib/entry-execution-policy.ts'), 'utf8');
+  const sizingPolicy = readFileSync(join(repoRoot, 'src/lib/entry-sizing-policy.ts'), 'utf8');
+  const paperCalibration = readFileSync(join(repoRoot, 'src/lib/paper-fill-calibration.ts'), 'utf8');
+  const strategyRegistry = readFileSync(join(repoRoot, 'src/lib/strategy-registry.ts'), 'utf8');
 
   const identities = [
     sourceConstant(dashboard, 'MODEL_VERSION'),
@@ -108,13 +108,13 @@ function verifyActiveIdentityProjection() {
   const prefix = sourceConstant(paperCalibration, 'PAPER_EXECUTION_VERSION_PREFIX', false);
   const generation = paperCalibration.match(/PAPER_NEUTRAL_EXECUTION_VERSION = `\$\{PAPER_EXECUTION_VERSION_PREFIX\}(\d+)`/)?.[1];
   if (prefix && generation) identities.push(`${prefix}${generation}`);
-  else errors.push('could not derive PAPER_NEUTRAL_EXECUTION_VERSION from lib/paper-fill-calibration.ts');
+  else errors.push('could not derive PAPER_NEUTRAL_EXECUTION_VERSION from src/lib/paper-fill-calibration.ts');
 
   for (const identity of identities.filter(Boolean)) {
     if (!status.includes(identity)) errors.push(`STATUS.md active identities omit source-owned ${identity}`);
   }
   if (!/id: 'long-shot-round-trip',[\s\S]*?status: 'retired'/.test(strategyRegistry)) {
-    errors.push('lib/strategy-registry.ts does not retain long-shot-round-trip as retired');
+    errors.push('src/lib/strategy-registry.ts does not retain long-shot-round-trip as retired');
   } else if (!status.includes('Long-shot strategy | Retired registry identity only')) {
     errors.push('STATUS.md does not project the retired long-shot registry identity');
   }

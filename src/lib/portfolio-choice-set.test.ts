@@ -87,7 +87,7 @@ describe('pre-registered portfolio choice-set report', () => {
 
 describe('choice-set evidence cannot feed a money-moving module', () => {
   it('is append-journaled and imported only by shared orchestration', () => {
-    const store = readFileSync(path.join(process.cwd(), 'lib', 'portfolio-choice-set-store.ts'), 'utf8');
+    const store = readFileSync(path.join(process.cwd(), 'src/lib', 'portfolio-choice-set-store.ts'), 'utf8');
     expect(store).toContain('appendFile(JOURNAL_FILE');
     expect(store).toContain('JOURNAL_COMPACTION_BYTES');
     expect(store).toContain("await atomicWrite(JOURNAL_FILE, '')");
@@ -97,7 +97,7 @@ describe('choice-set evidence cannot feed a money-moving module', () => {
       'maker-retry-policy.ts', 'signal-persistence.ts',
     ];
     for (const file of forbidden) {
-      const source = readFileSync(path.join(process.cwd(), 'lib', file), 'utf8');
+      const source = readFileSync(path.join(process.cwd(), 'src/lib', file), 'utf8');
       expect({ file, importsStore: source.includes('portfolio-choice-set-store') }).toEqual({ file, importsStore: false });
     }
   });

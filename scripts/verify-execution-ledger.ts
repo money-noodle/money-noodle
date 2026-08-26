@@ -1,4 +1,4 @@
-import { verifyExecutionLedgerAt } from '../lib/execution-ledger-compaction';
+import { verifyExecutionLedgerAt } from '../src/lib/execution-ledger-compaction';
 
 verifyExecutionLedgerAt()
   .then((result) => console.log(JSON.stringify({ ok: true, ...result }, null, 2)))

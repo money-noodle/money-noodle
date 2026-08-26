@@ -10,7 +10,7 @@ describe('entry fee semantics', () => {
   });
 
   it('makes adaptive taker and maker economics independent of the admission constant', async () => {
-    const source = await readFile(path.join(process.cwd(), 'lib/paper-execution.ts'), 'utf8');
+    const source = await readFile(path.join(process.cwd(), 'src/lib/paper-execution.ts'), 'utf8');
     const start = source.indexOf('function entryExecutionDecision(');
     const end = source.indexOf('export function applyTakerQuoteMovementReserve', start);
     const decision = source.slice(start, end);
@@ -20,7 +20,7 @@ describe('entry fee semantics', () => {
   });
 
   it('prices ask and maker counterfactuals with their own roles', async () => {
-    const source = await readFile(path.join(process.cwd(), 'lib/maker-shadow.ts'), 'utf8');
+    const source = await readFile(path.join(process.cwd(), 'src/lib/maker-shadow.ts'), 'utf8');
     expect(source).toContain("venueFeeRate(order.venue, price, 'taker')");
     expect(source).toContain("venueFeeRate(order.venue, bid, 'maker')");
   });

@@ -117,7 +117,7 @@ export function staticMakerPost(rungs: MakerPostRung[]): MakerPostRung[] {
  * Whether the post filled, given the rungs it rested at and the prints that traded.
  *
  * A post fills once volume traded at or through its price exceeds the size displayed ahead of it — the
- * rule in `lib/maker-depth-experiment.ts`, not a touch. Repricing **upward resets the queue**: the order
+ * rule in `src/lib/maker-depth-experiment.ts`, not a touch. Repricing **upward resets the queue**: the order
  * joins the back of a new price level, so volume consumed at the old price does not carry. A rung that
  * repeats a price is the same resting order and keeps its progress, which is why `makerPostLadder`
  * collapses repeated prices rather than emitting them.

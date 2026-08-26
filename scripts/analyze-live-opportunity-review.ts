@@ -16,13 +16,13 @@
  * Read-only: reloads durable forecasts/orders, writes no data, and calls no order endpoint.
  * Run: npm run analyze:live-opportunities -- [optional end ISO]
  */
-import { ENTRY_EXECUTION_POLICY_VERSION } from '../lib/entry-execution-policy';
-import { getForecastHistory } from '../lib/forecast-tracker';
-import { getExecutionOrders } from '../lib/paper-execution';
-import { BUY_POLICY_VERSION } from '../lib/prediction-policy';
-import { EDGE_BINARY_BUY, normalizeStrategyId } from '../lib/strategy-registry';
-import type { PaperOrder, PositionSide, TrackedForecast } from '../lib/types';
-import { venueFeeCents } from '../lib/venue-fill';
+import { ENTRY_EXECUTION_POLICY_VERSION } from '../src/lib/entry-execution-policy';
+import { getForecastHistory } from '../src/lib/forecast-tracker';
+import { getExecutionOrders } from '../src/lib/paper-execution';
+import { BUY_POLICY_VERSION } from '../src/lib/prediction-policy';
+import { EDGE_BINARY_BUY, normalizeStrategyId } from '../src/lib/strategy-registry';
+import type { PaperOrder, PositionSide, TrackedForecast } from '../src/lib/types';
+import { venueFeeCents } from '../src/lib/venue-fill';
 
 const V22_ACTIVATED_AT = Date.parse('2026-08-20T04:50:15.000Z');
 const HOUR_MS = 3_600_000;

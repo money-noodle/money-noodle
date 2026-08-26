@@ -55,9 +55,9 @@ A separate **07:30:25Z–07:33:09Z main-worker stall** remained:
   next did not begin until 07:34:31.874Z.
 
 Source and durable timing identify the automatic walk-forward evaluator as the load-bearing explanation, not
-reconciliation. The collector awaits `maybeRunWalkForwardEvaluation` (`lib/background-collector.ts`). At the
+reconciliation. The collector awaits `maybeRunWalkForwardEvaluation` (`src/lib/background-collector.ts`). At the
 1,250-window threshold, that function loads shard history and runs the synchronous CPU evaluation on the same
-Node worker (`lib/model-evaluation-store.ts`, `runWalkForwardEvaluation` in `lib/walk-forward.ts`). The new durable
+Node worker (`src/lib/model-evaluation-store.ts`, `runWalkForwardEvaluation` in `src/lib/walk-forward.ts`). The new durable
 run is stamped `generatedAt: 2026-08-23T07:30:29.063Z`, ends at the 07:30 settlement window, and
 `data/model-evaluations.json` was published at approximately 07:33:08Z, matching recovery.
 A native profile at the next checkpoint would prove exact stack proportions, but the awaited source path,

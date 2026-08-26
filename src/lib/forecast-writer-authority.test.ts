@@ -14,7 +14,7 @@ async function sourceFiles(root: string): Promise<string[]> {
 
 describe('forecast writer authority', () => {
   it('keeps calculation recording out of every request and rendering entrypoint', async () => {
-    const files = [...await sourceFiles(path.resolve('app')), ...await sourceFiles(path.resolve('lib'))];
+    const files = [...await sourceFiles(path.resolve('src/app')), ...await sourceFiles(path.resolve('src/lib'))];
     const calculationWriters: string[] = [];
     const resolutionWriters: string[] = [];
     for (const file of files) {
@@ -22,8 +22,8 @@ describe('forecast writer authority', () => {
       if (source.includes('recordCollectorCalculations')) calculationWriters.push(path.relative(process.cwd(), file));
       if (source.includes('resolveDueForecasts')) resolutionWriters.push(path.relative(process.cwd(), file));
     }
-    expect(calculationWriters.sort()).toEqual(['lib/background-collector.ts', 'lib/forecast-tracker.ts']);
-    expect(resolutionWriters.sort()).toEqual(['lib/background-collector.ts', 'lib/forecast-tracker.ts']);
-    expect(await readFile(path.resolve('lib/dashboard.ts'), 'utf8')).not.toContain('trackCalculations');
+    expect(calculationWriters.sort()).toEqual(['src/lib/background-collector.ts', 'src/lib/forecast-tracker.ts']);
+    expect(resolutionWriters.sort()).toEqual(['src/lib/background-collector.ts', 'src/lib/forecast-tracker.ts']);
+    expect(await readFile(path.resolve('src/lib/dashboard.ts'), 'utf8')).not.toContain('trackCalculations');
   });
 });

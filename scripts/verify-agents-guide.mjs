@@ -54,7 +54,7 @@ const AGENTS_WORD_LIMIT = 3_000;
  * maintainer's machine and fail in CI — the exact divergence this verifier is
  * meant to eliminate.
  */
-const sourceRoots = ['lib', 'scripts', 'spec', 'status', 'docs', 'reports', 'app', 'components', 'db'];
+const sourceRoots = ['src', 'scripts', 'spec', 'status', 'docs', 'reports', 'db'];
 /** Root files that are cited bare rather than under a directory. */
 const rootFiles = new Set(['SPEC.md', 'STATUS.md', 'AGENTS.md', 'README.md', 'CLAUDE.md', 'package.json']);
 
@@ -231,11 +231,11 @@ function citedPaths(text) {
  * Identifier/module pairings this verifier can check, in the two forms the
  * guidance actually uses:
  *
- *   `symbol`, `other` (`lib/module.ts`)   — trailing parenthesised citation
- *   `lib/module.ts` — `symbol`, `other`   — leading path, as in the §0 table
+ *   `symbol`, `other` (`src/lib/module.ts`)   — trailing parenthesised citation
+ *   `src/lib/module.ts` — `symbol`, `other`   — leading path, as in the §0 table
  *
  * A parenthesised group may list the path in any position, so
- * ``(`venueFeeCents`, `lib/venue-fill.ts`)`` and its reverse both resolve.
+ * ``(`venueFeeCents`, `src/lib/venue-fill.ts`)`` and its reverse both resolve.
  */
 function symbolClaims(text) {
   const claims = [];

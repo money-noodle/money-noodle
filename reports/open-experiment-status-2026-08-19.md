@@ -23,7 +23,7 @@ residency issue can be called closed.
 ## 2. v21 does not execute what its prose says
 
 `MONEY_NOODLE_ENTRY_EXECUTION_MODE=taker` does not mean unconditional taking in
-`evaluateEntryExecutionPolicy` (`lib/entry-execution-policy.ts`). Both `adaptive` and `taker` execute the
+`evaluateEntryExecutionPolicy` (`src/lib/entry-execution-policy.ts`). Both `adaptive` and `taker` execute the
 recommendation after the same edge, median-edge, quality, spread, sample, and advantage gates; a failed gate
 still executes as maker. Paper remains the independent managed-maker lane.
 
@@ -31,7 +31,7 @@ A policy-aware reconstruction from forecast history found 43 v21 decisions admit
 current 2-over-15-second persistence requirement, 15 matched live orders, and 6 fills. The order ledger held
 18 live v21 orders: 13 labelled taker (4 fills) and 5 labelled maker (2 fills). Paper held 17 orders and 7
 fills, all through its managed-maker path. Thus the claims "every accepted decision fills at the ask" and
-"100% fills" in `STATUS.md` and the v21 entry in `lib/policy-manifest.ts` are false descriptions of current
+"100% fills" in `STATUS.md` and the v21 entry in `src/lib/policy-manifest.ts` are false descriptions of current
 behavior.
 
 The checked-in `scripts/analyze-execution-gap.mjs` also still required 3 observations over 30 seconds for
@@ -52,7 +52,7 @@ decisions, not results this review's evidence authorized.
 
 ### Persistence candidate
 
-`buildPersistenceCandidateReport` (`lib/persistence-candidate-store.ts`) reported 28 current-policy intents
+`buildPersistenceCandidateReport` (`src/lib/persistence-candidate-store.ts`) reported 28 current-policy intents
 and zero incremental intents: v21 made the candidate identical to production. The detached maker observer
 continues to make public requests, while the report deliberately summarizes observed fills only over the
 incremental cohort and therefore displays zero current observations. The policy experiment is complete;
@@ -60,20 +60,20 @@ continuing it requires a new stated measurement or retirement.
 
 ### Edge-spike sentinel
 
-`buildEdgeSpikeSentinelReport` (`lib/edge-spike-sentinel.ts`) reported 28 v21 samples, 23 resolved, with only
+`buildEdgeSpikeSentinelReport` (`src/lib/edge-spike-sentinel.ts`) reported 28 v21 samples, 23 resolved, with only
 2 declined windows against the 60-window review bar. Admitted-minus-declined edge was +12.9pp with 32.6pp
 standard error. Earlier policy cohorts cannot be pooled under the sentinel's version-scoping rule. No gate
 change is authorized.
 
 ### Adaptive regime gate
 
-`getRegimeGateStatus` (`lib/regime-gate-store.ts`) reported 4/12 resolved v21 windows, +3.0pp weighted edge
+`getRegimeGateStatus` (`src/lib/regime-gate-store.ts`) reported 4/12 resolved v21 windows, +3.0pp weighted edge
 with 21.3pp standard error, and 44.4% confidence of negative return. It was warming and permissive, as
 specified.
 
 ### Calendar evaluation
 
-`buildCalendarEvaluationReport` (`lib/calendar-evaluation-store.ts`) reported 5 current-policy windows, 4
+`buildCalendarEvaluationReport` (`src/lib/calendar-evaluation-store.ts`) reported 5 current-policy windows, 4
 resolved candidate windows, and one date. The bars remain 30 dates and 100 candidate windows per time band,
 plus 12 weekday occurrences and 100 candidate windows per weekday. Neither review is close to unlocked.
 

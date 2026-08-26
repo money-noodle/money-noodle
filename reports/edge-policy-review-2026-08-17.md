@@ -43,7 +43,7 @@ The last two are one mechanism seen twice, and §3 argues they are the same thin
 ## 1. The correction that decides this review
 
 **Live and paper are one policy on the same signals in the same windows.** Since v17 they are a mirror by
-construction (`lib/mirror-invariant.test.ts`), so pooling the two tracks counts every decision twice and
+construction (`src/lib/mirror-invariant.test.ts`), so pooling the two tracks counts every decision twice and
 halves every standard error. The 477 v17 orders are **228 unique `(symbol, closesAt, side)` decisions**.
 Every cross-track figure below is deduplicated to those, preferring the live record; per-track figures
 appear beside them so that agreement is visible as agreement and not silently spent as corroboration.
@@ -81,7 +81,7 @@ tracks. That it was absent before is **not** established.
 
 ## 3. The desk is firing on edge spikes, and a spike is an adverse move in progress
 
-`signalEligibility` (`lib/signal-persistence.ts`) already computes `medianNetEdge` over the qualifying
+`signalEligibility` (`src/lib/signal-persistence.ts`) already computes `medianNetEdge` over the qualifying
 snapshots and stamps it on every entry decision. Nothing reads it as a gate. Comparing the edge the desk
 fired on against its own persistence median, over the 228 deduplicated decisions:
 
@@ -222,7 +222,7 @@ Nothing automatic, and no policy version changes here. In order of value:
    decisions each is a direction check, not a per-asset measurement, and the 2026-08-16 review already
    showed that per-asset apparent significance does not survive window clustering.
 6. **The walk-forward baseline is not the production policy, and its objective is the wrong quantity.**
-   Two separate defects, both in `lib/walk-forward.ts`:
+   Two separate defects, both in `src/lib/walk-forward.ts`:
    - `WalkForwardParameters` carries `minimumEdge` and `minimumQuality` but no maximum edge and no
      selected-side floor, so `PRODUCTION_BASELINE_PARAMETERS` cannot express `MAX_NET_EDGE` (v15) or
      `MIN_SELECTED_SIDE_PROBABILITY` (v13). A candidate is being compared against a gate the desk does
@@ -248,7 +248,7 @@ and the earlier eras are too small or too low-base-rate to serve as a control.
 It cannot separate "the ranking picks worse candidates" from "the ranking picks candidates that are
 worse to execute". §4 establishes there is a selection cost among simultaneous candidates and does not
 identify it; §3 offers a hypothesis that would explain it, since ranking by `edgeStrength` — net edge
-scaled by confidence (`lib/prediction-policy.ts`) — mechanically prefers the largest edge available in
+scaled by confidence (`src/lib/prediction-policy.ts`) — mechanically prefers the largest edge available in
 the cycle, and §3 says the largest edge is disproportionately the freshly-spiked one.
 
 Sample sizes remain thin everywhere it matters: 110 live and 117 paper settled entries under v17, 207
@@ -291,7 +291,7 @@ difference is the interesting part.
 The operator decision was to ship the gate as **v18** *and* run the sentinel, on an explicit asymmetry:
 declining ~30% of stake costs roughly nothing while the book realizes −4.3%, and not declining it costs
 ~680c/day against 1,705c available if the effect is real. That is a different justification from
-"the evidence cleared a bar", and `lib/policy-manifest.ts` states it as such.
+"the evidence cleared a bar", and `src/lib/policy-manifest.ts` states it as such.
 
 The rest of §6 is unchanged and unactioned. Two things this addendum should not be read as saying:
 

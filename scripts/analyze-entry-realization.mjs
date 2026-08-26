@@ -43,7 +43,7 @@ const DATA = path.resolve(process.cwd(), 'data');
 const SHARDS = path.join(DATA, 'forecast-history-shards');
 
 /**
- * The policy under review and the moment it became active, from lib/policy-manifest.ts.
+ * The policy under review and the moment it became active, from src/lib/policy-manifest.ts.
  *
  * Pinned to v17 rather than tracking BUY_POLICY_VERSION: v17 is the closed cohort this measurement
  * describes, and its successor v18 exists *because* of it. Following the live constant would silently
@@ -53,7 +53,7 @@ const POLICY = 'buy-binary-edge-net5to35-quality50-owned55-price5to97-v17';
 const POLICY_ACTIVE_FROM = Date.parse('2026-08-14T01:05:00.000Z');
 /** Kalshi charges `0.07 * p * (1 - p)` per contract on entry; Polymarket `0.01 * p`. Settlement is free. */
 const feeRate = (venue, price) => (venue === 'kalshi' ? 0.07 * price * (1 - price) : 0.01 * price);
-/** The gate as `admissibleEntry` + `qualifiesAsBuyEdge` express it in lib/prediction-policy.ts. */
+/** The gate as `admissibleEntry` + `qualifiesAsBuyEdge` express it in src/lib/prediction-policy.ts. */
 const admits = (r) => r.ask >= 0.05 && r.ask <= 0.97 && r.probability >= 0.55
   && r.netEdge >= 0.05 && r.netEdge < 0.35 && r.confidence >= 0.5;
 

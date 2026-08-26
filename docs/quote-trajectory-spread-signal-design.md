@@ -367,13 +367,13 @@ clustering.
 
 | Path | Role |
 | --- | --- |
-| `lib/quote-trajectory-spread.ts` | pure normalized samples, horizon extraction, feature calculation, and validation |
-| `lib/cache.ts` / cached feed envelopes | preserve source capture time and bounded normalized rolling quote history without a new request |
-| `lib/cycle-regime.ts` / `lib/types.ts` | add signed underlying fields and optional observation schema without changing existing regime semantics |
-| `lib/dashboard.ts` | attach observation-only current features before forecast tracking; no ranking or policy read |
-| `lib/forecast-tracker.ts` | persist the current production-selected provider/side feature on qualified calculations |
-| `lib/paper-execution.ts` | copy the same immutable slice onto new edge entry decisions only |
-| `lib/entry-decision-observation.test.ts` and new feature tests | enforce observation-only imports, exact arithmetic, freshness, and mirror boundaries |
+| `src/lib/quote-trajectory-spread.ts` | pure normalized samples, horizon extraction, feature calculation, and validation |
+| `src/lib/cache.ts` / cached feed envelopes | preserve source capture time and bounded normalized rolling quote history without a new request |
+| `src/lib/cycle-regime.ts` / `src/lib/types.ts` | add signed underlying fields and optional observation schema without changing existing regime semantics |
+| `src/lib/dashboard.ts` | attach observation-only current features before forecast tracking; no ranking or policy read |
+| `src/lib/forecast-tracker.ts` | persist the current production-selected provider/side feature on qualified calculations |
+| `src/lib/paper-execution.ts` | copy the same immutable slice onto new edge entry decisions only |
+| `src/lib/entry-decision-observation.test.ts` and new feature tests | enforce observation-only imports, exact arithmetic, freshness, and mirror boundaries |
 | future candidate design/store | separately versioned gate or ranking sentinel after screening; not part of collection v1 |
 
 ## 14. Explicitly unchanged

@@ -244,12 +244,12 @@ promotion records and must not be reinterpreted as such.
 
 | path | role |
 | --- | --- |
-| `lib/maker-restriction-sentinel.ts` | pure candidate classification and track-separated reporting |
-| `lib/maker-restriction-sentinel-store.ts` | prospective decision records, settlement, append journal, compaction |
-| `lib/exit-policy-sentinel.ts` | pure first-to-fire reducers, path coverage, track-separated reporting |
-| `lib/exit-policy-sentinel-store.ts` | position/observation/production/resolution events and compaction |
-| `lib/paper-execution.ts` | detached hooks after durable maker intent and after lifecycle observation; public-data continuation after production exits |
-| `app/api/performance/route.ts` | authenticated, stateful, read-only reports; public/stateless payload unchanged |
+| `src/lib/maker-restriction-sentinel.ts` | pure candidate classification and track-separated reporting |
+| `src/lib/maker-restriction-sentinel-store.ts` | prospective decision records, settlement, append journal, compaction |
+| `src/lib/exit-policy-sentinel.ts` | pure first-to-fire reducers, path coverage, track-separated reporting |
+| `src/lib/exit-policy-sentinel-store.ts` | position/observation/production/resolution events and compaction |
+| `src/lib/paper-execution.ts` | detached hooks after durable maker intent and after lifecycle observation; public-data continuation after production exits |
+| `src/app/api/performance/route.ts` | authenticated, stateful, read-only reports; public/stateless payload unchanged |
 
 The runtime imports sentinel stores only from shared orchestration. Rule, sizing, budget, portfolio, signed
 order, and reconciliation modules import no sentinel result. Tests pin candidate boundaries, mirror labels,

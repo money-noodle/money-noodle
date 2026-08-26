@@ -7,7 +7,7 @@ winning binary short (costing winnings)?
 **Method:** Reloaded 3,059 rows from `data/paper-orders.json` at 2026-08-20T23:26Z and retained `sold`,
 non-switch `strict-value-v1` rows whose `standaloneExitAttemptedAt` falls in the fixed interval. Every such
 exit later receives an authoritative hold counterfactual (`updateSoldCounterfactuals`,
-`lib/paper-execution.ts`) computed from the actual settled outcome:
+`src/lib/paper-execution.ts`) computed from the actual settled outcome:
 `counterfactualHoldPnlCents = (won ? potentialPayoutCents : 0) − stake`. The per-track incremental is
 `exitPnl − holdPnl`. Per-window means cluster on settlement `closesAt`; `n` is exits. Live was `state:
 active`, `mode: live` with budget 1730¢ / 0¢ reserved at the original 23:14Z read; that point-in-time state

@@ -38,7 +38,7 @@ omitted failure within 30 seconds could falsely preserve a reconstructed streak.
 | live | 41 / 41 | **−45.7% ±21.5** | 531.93¢ | −93.34¢ | −17.5% |
 | paper | 85 / 81 | **−35.1% ±13.0** | 2,270¢ | −235.35¢ | −10.4% |
 
-These are the figures embedded in `lib/asset-exclusion.ts`; both means remain more than two standard errors
+These are the figures embedded in `src/lib/asset-exclusion.ts`; both means remain more than two standard errors
 below zero. Equal-window return and aggregate ROI answer different questions, so their levels should not be
 made to agree.
 

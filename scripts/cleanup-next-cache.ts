@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { cleanupNextBuildCaches } from '../lib/next-cache-cleanup';
+import { cleanupNextBuildCaches } from '../src/lib/next-cache-cleanup';
 
 const execFileAsync = promisify(execFile);
 

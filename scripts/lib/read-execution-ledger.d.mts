@@ -1,4 +1,4 @@
-import type { PaperOrder } from '../../lib/types';
+import type { PaperOrder } from '../../src/lib/types';
 
 export interface ScriptExecutionLedger {
   version?: number;

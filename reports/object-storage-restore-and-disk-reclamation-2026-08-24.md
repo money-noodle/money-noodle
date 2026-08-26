@@ -14,7 +14,7 @@ Final expanded manifest:
 - manifest time: `2026-08-24T16:16:01.305Z`
 - manifest SHA-256: `0670e1179e8dcc2b1b7ecc659a9c9974e318fae851ba0c0b671e1826d17b9ce1`
 - restore destination: a new `/tmp/money-noodle-restore-expanded-20260824/data` staging tree, removed after verification
-- restore implementation: `restoreLocalArchive` in `lib/local-data-archive.ts`
+- restore implementation: `restoreLocalArchive` in `src/lib/local-data-archive.ts`
 - semantic commands: production `scripts/verify-forecast-storage.ts` and `scripts/verify-execution-ledger.ts`, run with the restored directory as `process.cwd()/data`
 - cache baseline: `du -sk .next/cache .next/dev`
 - runtime check: `.next/server` and `.next/static` remained present and `/api/dashboard` returned HTTP 200 after cleanup

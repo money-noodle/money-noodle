@@ -85,7 +85,7 @@ const history: PolicyManifestHistoryEntry[] = [
     evidence: [
       'reports/entry-admission-v22-review-2026-08-20.md · exact-provider replay, uncertainty correction, and deployment status',
       'npm run analyze:entry-admission-v22 · 66,651 resolved snapshots, 3,941 -> 3,373 decisions, 0 added, 568 dropped at the cited read',
-      'lib/prediction-policy.ts MIN_NET_EDGE · the v20 evidence this reverses, reproduced rather than refuted',
+      'src/lib/prediction-policy.ts MIN_NET_EDGE · the v20 evidence this reverses, reproduced rather than refuted',
       'SPEC.md 12.5 · promotion requires committed sentinel evidence; this is an operator narrowing and claims no promotion',
     ],
   },

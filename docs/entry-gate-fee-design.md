@@ -14,7 +14,7 @@
 
 ## 1. What is wrong
 
-`venueFeeRate` (`lib/prediction-policy.ts`) charges every candidate a Kalshi taker fee:
+`venueFeeRate` (`src/lib/prediction-policy.ts`) charges every candidate a Kalshi taker fee:
 
 ```
 venueFeeRate(kalshi, price) = 0.07 · price · (1 − price)

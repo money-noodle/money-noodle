@@ -11,7 +11,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 # Money Noodle
 
 Research dashboard, continuous paper shadow trader, and live trading desk across multiple prediction-market
-venues, in one Next.js app. Real money moves through `lib/live-orders.ts`. Treat every change as though it
+venues, in one Next.js app. Real money moves through `src/lib/live-orders.ts`. Treat every change as though it
 executes against a funded account tonight.
 
 Before touching money paths, read in order: `SPEC.md` → every relevant canonical `spec/*.md` module completely,
@@ -34,10 +34,10 @@ loses to it on any divergence.
 | `STATUS.md` | Compact dated projection of what is implemented and most recently measured; never live operational authority. |
 | `status/roadmap.md` | Non-normative sequencing and pending work; never implementation authority. |
 | `status/archive/*.md` | Immutable historical status and superseded measurements; read only when history is material. |
-| `lib/trading-provider-registry.ts` | Which venues exist and what each may do. |
-| `lib/market-registry.ts` | Which markets exist and what each may do per lane (market data / paper / live). |
-| `lib/strategy-registry.ts` | Which strategies exist and which is default. |
-| `lib/policy-manifest.ts` | Every buy policy that has been live. |
+| `src/lib/trading-provider-registry.ts` | Which venues exist and what each may do. |
+| `src/lib/market-registry.ts` | Which markets exist and what each may do per lane (market data / paper / live). |
+| `src/lib/strategy-registry.ts` | Which strategies exist and which is default. |
+| `src/lib/policy-manifest.ts` | Every buy policy that has been live. |
 | `reports/*.md`, indexed by `reports/README.md` | Dated measurements, methods, cohorts, and caveats. |
 | `docs/README.md` and indexed `docs/*.md` | Proposed, accepted, superseded, retired, reference, and exploratory designs; never an alternate requirement authority. |
 | `README.md` | Human orientation and setup; never requirement, implementation, or operational authority. |
@@ -60,26 +60,26 @@ and `data/trading-control.json`.
 
 Do not copy venue, market, or strategy enumerations into generic instructions; read the versioned registries,
 starting with `TRADING_PROVIDER_REGISTRY_VERSION`. Provider `implementation` is intersected per market and lane with
-`productionMarketCapability` (`lib/market-registry.ts`): one market never unlocks another, and configuration cannot
+`productionMarketCapability` (`src/lib/market-registry.ts`): one market never unlocks another, and configuration cannot
 make an unimplemented adapter live. New providers and markets **fail closed**. Name a venue only for venue-specific
 mechanics; otherwise use role-based language.
 
 ## 0. Shared orchestration and the default-strategy path
 
-Start at `lib/strategy-registry.ts` for every registered strategy. This table maps shared orchestration and the
+Start at `src/lib/strategy-registry.ts` for every registered strategy. This table maps shared orchestration and the
 default strategy's forecast and entry path; strategy-specific engines and policies live outside that path.
 
 | Stage | Entry point |
 | --- | --- |
-| Collection | `startBackgroundCollector` (`lib/background-collector.ts`) |
-| Forecast | `buildPrediction`, cached behind `getDashboard` (`lib/dashboard.ts`) |
-| **Entry rule layer** | `lib/prediction-policy.ts` — `qualifiesAsBuyEdge`, `hasTradableEdge`, `bestEntry`. This is the layer the mirror invariant protects: it takes no execution mode. |
-| Execution style | `evaluateEntryExecutionPolicy` (`lib/entry-execution-policy.ts`) |
-| Both lanes | `processPaperTradingCycle` (`lib/paper-execution.ts`) — the orchestrator |
-| Live wire | `lib/live-orders.ts` |
-| Exits | `evaluateExitPolicy` (`lib/exit-policy.ts`) decides strict-value and profit-reversal; the reduce-only IOC sell is `placeKalshiSell` (`lib/live-orders.ts`) |
-| Fills and fees | `estimatePaperFill`, `venueFeeCents` (`lib/venue-fill.ts`) |
-| Reconciliation | `reconcileExecutionLedger` (`lib/execution-reconciliation.ts`), scheduled by `maybeRunPeriodicReconciliation` (`lib/periodic-reconciliation.ts`) |
+| Collection | `startBackgroundCollector` (`src/lib/background-collector.ts`) |
+| Forecast | `buildPrediction`, cached behind `getDashboard` (`src/lib/dashboard.ts`) |
+| **Entry rule layer** | `src/lib/prediction-policy.ts` — `qualifiesAsBuyEdge`, `hasTradableEdge`, `bestEntry`. This is the layer the mirror invariant protects: it takes no execution mode. |
+| Execution style | `evaluateEntryExecutionPolicy` (`src/lib/entry-execution-policy.ts`) |
+| Both lanes | `processPaperTradingCycle` (`src/lib/paper-execution.ts`) — the orchestrator |
+| Live wire | `src/lib/live-orders.ts` |
+| Exits | `evaluateExitPolicy` (`src/lib/exit-policy.ts`) decides strict-value and profit-reversal; the reduce-only IOC sell is `placeKalshiSell` (`src/lib/live-orders.ts`) |
+| Fills and fees | `estimatePaperFill`, `venueFeeCents` (`src/lib/venue-fill.ts`) |
+| Reconciliation | `reconcileExecutionLedger` (`src/lib/execution-reconciliation.ts`), scheduled by `maybeRunPeriodicReconciliation` (`src/lib/periodic-reconciliation.ts`) |
 
 Sizes and thresholds are not in this table on purpose — read them from the symbol.
 
@@ -99,16 +99,16 @@ Guards are sized to current venues' wire precision; **a finer-precision venue me
 ### Rounding and comparison
 
 - **Round against us**: costs up, proceeds down — `Math.ceil(cost - 1e-9)`, `Math.floor(proceeds + 1e-9)`
-  (`reconcileExecutionLedger`, `lib/execution-reconciliation.ts`). Never `Math.round` a cost or a fee.
-- Nonzero modeled fees round **up** with a 1¢ floor (`venueFeeCents`, `lib/venue-fill.ts`); quantity rounds
+  (`reconcileExecutionLedger`, `src/lib/execution-reconciliation.ts`). Never `Math.round` a cost or a fee.
+- Nonzero modeled fees round **up** with a 1¢ floor (`venueFeeCents`, `src/lib/venue-fill.ts`); quantity rounds
   **down** until `price × count + fees` fits the all-in cap.
 - **Never `toFixed()` for arithmetic** — formatting only: wire, error messages, display.
 - **Never `===` a computed money or price value.** Use only the named tolerances: `1e-12` for probability and edge
-  gates (`evaluateEntryExecutionPolicy`), `1e-9` for prices and cents (`lib/live-orders.ts`), and `1e-6` for book
-  levels (`quantityAt`, `lib/order-book-depth.ts`). Within epsilon is equal; beyond it fails closed. Never widen or
+  gates (`evaluateEntryExecutionPolicy`), `1e-9` for prices and cents (`src/lib/live-orders.ts`), and `1e-6` for book
+  levels (`quantityAt`, `src/lib/order-book-depth.ts`). Within epsilon is equal; beyond it fails closed. Never widen or
   misapply one.
 - **Reach a tick by index**: `start + floor((target - start) / step) * step`, then round onto the ladder
-  (`lib/managed-maker.ts`). Never `price += step`.
+  (`src/lib/managed-maker.ts`). Never `price += step`.
 
 ### Validation and standing rules
 
@@ -116,8 +116,8 @@ Guards are sized to current venues' wire precision; **a finer-precision venue me
   `Math.abs(count * 100 - Math.round(count * 100)) > 1e-8`; retain order-path `Number.isSafeInteger` assertions
   and **do not use `BigInt`**.
 - **The per-trade cap is all-in**, fees included; reserve fees when sizing.
-- **Fee schedules live only in `venueFeeFraction`** (`lib/venue-fee-schedule.ts`). Charged whole-cent fill fees
-  live in `venueFeeCents` (`lib/venue-fill.ts`), which applies adverse rounding and the fee floor. Extend the
+- **Fee schedules live only in `venueFeeFraction`** (`src/lib/venue-fee-schedule.ts`). Charged whole-cent fill fees
+  live in `venueFeeCents` (`src/lib/venue-fill.ts`), which applies adverse rounding and the fee floor. Extend the
   schedule; never duplicate it. A fee can depend on price, not just on stake.
 - **Do not mix the two P&L views.** `actualPnlCents` / `payoutCents` are exact and reporting-only; budgets use
   whole-cent `pnlCents`. When the ledgers seem to disagree, suspect the view.
@@ -130,7 +130,7 @@ Guards are sized to current venues' wire precision; **a finer-precision venue me
 
 - **UTC is authoritative.** Local labels are derived for reading only; never a key, never compared.
 - **Pure functions take the clock as a parameter** (`nowMs = Date.now()` default) so tests can pin it.
-- **Never recompute a slot boundary inline** — `CONTRACT_SLOT_SECONDS` (`lib/feeds.ts`), `contractSlot`, and the
+- **Never recompute a slot boundary inline** — `CONTRACT_SLOT_SECONDS` (`src/lib/feeds.ts`), `contractSlot`, and the
   venue's aligned-market selector own that math.
 - **Freshness expiries are hard.** A stale quote fails the calculation; it is never used with a warning.
 
@@ -138,13 +138,13 @@ Guards are sized to current venues' wire precision; **a finer-precision venue me
 
 - `data/` and `.cache/` are worker-local durable state, not artifacts. Never commit them, hand-edit a ledger, or
   delete a journal to "reset". Move corrupt files to `data/*.corrupt-*`.
-- **Writes are atomic**: `${target}.${pid}.${rand}.tmp`, then `rename` (`lib/cache.ts`).
+- **Writes are atomic**: `${target}.${pid}.${rand}.tmp`, then `rename` (`src/lib/cache.ts`).
 - Normal writes to **journals (`*.journal.jsonl`) are append-only**. Only the journal's owning compactor may
   rewrite or truncate it; never manually rewrite history.
 - **Never load a sealed shard to answer a summary question** — `forecast-history` keeps per-shard rollups.
 - **Server-only modules import `'server-only'`** (vitest alias in tests, `JITI_ALIAS` in scripts). Never import a
   store from a client component to dodge the boundary.
-- **Stateless hosts must not reconcile, execute, collect, or write ledgers** — `lib/runtime-environment.ts`,
+- **Stateless hosts must not reconcile, execute, collect, or write ledgers** — `src/lib/runtime-environment.ts`,
   `MONEY_NOODLE_STATELESS`. Hosted reads the bounded, sanitized, paper-only Postgres projection: no credentials,
   no write authority.
 
@@ -156,7 +156,7 @@ Do not relax any of these to make a change land.
   and reconciles.
 - **Live execution stays environment-gated, typed-confirmation armed, stake- and rate-capped, and kill-switch
   protected**, blocked until cash/position/order/fill/resting-order reconciliation passes, repeated on the
-  configured cadence (`configuredReconciliationIntervalMs`, `lib/task-cadence.ts`; default five minutes).
+  configured cadence (`configuredReconciliationIntervalMs`, `src/lib/task-cadence.ts`; default five minutes).
 - **Operator intent is separate from operational state.** Manual pause, kill switch, and config changes never
   auto-resume; only a *system* suspension may, after full reconciliation and every readiness check.
 - **Pause is a quiescent drain**: withdraw intent, serialize behind execution, cancel and confirm managed
@@ -168,7 +168,7 @@ Do not relax any of these to make a change land.
   global one are not a cap.
 - **Strategies share one account and one order ledger, and must not share money.** Never split the ledger per
   strategy. Re-narrow every money aggregation by `strategyId`, and add each new strategy to
-  `lib/strategy-isolation.test.ts`.
+  `src/lib/strategy-isolation.test.ts`.
 
 ## 5. Analysis discipline
 
@@ -183,7 +183,7 @@ Worked examples for these rules: `reports/edge-policy-margin-review-2026-08-16.m
 4. **A candidate must beat the live rule**, including its exits — not beat doing nothing.
 5. **Retroactive screening never promotes anything.** Promotion needs committed sentinels written at decision time
    and followed to settlement, a minimum count of independent windows, a clustered return clearing a stated
-   threshold, and a written reason. See the withdrawn DOWN/NO suspension in `lib/policy-manifest.ts`.
+   threshold, and a written reason. See the withdrawn DOWN/NO suspension in `src/lib/policy-manifest.ts`.
 6. **A null result is a result.** Write it up with equal care and say what would change the answer.
 7. **Name what a gate actually does.** Some entry gates are inert — removing them changes no admitted row. Do not
    describe those as risk controls.
@@ -210,23 +210,23 @@ a superseded report.
 - **Expose disagreement.** Verify the source behind each claim. Report exact-versus-whole-cent, live-versus-paper,
   and materially different route results instead of smoothing or cherry-picking them.
 
-**The app's research surface is advisory and terminal.** Only the research and provider routes import `lib/llm.ts`;
+**The app's research surface is advisory and terminal.** Only the research and provider routes import `src/lib/llm.ts`;
 its output must never reach a forecast, policy, budget, or order, and dashboard probabilities never become generated
 text. Preserve `callProvider` prompt constraints unless the maintainer agrees otherwise; temperature stays 0.2.
 
 ## 7. Changing the policy
 
-- **Bump the version and add matching `history`** in `lib/policy-manifest.ts`: full version, change, and evidence
-  link. `lib/policy-manifest.test.ts` enforces this.
+- **Bump the version and add matching `history`** in `src/lib/policy-manifest.ts`: full version, change, and evidence
+  link. `src/lib/policy-manifest.test.ts` enforces this.
 - **Hold the mirror invariant** (`spec/policy-and-track-separation.md` §12.3): live and paper entry decisions are identical. The rule layer takes no
-  execution mode; `lib/mirror-invariant.test.ts` asserts arity. Tracks differ **only** in execution and capital:
+  execution mode; `src/lib/mirror-invariant.test.ts` asserts arity. Tracks differ **only** in execution and capital:
   fills, budget and sizing, rate limits, risk stops, and reconciliation.
 - **Walk-forward evaluation never changes production automatically.** Promotion is a manual act recorded in an
   immutable ledger.
 
 ## 8. Tests
 
-- Keep Vitest tests colocated as `lib/<module>.test.ts`. **Start server-touching tests with
+- Keep Vitest tests colocated as `src/lib/<module>.test.ts`. **Start server-touching tests with
   `vi.mock('server-only', () => ({}))`.**
 - **Test pure rule modules over a grid of inputs**, not a fixture — the claim is "no input reaches a different
   answer".

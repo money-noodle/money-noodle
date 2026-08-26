@@ -17,7 +17,7 @@
 
 ## 1. What is wrong
 
-The sentinel's maker benchmark is computed in `resolveIntent` (`lib/persistence-candidate-store.ts`) as
+The sentinel's maker benchmark is computed in `resolveIntent` (`src/lib/persistence-candidate-store.ts`) as
 
 ```
 makerExpectedProfitPerContract = ((won ? 1 : 0) − bidPrice − estimatedMakerFeeRate) × makerFillProbability
@@ -25,7 +25,7 @@ makerExpectedProfitPerContract = ((won ? 1 : 0) − bidPrice − estimatedMakerF
 ```
 
 and surfaced on the performance dialog as **"Maker-touch benchmark · empirical fill-weighted"**
-(`components/performance-dialog.tsx`). Three things are wrong with it, in order of force.
+(`src/components/performance-dialog.tsx`). Three things are wrong with it, in order of force.
 
 **It assumes filling is independent of the outcome.** The desk's own measurements say the opposite: filled
 entries win about 19pp less than unfilled ones ([loss-decomposition-2026-08-18.md](../reports/loss-decomposition-2026-08-18.md),
@@ -47,7 +47,7 @@ tile is approximately the bid-priced return times a constant one-half:
 A number that cannot contradict the one beside it is not a benchmark. It is a unit conversion.
 
 **It is not touch, and touch would be worse.** The label is wrong: touch is `touchProbability`, kept as a
-diagnostic, and `lib/maker-fill-model.ts` documents it as *inverted* against reality — bucketed by its own
+diagnostic, and `src/lib/maker-fill-model.ts` documents it as *inverted* against reality — bucketed by its own
 prediction, observed fill rates ran 66/61/57/52% against predictions of 12/41/64/86%, because the mechanism
 is queue position and touch cannot see it.
 
@@ -55,14 +55,14 @@ is queue position and touch cannot see it.
 
 A resting entry is **not a static post**.
 
-- `initialManagedMakerPrice` (`lib/managed-maker.ts`) joins or improves the selected side's bid, stays one
+- `initialManagedMakerPrice` (`src/lib/managed-maker.ts`) joins or improves the selected side's bid, stays one
   tick below the ask, and never exceeds the issuance cap.
 - `nextManagedMakerPrice` then runs `MAKER_MANAGEMENT_CHECKS` = 6 checks across the 12-second
   `MANAGED_MAKER_HORIZON_SECONDS`, one every 2 seconds, ratcheting the limit up a linear ramp from the bid
   toward the passive ceiling on checks 0–4. The price is monotonically non-decreasing. The 6th check is
   terminal-only.
 - At the time of this v1 observation design, live and paper could each retry maker with a 30s cooldown and
-  no retry inside the final 120 seconds (`lib/maker-retry-policy.ts`). **Superseded for adaptive live on
+  no retry inside the final 120 seconds (`src/lib/maker-retry-policy.ts`). **Superseded for adaptive live on
   2026-08-19:** live attempt 2 is now the fresh post-miss capped taker fallback in
   `docs/adaptive-entry-fallback-design.md`; paper retained its independent maker simulation behavior.
   **Superseded again later on 2026-08-19:** v5 permits up to three maker-miss-requalified episodes on both
@@ -100,7 +100,7 @@ check, so a 15-second sample sees one rung in six.
 
 ## 4. The fill rule
 
-The rule is the one already written and tested in `lib/maker-depth-experiment.ts`: a post fills once
+The rule is the one already written and tested in `src/lib/maker-depth-experiment.ts`: a post fills once
 cumulative volume **at or through its price** exceeds the size displayed ahead of it at posting.
 `openPost`/`applySample` are reused rather than reimplemented. Size ahead is fixed at posting — a level
 that grows behind us does not delay a fill and a cancellation does not advance it; only executions do.
@@ -126,7 +126,7 @@ static  post held at the initial bid for the whole horizon
 `processCycle`, because "a standalone process cannot delay, gate, size, price, or trade, because it is not
 on that path at all". That boundary is being moved and the move should be recorded rather than glossed.
 
-What makes it acceptable: **the sentinel is already detached.** `lib/paper-execution.ts` calls
+What makes it acceptable: **the sentinel is already detached.** `src/lib/paper-execution.ts` calls
 `void persistenceCandidateCycle(...)` — the result is never awaited by the execution path and cannot delay
 it. The observer hangs off that same detached call, so nothing new lands on the critical path.
 
@@ -196,7 +196,7 @@ maker benchmark. It reports instead, over resolved incremental intents:
 
 The dialog tile is relabelled off "Maker-touch benchmark", which was wrong in both halves.
 
-The same `return × p_fill` product exists in `lib/calendar-evaluation-store.ts` and `lib/maker-shadow.ts`.
+The same `return × p_fill` product exists in `src/lib/calendar-evaluation-store.ts` and `src/lib/maker-shadow.ts`.
 Those are **out of scope here** and left as they are; this document does not silently redefine a number two
 other surfaces still compute.
 

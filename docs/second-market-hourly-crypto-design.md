@@ -71,7 +71,7 @@ query surface is therefore a **grid**: asset × window × strike × side.
 
 ### 2.2 The model consequence (the load-bearing difference)
 
-The 15m model (`basisProbability`, `lib/basis-model.ts`) prices **exactly one thing**:
+The 15m model (`basisProbability`, `src/lib/basis-model.ts`) prices **exactly one thing**:
 `P(settlement ≥ cycle-open reference)` — a two-sided event anchored to the open, solved as the CDF of a
 driftless log-normal. That does **not** answer an absolute-strike contract, which needs
 `P(close > K)`, `P(close < K)`, and (for bands) `P(A < close < B)` from a **price**: a whole log-price
@@ -98,7 +98,7 @@ The four keying axes must stay intact. A second market is **additive**, keyed by
 
 Concretely:
 
-- **`lib/market-registry.ts`**: add `CRYPTO_1H: MarketId = 'crypto-1h'`, a descriptor
+- **`src/lib/market-registry.ts`**: add `CRYPTO_1H: MarketId = 'crypto-1h'`, a descriptor
   (`horizonSeconds: 3600`, `settlementBasis: '60-second CF index average versus an absolute strike'`),
   and a **(kalshi, crypto-1h)** capability triple.
 - **Fail closed:** capability is declared per (provider, market). Adding hourly to the registry does
@@ -116,7 +116,7 @@ after fees), but **isolation requires the P&L not pool with the 15m edge book**,
 distinguish it. Recommend a **new strategy id**, e.g. `edge-binary-buy-1h-strike`, with
 `signalSource: 'model-probability'` unchanged.
 
-This gates every money aggregation (`lib/strategy-isolation.test.ts` re-narrows by `strategyId`), so
+This gates every money aggregation (`src/lib/strategy-isolation.test.ts` re-narrows by `strategyId`), so
 the new strategy is added there and to every money path.
 
 ### 3.2 Candidate model: the threshold surface is an up/down pair, not a strike grid

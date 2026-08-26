@@ -86,4 +86,4 @@ measuring — but on today's data it does **not** cleanly "keep the winners and 
 - The existing quote-trajectory collection (`trailing-60s`, `cycle-to-date`) answers the longer-horizon
   version of this question; the 2-second pre-submit reading is the wrong instrument for a maker fill.
 
-Full inputs: `data/paper-orders.json`, `lib/entry-direction-observation.ts`.
+Full inputs: `data/paper-orders.json`, `src/lib/entry-direction-observation.ts`.

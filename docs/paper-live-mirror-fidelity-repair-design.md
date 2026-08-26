@@ -168,13 +168,13 @@ measurement.
 
 | Path | Change |
 | --- | --- |
-| `lib/maker-retry-policy.ts` | lane-aware execution-generation ownership |
-| `lib/paper-maker-simulation.ts` | paper execution v5 identity and bounded trade evidence |
-| `lib/execution-mirror-pair.ts` | pure pair identity and complete-pair aggregation |
-| `lib/paper-execution.ts` | stamp pair identity after final episode assignment |
-| `lib/execution-report.ts` | expose prospective four-cell report |
-| `components/performance-dialog.tsx` | signed-only complete-pair panel |
-| `lib/types.ts` | durable observation/pair and report types |
+| `src/lib/maker-retry-policy.ts` | lane-aware execution-generation ownership |
+| `src/lib/paper-maker-simulation.ts` | paper execution v5 identity and bounded trade evidence |
+| `src/lib/execution-mirror-pair.ts` | pure pair identity and complete-pair aggregation |
+| `src/lib/paper-execution.ts` | stamp pair identity after final episode assignment |
+| `src/lib/execution-report.ts` | expose prospective four-cell report |
+| `src/components/performance-dialog.tsx` | signed-only complete-pair panel |
+| `src/lib/types.ts` | durable observation/pair and report types |
 | `scripts/analyze-paper-live-mirror.mjs` | reproducible historical/current review |
 | `scripts/correct-paper-bankroll-drift.ts` | strategy-scoped open-stake diagnostic |
 

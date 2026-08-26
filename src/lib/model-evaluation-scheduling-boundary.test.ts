@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 describe('walk-forward evaluation scheduling boundary', () => {
   it('keeps evaluation out of the funded background collector', async () => {
-    const collector = await readFile(path.join(process.cwd(), 'lib/background-collector.ts'), 'utf8');
+    const collector = await readFile(path.join(process.cwd(), 'src/lib/background-collector.ts'), 'utf8');
     expect(collector).not.toContain('model-evaluation-store');
     expect(collector).not.toContain('maybeRunWalkForwardEvaluation');
     expect(collector).not.toContain('runWalkForwardEvaluationOffline');

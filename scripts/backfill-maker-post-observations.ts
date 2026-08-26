@@ -34,10 +34,10 @@ import { readFile } from 'node:fs/promises';
 import { createReadStream, existsSync } from 'node:fs';
 import readline from 'node:readline';
 import path from 'node:path';
-import { applySample, decodeSample, openPost, type MakerDepthSample } from '../lib/maker-depth-experiment';
-import { MAKER_POST_OBSERVATION_VERSION } from '../lib/maker-post-observation';
-import { recordMakerPostObservations, type MakerPostObservationRecord } from '../lib/persistence-candidate-store';
-import type { PersistenceCandidateIntent } from '../lib/types';
+import { applySample, decodeSample, openPost, type MakerDepthSample } from '../src/lib/maker-depth-experiment';
+import { MAKER_POST_OBSERVATION_VERSION } from '../src/lib/maker-post-observation';
+import { recordMakerPostObservations, type MakerPostObservationRecord } from '../src/lib/persistence-candidate-store';
+import type { PersistenceCandidateIntent } from '../src/lib/types';
 
 function refuseRetiredRun(): void {
   throw new Error('Retired: the completed persistence sentinel and permissive 60-second backfill are read-only.');
@@ -77,7 +77,7 @@ if (process.argv.includes('--reset-backfill')) {
   const stale = store.intents.filter((intent) => intent.makerObservationSource === 'depth-experiment-60s');
   console.log(`clearing ${stale.length} backfilled observations; live observations are untouched`);
   if (!dryRun) {
-    const { clearBackfilledMakerPostObservations } = await import('../lib/persistence-candidate-store');
+    const { clearBackfilledMakerPostObservations } = await import('../src/lib/persistence-candidate-store');
     console.log(`cleared ${await clearBackfilledMakerPostObservations()}`);
   }
   process.exit(0);

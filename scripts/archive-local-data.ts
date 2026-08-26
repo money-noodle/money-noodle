@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { archiveLocalData, localArchiveConfig } from '../lib/local-data-archive';
+import { archiveLocalData, localArchiveConfig } from '../src/lib/local-data-archive';
 
 // Next loads .env.local for the scheduler. The manual command has the same local-only behavior.
 try { process.loadEnvFile(path.resolve(process.cwd(), '.env.local')); } catch { /* Scheduler credentials may already be inherited. */ }

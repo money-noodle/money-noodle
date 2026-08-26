@@ -101,7 +101,7 @@ Files:
 - `data/portfolio-choice-sets.json`
 - `data/portfolio-choice-sets.journal.jsonl`
 
-`lib/portfolio-choice-set-store.ts` is the only writer and imports `server-only`. Normal writes append.
+`src/lib/portfolio-choice-set-store.ts` is the only writer and imports `server-only`. Normal writes append.
 At 50 MB, that owner may atomically compact to the snapshot and truncate its journal. Malformed snapshots or
 journals are moved to `*.corrupt-*`; history is never hand-edited. V1 is worker-local and omitted from the
 stateless/public projection.
@@ -155,9 +155,9 @@ change remains manual and requires a new policy-manifest version, committed evid
 
 | Path | Role |
 | --- | --- |
-| `lib/portfolio-choice-set.ts` | immutable schema, event replay, integrity and clustered report (pure) |
-| `lib/portfolio-choice-set-store.ts` | prospective boundary, append journal, exact Kalshi resolution, compaction |
-| `lib/paper-execution.ts` | build the already-computed state snapshot and launch detached writes after durable live intent |
+| `src/lib/portfolio-choice-set.ts` | immutable schema, event replay, integrity and clustered report (pure) |
+| `src/lib/portfolio-choice-set-store.ts` | prospective boundary, append journal, exact Kalshi resolution, compaction |
+| `src/lib/paper-execution.ts` | build the already-computed state snapshot and launch detached writes after durable live intent |
 | `scripts/analyze-portfolio-choice-sets.mjs` | read-only prospective diagnostic |
 | `data/portfolio-choice-sets*` | worker-local evidence; never committed or hand-edited |
 

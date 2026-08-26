@@ -31,11 +31,11 @@
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { fetchKalshiOrderBookNow } from '../lib/kalshi-depth';
-import { fetchKalshiTradePrintsSince } from '../lib/kalshi-market-data';
-import { selectedSideDepth } from '../lib/order-book-depth';
-import { encodeSample, type MakerDepthSample } from '../lib/maker-depth-experiment';
-import type { PositionSide } from '../lib/types';
+import { fetchKalshiOrderBookNow } from '../src/lib/kalshi-depth';
+import { fetchKalshiTradePrintsSince } from '../src/lib/kalshi-market-data';
+import { selectedSideDepth } from '../src/lib/order-book-depth';
+import { encodeSample, type MakerDepthSample } from '../src/lib/maker-depth-experiment';
+import type { PositionSide } from '../src/lib/types';
 
 function refuseRetiredRun(): void {
   throw new Error('Retired: maker-depth-experiment-v1 discarded takerSide and must not collect new rows.');

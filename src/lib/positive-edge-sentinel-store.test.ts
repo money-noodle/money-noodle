@@ -94,14 +94,14 @@ describe('sentinel results cannot reach a money-moving module', () => {
       'venue-fill.ts', 'live-risk-policy.ts', 'live-orders.ts', 'trading-control.ts',
     ];
     for (const file of forbidden) {
-      const source = readFileSync(path.join(process.cwd(), 'lib', file), 'utf8');
+      const source = readFileSync(path.join(process.cwd(), 'src/lib', file), 'utf8');
       expect({ file, importsSentinel: /from ['"].*(maker-restriction|exit-policy-sentinel)/.test(source) })
         .toEqual({ file, importsSentinel: false });
     }
   });
 
   it('queues current exit observations before detached cycle classification and resolution', () => {
-    const source = readFileSync(path.join(process.cwd(), 'lib', 'paper-execution.ts'), 'utf8');
+    const source = readFileSync(path.join(process.cwd(), 'src/lib', 'paper-execution.ts'), 'utf8');
     const observation = source.indexOf('changed = await observeAndExecuteStandaloneExits');
     const maintenance = source.indexOf('void getExitPolicyContinuationOrderIds(dashboard.generatedAt)', observation);
     expect(observation).toBeGreaterThan(-1);
@@ -110,7 +110,7 @@ describe('sentinel results cannot reach a money-moving module', () => {
 
   it('keeps both stores append-journaled and owned by their compactor', () => {
     for (const file of ['maker-restriction-sentinel-store.ts', 'exit-policy-sentinel-store.ts']) {
-      const source = readFileSync(path.join(process.cwd(), 'lib', file), 'utf8');
+      const source = readFileSync(path.join(process.cwd(), 'src/lib', file), 'utf8');
       expect(source).toContain('appendFile(JOURNAL_FILE');
       expect(source).toContain('JOURNAL_COMPACTION_BYTES');
       expect(source).toContain("await atomicWrite(JOURNAL_FILE, '')");

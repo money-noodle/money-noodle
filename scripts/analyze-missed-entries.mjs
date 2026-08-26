@@ -4,7 +4,7 @@
  *   npm run analyze:missed-entries
  *
  * **What it measures.** For every recorded 15-minute contract, every side, and every recorded calculation,
- * this replays the v19 entry rule from `lib/prediction-policy.ts` and a set of one-constant relaxations of
+ * this replays the v19 entry rule from `src/lib/prediction-policy.ts` and a set of one-constant relaxations of
  * it. A relaxation's *increment* is the set of `(symbol, window, side)` decisions it admits and the live
  * rule never admits at any point in that window. The increment is scored three ways — held to settlement,
  * with the desk's own `strict-value-v1` exit replayed over the recorded price path, and at the best bid the
@@ -29,7 +29,7 @@
  *   - **Fees are continuous rates**, not the whole-cent charge with its 1c floor (`venueFeeCents`). At a
  *     $5 ticket the floor is real and this is mildly optimistic, equally across arms.
  *   - **Persistence is not replayable at this cadence and is not modelled.** Production requires three
- *     qualifying dashboard snapshots spanning 30s (`REQUIRED_QUALIFYING_SNAPSHOTS`, `lib/signal-persistence.ts`)
+ *     qualifying dashboard snapshots spanning 30s (`REQUIRED_QUALIFYING_SNAPSHOTS`, `src/lib/signal-persistence.ts`)
  *     and the dashboard refreshes every few seconds; the forecast history records a calculation every 55s at
  *     the median. Imposing the rule on recorded rows would demand roughly 110s of continuous qualification,
  *     which is a different and much stricter gate. §3 reports it that way, as an upper bound on what
@@ -54,12 +54,12 @@ const CYCLE_SECONDS = 900;
 
 /** Kalshi taker rate per $1 of payout, matching the gate's immediate-execution admission semantics. */
 const feeRate = (price) => 0.07 * price * (1 - price);
-/** `exitUncertainty` in lib/paper-execution.ts. */
+/** `exitUncertainty` in src/lib/paper-execution.ts. */
 const uncertainty = (confidence) => Math.max(0.03, Math.min(0.15, (1 - confidence) * 0.25));
 
-/** Live rule constants, read from lib/prediction-policy.ts at v19. */
+/** Live rule constants, read from src/lib/prediction-policy.ts at v19. */
 const LIVE = { minEdge: 0.05, maxEdge: 0.35, minQuality: 0.5, minSideProbability: 0.55, minPrice: 0.05, maxPrice: 0.97 };
-/** Execution window from lib/signal-persistence.ts. */
+/** Execution window from src/lib/signal-persistence.ts. */
 const WARMUP_SECONDS = 90, LATE_CUTOFF_SECONDS = 120, REQUIRED_SNAPSHOTS = 3, REQUIRED_SPAN_SECONDS = 30;
 
 const admits = (rule, { probability, price, confidence, netEdge }) =>
@@ -485,7 +485,7 @@ console.log('\n=== 4. capacity: how many decisions the live rule admits per wind
   const median = counts[Math.floor(counts.length / 2)];
   console.log(`live rule admits ${liveEntries.size} decisions across ${active.length} contract-windows and ${byClose.size} settlement times`);
   console.log(`simultaneous admitted decisions per settlement time: median ${median}, mean ${(liveEntries.size / byClose.size).toFixed(1)}, max ${counts.at(-1)}`);
-  console.log('The desk holds at most DEFAULT_MAX_OPEN_POSITIONS (lib/portfolio-policy.ts) at once, so above that');
+  console.log('The desk holds at most DEFAULT_MAX_OPEN_POSITIONS (src/lib/portfolio-policy.ts) at once, so above that');
   console.log('count a looser gate changes which decision is taken, not how many.');
 }
 

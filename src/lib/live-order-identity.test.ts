@@ -46,7 +46,7 @@ describe('collision-resistant live entry identity', () => {
   });
 
   it('stamps and checks the final episode identity before reservation or submission', () => {
-    const source = readFileSync(path.join(process.cwd(), 'lib', 'paper-execution.ts'), 'utf8');
+    const source = readFileSync(path.join(process.cwd(), 'src/lib', 'paper-execution.ts'), 'utf8');
     const stampAt = source.indexOf('built.order.clientOrderId = liveEntryClientOrderId(built.order.id)');
     const uniqueAt = source.indexOf('assertUniqueLiveEntryClientOrderId(ledger.orders, built.order)');
     const executeAt = source.indexOf('await executePreparedLiveBuy(built.order');

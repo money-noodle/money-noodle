@@ -69,7 +69,7 @@ The budget projection is written on every ledger write; the track record is scor
   budget, or order.
 
 Current policy versions, thresholds, entry bands, sizing, and the latest measurements with their caveats live in
-[`STATUS.md`](STATUS.md); [`lib/policy-manifest.ts`](lib/policy-manifest.ts) is authoritative for entry policy.
+[`STATUS.md`](STATUS.md); [`src/lib/policy-manifest.ts`](src/lib/policy-manifest.ts) is authoritative for entry policy.
 
 For a signed Kalshi connection, create a dedicated API key, keep its RSA PEM outside the repository, and set `KALSHI_API_KEY_ID`, `KALSHI_PRIVATE_KEY_PATH`, and `KALSHI_BASE_URL` in `.env.local`. Validate against Kalshi demo first. Budget → Account funding → Kalshi signed connection setup can test the connection after restarting the server.
 

@@ -105,7 +105,7 @@ This points the same way as the same-day
 which finds the maker result to be a selection mechanism rather than a losing cohort. The two were
 measured independently and should be read together; neither identifies a validated replacement.
 
-That is the same sentence `lib/edge-spike-policy.ts` already writes in its header — "a resting passive
+That is the same sentence `src/lib/edge-spike-policy.ts` already writes in its header — "a resting passive
 limit below that then fills only if the move continues, so the entry signal and the fill selection are
 the same event seen twice" — except the sentinel now says the entry half is null and the fill half is
 where the money is.
@@ -118,7 +118,7 @@ recorded beside the spike, which §7 is the prerequisite for.
 
 ## 3. `volatilityRatio` is clean on the gate and does not survive the ledger — a reversal, recorded
 
-`volatilityRatio` is our σ divided by the σ the venue price implies (`lib/dashboard.ts`). On the
+`volatilityRatio` is our σ divided by the σ the venue price implies (`src/lib/dashboard.ts`). On the
 admitted population it is one of the cleanest gradients in this dataset:
 
 | VR band | n | win | return per $1 | days positive |
@@ -130,7 +130,7 @@ admitted population it is one of the cleanest gradients in this dataset:
 
 It is **not net edge in disguise** — it holds inside every edge band. In the −5..10pp band the top VR
 tercile returns −0.5% against +16.3% for the bottom. And it has a mechanism stated in the code:
-`lib/basis-model.ts` says volatility is the only input on which our estimate may legitimately differ
+`src/lib/basis-model.ts` says volatility is the only input on which our estimate may legitimately differ
 from the venue's, so when VR is high we and the venue already agree on σ and the claimed edge is the
 model asserting a *directional* view it has no standing to hold.
 
@@ -206,7 +206,7 @@ Two structured residuals worth recording rather than acting on:
   420–900 s. That pattern is a **known misspecification**, not noise. Production uses
   `effectiveSeconds = T − 30`, while the exact variance of the settlement average is `σ²(T − 2W/3)` for
   T ≥ W and `σ²r³/(3W²)` once the window is partly observed — **both already implemented in
-  `lib/settlement-average.ts`** and both never allowed to trade. At T = 45 s production's σ is 1.33×
+  `src/lib/settlement-average.ts`** and both never allowed to trade. At T = 45 s production's σ is 1.33×
   too large. Separately, there is no variance floor for Kraken-versus-venue-oracle basis risk even
   though `targetComparison.oracleAligned` is `false`, so what bounds certainty near close is something
   the model does not model. A variance floor is one parameter and is mechanism-first rather than
@@ -228,7 +228,7 @@ Two structured residuals worth recording rather than acting on:
   shows it makes almost no difference in practice.
 - **Asset exclusion remains unsupported.** BNB and DOGE are the weakest admitted assets (+7.5%, +8.5%)
   and the worst on paper realized (−23.7% combined), but on **live** realized they are better than the
-  rest (−3.2% against −6.0%). The tracks disagree; leave `lib/asset-exclusion.ts` alone.
+  rest (−3.2% against −6.0%). The tracks disagree; leave `src/lib/asset-exclusion.ts` alone.
 - **Hour of day**: 16:00–20:00 UTC settlement is strongest (+42.1% on 8/8 days, then +51.2%);
   06:00–08:00 (+5.4%) and 14:00–16:00 (+6.2%) weakest. Twelve cells, and this dimension has already
   been reported twice in this repo. Treat as known, not new.
@@ -249,7 +249,7 @@ two things the desk already computed at decision time and discarded:
 - `cycleRegime` — the numeric features (`trendEfficiency`, `localVolatilityPerSecond`, `signFlipRate`,
   `lagOneAutocorrelation`, `rangePercent`) behind the coarse label the order already carried.
 
-Both are reporting-only. `lib/entry-decision-observation.test.ts` asserts that no module on a pricing,
+Both are reporting-only. `src/lib/entry-decision-observation.test.ts` asserts that no module on a pricing,
 sizing, gating, or execution path reads them, that the features are cloned rather than aliased, and
 that a v1 row keeps the fields **absent** rather than defaulted — the failure mode the long-shot hold
 sentinel hit when `peakOwnedSideBidCents` was read as "did not touch" on 26 records that predated it.

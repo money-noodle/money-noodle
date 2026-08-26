@@ -18,7 +18,7 @@ before changing it.
 
 `edge-binary-buy` is the only active strategy. `long-shot-round-trip` remains registered only as a retired
 historical ledger identity; it has no trigger, lifecycle, allocation, or product surface. See
-[`lib/strategy-registry.ts`](../lib/strategy-registry.ts) and the preserved
+[`src/lib/strategy-registry.ts`](../src/lib/strategy-registry.ts) and the preserved
 [`docs/long-shot-policy-design.md`](long-shot-policy-design.md).
 
 ## The seven states
@@ -39,7 +39,7 @@ and a portfolio selection is provisional until the live authorization checks run
 
 ## Decisions in runtime order
 
-### 1. Market data and forecast — `lib/dashboard.ts`, `lib/forecast-model.ts`
+### 1. Market data and forecast — `src/lib/dashboard.ts`, `src/lib/forecast-model.ts`
 
 1. Fetch bounded-cache market, oracle, volatility, price, and context inputs.
 2. Keep only a current funded-venue contract aligned to the canonical contract window; reject a cached contract
@@ -51,7 +51,7 @@ and a portfolio selection is provisional until the live authorization checks run
 
 Output: a **market observation** (`Prediction`).
 
-### 2. Shared buy policy — `lib/prediction-policy.ts`
+### 2. Shared buy policy — `src/lib/prediction-policy.ts`
 
 5. For every enabled live quote, price UP/YES and DOWN/NO from their own actionable asks.
 6. Compute fee-aware value as `P(side) - ask - admission fee`. Admission uses immediate-execution fee economics
@@ -63,7 +63,7 @@ Output: a **market observation** (`Prediction`).
 Output: a **base signal** (`qualifiesAsBuyEdge`). This pure rule layer takes no execution mode, so live and paper
 make the same entry-policy decision for the same snapshot (`SPEC.md` §12.3).
 
-### 3. Confirmation and regime evidence — `updateSignalPersistence`, `lib/signal-persistence.ts`
+### 3. Confirmation and regime evidence — `updateSignalPersistence`, `src/lib/signal-persistence.ts`
 
 10. Record the selected side once per fresh dashboard calculation. A failed current observation resets the
     streak; replaying one timestamp cannot manufacture confirmation.
@@ -112,7 +112,7 @@ concurrency-fault, authority-age, funding-ownership, and guarded-recovery review
 freezes in [`docs/live-authorization-evaluation-design.md`](live-authorization-evaluation-design.md). It is not
 collecting or changing production yet.
 
-### 6. Final per-order authorization and routing — `runLive`, `lib/entry-execution-policy.ts`
+### 6. Final per-order authorization and routing — `runLive`, `src/lib/entry-execution-policy.ts`
 
 20. Before each placement, recount positions and rate usage, reapply correlation limits, and calculate current
     provider/market funding headroom. Earlier placements in the same cycle are included.
@@ -126,7 +126,7 @@ collecting or changing production yet.
 
 Output: an operationally **authorized live order**.
 
-### 7. Durable intent and venue outcome — `executePreparedLiveBuy`, `lib/live-orders.ts`
+### 7. Durable intent and venue outcome — `executePreparedLiveBuy`, `src/lib/live-orders.ts`
 
 24. Write the complete intent and decision evidence to the shared ledger before a signed venue request.
 25. Reserve whole-cent budget, then submit either the bounded managed-maker lifecycle or a marketable IOC limit.

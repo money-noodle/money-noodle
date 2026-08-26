@@ -72,7 +72,7 @@ plus netting, reduce-only, risk, cash, and concurrent-actor fault evidence.
 
 ## 4. Implementation
 
-Add one pure status-and-time ownership predicate in `lib/execution-reconciliation.ts`. Use it to construct
+Add one pure status-and-time ownership predicate in `src/lib/execution-reconciliation.ts`. Use it to construct
 `currentManagedTickers`; leave `expectedByTicker`, exact order/fill matching, reservations, and every other issue
 unchanged.
 

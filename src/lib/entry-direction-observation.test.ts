@@ -46,7 +46,7 @@ describe('entry direction observation', () => {
       'live-orders.ts', 'venue-fill.ts', 'portfolio-policy.ts', 'live-risk-policy.ts', 'maker-retry-policy.ts',
     ];
     for (const file of forbidden) {
-      const source = readFileSync(path.join(process.cwd(), 'lib', file), 'utf8');
+      const source = readFileSync(path.join(process.cwd(), 'src/lib', file), 'utf8');
       expect({ file, readsDirection: source.includes('entryDirectionObservation') }).toEqual({ file, readsDirection: false });
     }
   });

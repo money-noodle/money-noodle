@@ -17,7 +17,7 @@ const DATA = path.resolve(process.cwd(), 'data');
 const SNAPSHOT = path.join(DATA, 'portfolio-choice-sets.json');
 const JOURNAL = path.join(DATA, 'portfolio-choice-sets.journal.jsonl');
 const jiti = createJiti(import.meta.url);
-const { buildPortfolioChoiceSetReport, replayPortfolioChoiceSetEvents } = await jiti.import('../lib/portfolio-choice-set.ts');
+const { buildPortfolioChoiceSetReport, replayPortfolioChoiceSetEvents } = await jiti.import('../src/lib/portfolio-choice-set.ts');
 
 const readOptional = async (file) => {
   try { return await readFile(file, 'utf8'); }

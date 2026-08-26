@@ -7,7 +7,7 @@ const root = process.cwd();
 /** Retired evidence lanes stay readable, but must not regain runtime or package-command wiring. */
 describe('retired collector integrity', () => {
   it('keeps the completed persistence candidate and maker observer off the execution cycle', async () => {
-    const source = await readFile(path.join(root, 'lib/paper-execution.ts'), 'utf8');
+    const source = await readFile(path.join(root, 'src/lib/paper-execution.ts'), 'utf8');
     expect(source).not.toContain('persistenceCandidateCycle');
     expect(source).not.toContain('updatePersistenceCandidateStore');
     expect(source).not.toContain('observeMakerPosts');

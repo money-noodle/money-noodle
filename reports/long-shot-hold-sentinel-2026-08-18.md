@@ -1,7 +1,7 @@
 # The long-shot hold sentinel has not cleared its bar, and my earlier reading of it was wrong
 
 > **No policy change is made or authorized by this.** It reviews the committed sentinel
-> `long-shot-hold-v1` (`lib/hold-sentinel.ts`) against its stated bar of
+> `long-shot-hold-v1` (`src/lib/hold-sentinel.ts`) against its stated bar of
 > `HOLD_SENTINEL_MINIMUM_REVIEW_WINDOWS` = 60 independent settlement windows.
 >
 > **Every figure is one read of `data/hold-sentinels.json` at 2026-08-18T21:50Z.** Reproduce the sweep it

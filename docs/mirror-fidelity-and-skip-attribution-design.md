@@ -36,7 +36,7 @@ This change does three things and deliberately does not do a fourth.
 
 ## 1. Live skip attribution
 
-`lib/live-skip.ts` (pure), `lib/live-skip-store.ts` (durable), wired through `runLive`.
+`src/lib/live-skip.ts` (pure), `src/lib/live-skip-store.ts` (durable), wired through `runLive`.
 
 ### 1.1 Why a class per call site rather than a classifier
 
@@ -97,7 +97,7 @@ recoverable, a stalled cycle is a gap in risk control.
 
 ## 2. Paper exit fill model
 
-`lib/ioc-fill-model.ts` (pure), applied in `executePaperStandaloneExit`.
+`src/lib/ioc-fill-model.ts` (pure), applied in `executePaperStandaloneExit`.
 
 Before this, `executePaperStandaloneExit` set `status = 'sold'` at the modelled net liquidation value
 unconditionally. Every exit paper decided on completed. Live's reduce-only IOC completed 50 of 87
@@ -182,7 +182,7 @@ that never rests.
 
 **The mirror invariant is untouched.** This is execution, not the rule layer.
 `evaluateEntryExecutionPolicy` is not an entry rule and takes no execution mode; `qualifiesAsBuyEdge`,
-`bestEntry` and the rest are unchanged, and `lib/mirror-invariant.test.ts` still asserts their arity.
+`bestEntry` and the rest are unchanged, and `src/lib/mirror-invariant.test.ts` still asserts their arity.
 
 ## 4. Channel 1 stays open, on purpose
 

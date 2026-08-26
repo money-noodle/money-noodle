@@ -1,8 +1,8 @@
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
-import { releaseForecastWriterLeaseForShutdown, serializeForecastMutation } from '../lib/forecast-write-lock';
-import { sealForecastStorage } from '../lib/forecast-store';
-import { pruneForecastRetention, readFullForecastHistory } from '../lib/forecast-tracker';
+import { releaseForecastWriterLeaseForShutdown, serializeForecastMutation } from '../src/lib/forecast-write-lock';
+import { sealForecastStorage } from '../src/lib/forecast-store';
+import { pruneForecastRetention, readFullForecastHistory } from '../src/lib/forecast-tracker';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 

@@ -55,8 +55,8 @@ The current code already has a partial deployment split, but not a process bound
 - `startBackgroundCollector` calls dashboard calculation, `processPaperTradingCycle`, settlement, and public
   projection from one loop. Periodic reconciliation now has an independent process-global timer, and walk-forward
   evaluation is an explicit paused/stopped offline command; both still share the host until engine extraction.
-- `app/api/trading/control/route.ts`, `app/api/trading/allocations/route.ts`, and
-  `app/api/trading/providers/route.ts` call worker-local stores and process-local queues directly.
+- `src/app/api/trading/control/route.ts`, `src/app/api/trading/allocations/route.ts`, and
+  `src/app/api/trading/providers/route.ts` call worker-local stores and process-local queues directly.
 - `engineQueue`, reconciliation state, execution-drain state, collector state, and task-cadence health are all
   process-local. A web restart resets the operational observations and restarts the funded runtime.
 - Hosted/stateless mode correctly refuses private controls and serves only bounded paper projections. It cannot
@@ -795,26 +795,26 @@ control-plane outage.
 Exact filenames can change during implementation. The layers and dependency direction may not:
 
 ```text
-lib/domain/*                         ids, discriminated instruments/events, money/time primitives
-lib/catalog/*                        compiled asset/instrument/listing/market/capability registries
-lib/data/adapters/<source>/*         ingress and normalization; no strategy or money authority
-lib/data/events/*                    typed journals, indexes, rollups, current state, as-of snapshots
-lib/features/*                       pure versioned reducers over as-of observations
-lib/models/*                         typed targets, inference, calibration, model registry
-lib/policies/*                       pure versioned rule/portfolio/sizing/execution/exit policy values
-lib/strategies/<strategy>/*          pure state + DecisionPlan construction; no adapter/order imports
-lib/experiments/*                    sentinel descriptors, reducers, evidence stores, reports; one-way only
-lib/execution/*                      shared risk, budget, OMS, live adapters, reconciliation, account ledger
-lib/engine/*                         composition root, scheduler, lease, commands, status, lifecycle
-lib/control-plane/protocol.ts        client-safe command/status schemas and versions
-lib/control-plane/web.ts             web role: read projection, append command
-lib/control-plane/engine.ts          engine role: lease, claim, publish outcome/status
-app/api/engine/status/route.ts       authenticated BFF read
-app/api/engine/commands/route.ts     authenticated BFF append/read result
+src/lib/domain/*                         ids, discriminated instruments/events, money/time primitives
+src/lib/catalog/*                        compiled asset/instrument/listing/market/capability registries
+src/lib/data/adapters/<source>/*         ingress and normalization; no strategy or money authority
+src/lib/data/events/*                    typed journals, indexes, rollups, current state, as-of snapshots
+src/lib/features/*                       pure versioned reducers over as-of observations
+src/lib/models/*                         typed targets, inference, calibration, model registry
+src/lib/policies/*                       pure versioned rule/portfolio/sizing/execution/exit policy values
+src/lib/strategies/<strategy>/*          pure state + DecisionPlan construction; no adapter/order imports
+src/lib/experiments/*                    sentinel descriptors, reducers, evidence stores, reports; one-way only
+src/lib/execution/*                      shared risk, budget, OMS, live adapters, reconciliation, account ledger
+src/lib/engine/*                         composition root, scheduler, lease, commands, status, lifecycle
+src/lib/control-plane/protocol.ts        client-safe command/status schemas and versions
+src/lib/control-plane/web.ts             web role: read projection, append command
+src/lib/control-plane/engine.ts          engine role: lease, claim, publish outcome/status
+src/app/api/engine/status/route.ts       authenticated BFF read
+src/app/api/engine/commands/route.ts     authenticated BFF append/read result
 engine/main.ts                       standalone persistent entry point
 ```
 
-This is a target map, not an instruction to move every current `lib/*.ts` file at once. First wrap existing
+This is a target map, not an instruction to move every current `src/lib/*.ts` file at once. First wrap existing
 behavior behind contracts; move it only with characterization tests and no semantic change.
 
 Mechanically enforce at least these forbidden edges:

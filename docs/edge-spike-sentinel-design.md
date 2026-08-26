@@ -50,7 +50,7 @@ prospectively, from data written at decision time, rather than re-argued from th
 
 ## 3. Where the gate goes
 
-In `evaluateSignalPersistenceWithRequirements` (`lib/signal-persistence.ts`), as a declared member of
+In `evaluateSignalPersistenceWithRequirements` (`src/lib/signal-persistence.ts`), as a declared member of
 `SignalPersistenceRequirements` rather than a hidden constant.
 
 That layer is correct for three reasons. It is the only place that holds both the firing edge and its
@@ -63,7 +63,7 @@ candidate lane, which calls the same evaluator directly. That candidate exists t
 and span; it passes the production spike threshold explicitly so it keeps differing from production in one
 variable only.
 
-The rule itself lives in `lib/edge-spike-policy.ts` — pure, I/O free, no persistence types — so the gate,
+The rule itself lives in `src/lib/edge-spike-policy.ts` — pure, I/O free, no persistence types — so the gate,
 the sentinel, and the policy manifest all read one constant, and the rule can be tested over a grid of
 inputs rather than through a fixture.
 
@@ -79,7 +79,7 @@ tolerance that eased this gate would be a bug.
 **Committed at decision time, not fill time.** Derived from fills it would inherit every selection bias of
 the executing lane — budget exhaustion, cap blocks, maker no-fills — and would answer "conditional on
 having successfully bought", which is a different and flatteringly selected question. This is the same
-reason `lib/hold-sentinel.ts` commits at trigger time, and it matters more here than there, because the
+reason `src/lib/hold-sentinel.ts` commits at trigger time, and it matters more here than there, because the
 review's §2 showed maker fills are themselves adversely selected in exactly this cohort.
 
 One record per `(symbol, side, closesAt)`, written when a decision passes **every other** persistence gate

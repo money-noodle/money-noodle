@@ -60,7 +60,7 @@ Money Noodle must persist every calculation that passes the active buy policy an
 
 #### Issuance policy
 
-- `lib/policy-manifest.ts` owns the active policy identity and immutable version history. Under the required
+- `src/lib/policy-manifest.ts` owns the active policy identity and immutable version history. Under the required
   production rule, a calculation qualifies only when independent `P(side)` is at least 55%,
   `P(side) − side ask − venue fees` is at least 5 percentage points, estimate quality is at least 50%, and an enabled
   venue exposes an executable selected-side ask from 10¢ through 75¢. `P(DOWN)=1−P(UP)` and uses no venue input.

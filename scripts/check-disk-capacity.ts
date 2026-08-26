@@ -1,4 +1,4 @@
-import { readDiskCapacity } from '../lib/disk-capacity';
+import { readDiskCapacity } from '../src/lib/disk-capacity';
 
 const gib = (bytes: number) => Number((bytes / 1024 ** 3).toFixed(2));
 

@@ -40,7 +40,7 @@ fault model is real. Capital ceilings and misplaced economic selectors receive s
 
 ## 2. Current production boundary
 
-Live authority is distributed across `readiness` in `lib/trading-control.ts`, `runLive`, `buildOrder`,
+Live authority is distributed across `readiness` in `src/lib/trading-control.ts`, `runLive`, `buildOrder`,
 `executePreparedLiveBuy`, budget reservation, and `placeKalshiBuy` / `placeKalshiTakerBuy`. There is no single
 current authorization object.
 

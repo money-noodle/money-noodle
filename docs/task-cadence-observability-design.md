@@ -64,7 +64,7 @@ The first registry contains exactly these task clocks:
 7. long-shot target exit;
 8. periodic and event-triggered reconciliation.
 
-Input cache TTLs remain in `lib/freshness.ts` and remain visible in a separate UI table. A cache TTL is not a
+Input cache TTLs remain in `src/lib/freshness.ts` and remain visible in a separate UI table. A cache TTL is not a
 runtime task and should not be presented as though it were one.
 
 ## 4. Health semantics
@@ -86,13 +86,13 @@ reconciliation retains its existing authoritative durable role.
 
 ## 5. Runtime ownership
 
-`lib/task-cadence.ts` is client-safe registry data and owns shared display constants that otherwise had no
-client-safe home. `lib/task-cadence-runtime.ts` is server-only and owns process-local timestamps and health.
+`src/lib/task-cadence.ts` is client-safe registry data and owns shared display constants that otherwise had no
+client-safe home. `src/lib/task-cadence-runtime.ts` is server-only and owns process-local timestamps and health.
 Existing loops mark their own starts and outcomes but retain their timers:
 
-- `lib/dashboard.ts` marks calculations;
-- `lib/paper-execution.ts` marks edge observations, paper managed makers, long-shot clocks, and reconciliation;
-- `lib/live-orders.ts` marks on-demand pre-submit quote reads;
+- `src/lib/dashboard.ts` marks calculations;
+- `src/lib/paper-execution.ts` marks edge observations, paper managed makers, long-shot clocks, and reconciliation;
+- `src/lib/live-orders.ts` marks on-demand pre-submit quote reads;
 - live managed-maker health is marked at its existing execution call site.
 
 The dashboard serializes a bounded registry snapshot. The client does not import a server store, and the

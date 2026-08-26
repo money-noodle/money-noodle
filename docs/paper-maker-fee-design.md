@@ -13,14 +13,14 @@
 
 ## 1. What is wrong
 
-`estimatePaperFill` reserves a conservative **taker** fee, and the comment on `venueFeeCents` (`lib/venue-fill.ts`) states the intended
+`estimatePaperFill` reserves a conservative **taker** fee, and the comment on `venueFeeCents` (`src/lib/venue-fill.ts`) states the intended
 contract in as many words:
 
 > Conservative taker-fee reserve; actual maker fees come from Kalshi fill records and unused cash is released.
 
 Live honours it. On a fill it takes `fill.feeCents` — sourced from Kalshi's `average_fee_paid`
-(`placeKalshiBuy`/`placeKalshiSell`, `lib/live-orders.ts`) — recomputes the all-in cost, and returns the difference with
-`releaseTradingBudget` (`executePreparedLiveBuy`, `lib/paper-execution.ts`).
+(`placeKalshiBuy`/`placeKalshiSell`, `src/lib/live-orders.ts`) — recomputes the all-in cost, and returns the difference with
+`releaseTradingBudget` (`executePreparedLiveBuy`, `src/lib/paper-execution.ts`).
 
 Paper never releases. At the equivalent point it *recomputes the taker fee*:
 
@@ -28,7 +28,7 @@ Paper never releases. At the equivalent point it *recomputes the taker fee*:
 const feeCents = venueFeeCents(order.venue, result.averagePrice * 100, result.filledCount);
 ```
 
-That is the defect, and it is one line, in `applyPaperMakerSimulation` (`lib/paper-execution.ts`).
+That is the defect, and it is one line, in `applyPaperMakerSimulation` (`src/lib/paper-execution.ts`).
 
 ## 2. The venue's own answer, across every live fill
 
@@ -90,7 +90,7 @@ document rather than a one-line change.
 ## 5. Why nothing caught it
 
 The mirror invariant governs the entry **rule** layer — it asserts that layer takes no execution mode
-(`lib/mirror-invariant.test.ts`). Tracks are *permitted* to differ in fill model, budget and sizing; SPEC
+(`src/lib/mirror-invariant.test.ts`). Tracks are *permitted* to differ in fill model, budget and sizing; SPEC
 §12.3 says so deliberately. This divergence hid inside that permission.
 
 It arrived with the 2026-08-14 mirror alignment (`6c58054`, "Execute paper as a maker so the mirror
@@ -101,7 +101,7 @@ has no invariant watching it.
 ## 6. The fix
 
 > **Implemented 2026-08-17.** `venueFeeCents` takes a required `role`, all seven call sites declare one,
-> and `lib/venue-fill.test.ts` pins both schedules, the 1c taker floor, the rounding direction and a
+> and `src/lib/venue-fill.test.ts` pins both schedules, the 1c taker floor, the rounding direction and a
 > float-representation edge. The historical 694c plus the 12c that accrued before the fix landed have been
 > returned; both correction scripts now report nothing to do.
 
@@ -121,7 +121,7 @@ Call sites and their correct role:
 | --- | --- | --- |
 | `estimatePaperFill` reserve | taker | conservative; the desk cannot know at issuance how it will fill, and reserving low would breach the all-in cap |
 | `applyPaperMakerSimulation` | **maker** | the simulated fill is a managed maker fill |
-| `applyExitObservation` | taker | live's reduce-only exit reports `liquidityRole: 'taker'` (`placeKalshiSell`, `lib/live-orders.ts`) |
+| `applyExitObservation` | taker | live's reduce-only exit reports `liquidityRole: 'taker'` (`placeKalshiSell`, `src/lib/live-orders.ts`) |
 | `bestSwitch` | taker | same |
 | `buildOrder` minimum-size probe | taker | sizing headroom, matches the reserve |
 | `runLongShot` entry | taker | its entry is an explicit price-capped taker IOC |
@@ -146,7 +146,7 @@ can go stale silently — §8 covers that.
   affected v17 paper orders are evidence of what the desk did. They stay.
 - **`BUY_POLICY_VERSION` does not move.** The entry rule is unchanged; this is execution. Bump the paper
   execution identifier (`paper-managed-maker-trade-queue-v2` at that design generation; superseded by
-  `paper-managed-maker-requalify3-v3`, set in `buildOrder`, `lib/paper-execution.ts`) instead, so
+  `paper-managed-maker-requalify3-v3`, set in `buildOrder`, `src/lib/paper-execution.ts`) instead, so
   pre-fix and post-fix paper cohorts are separable in every report that groups by it.
 
 ## 8. Guarding against a stale constant
@@ -169,7 +169,7 @@ path gets an exact-arithmetic test.
 **The entry gate charges the same phantom fee**, through a second fee model:
 
 ```
-venueFeeRate(venue, price) = 0.07 * price * (1 - price)   // lib/prediction-policy.ts
+venueFeeRate(venue, price) = 0.07 * price * (1 - price)   // src/lib/prediction-policy.ts
 netEdge = probability - price - feeRate
 ```
 
@@ -201,7 +201,7 @@ the other a rate per $1 of payout, and merging them carelessly would move the en
 1. `venueFeeCents` unit tests pin both schedules, the 1c floor on taker, the rounding direction, and a
    value on a float-representation edge.
 2. A paper fill settling at the maker rate releases exactly `reserved − accounted` to the bankroll, and
-   the budget ledger balances — the property `lib/budget-ledger.test.ts` already guards.
+   the budget ledger balances — the property `src/lib/budget-ledger.test.ts` already guards.
 3. `estimatePaperFill` still sizes against the taker reserve, so paper and live quantities agree for the
    same stake cap and ask. This is the regression most worth pinning: it is the thing §7 says must not
    change.

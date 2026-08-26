@@ -35,7 +35,7 @@ import { readExecutionLedger } from './lib/read-execution-ledger.mjs';
 
 const DATA = path.resolve(process.cwd(), 'data');
 const jiti = createJiti(import.meta.url);
-const { analyzeContractSelection, clusterSnapshotPairs } = await jiti.import('../lib/contract-selection-analysis.ts');
+const { analyzeContractSelection, clusterSnapshotPairs } = await jiti.import('../src/lib/contract-selection-analysis.ts');
 
 const forecasts = await readForecastHistory(DATA);
 const ledger = await readExecutionLedger(DATA);

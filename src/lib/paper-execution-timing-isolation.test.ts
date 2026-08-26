@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const source = (file: string) => readFileSync(path.join(process.cwd(), 'lib', file), 'utf8');
+const source = (file: string) => readFileSync(path.join(process.cwd(), 'src/lib', file), 'utf8');
 
 const forbiddenReaders = [
   'prediction-policy.ts', 'signal-persistence.ts', 'portfolio-policy.ts',

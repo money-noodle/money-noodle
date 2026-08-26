@@ -11,14 +11,14 @@
  */
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { readHydratedExecutionOrders } from '../lib/execution-ledger-storage';
-import { getForecastHistory } from '../lib/forecast-tracker';
-import { evaluatePromotionEligibility } from '../lib/model-promotion';
-import type { WalkForwardEvaluationHistory, WalkForwardParameters } from '../lib/types';
+import { readHydratedExecutionOrders } from '../src/lib/execution-ledger-storage';
+import { getForecastHistory } from '../src/lib/forecast-tracker';
+import { evaluatePromotionEligibility } from '../src/lib/model-promotion';
+import type { WalkForwardEvaluationHistory, WalkForwardParameters } from '../src/lib/types';
 import {
   PRODUCTION_BASELINE_PARAMETERS, WALK_FORWARD_CANDIDATES, WALK_FORWARD_FOLDS,
   buildWalkForwardDataset, candidateProbability, runWalkForwardEvaluation, selectedTrade,
-} from '../lib/walk-forward';
+} from '../src/lib/walk-forward';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const HISTORY_FILE = path.join(DATA_DIR, 'model-evaluations.json');

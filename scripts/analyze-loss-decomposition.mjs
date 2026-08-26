@@ -65,7 +65,7 @@ const COHORTS = [
 ];
 
 const feeRate = (venue, price) => (venue === 'kalshi' ? 0.07 * price * (1 - price) : 0.01 * price);
-/** The gate as `admissibleEntry` + `qualifiesAsBuyEdge` express it in lib/prediction-policy.ts. */
+/** The gate as `admissibleEntry` + `qualifiesAsBuyEdge` express it in src/lib/prediction-policy.ts. */
 const admits = (r) => r.ask >= 0.05 && r.ask <= 0.97 && r.probability >= 0.55
   && r.netEdge >= 0.05 && r.netEdge < 0.35 && r.confidence >= 0.5;
 /** Per dollar committed, held to settlement, net of the entry fee. */

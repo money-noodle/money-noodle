@@ -13,7 +13,7 @@ import path from 'node:path';
 import {
   applyHypeIdentityControlCorrection, applyHypeIdentityLedgerCorrection,
   type CorrectableLiveLedger, type CorrectableTradingControl,
-} from '../lib/live-order-identity-correction';
+} from '../src/lib/live-order-identity-correction';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const LEDGER_FILE = path.join(DATA_DIR, 'paper-orders.json');

@@ -9,9 +9,9 @@
  */
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { getWalkForwardEvaluationHistory, runWalkForwardEvaluationOffline } from '../lib/model-evaluation-store';
-import { offlineEvaluationBlockers } from '../lib/offline-evaluation-gate';
-import type { BudgetControl } from '../lib/types';
+import { getWalkForwardEvaluationHistory, runWalkForwardEvaluationOffline } from '../src/lib/model-evaluation-store';
+import { offlineEvaluationBlockers } from '../src/lib/offline-evaluation-gate';
+import type { BudgetControl } from '../src/lib/types';
 
 interface StoredControl {
   control: BudgetControl;

@@ -162,7 +162,7 @@ also beat baseline at 20¢. It costs nothing to keep recording.
 
 ## 5. Lanes and the mirror invariant
 
-The rule layer must not regain an execution-mode parameter; `lib/mirror-invariant.test.ts` asserts its
+The rule layer must not regain an execution-mode parameter; `src/lib/mirror-invariant.test.ts` asserts its
 absence by arity precisely so a paper/live divergence cannot be expressed. This policy is a separate module
 with its own rule functions, so the invariant then holds **within** it: the long-shot paper and live lanes
 make identical entry and exit decisions and differ only in fill and capital.
@@ -738,7 +738,7 @@ multiple-comparison count legible: N is the number of hypotheses, stated on the 
 
 Answering an arbitrary band cheaply needs a **band-independent** primitive, because the alternative —
 storing results per band — would mean every new band required re-reading months of paths, and
-`lib/contract-path.ts` refuses to bake a mark into a stored summary for exactly that reason.
+`src/lib/contract-path.ts` refuses to bake a mark into a stored summary for exactly that reason.
 
 Per `(contract, side)`, at seal: **the first occurrence of each distinct ask, with its offset, paired with
 the highest owned-side bid reachable strictly after it.**
@@ -787,7 +787,7 @@ machine for retroactive screening. Three guards, built in rather than bolted on:
 
 - **Naming enforces the gap.** These are *analysis* bands, never entry bands. No module that can price,
   size, gate, or trade may import the store, asserted by a test in the spirit of
-  `lib/strategy-isolation.test.ts`, so wiring a good-looking band into `entryMarkCents` breaks the build
+  `src/lib/strategy-isolation.test.ts`, so wiring a good-looking band into `entryMarkCents` breaks the build
   rather than shipping.
 - **Every saved configuration is retained and counted.** The surface displays how many band sets have been
   evaluated, because that count is the multiple-comparison denominator. Without it on the face of the
@@ -810,7 +810,7 @@ at 20, require a label, and validate `1 ≤ entryLow < entryHigh ≤ 99` and `en
 ## 15b. Approach (iii) — near-money hold, committed 2026-08-18
 
 **A prospective test, committed before the evidence.** The rule is fixed in `NEAR_MONEY_HOLD`
-(`lib/near-money-sentinel.ts`) with the date it was written; windows closing at or after that instant are
+(`src/lib/near-money-sentinel.ts`) with the date it was written; windows closing at or after that instant are
 the only arm that could promote anything, and everything before it is screening (§5.5). Changing any field
 is a new `id` and a new cohort, never an edit.
 
@@ -874,10 +874,10 @@ Four of the five pieces are built and in production use for the edge policy's ma
 
 | piece | where |
 | --- | --- |
-| Full ladder, depth 20 | `fetchKalshiOrderBookNow` (`lib/kalshi-depth.ts`) |
-| Size at our price and ahead of it | `selectedSideDepth` (`lib/order-book-depth.ts`) |
-| Real executions since a timestamp | `fetchKalshiTradePrintsSince` (`lib/kalshi-market-data.ts`) |
-| Queue consumption, with the right rule | `simulatePaperMaker` (`lib/paper-maker-simulation.ts`) |
+| Full ladder, depth 20 | `fetchKalshiOrderBookNow` (`src/lib/kalshi-depth.ts`) |
+| Size at our price and ahead of it | `selectedSideDepth` (`src/lib/order-book-depth.ts`) |
+| Real executions since a timestamp | `fetchKalshiTradePrintsSince` (`src/lib/kalshi-market-data.ts`) |
+| Queue consumption, with the right rule | `simulatePaperMaker` (`src/lib/paper-maker-simulation.ts`) |
 
 `simulatePaperMaker` already encodes the distinction this needs: *a selected-side resting bid is consumed
 by a taker buying the opposite outcome, and an ask touch alone is deliberately not a fill.* The gap is only
@@ -967,7 +967,7 @@ Journals are append-only and are not rewritten to change history (AGENTS §3); t
 not content, and restores exactly the sampling density every existing measurement was written against. The
 thinned form is **not** byte-identical to a coarsely recorded window: an observation is bucketed when it is
 stored, so a fine sample survives at offset 16 where the coarse recorder would have written 15. Offsets
-differ by less than one coarse bucket and carry the same information. `lib/contract-path.test.ts` pins the
+differ by less than one coarse bucket and carry the same information. `src/lib/contract-path.test.ts` pins the
 density, the ordering, and that no sample is ever invented.
 
 ### What it does not change

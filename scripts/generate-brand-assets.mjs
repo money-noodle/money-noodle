@@ -45,5 +45,5 @@ const square = async (size, background = { r: 0, g: 0, b: 0, alpha: 0 }) => {
 for (const size of [512, 192, 64, 32, 16]) {
   await (await square(size)).png({ compressionLevel: 9 }).toFile(`public/brand/money-noodle-icon-${size}.png`);
 }
-await (await square(512)).png({ compressionLevel: 9 }).toFile('app/icon.png');
-await (await square(180, '#08100c')).png({ compressionLevel: 9 }).toFile('app/apple-icon.png');
+await (await square(512)).png({ compressionLevel: 9 }).toFile('src/app/icon.png');
+await (await square(180, '#08100c')).png({ compressionLevel: 9 }).toFile('src/app/apple-icon.png');

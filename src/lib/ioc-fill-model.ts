@@ -6,7 +6,7 @@ import type { BinaryOrderBook, OrderBookLevel, PositionSide } from './types';
  * **Why this is not the maker simulation.** `paper-maker-simulation.ts` models a resting post: it waits
  * out a 12-second horizon and fills only when aggressive prints reach a price it is already displayed at.
  * Every taker path the desk actually runs is the opposite shape. `placeKalshiSell` and the high-edge
- * entry both send `time_in_force: 'immediate_or_cancel'` with `post_only: false` (`lib/live-orders.ts`),
+ * entry both send `time_in_force: 'immediate_or_cancel'` with `post_only: false` (`src/lib/live-orders.ts`),
  * so they never rest, never accumulate queue position, and never see a print: they cross what is
  * displayed at the instant they arrive, take whatever fits, and cancel the remainder. Modelling either
  * one by waiting for prints would invent a resting order the venue never held.
@@ -31,7 +31,7 @@ import type { BinaryOrderBook, OrderBookLevel, PositionSide } from './types';
 
 /** Kalshi trades in hundredths of a contract; a partial IOC fill still lands on that lattice. */
 export const IOC_QUANTITY_STEP = 0.01;
-/** Book-level tolerance, matching `quantityAt` in `lib/order-book-depth.ts`. */
+/** Book-level tolerance, matching `quantityAt` in `src/lib/order-book-depth.ts`. */
 const LEVEL_EPSILON = 1e-6;
 
 export interface IocFillResult {

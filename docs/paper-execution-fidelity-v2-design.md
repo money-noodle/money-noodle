@@ -229,8 +229,8 @@ does not change funded execution. A null review leaves neutral v6 active and is 
 
 | Phase | Primary paths |
 | --- | --- |
-| F1 | `lib/paper-fill-calibration.ts`, `lib/paper-maker-simulation.ts`, `lib/paper-maker-fill.test.ts`, corrected paper analyzers and report |
-| F2 | `lib/paper-execution-timing-shadow.ts`, `lib/paper-execution-timing-shadow-store.ts`, `lib/paper-execution-timing-observer.ts`, isolation/pure/store tests, and `scripts/analyze-paper-execution-timing.mjs` |
+| F1 | `src/lib/paper-fill-calibration.ts`, `src/lib/paper-maker-simulation.ts`, `src/lib/paper-maker-fill.test.ts`, corrected paper analyzers and report |
+| F2 | `src/lib/paper-execution-timing-shadow.ts`, `src/lib/paper-execution-timing-shadow-store.ts`, `src/lib/paper-execution-timing-observer.ts`, isolation/pure/store tests, and `scripts/analyze-paper-execution-timing.mjs` |
 | F3 | detached queue-family replay/store and held-out analyzer; no paper accounting imports |
 | F4 | combined shadow evaluator, immutable review manifest, and only after approval a new execution generation |
 

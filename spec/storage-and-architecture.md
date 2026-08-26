@@ -70,20 +70,20 @@ Replace repository implementations without changing domain/services. Add TTL ind
 - **Server:** Next.js route handlers and server-only services.
 - **Runtime:** local Node.js; architecture remains deployable later.
 - **Data flow:** external adapter → cached raw data → normalized domain data → feature/model service → API → client dashboard.
-- **Freshness and cadence:** every dashboard payload includes generation/expiry, per-source status, and a bounded runtime-task snapshot. Input TTLs remain client-safe data in `lib/freshness.ts`; task metadata and shared cadence constants live in `lib/task-cadence.ts`; process-local run health lives only in server-side `lib/task-cadence-runtime.ts`. Existing loops mark their own outcomes but the registry cannot schedule, await, gate, price, size, or trade. Conditional and on-demand tasks do not become unhealthy merely because no candidate, order, position, or event activated them.
+- **Freshness and cadence:** every dashboard payload includes generation/expiry, per-source status, and a bounded runtime-task snapshot. Input TTLs remain client-safe data in `src/lib/freshness.ts`; task metadata and shared cadence constants live in `src/lib/task-cadence.ts`; process-local run health lives only in server-side `src/lib/task-cadence-runtime.ts`. Existing loops mark their own outcomes but the registry cannot schedule, await, gate, price, size, or trade. Conditional and on-demand tasks do not become unhealthy merely because no candidate, order, position, or event activated them.
 
-**Aspirational, not current.** `lib/` is flat; none of the directories below exist. They record an intended
+**Aspirational, not current.** `src/lib/` is flat; none of the directories below exist. They record an intended
 future decomposition, not a map of the code — for that, see the table in `AGENTS.md` §0. Do not cite this list
 as evidence of where anything lives.
 
 Recommended future service boundaries:
-- `lib/venues/*` — normalized trading-provider registry and Polymarket/Kalshi/Crypto.com/ForecastEx/Robinhood adapters.
-- `lib/market-data/*` — spot, derivatives, historical feeds.
-- `lib/news/*` — retrieval, dedupe, entity matching, sentiment.
-- `lib/models/*` — feature generation, versions, calibration.
-- `lib/llm/*` — provider adapters and grounded research orchestration.
-- `lib/repositories/*` — filesystem then MongoDB implementations.
-- `lib/trading/*` — risk checks, previews, idempotency, audit.
+- `src/lib/venues/*` — normalized trading-provider registry and Polymarket/Kalshi/Crypto.com/ForecastEx/Robinhood adapters.
+- `src/lib/market-data/*` — spot, derivatives, historical feeds.
+- `src/lib/news/*` — retrieval, dedupe, entity matching, sentiment.
+- `src/lib/models/*` — feature generation, versions, calibration.
+- `src/lib/llm/*` — provider adapters and grounded research orchestration.
+- `src/lib/repositories/*` — filesystem then MongoDB implementations.
+- `src/lib/trading/*` — risk checks, previews, idempotency, audit.
 
 <a id="req-storage-nonfunctional"></a>
 
