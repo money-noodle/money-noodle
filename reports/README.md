@@ -35,6 +35,7 @@ Reports marked **cited by current status** are the evidence [`STATUS.md`](../STA
 
 | Report | Question it answers |
 | --- | --- |
+| [`maker-restriction-v1-fixed-review-2026-08-26`](maker-restriction-v1-fixed-review-2026-08-26.md) | Whether either prospective maker restriction cleared its fixed count, cash, clustered-return, Holm, and simultaneous-track gates — **cited by current status** |
 | [`kalshi-order-size-and-fill-mechanics-2026-08-20`](kalshi-order-size-and-fill-mechanics-2026-08-20.md) | How order size affects fills on Kalshi |
 | [`maker-adverse-selection-and-exit-depth-2026-08-19`](maker-adverse-selection-and-exit-depth-2026-08-19.md) | Whether maker adverse selection or exit depth is the larger cost |
 | [`execution-direction-sizing-review-2026-08-19`](execution-direction-sizing-review-2026-08-19.md) | Whether direction-aware execution and 30pp reduced sizing are supported |

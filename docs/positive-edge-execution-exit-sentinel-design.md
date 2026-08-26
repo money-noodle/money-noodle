@@ -13,6 +13,13 @@
 > The maintainer chose to keep live trading running. This changes no entry, execution, sizing, or exit
 > behavior. Collection starts prospectively when the built runtime first initializes each store; no existing
 > order or lifecycle path is backfilled.
+>
+> **Maker review status:** the fixed 2026-08-26 review found 181 scoreable live attempts across 102 windows and
+> 707 scoreable paper attempts across 288 windows. The 2¢ spread arm reached 20 live divergent windows and had
+> positive exact cash and clustered point estimates on both tracks, but neither track survived the two-arm Holm
+> correction. The spike arm also lacked 20 live divergent windows and lost incremental exact cash on paper. Both
+> joint review locks remained closed; no execution, paper, sizing, capital, or policy generation changed. See
+> [`reports/maker-restriction-v1-fixed-review-2026-08-26.md`](../reports/maker-restriction-v1-fixed-review-2026-08-26.md).
 
 ## 1. Decision and boundary
 
@@ -221,6 +228,11 @@ otherwise the candidate remains evaluation-only even if its return criteria clea
 Reaching the bar changes status only to reviewable. Promotion remains manual, requires a written reason and
 policy/version history, and must satisfy the existing paused/quiescent real-money mutation controls. No
 sentinel can auto-promote, auto-withdraw, or auto-resume anything.
+
+The fixed 2026-08-26 review applied this complete lock after the spread arm reached 20 live divergent windows.
+Neither frozen arm passed the Holm requirement, and the spike arm also failed other track-specific gates. Counts
+opened the review but authorized no policy change. Continued untouched observation remains diagnostic; a revised
+threshold, family, or sequential-review rule requires a new precommitted generation.
 
 A 2026-08-24 reporting review found that the maker report's `reviewUnlocked` projection enforced only the first
 two count thresholds. The corrected projection also enforces scoreable coverage, positive exact aggregate cash,

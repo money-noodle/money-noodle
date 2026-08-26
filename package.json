@@ -45,6 +45,7 @@
     "analyze:positive-edge-current": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/src/lib/server-only-stub.ts\\\"}\" jiti scripts/analyze-positive-edge-current.ts",
     "analyze:live-opportunities": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/src/lib/server-only-stub.ts\\\"}\" jiti scripts/analyze-live-opportunity-review.ts",
     "analyze:trading-clock": "node --max-old-space-size=6144 scripts/analyze-trading-clock.mjs",
+    "analyze:maker-restrictions": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/src/lib/server-only-stub.ts\\\"}\" jiti scripts/analyze-maker-restriction-review.ts",
     "analyze:exit-alternatives": "node --max-old-space-size=6144 scripts/analyze-exit-alternatives.mjs",
     "analyze:exit-counterfactuals": "node scripts/analyze-exit-counterfactuals.mjs",
     "analyze:exit-sentinel-coverage": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/src/lib/server-only-stub.ts\\\"}\" jiti scripts/analyze-exit-sentinel-coverage.ts",

@@ -17,8 +17,9 @@ conflict in the canonical specification and decision record before coding.
 2. **Continue paper timing Phase F2 unchanged.** Freeze acceptance and evidence mechanics only after 300 exact-pair
    windows, at least 30 observed create races, required coverage, and the non-interference review. F3 remains off.
    See [`paper-execution-fidelity-v2-design.md`](../docs/paper-execution-fidelity-v2-design.md).
-3. **Continue maker-restriction v1 without tuning.** The joint live/paper, divergence, cash, clustered-return, and
-   multiple-comparison gates remain binding. Counts or one favorable statistic cannot unlock review.
+3. **Continue maker-restriction v1 without tuning.** The fixed 20-live-divergence review completed on 2026-08-26
+   without unlocking either arm. The joint live/paper, divergence, cash, clustered-return, and multiple-comparison
+   gates remain binding; repeated interim looks cannot create promotion authority.
 4. **Keep reasoned exit-v3 deferred.** Exit v2 conflates a known zero owned-side bid with missing evidence and its
    incomplete cohort is outcome-selected. Do not relabel history or score efficacy. No v3 design or implementation
    begins until the maintainer reopens it.
