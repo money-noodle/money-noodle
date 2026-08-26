@@ -43,8 +43,17 @@ const reportsIndex = join(reportsDir, 'README.md');
 
 const AGENTS_WORD_LIMIT = 3_000;
 
-/** Directories whose backticked paths are treated as repository references. */
-const sourceRoots = ['lib', 'scripts', 'spec', 'status', 'docs', 'reports', 'data', 'app', 'components', 'db'];
+/**
+ * Directories whose backticked paths are treated as repository references.
+ *
+ * `data/` and `.cache/` are deliberately absent. They are worker-local durable
+ * runtime state, gitignored and never committed, so a reference such as
+ * `data/trading-control.json` names something that exists on an operating
+ * worker and never in a clone. Requiring it to resolve would pass on the
+ * maintainer's machine and fail in CI — the exact divergence this verifier is
+ * meant to eliminate.
+ */
+const sourceRoots = ['lib', 'scripts', 'spec', 'status', 'docs', 'reports', 'app', 'components', 'db'];
 /** Root files that are cited bare rather than under a directory. */
 const rootFiles = new Set(['SPEC.md', 'STATUS.md', 'AGENTS.md', 'README.md', 'CLAUDE.md', 'package.json']);
 
