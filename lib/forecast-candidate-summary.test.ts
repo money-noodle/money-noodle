@@ -63,8 +63,41 @@ describe('forecast candidate collection milestones', () => {
     }));
     const summary = summarizeForecastCandidateCollection(forecasts, now);
     expect(summary.candidates[0].scoreableCoverage).toBeCloseTo(0.95, 12);
+    expect(summary.fundedOutcomeCoverage).toEqual({
+      scoreableRows: 95,
+      unavailableRows: 5,
+      unavailableClasses: [{ reason: 'funded-outcome-unavailable', rows: 5, windows: 5 }],
+    });
     expect(summary.milestones.coverage100.met).toBe(true);
     expect(summary.milestones.smoke10.met).toBe(false);
     expect(summary.milestones.phaseExit300.automatedCriteriaMet).toBe(false);
+  });
+
+  it('reports every candidate and funded-outcome unavailable class', () => {
+    const forecasts = [row(0), row(1), row(2)];
+    forecasts[0].venueContracts = {};
+    forecasts[1].venueOutcomes = undefined;
+    forecasts[2].candidateEvaluation!.decisions = forecasts[2].candidateEvaluation!.decisions.map((decision) => (
+      decision.candidateId === 'basis-only-v1'
+        ? {
+            candidateId: decision.candidateId,
+            candidateModelVersion: decision.candidateModelVersion,
+            status: 'unavailable' as const,
+            unavailableReason: 'test input unavailable',
+          }
+        : decision
+    ));
+
+    const summary = summarizeForecastCandidateCollection(forecasts, now);
+    expect(summary.fundedOutcomeCoverage).toEqual({
+      scoreableRows: 1,
+      unavailableRows: 2,
+      unavailableClasses: [
+        { reason: 'funded-contract-provenance-unavailable', rows: 1, windows: 1 },
+        { reason: 'funded-outcome-unavailable', rows: 1, windows: 1 },
+      ],
+    });
+    expect(summary.candidates.find((candidate) => candidate.candidateId === 'basis-only-v1')?.unavailableClasses)
+      .toEqual([{ reason: 'test input unavailable', rows: 1, windows: 1 }]);
   });
 });

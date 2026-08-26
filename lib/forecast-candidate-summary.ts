@@ -1,6 +1,12 @@
 import { FORECAST_CANDIDATE_REGISTRY, FORECAST_CANDIDATE_REGISTRY_VERSION } from './forecast-candidates';
-import { productionMarketCapability } from './market-registry';
+import { DEFAULT_MARKET_ID, marketProviders, productionMarketCapability } from './market-registry';
 import type { ForecastCandidateDecision, TrackedForecast, TradingVenue } from './types';
+
+export interface ForecastCandidateUnavailableClass {
+  reason: string;
+  rows: number;
+  windows: number;
+}
 
 export interface ForecastCandidateCoverage {
   candidateId: string;
@@ -13,6 +19,7 @@ export interface ForecastCandidateCoverage {
   scoreableCoverage: number | null;
   availableWindows: number;
   scoreableWindows: number;
+  unavailableClasses: ForecastCandidateUnavailableClass[];
 }
 
 export interface ForecastCandidateCollectionSummary {
@@ -25,6 +32,11 @@ export interface ForecastCandidateCollectionSummary {
   closedWindows: number;
   rowsWithCompleteFamily: number;
   maximumProductionReplayError: number | null;
+  fundedOutcomeCoverage: {
+    scoreableRows: number;
+    unavailableRows: number;
+    unavailableClasses: ForecastCandidateUnavailableClass[];
+  };
   candidates: ForecastCandidateCoverage[];
   milestones: {
     smoke10: { met: boolean; reason: string };
@@ -33,13 +45,42 @@ export interface ForecastCandidateCollectionSummary {
   };
 }
 
-function fundedOutcome(forecast: TrackedForecast): 'UP' | 'DOWN' | undefined {
-  const funded = (Object.keys(forecast.venueContracts ?? {}) as TradingVenue[])
-    .filter((venue) => productionMarketCapability(venue).live);
+type FundedOutcomeState =
+  | { status: 'scoreable'; outcome: 'UP' | 'DOWN' }
+  | { status: 'unavailable'; reason: string };
+
+function fundedOutcomeState(forecast: TrackedForecast): FundedOutcomeState {
+  const fundedProviders = marketProviders(DEFAULT_MARKET_ID)
+    .filter((provider) => productionMarketCapability(provider).live);
   // Phase 2 is deliberately valid only while exactly one funded provider is implemented for this market. A future
   // multi-provider generation must select and resolve its own provider rather than silently taking the first one.
-  if (funded.length !== 1) return undefined;
-  return forecast.venueOutcomes?.[funded[0]]?.outcome;
+  if (fundedProviders.length !== 1) {
+    return { status: 'unavailable', reason: `funded-provider-cardinality-${fundedProviders.length}` };
+  }
+  const provider = fundedProviders[0] as TradingVenue;
+  if (!forecast.venueContracts?.[provider]) {
+    return { status: 'unavailable', reason: 'funded-contract-provenance-unavailable' };
+  }
+  const outcome = forecast.venueOutcomes?.[provider]?.outcome;
+  if (outcome !== 'UP' && outcome !== 'DOWN') {
+    return { status: 'unavailable', reason: 'funded-outcome-unavailable' };
+  }
+  return { status: 'scoreable', outcome };
+}
+
+function unavailableClasses(
+  unavailable: Array<{ reason: string; closesAt: string }>,
+): ForecastCandidateUnavailableClass[] {
+  const classes = new Map<string, { rows: number; windows: Set<string> }>();
+  for (const row of unavailable) {
+    const value = classes.get(row.reason) ?? { rows: 0, windows: new Set<string>() };
+    value.rows += 1;
+    value.windows.add(row.closesAt);
+    classes.set(row.reason, value);
+  }
+  return [...classes.entries()]
+    .map(([reason, value]) => ({ reason, rows: value.rows, windows: value.windows.size }))
+    .sort((a, b) => b.rows - a.rows || a.reason.localeCompare(b.reason));
 }
 
 const ratio = (numerator: number, denominator: number) => denominator ? numerator / denominator : null;
@@ -67,6 +108,11 @@ export function summarizeForecastCandidateCollection(
     }
   }
 
+  const fundedOutcomeStates = new Map(closedRows.map((forecast) => [forecast.id, fundedOutcomeState(forecast)]));
+  const fundedOutcomeUnavailable = closedRows.flatMap((forecast) => {
+    const state = fundedOutcomeStates.get(forecast.id)!;
+    return state.status === 'unavailable' ? [{ reason: state.reason, closesAt: forecast.closesAt }] : [];
+  });
   const candidates = FORECAST_CANDIDATE_REGISTRY.map((descriptor): ForecastCandidateCoverage => {
     let availableRows = 0;
     let actionableRows = 0;
@@ -74,15 +120,22 @@ export function summarizeForecastCandidateCollection(
     let scoreableRows = 0;
     const availableWindows = new Set<string>();
     const scoreableWindows = new Set<string>();
+    const candidateUnavailable: Array<{ reason: string; closesAt: string }> = [];
     for (const forecast of closedRows) {
       const decision: ForecastCandidateDecision | undefined = forecast.candidateEvaluation!.decisions
         .find((candidate) => candidate.candidateId === descriptor.id);
-      if (decision?.status !== 'available') continue;
+      if (decision?.status !== 'available') {
+        candidateUnavailable.push({
+          reason: decision?.unavailableReason ?? (decision ? 'candidate-unavailable-without-reason' : 'candidate-decision-missing'),
+          closesAt: forecast.closesAt,
+        });
+        continue;
+      }
       availableRows += 1;
       availableWindows.add(forecast.closesAt);
       if (decision.bestOption) actionableRows += 1;
       if (decision.qualified) qualifiedRows += 1;
-      if (fundedOutcome(forecast)) {
+      if (fundedOutcomeStates.get(forecast.id)?.status === 'scoreable') {
         scoreableRows += 1;
         scoreableWindows.add(forecast.closesAt);
       }
@@ -98,6 +151,7 @@ export function summarizeForecastCandidateCollection(
       scoreableCoverage: ratio(scoreableRows, closedRows.length),
       availableWindows: availableWindows.size,
       scoreableWindows: scoreableWindows.size,
+      unavailableClasses: unavailableClasses(candidateUnavailable),
     };
   });
 
@@ -119,6 +173,11 @@ export function summarizeForecastCandidateCollection(
     closedWindows: closedWindows.size,
     rowsWithCompleteFamily,
     maximumProductionReplayError,
+    fundedOutcomeCoverage: {
+      scoreableRows: closedRows.length - fundedOutcomeUnavailable.length,
+      unavailableRows: fundedOutcomeUnavailable.length,
+      unavailableClasses: unavailableClasses(fundedOutcomeUnavailable),
+    },
     candidates,
     milestones: {
       smoke10: {

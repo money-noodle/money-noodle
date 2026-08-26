@@ -9,11 +9,14 @@
 > **Design index:** [`docs/README.md`](README.md)
 
 > **Status:** Phase 1 implemented on 2026-08-24. Phase 2 prospective collection activated locally at
-> 2026-08-25T03:17:17.456Z. Its written 10-window wiring review passed on 2026-08-25 with 5,169/5,169
-> complete-family rows, 45 closed windows, and zero production replay error; the 100-window coverage and 300-window
-> phase-exit gates remain closed. Confirmed-signal, venue-candidate, portfolio-selection, live-authorization, and
-> attempt-and-outcome reviews are approved next in strict layer order. A separate paper-execution fidelity
-> workstream began exact-control Phase F1 on 2026-08-25; it does not advance a decision layer and must freeze its
+> 2026-08-25T03:17:17.456Z. Its written 10-window wiring review passed on 2026-08-25. The fixed 100-window coverage
+> review passed on 2026-08-26 with 11,303 closed rows across 104 closed windows, 95.34% same-funded-provider outcome
+> coverage, a complete available six-arm family, and zero production replay error; all 527 unscoreable rows lacked
+> funded-provider contract provenance at issuance. This was coverage-only and neither ranked candidates nor opened
+> Phase 3. The 300-window phase-exit gate remains closed. Confirmed-signal, venue-candidate, portfolio-selection,
+> live-authorization, and attempt-and-outcome reviews are approved next in strict layer order. A separate
+> paper-execution fidelity workstream began exact-control Phase F1 on 2026-08-25; it does not advance a decision
+> layer and must freeze its
 > execution generation before any serial execution-evidence phase uses paper as a control. Every later phase remains
 > observation-only and must clear its milestone review before the next phase is activated. This design changes no
 > production forecast, buy policy, execution, capital, accounting, or live authority by itself.
@@ -173,6 +176,12 @@ denominator.
 At a nominal continuous 15-minute market cadence, 100 settlement timestamps are about 25 hours and 300 about 75
 hours. Outages, unavailable inputs, and incomplete outcomes extend the calendar; elapsed time never substitutes
 for the window count.
+
+**Coverage review:** the 100-window gate passed at 2026-08-26T05:27:33.326Z with 104 closed windows and 95.34%
+scoreable production-control coverage. The complete unavailable class was 527 rows without funded-provider contract
+provenance at issuance; no row with that provenance lacked its eventual same-provider outcome. See
+[`reports/forecast-candidate-phase2-100-window-coverage-review-2026-08-26.md`](../reports/forecast-candidate-phase2-100-window-coverage-review-2026-08-26.md).
+The review changed no production version and did not activate Phase 3.
 
 **Activation:** `forecast-candidate-registry-v1` began at 2026-08-25T03:17:17.456Z. Its first open window carried
 the complete six-arm family on 8/8 issuance rows with maximum production replay error 0. This is activation wiring,

@@ -10,10 +10,10 @@ conflict in the canonical specification and decision record before coding.
 
 ## Active collection and review sequence
 
-1. **Finish forecast-candidate Phase 2 unchanged.** Continue `forecast-candidate-registry-v1` to its precommitted
-   100- and 300-window coverage gates. At 100 windows, explain issuance rows without funded-provider provenance;
-   do not rank arms, start uncertainty work, or begin confirmed-signal collection early. The governing accepted
-   design is [`forecast-model-and-evaluator-v3-design.md`](../docs/forecast-model-and-evaluator-v3-design.md).
+1. **Finish forecast-candidate Phase 2 unchanged.** The fixed 100-window coverage review passed on 2026-08-26;
+   continue `forecast-candidate-registry-v1` to its precommitted 300-window phase-exit gate. Do not rank arms, start
+   uncertainty work, or begin confirmed-signal collection early. The governing accepted design is
+   [`forecast-model-and-evaluator-v3-design.md`](../docs/forecast-model-and-evaluator-v3-design.md).
 2. **Continue paper timing Phase F2 unchanged.** Freeze acceptance and evidence mechanics only after 300 exact-pair
    windows, at least 30 observed create races, required coverage, and the non-interference review. F3 remains off.
    See [`paper-execution-fidelity-v2-design.md`](../docs/paper-execution-fidelity-v2-design.md).

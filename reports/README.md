@@ -71,6 +71,7 @@ Reports marked **cited by current status** are the evidence [`STATUS.md`](../STA
 
 | Report | Question it answers |
 | --- | --- |
+| [`forecast-candidate-phase2-100-window-coverage-review-2026-08-26`](forecast-candidate-phase2-100-window-coverage-review-2026-08-26.md) | Whether forecast-candidate Phase 2 cleared its fixed 100-window coverage gate and why rows remained unscoreable — **cited by current status** |
 | [`forecast-candidate-phase2-wiring-review-2026-08-25`](forecast-candidate-phase2-wiring-review-2026-08-25.md) | Whether forecast-candidate Phase 2 collection is wired correctly and covering its windows |
 | [`walk-forward-model-candidate-review-2026-08-20`](walk-forward-model-candidate-review-2026-08-20.md) | How walk-forward model candidates score on unseen windows after fees |
 | [`kalshi-forecast-weight-analysis-2026-08-11`](kalshi-forecast-weight-analysis-2026-08-11.md) | What weight, if any, Kalshi's implied probability should carry in the forecast |
