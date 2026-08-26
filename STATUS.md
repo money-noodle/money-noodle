@@ -94,12 +94,11 @@ for unresolved normative questions.
 
 ## Latest recorded operational snapshot
 
-At the published snapshot on 2026-08-26, the requested documentation rollout used the authenticated Pause path:
-revision 7,097 became operator-paused / `live`, quiescent, and restart-safe after manual full reconciliation passed
-with zero local/venue managed positions, resting orders, or reservations. After the provider/policy attribution
-build loaded, startup full reconciliation completed READY at `2026-08-26T04:49:07.312Z`; revision 7,099 retained
-operator-paused intent, 1,861¢ available, zero reserved, no blockers, and zero open positions. Paper collection
-continues, but funded execution was not implicitly resumed.
+At the published snapshot on 2026-08-26, the local production worker restarted after existing funded positions
+became terminal and reservations reached zero. Startup full reconciliation completed READY at
+`2026-08-26T07:32:11.779Z` with zero local/venue managed positions, resting orders, reservations, or blockers.
+Revision 7,130 retained explicit active operator intent in `live` mode with 1,888¢ available and zero reserved;
+funded execution was not paused or implicitly re-armed by the restart.
 
 That state may have changed immediately after publication. Do not infer present permission, exposure, cash,
 readiness, or restart safety from it.
