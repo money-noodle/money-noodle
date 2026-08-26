@@ -21,7 +21,11 @@ including `spec/policy-and-track-separation.md` §12 → `STATUS.md` → the §0
 Before editing, classify funded-path and durable-state impact, required records, and invariant tests. Run
 `npm run agent:context -- <path...> --task "description"` for a deterministic preflight, then verify its routing
 against `SPEC.md` and source; generated output is advisory and never authority. State the classification and read
-set when handing off or asking for approval.
+set when handing off or asking for approval. Treat `scripts/agent-context-manifest.json` and
+`spec/traceability.json` as maintained indexes: when a change adds, moves, renames, or changes ownership of a
+canonical module, source entry point, invariant test, design, or traced requirement, review and update the affected
+routes and mappings in the same change. Do not add shallow mappings or overstate coverage; rerun the preflight for
+the changed paths and `npm run verify` before handoff.
 
 ## Orientation, authority, and change routing
 
