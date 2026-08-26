@@ -1,7 +1,7 @@
 # Money Noodle — Current Implementation Status
 
 > **Projection date:** 2026-08-26 · **Status:** Current implementation projection
-> **Projection-critical source fingerprint:** `sha256:81bae0d796b0510c0b4113162d0b611bc916fecbf05ed797feb39be8762c1ac5`
+> **Projection-critical source fingerprint:** `sha256:d5549743842910f4e50b2107e4abc2068b733a242b607d7491bc85de7e72f022`
 > **Requirements:** [`SPEC.md`](SPEC.md) · **Design lifecycle:** [`docs/README.md`](docs/README.md)
 > **Status index and archives:** [`status/README.md`](status/README.md) · **Roadmap:** [`status/roadmap.md`](status/roadmap.md)
 >
@@ -32,7 +32,7 @@ indexed by [`status/README.md`](status/README.md).
 
 | Area | Current implementation |
 | --- | --- |
-| Product surfaces | Local dashboard, signed Automation/Budget/Performance controls, public sanitized paper summary, factor and policy drill-downs, selected-side order-book ladder, stable signal transitions, explicit stale/degraded states, and read-only track/provider/variant/market/forecast/buy/execution attribution scopes are implemented. Current-card scope is presentation-only; signed open orders, history, and trading performance share one pure order-identity vocabulary and keep live/paper totals separate. |
+| Product surfaces | Local dashboard, signed Automation/Budget/Performance controls, public sanitized paper summary, factor and policy drill-downs, selected-side order-book ladder, stable signal transitions, explicit stale/degraded states, and read-only track/provider/variant/market/forecast/buy/execution attribution scopes are implemented. Current-card scope is presentation-only; signed open orders, history, and trading performance share one pure order-identity vocabulary and keep live/paper totals separate. A separate stateless-safe Kalshi one-hour threshold section shows exact-duration ABOVE/YES and BELOW/YES research contracts without policy, paper, or live authority. |
 | Forecasting | Venue-independent Blend 0.4 production probability, immutable forecast history, exact provenance, outcome resolution, calibration/performance reports, pure forecast boundary, and prospective candidate-family collection are implemented. Evaluator v2 is offline monitoring only and cannot promote. |
 | Entry and portfolio | Shared buy policy v22, mode-free rule evaluation, post-qualification execution style, persistence, up to three requalified episodes, sizing, global position/window/correlation ceilings, and prospective choice-set evidence are implemented. |
 | Paper execution | Independent managed-maker/IOC simulation, displayed-depth queue proxy, public trade evidence, reduce-only depth exits, exact mirror-pair IDs, separate paper bankroll, and neutral versioned calibration are implemented. Paper is diagnostic rather than live-equivalent. |
@@ -40,7 +40,7 @@ indexed by [`status/README.md`](status/README.md).
 | Funded safety | Explicit arming, typed environment confirmation, kill switch, quiescent Pause/drain, per-trade and rate caps, loss/drawdown stops, durable reservations, operator-intent separation, startup/manual/full and periodic incremental reconciliation, and guarded system-only auto-resume are implemented. |
 | Storage | Forecast storage v3 uses one owning writer, immutable content-addressed shards/rollups, checksums, journal replay, and publish-last generations. Execution ledger v9 keeps money/control rows hot and hydrates immutable terminal evidence from verified batches. Atomic stores and append-only journals retain owner boundaries. |
 | Archive and restore | Local-only object archival, full read-back checksum verification, manifests, independent restore, disk-capacity checks, and rebuildable Next-cache cleanup are implemented. Remote-primary deletion is not authorized. |
-| Hosted runtime | Hosted deployment is stateless and reads only bounded sanitized paper projections. It has no credentials, collection, reconciliation, ledger-write, control, or funded order authority. |
+| Hosted runtime | Hosted deployment is stateless, reads bounded sanitized paper projections, and may fetch bounded public research feeds such as the H1 hourly threshold surface. It has no credentials, durable collection, reconciliation, ledger-write, control, paper, or funded order authority. |
 | Governance | Versioned registries, policy manifest, immutable model-promotion ledger, canonical modular specification, controlled design/status lifecycles, stable requirement/decision IDs, deterministic task preflight, critical requirement-to-source/test navigation, workstream design routing, and CI documentation/application gates are implemented. `AGENTS.md` remains one bounded always-loaded guide; the verifiers check its citations, routed context, current-design source pointers, canonical authority restatement, and the projection-critical source fingerprint above. |
 
 ## Active identities
@@ -55,6 +55,7 @@ indexed by [`status/README.md`](status/README.md).
 | Ordinary exit | `strict-value-v1`; side-aware reduce-only IOC behavior |
 | Profit reversal | `profit-reversal-75-v1` remains withheld from execution by default while prospective observations continue |
 | Long-shot strategy | Retired registry identity only; no execution, collection, allocation, API, or UI authority |
+| Hourly threshold research | `kalshi-hourly-threshold-read-v1` with `strike-threshold-zero-drift-v1`; market data only, paper/live false |
 
 Read the exact constants and capability intersections from their owning source and registries; this table is a dated
 projection, not a substitute for code.
@@ -70,6 +71,7 @@ projection, not a substitute for code.
 | Exit sentinel v2 | The 2026-08-26 diagnosis covered 9,240 events across 150 sentinels; close-bounded coverage was 71/78 live and 62/72 paper. Every position made incomplete by cycle coverage was a loss. | V2 conflates a fresh zero bid with missing evidence, creating outcome selection. Its candidate economics are not promotion-grade; v3 remains deferred. See [`reports/exit-sentinel-preclose-availability-diagnosis-2026-08-26.md`](reports/exit-sentinel-preclose-availability-diagnosis-2026-08-26.md). |
 | Long-shot final review | On 2026-08-26, 150 resolved attempts across 76 windows lost 1,410.93¢ exact on 4,979¢ staked. The paired 97¢ exit was −98.93¢ versus hold. | Hold uncertainty remained broad and the strategy came from retrospective screening. The result supported retirement, not a claim against every cheap-contract strategy. See [`reports/long-shot-v2-final-review-2026-08-26.md`](reports/long-shot-v2-final-review-2026-08-26.md). |
 | Fixed live/paper economic monitor | The 24 hours through 2026-08-26T07:15Z had 54 live fills across 42 windows and −221.4543¢ exact P&L, versus 49 paper fills across 41 windows and −388.2450¢. Every qualifying v22 decision remained +24.33% ±7.21pp ask-and-hold, while live fills were −23.81% ±15.82pp and paper fills −36.22% ±16.43pp. | One live taker fill gained 242.79¢ while 53 maker fills lost 464.2443¢; paper captured only 24.49% of accepted live maker fills in the fixed-day exact cohort. Execution selection and exits remain competing explanations, not a unique correction. No forecast, policy, route, exit, calibration, sizing, or capital change was authorized. See [`reports/live-paper-economic-monitor-2026-08-26.md`](reports/live-paper-economic-monitor-2026-08-26.md). |
+| Hourly threshold mechanics | The 2026-08-26 public revalidation covered ten planned series, 1,335 open rows, 36 threshold rows, twelve exact one-hour rows, and ten rows with the structured strike fields required by H1. | This was one listing snapshot; availability changes, and DOGE's two exact-hour rows omitted structured strikes. H1 leaves incomplete contracts unavailable and grants no policy, paper, or live authority. See [`reports/kalshi-hourly-threshold-contract-revalidation-2026-08-26.md`](reports/kalshi-hourly-threshold-contract-revalidation-2026-08-26.md). |
 | Archive/restore | The 2026-08-24 manifest covered 138 stable files and 1,436,922,799 source bytes; an independent restore reproduced every file and passed forecast-v3 and execution-v9 semantic verifiers. | The bucket lacked Object Lock and an independent replica. No durable local source deletion or remote-primary eviction was authorized. See [`reports/object-storage-restore-and-disk-reclamation-2026-08-24.md`](reports/object-storage-restore-and-disk-reclamation-2026-08-24.md). |
 
 These measurements are not live counters. Recalculate from durable inputs before making a current quantitative
@@ -87,8 +89,9 @@ claim or decision.
   relaxation remain unsupported or blocked.
 - Provider/policy attribution visibility is implemented without a ledger rewrite or public-payload expansion.
   Durable unified policy lineage and parameter diffs remain a separate structural design.
-- The accepted hourly threshold-market design is not implemented. Proposed engine separation and multitenancy have
-  no implementation authority. Noodle Land remains exploratory and outside application/runtime authority.
+- Hourly threshold H1 public market data is implemented; H2 durable observation and H3 isolated paper remain
+  unactivated. Proposed engine separation and multitenancy have no implementation authority. Noodle Land remains
+  exploratory and outside application/runtime authority.
 
 See [`status/roadmap.md`](status/roadmap.md) for sequencing and [`spec/open-decisions.md`](spec/open-decisions.md)
 for unresolved normative questions.
@@ -97,8 +100,8 @@ for unresolved normative questions.
 
 At the published snapshot on 2026-08-26, the local production worker restarted after existing funded positions
 became terminal and reservations reached zero. Startup full reconciliation completed READY at
-`2026-08-26T07:36:41.298Z` with zero local/venue managed positions, resting orders, reservations, or blockers.
-Revision 7,131 retained explicit active operator intent in `live` mode with 1,888¢ available and zero reserved;
+`2026-08-26T16:04:22.165Z` with zero local/venue managed positions, resting orders, reservations, or blockers.
+Revision 7,420 retained explicit active operator intent in `live` mode with 1,791¢ available and zero reserved;
 funded execution was not paused or implicitly re-armed by the restart.
 
 That state may have changed immediately after publication. Do not infer present permission, exposure, cash,

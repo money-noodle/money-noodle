@@ -102,17 +102,22 @@ The `crypto-1h` plan (docs/second-market-hourly-crypto-design.md) changes the ta
 2. **60s cadence (locked).** At one read per asset per 60s: Kalshi hourly adds **10 assets × 1 = 10
    requests/min ≈ 0.17/s**. Negligible against 20/s sustained. Request count stays near-flat against the
    token budget; the load that matters is bandwidth on the grid fetch, which a min-60s cadence bounds.
-3. **`ASSETS` widening 7 → 10 adds per-raw reads to the *15m loop too*.**
-   - Kalshi 15m: 7 → 10 per 12s; Polymarket: 7 → 10 events per 12s; Kraken: 8 → 11 fast + 7 → 10 weekly.
-   - Steady public reads go from ~23.3/15s to ~**31/15s** (≈ 2.1 → **≈ 2.8/s**), worst-case single cycle
-     to ~**41**. Still ~5–7% of Kalshi 20/s sustained. The cost is real but not binding — it is the "all
-     ten assets" call the design made without counting, and this reference now prices it.
+3. **Market-specific membership keeps the 15m venue loop at seven assets.**
+   - The hourly design no longer widens the one global `ASSETS` list and accidentally adds TON/NEAR/ZEC to 15m
+     Kalshi and Polymarket discovery. Shared asset metadata gains those symbols, while explicit market membership
+     keeps the current 15m subjects unchanged and gives the hourly market its planned ten.
+   - Hourly reference data may add up to ten 1m-OHLC reads/min plus one batched ticker read/min at its 60-second
+     cadence; CoinGecko remains one batched request with a larger ID set. That is approximately another 0.18
+     requests/s before cache reuse, rather than adding requests to every 15-second venue cycle.
+   - Together with ten hourly Kalshi reads/min, the planned request-count delta is approximately 0.35 requests/s.
+     Exact cache sharing and cold-start arithmetic must be remeasured in the implementation review; this estimate
+     does not authorize a broader caller or faster cadence.
 
-**Net against Kalshi token budget:** public quote + hourly reads stay a small fraction of the 20/s
-sustained. The binding constraints remain (a) the signed-read burst during reconciliation/manager, and
-(b) the **grid-payload** cost of hourly reads, which must be bounded (prefer a `status`/type filter or
-series query that returns the threshold pair rather than the full band grid) before the hourly market
-ships.
+**Net against Kalshi token budget:** the hourly public quote count remains a small fraction of the 20/s sustained,
+and the existing 15m venue count does not change. The binding constraints remain (a) the signed-read burst during
+reconciliation/manager, and (b) the **grid-payload** cost of hourly reads, which must be bounded (prefer a
+`status`/type/time filter or series query that returns the exact one-hour threshold pair rather than the full band
+grid) before the hourly market ships.
 
 ## 5. Throttle recovery matrix
 
@@ -142,6 +147,9 @@ separately, because the hourly case shows they diverge.
 
 ## Change log
 
+- 2026-08-26 · Replaced the planned global 7→10 asset widening with shared asset metadata plus per-market
+  membership. The 15m venue loop stays at seven subjects; the hourly ten-series and reference-data delta is
+  separately bounded. No runtime caller or capability changed.
 - 2026-08-26 · Removed the long-shot ordinary/trailing/target quote load after the strategy's final review;
   no replacement reader was added.
 - 2026-08-26 · Recorded the 190-response public exact-market 429 burst across seven 20:15Z contracts. The existing

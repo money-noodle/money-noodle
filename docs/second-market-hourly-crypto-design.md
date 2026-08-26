@@ -2,15 +2,15 @@
 
 > **Document type:** Product design
 > **Design status:** Accepted
-> **Implementation:** Not started
+> **Implementation:** Partial
 > **Created:** 2026-08-21
 > **Canonical requirements:** [`spec/forecasting-and-evidence.md`](../spec/forecasting-and-evidence.md), [`spec/providers-and-market-data.md`](../spec/providers-and-market-data.md), [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md)
 > **Decision record:** [`DEC-20260821-01`](../spec/decisions/decision-id-map.json)
 > **Design index:** [`docs/README.md`](README.md)
 
 > **Approved 2026-08-21** · Decisions locked: T-only, 8pp edge floor, 3/2/1 caps, 60s cadence,
-> cross-market exposure ignored, threshold-pair selection, all ten assets. · Status: design, implementation
-> pending. Product/architecture truth lives in `spec/trading-risk-and-budget.md` §3.6 (markets & keying), `market-registry.ts`,
+> cross-market exposure ignored, threshold-pair selection, all ten assets. · Status: H1 public market-data
+> capability and Vercel UI implemented; H2 durable observation and H3 paper remain pending. Product/architecture truth lives in `spec/trading-risk-and-budget.md` §3.6 (markets & keying), `market-registry.ts`,
 > `strategy-registry.ts`, `policy-manifest.ts`, and `basis-model.ts`. This document is the pre-code
 > agreement for adding a second market: what the market is, how the contracts differ, and every
 > registry/policy/store seam that must grow a case.
@@ -70,6 +70,14 @@ A window (e.g., 19:00→20:00Z) lists **one strike per ticker** and **many ticke
 venue listing is therefore a grid, but the Phase 1 candidate surface is not: discovery filters to the exact `T`
 above/below threshold pair for each asset/window and does not evaluate the deferred `B`-family strike grid.
 
+A fresh public-API check on 2026-08-26 found that one series can simultaneously expose `T` pairs whose
+`open_time`→`close_time` durations are one hour, 25 hours, and seven days. `crypto-1h` therefore requires an exact
+3,600-second duration; series identity or nearest future close alone is insufficient. Six of the ten planned
+series exposed current exact-hour rule pairs in that single snapshot, but only five supplied the structured
+floor/cap fields H1 requires; DOGE omitted both fields and remains unavailable alongside SOL, TON, NEAR, and ZEC.
+Absence or structural incompleteness remains explicit and does not prove permanent unsupported status. See
+[`reports/kalshi-hourly-threshold-contract-revalidation-2026-08-26.md`](../reports/kalshi-hourly-threshold-contract-revalidation-2026-08-26.md).
+
 ### 2.2 The model consequence (the load-bearing difference)
 
 The 15m model (`basisProbability`, `src/lib/basis-model.ts`) prices **exactly one thing**:
@@ -103,10 +111,13 @@ Concretely:
   (`horizonSeconds: 3600`, `settlementBasis: '60-second CF index average versus an absolute strike'`),
   and a **(kalshi, crypto-1h)** capability triple.
 - **Fail closed:** capability is declared per (provider, market). Adding hourly to the registry does
-  **not** grant Kalshi live authority on it. The new triple grants `marketData + paper`; `live` stays
-  `false` until a separate promotion.
-- **Provider registry** (`trading-provider-registry.ts`): add an hourly variant identity (e.g.
-  `kalshi-1h-maker-v1`) so paper P&L is not pooled with the 15m maker.
+  **not** grant Kalshi live authority on it. Activation is staged: H1 grants `marketData` only while `paper` and
+  `live` remain false; the completed initial target grants `marketData + paper`, with `live` still false until a
+  separate promotion.
+- **Provider registry:** H1 uses a read-model identity such as `kalshi-hourly-threshold-read-v1`, not the
+  provider's selected execution variant. The current provider configuration selects one variant per provider, so
+  adding an active hourly execution variant early could stamp a 15m order with the wrong identity. Add the eventual
+  `kalshi-1h-maker-v1` only with H3's provider × market execution-variant ownership and isolated paper P&L.
 - **Everything keeps `marketId`.** Orders, budget rows, policy rows, and summaries already carry an
   explicit `marketId`; the default still points at `crypto-15m`, so nothing existing migrates.
 
@@ -134,8 +145,9 @@ future window:
 | `KXHYPE` | 75 | **2** | 73 |
 
 The **188-strike grid is the band (`B`) family**, which we deferred. The threshold (`T`) product
-we are actually trading is **one above-strike contract and one below-strike contract per asset/window**
-— an up/down pair. Candidate selection therefore aligns with the 15m, not with a grid:
+we are initially implementing is **one above-strike contract and one below-strike contract per asset/window**
+— a presentation pair. Candidate selection therefore aligns with the 15m one-position grouping, not with a grid,
+while retaining the non-complementary contract identity below:
 
 - **One T contract per side per asset/window** (above-strike = up, below-strike = down), the hourly
   analog of the single 15m contract per asset/window.
@@ -145,6 +157,26 @@ we are actually trading is **one above-strike contract and one below-strike cont
   net-edge floor after fees — same qualifications as the 15m, applied to the up/down pair.
 - The portfolio holds **at most one T position per (asset, window)** (one side of the pair), matching
   the 15m one-position-per-window rule and avoiding a doubled economic bet.
+
+#### Independent candidate contract
+
+“Pair” is presentation grouping, not binary complement identity. The first generation contains exactly these two
+candidate classes when their exact contracts are available:
+
+- `ABOVE`: buy YES on the floor-strike `T` contract; model `P(settlement > K_high)`; display direction `UP`;
+- `BELOW`: buy YES on the cap-strike `T` contract; model `P(settlement < K_low)`; display direction `DOWN`.
+
+Each candidate owns its ticker, strike relation/value, YES book, rules fingerprint, open/close timestamps, model
+probability, and outcome. The BELOW probability is never `1 − P(ABOVE)`, and its quote is never inferred from the
+ABOVE contract's NO book. The two events leave a middle region where both settle NO. Their NO books remain venue
+mechanics for those exact contracts and are not additional entry candidates in the initial T-only family.
+
+Discovery groups rows only when provider, series, asset, exact `open_time`, and exact `close_time` agree and
+`close_time − open_time = 3,600` seconds. It identifies ABOVE from a finite floor strike with no cap strike and
+BELOW from a finite cap strike with no floor strike, then confirms the exact rules. A missing or ambiguous side is
+explicitly unavailable. It may remain visible as incomplete research evidence, but an incomplete group cannot
+become paper-eligible. No ticker pattern, row order, subtitle, complementary price, or nearby longer-duration pair
+may fill the gap.
 
 **Open verification item (not a lock):** the two T strikes per window are not centered near spot in the
 sample — BTC showed above-$87,799 and below-$69,200 around an ~$80k spot, roughly $8k above and $11k
@@ -192,15 +224,16 @@ design if measurement shows the correlation is material.
 
 - Driftless log-normal generalizes to `P(settlement > K)` / `P(<K)`. **Drift stays zero** — hourly
   drift is not estimable from sparse short-horizon samples, and assuming it fabricates edge.
-- **New edge floor — locked at 8pp for the hourly collection cohort** (operator decision 2026-08-21).
+- **New edge floor — locked at 8pp for the eventual hourly paper cohort** (operator decision 2026-08-21).
   The 15m sits at 5pp (v22) on ~58k observations of `P(settlement ≥ cycle-open reference)`; the hourly
   target `P(settlement ≥/≤ absolute strike)` has **zero calibration history**, so 8pp = 1.6× the
   proven 15m floor applied to an untuned surface. It excludes everything below 5pp where Kalshi's
   quadratic fee (~1.3¢ at a 75¢ ask) and tick error alone can flip an edge's sign, but admits a
   5–9pp band where venue-implied-vol misestimation is most plausibly tradeable. The cost of an 8pp
-  floor is slower cohort accumulation on a 24-window/day book (a 10pp floor can drop below one
-  qualifying paper trade/day); that cost is bounded because the track is paper-only. The floor is a
-  collection-cohort number the 60-window cohort exists to re-examine, not a promotion.
+  floor is slower cohort accumulation on a nominal one-hour book (a 10pp floor can drop below one
+  qualifying paper trade/day); actual listing availability controls the calendar. That cost is bounded because the
+  track is paper-only. The floor is a paper-cohort number the 60-window cohort exists to re-examine, not a promotion.
+  It has no authority during the read-only H1 market-data stage.
 - New **buy policy version** (`provider × market`) with its own `BUY_POLICY_VERSION`, added to
   `policy-manifest.ts` with matching `history` (the manifest test enforces this).
 - **New execution-policy, sizing, and exit rows** — not shared with the 15m, because fees, tick sizes,
@@ -213,14 +246,23 @@ design if measurement shows the correlation is material.
   strike multiplicity makes stacking easy. Caps rise only on measured stacking evidence after the
   hourly 60-window cohort.
 
-### 5.1 Paper/market-data first; live withheld
+### 5.1 Market-data first, then paper; live withheld
 
-- The new capability triple for (kalshi, crypto-1h) grants **marketData + paper**; `live` stays
-  `false`. Fail closed.
-- **Paper shadow trading** on the 1h strike book keeps the mirror invariant: the entry rule takes no
-  execution mode — identical rule for paper/live.
-- Live promotion is a separate manual act on committed sentinel evidence (`spec/policy-and-track-separation.md` §12.5), out of scope
-  for this design.
+- **H1 — read-only market data:** register `crypto-1h`, implement the exact-duration independent-candidate
+  normalizer and strike model, and expose a stateless-safe Vercel surface. Capability is
+  `marketData: true, paper: false, live: false`. H1 has no buy-policy, persistence, sizing, portfolio, budget,
+  ledger, order, settlement-write, or reconciliation authority. It may display model probability, exact YES ask,
+  and their labeled difference, but cannot call the row qualified, paper-eligible, or trade-ready.
+- **H2 — durable observation:** the persistent worker may add a detached 60-second observation/outcome lane only
+  after its schema, writer ownership, archive inclusion, exact-provider resolution, and non-interference tests are
+  accepted. Stateless hosts remain writer-free. This stage supplies the prospective availability needed to freeze
+  the still-unspecified persistence, warm-up, and final-cutoff values before paper starts.
+- **H3 — paper activation:** only after the complete provider × market buy, persistence, sizing, execution, exit,
+  portfolio, bankroll, settlement, and reporting identities are frozen and tested may the capability become
+  `marketData: true, paper: true, live: false`. Paper shadow trading then keeps the mirror invariant: its entry rule
+  takes no execution mode and would be identical to a future live rule.
+- Live promotion is a separate manual act on committed sentinel evidence
+  (`spec/policy-and-track-separation.md` §12.5), out of scope for this design.
 
 ## 6. Index and oracle handling
 
@@ -256,28 +298,42 @@ hourly plan's delta and points there.
   (hundreds of contracts, dominated by the deferred `B` family) to locate the two threshold contracts,
   where the 15m read is `limit=10`. Bound this with a series/status/type filter that returns the
   threshold pair rather than the whole grid before the hourly market ships.
-- `ASSETS` widening 7 → 10 also adds per-asset public reads to the **15m loop** (Kalshi, Polymarket,
-  Kraken), roughly +8 requests per 15s tick. Combined steady public reads rise from ~23 to ~31 per 15s
-  (~5–7% of Kalshi sustained) — real but not the binding constraint. The binding constraints remain (a)
-  the signed-read burst during reconciliation/manager and (b) the hourly grid payload.
+- Do **not** widen the 15m venue loop to implement the hourly asset set. Split the current global asset list into
+  shared asset metadata plus explicit per-market membership: the existing seven stay on `crypto-15m`, while the ten
+  planned symbols belong to `crypto-1h`. Shared spot/reference requests may fetch the union at the slowest adequate
+  market cadence, but 15m Kalshi and Polymarket discovery must not acquire three unrelated subjects. This keeps the
+  hourly delta near 10 Kalshi series reads/min plus bounded reference-data deltas rather than changing every 15m
+  venue tick. The binding constraints remain (a) signed-read bursts during reconciliation/manager and (b) hourly
+  grid payload.
 
 See `docs/venue-traffic-and-rate-limits.md` §4 for the worked deltas.
 - 15-second polling would waste the shared Kalshi read-limit budget on a book that cannot act that
   fast.
 
-## 8. Asset set — all ten, all fully participating
+## 8. Asset set — all ten planned, availability explicit
 
-Add TON/NEAR/ZEC to the participating set (hourly strikes exist for them), not read-only:
+Support the ten planned symbols in the read model, but never imply that a planned series has a current exact
+one-hour listing. The 2026-08-26 snapshot found current pairs for six and none for four; a missing series/card is
+shown as unavailable. Paper participation begins per exact available contract only after H3 rather than being
+inferred from planned asset membership.
 
-- Widen `ASSETS` and the `KRAKEN_PAIRS` / CoinGecko mappings in `feeds.ts`.
-- Ten symbols map to hourly series 1:1: BTC/ETH/SOL/XRP/DOGE/HYPE/BNB + TON/NEAR/ZEC.
+Add TON/NEAR/ZEC to the planned set and required spot/reference mappings:
+
+- Replace the one global `ASSETS` ownership assumption with shared asset metadata and explicit market membership;
+  keep the current seven-member `crypto-15m` set unchanged and define the ten-member `crypto-1h` planned set.
+- Extend Kraken and CoinGecko mappings for the three new reference assets without adding their Polymarket/Kalshi
+  15m discovery calls.
+- Ten symbols map to planned hourly series 1:1: BTC/ETH/SOL/XRP/DOGE/HYPE/BNB + TON/NEAR/ZEC; current listing
+  absence remains visible and does not remove the planned identity.
 - `cryptoExposureGroup` (`portfolio-policy.ts`) needs a mapping for the three new symbols
   (provisionally: `layer1-beta` for TON, `alt-beta` for NEAR/ZEC, with a correlation check before
   finalizing).
 
 ## 9. Decisions (locked 2026-08-21)
 
-All six open decisions are resolved; nothing remains un-decided.
+All six original product questions are resolved. H1 deliberately has no entry policy. The exact persistence,
+warm-up, and final-cutoff values required for H3 paper activation remain withheld pending the H2 prospective
+availability cohort; they require a pre-outcome design amendment and cannot be selected from paper results.
 
 1. **New 1h entry edge floor — 8pp.** Collection cohort; re-examined at the 60-window boundary; not a
    promotion.
@@ -318,3 +374,11 @@ All six open decisions are resolved; nothing remains un-decided.
 - 2026-08-26 · Removed the remaining stale current-decision references to the superseded strike-grid helper and
   clarified that the full venue listing is a grid while the Phase 1 candidate surface is the exact `T` threshold
   pair. No market capability, policy, registry, or runtime behavior changed.
+- 2026-08-26 · Revalidated all ten planned public series across 1,335 open rows. Defined exact 3,600-second
+  selection, two independent YES candidate identities, explicit unavailable handling, and staged H1 market-data →
+  H2 observation → H3 paper capability. This is pre-code prose and changes no current registry or runtime behavior.
+- 2026-08-26 · Maintainer approved the H0 contract and H1 implementation boundary under
+  [`DEC-20260826-08`](../spec/decisions/decision-id-map.json). H1 added exact-duration public normalization, a
+  zero-drift strike model, process-memory-only reads, market-specific asset membership, and a stateless-safe Vercel
+  UI. Paper/live capability and execution-variant selection remain unchanged until H3 can key them by provider ×
+  market.

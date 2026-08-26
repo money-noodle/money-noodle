@@ -9,6 +9,7 @@ import {
 import { AccountDialog } from '@/components/account-dialog';
 import { DataFreshnessDialog } from '@/components/data-freshness-dialog';
 import { MarketChart } from '@/components/market-chart';
+import { HourlyThresholdMarkets } from '@/components/hourly-threshold-markets';
 import { OrderBookLadder } from '@/components/order-book-ladder';
 import { PerformanceDialog } from '@/components/performance-dialog';
 import { PaperBudgetDialog } from '@/components/paper-budget-panel';
@@ -609,12 +610,14 @@ export function Dashboard({ initialData, authenticated, deskAvailable, stateless
 
       <section>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2"><h2 className="text-sm font-medium">Current markets</h2><Badge variant="secondary" className="font-mono">{predictions.length}</Badge></div>
+          <div className="flex items-center gap-2"><h2 className="text-sm font-medium">Current 15-minute markets</h2><Badge variant="secondary" className="font-mono">{predictions.length}</Badge></div>
           <div className="flex items-center gap-4 text-[10px] text-muted-foreground"><span className="flex items-center gap-1"><Clock3 className="size-3"/>{data ? `Updated ${new Date(data.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Loading'}</span><span className="hidden items-center gap-1 sm:flex"><ShieldCheck className="size-3"/>Sorted by buy strength</span></div>
         </div>
         {error && <div className="mb-4 flex items-center gap-2 rounded-lg border border-loss/20 bg-loss/5 p-3 text-xs text-loss"><Info className="size-4"/>{error}</div>}
         {!data && !error ? <LoadingState/> : predictions.length ? <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{predictions.map((prediction) => <PredictionCard key={prediction.symbol} prediction={prediction} news={data?.news ?? []}/>)}</div> : <Card className="grid min-h-52 place-items-center p-6 text-center text-sm text-muted-foreground">{!currentPolicyMatches ? <span>No current cards use {selectedBuyPolicy}. Historical policy cohorts remain in decision history and performance.</span> : 'No matching markets.'}</Card>}
       </section>
+
+      <HourlyThresholdMarkets query={query}/>
 
       <section className="mt-8 grid gap-3 md:grid-cols-3">
         <Card className="bg-card/60 p-4"><div className="flex items-start gap-3"><div className="rounded-lg bg-primary/10 p-2 text-primary"><BrainCircuit className="size-4"/></div><div><p className="text-xs font-medium">Transparent by default</p><p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">Every probability-point contribution is available in the thesis view.</p></div></div></Card>

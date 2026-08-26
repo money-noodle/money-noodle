@@ -45,8 +45,13 @@ provider/market funding → global exposure limits → expected dollar contribut
 Reliability is a hard gate, not a ranking weight. Venue preference uses an explicit cents margin so negligible quote
 noise cannot flip selection.
 
-The accepted hourly threshold market remains market-data/paper-first with live withheld until a separate promotion.
-Its exact semantics live in [`docs/second-market-hourly-crypto-design.md`](../docs/second-market-hourly-crypto-design.md).
+The accepted hourly threshold market activates in capability stages. H1 is public research only:
+`marketData: true, paper: false, live: false`. Its ABOVE and BELOW rows are independent YES contracts with distinct
+strikes, tickers, probabilities, quotes, and outcomes; neither may be inferred from the other's NO side. Assign
+`crypto-1h` only when exact venue timestamps establish a 3,600-second open-to-close duration. H2 durable observation
+and H3 paper capability require their own accepted ownership, outcome, policy, accounting, and isolation gates;
+live remains withheld until a separate promotion. Exact implementation semantics live in
+[`docs/second-market-hourly-crypto-design.md`](../docs/second-market-hourly-crypto-design.md).
 
 <a id="req-trading-budget-model"></a>
 

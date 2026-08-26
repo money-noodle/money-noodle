@@ -14,7 +14,7 @@ export const MIN_BASIS_PROBABILITY = 0.05;
 export const MAX_BASIS_PROBABILITY = 0.95;
 /** Settlement averages the final minute, so the effective diffusion horizon ends mid-window. */
 export const SETTLEMENT_WINDOW_SECONDS = 60;
-const MIN_EFFECTIVE_SECONDS = 2;
+export const MIN_EFFECTIVE_SECONDS = 2;
 
 export function clampProbability(value: number, min = MIN_BASIS_PROBABILITY, max = MAX_BASIS_PROBABILITY): number {
   return Math.min(max, Math.max(min, value));

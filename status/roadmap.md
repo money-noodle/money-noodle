@@ -59,9 +59,10 @@ No layer may gain order, budget, reconciliation, or automatic-promotion authorit
 
 ## Accepted work not yet scheduled
 
-- Implement the accepted read/paper-first hourly threshold market only through its registry, contract-provenance,
-  settlement, budget, and target-integrity gates. Live capability remains a separate promotion. See
-  [`second-market-hourly-crypto-design.md`](../docs/second-market-hourly-crypto-design.md).
+- Continue the accepted hourly threshold market after H1 public market data: design and activate H2 detached
+  durable observation/outcome ownership, then freeze the complete H3 policy, persistence, paper accounting,
+  settlement, budget, and target-integrity gates before enabling paper. Live capability remains a separate
+  promotion. See [`second-market-hourly-crypto-design.md`](../docs/second-market-hourly-crypto-design.md).
 - Verify the first organic live switch end to end without forcing one: reduce-only action, venue fills and fees,
   remaining quantity, reservation release, replacement withholding, and switch-versus-hold accounting.
 - Continue prospective strict-value/profit-reversal and maker queue/depth evidence without reinterpreting historical

@@ -33,7 +33,7 @@ export type TradingProviderImplementation = 'planned' | 'read-paper' | 'live';
  * budgets, orders, and reported summaries carry it explicitly so a second market is additive rather
  * than a migration of every historical record.
  */
-export type MarketId = 'crypto-15m' | 'crypto-spot';
+export type MarketId = 'crypto-15m' | 'crypto-1h' | 'crypto-spot';
 
 /**
  * A strategy is a complete way of deciding what to buy and when to sell, running on a market. The
@@ -288,6 +288,53 @@ export interface VenueQuote {
   floorStrike?: number;
   orderBook?: BinaryOrderBook;
   contract?: ContractProvenanceRecord;
+}
+
+export type HourlyThresholdDirection = 'ABOVE' | 'BELOW';
+
+/** Public H1 research candidate. It has no policy, paper, budget, ledger, or order semantics. */
+export interface HourlyThresholdCandidate {
+  direction: HourlyThresholdDirection;
+  displaySide: PositionSide;
+  ticker: string;
+  strike: number;
+  relation: 'greater-than' | 'less-than';
+  label: string;
+  yesBid?: number;
+  yesAsk?: number;
+  noBid?: number;
+  noAsk?: number;
+  modelProbabilityYes?: number;
+  modelMinusAsk?: number;
+  modelUnavailableReason?: string;
+  rulesFingerprint: string;
+  marketUrl: string;
+}
+
+export interface HourlyThresholdMarket {
+  marketId: 'crypto-1h';
+  providerId: 'kalshi';
+  symbol: string;
+  name: string;
+  marketDataAvailable: boolean;
+  openAt?: string;
+  closesAt?: string;
+  currentPrice?: number;
+  volatilityPerSecond?: number;
+  volatilitySamples?: number;
+  candidates: HourlyThresholdCandidate[];
+  unavailableReason?: string;
+}
+
+export interface HourlyThresholdMarketsResponse {
+  generatedAt: string;
+  expiresAt: string;
+  marketId: 'crypto-1h';
+  providerId: 'kalshi';
+  marketDataVersion: 'kalshi-hourly-threshold-read-v1';
+  modelVersion: 'strike-threshold-zero-drift-v1';
+  capability: { marketData: true; paper: false; live: false };
+  markets: HourlyThresholdMarket[];
 }
 
 export interface ContractComparabilityVenueReport {

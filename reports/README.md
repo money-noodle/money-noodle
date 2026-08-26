@@ -122,6 +122,7 @@ Fixed-window operational reads. Each is a snapshot of a stated past interval, ne
 
 | Report | Question it answers |
 | --- | --- |
+| [`kalshi-hourly-threshold-contract-revalidation-2026-08-26`](kalshi-hourly-threshold-contract-revalidation-2026-08-26.md) | Whether the planned hourly series currently expose exact one-hour threshold pairs and what identity the first selector must preserve |
 | [`contract-comparability-analysis-2026-08-14`](contract-comparability-analysis-2026-08-14.md) | Whether cross-venue contracts settle comparably enough to price one forecast against several venues |
 
 ## Time and seasonality

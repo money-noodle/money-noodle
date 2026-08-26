@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 
 import {
-  CRYPTO_15M, DEFAULT_MARKET_ID, MARKETS, isMarketId, marketDescriptor, marketProviders,
-  normalizeMarketId, productionMarketCapability, providerMarketCapability, providerMarketCapabilities,
+  CRYPTO_15M, CRYPTO_1H, DEFAULT_MARKET_ID, MARKETS, isMarketId, marketDescriptor, marketProviders,
+  normalizeMarketId, productionMarketCapability, providerFundedMarkets, providerMarketCapability, providerMarketCapabilities,
 } from './market-registry';
 import { tradingProviderRegistry } from './trading-provider-registry';
 import { TRADING_PROVIDER_IDS } from './trading-provider-config-store';
@@ -24,23 +24,33 @@ function configuration(overrides: Partial<TradingProviderConfiguration['provider
 
 describe('market registry', () => {
   it('names each market rather than implying it, with crypto-15m as production', () => {
-    expect(MARKETS.map((market) => market.id)).toEqual([CRYPTO_15M, 'crypto-spot']);
+    expect(MARKETS.map((market) => market.id)).toEqual([CRYPTO_15M, CRYPTO_1H, 'crypto-spot']);
     expect(DEFAULT_MARKET_ID).toBe(CRYPTO_15M);
     expect(marketDescriptor(CRYPTO_15M).horizonSeconds).toBe(900);
+    expect(marketDescriptor(CRYPTO_1H).horizonSeconds).toBe(3_600);
   });
 
   it('treats records written before markets were explicit as belonging to crypto-15m', () => {
     expect(normalizeMarketId(undefined)).toBe(CRYPTO_15M);
     expect(normalizeMarketId('not-a-market')).toBe(CRYPTO_15M);
     expect(normalizeMarketId(CRYPTO_15M)).toBe(CRYPTO_15M);
+    expect(isMarketId('crypto-1h')).toBe(true);
     expect(isMarketId('crypto-spot')).toBe(true);
     expect(isMarketId('us-equities-daily')).toBe(false);
   });
 
   it('declares capability per provider and market pair, not per provider', () => {
     expect(providerMarketCapability('kalshi', CRYPTO_15M)).toMatchObject({ marketData: true, paper: true, live: true });
+    expect(providerMarketCapability('kalshi', CRYPTO_1H)).toMatchObject({ marketData: true, paper: false, live: false });
+    expect(providerMarketCapability('polymarket', CRYPTO_1H)).toBeUndefined();
     expect(providerMarketCapability('polymarket', CRYPTO_15M)).toMatchObject({ paper: true, live: false });
     expect(marketProviders(CRYPTO_15M).sort()).toEqual([...TRADING_PROVIDER_IDS].sort());
+  });
+
+  it('keeps research-only hourly and spot markets out of funded allocation', () => {
+    expect(providerFundedMarkets('kalshi').map((market) => market.id)).toEqual([CRYPTO_15M]);
+    expect(providerFundedMarkets('crypto-com')).toEqual([]);
+    expect(providerFundedMarkets('robinhood')).toEqual([]);
   });
 
   it('keeps Crypto.com incapable on crypto-15m and explains why', () => {

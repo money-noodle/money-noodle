@@ -1,15 +1,11 @@
 import { createContractProvenance } from './contract-provenance';
+import { cryptoAsset, cryptoAssetsForMarket } from './asset-registry';
 import type { ChartPoint, MarketQuote, NewsItem, VenueQuote } from './types';
 
-export const ASSETS = [
-  { symbol: 'BTC', name: 'Bitcoin', coinGeckoId: 'bitcoin', poly: 'btc' },
-  { symbol: 'ETH', name: 'Ethereum', coinGeckoId: 'ethereum', poly: 'eth' },
-  { symbol: 'SOL', name: 'Solana', coinGeckoId: 'solana', poly: 'sol' },
-  { symbol: 'XRP', name: 'XRP', coinGeckoId: 'ripple', poly: 'xrp' },
-  { symbol: 'DOGE', name: 'Dogecoin', coinGeckoId: 'dogecoin', poly: 'doge' },
-  { symbol: 'BNB', name: 'BNB', coinGeckoId: 'binancecoin', poly: 'bnb' },
-  { symbol: 'HYPE', name: 'Hyperliquid', coinGeckoId: 'hyperliquid', poly: 'hype' },
-] as const;
+/** Existing 15m membership remains exactly seven subjects; hourly owns its separate ten-subject set. */
+export const ASSETS = cryptoAssetsForMarket('crypto-15m').map((asset) => ({
+  symbol: asset.symbol, name: asset.name, coinGeckoId: asset.coinGeckoId, poly: asset.polymarketSlug!,
+}));
 
 export interface CoinSnapshot {
   symbol: string;
@@ -50,9 +46,9 @@ async function fetchJson<T>(url: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-const KRAKEN_PAIRS: Record<string, string> = {
-  BTC: 'XBTUSD', ETH: 'ETHUSD', SOL: 'SOLUSD', XRP: 'XRPUSD', DOGE: 'DOGEUSD', BNB: 'BNBUSD', HYPE: 'HYPEUSD',
-};
+const KRAKEN_PAIRS: Record<string, string> = Object.fromEntries(
+  cryptoAssetsForMarket('crypto-15m').map((asset) => [asset.symbol, asset.krakenPair]),
+);
 
 export const CONTRACT_SLOT_SECONDS = 900;
 
@@ -72,9 +68,9 @@ export interface PriceSeries extends ContractReference {
   closes: number[];
 }
 
-const KRAKEN_TICKER_KEYS: Record<string, string> = {
-  BTC: 'XXBTZUSD', ETH: 'XETHZUSD', SOL: 'SOLUSD', XRP: 'XXRPZUSD', DOGE: 'XDGUSD', BNB: 'BNBUSD', HYPE: 'HYPEUSD',
-};
+const KRAKEN_TICKER_KEYS: Record<string, string> = Object.fromEntries(
+  cryptoAssetsForMarket('crypto-15m').map((asset) => [asset.symbol, asset.krakenTickerKey]),
+);
 
 async function fetchKrakenLastTrades(): Promise<Record<string, number>> {
   const pairs = ASSETS.map((asset) => KRAKEN_PAIRS[asset.symbol]).join(',');
@@ -280,7 +276,9 @@ export async function fetchPolymarketQuotes(): Promise<Record<string, MarketQuot
 }
 
 export function kalshiSeriesTicker(symbol: string): string {
-  return `KX${symbol.toUpperCase()}15M`;
+  const series = cryptoAsset(symbol)?.kalshi15mSeries;
+  if (!series) throw new Error(`No crypto-15m Kalshi series registered for ${symbol}.`);
+  return series;
 }
 
 export type KalshiMarket = {

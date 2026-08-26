@@ -9,6 +9,7 @@ export const CRYPTO_15M: MarketId = 'crypto-15m';
 /** Default carried by records written before markets were explicit, and by every current write. */
 export const DEFAULT_MARKET_ID: MarketId = CRYPTO_15M;
 
+export const CRYPTO_1H: MarketId = 'crypto-1h';
 export const CRYPTO_SPOT: MarketId = 'crypto-spot';
 
 export const MARKETS: MarketDescriptor[] = [
@@ -19,6 +20,14 @@ export const MARKETS: MarketDescriptor[] = [
     horizonSeconds: 900,
     settlementBasis: 'Settlement price versus the cycle-open reference for the same asset and window.',
     description: 'Binary Up/Down contracts on 15-minute crypto windows, compared across providers only when contract rules are exactly or approximately comparable.',
+  },
+  {
+    id: 'crypto-1h',
+    name: 'Crypto one-hour thresholds',
+    instrument: 'binary-event-contract',
+    horizonSeconds: 3_600,
+    settlementBasis: 'CF Benchmarks 60-second average versus one exact absolute strike.',
+    description: 'Read-only Kalshi threshold research. ABOVE/YES and BELOW/YES are distinct contracts; paper and live remain withheld.',
   },
   {
     id: 'crypto-spot',
@@ -63,6 +72,10 @@ const CAPABILITIES: ProviderMarketCapability[] = [
     readiness: 'Signed account, maker placement, cancellation, fills, positions, cash, and authoritative reconciliation are implemented.',
   },
   {
+    providerId: 'kalshi', marketId: 'crypto-1h', marketData: true, paper: false, live: false,
+    readiness: 'H1 public exact-duration threshold research is implemented. Durable observation, paper accounting, and live execution are withheld.',
+  },
+  {
     providerId: 'crypto-com', marketId: 'crypto-15m', marketData: false, paper: false, live: false,
     readiness: 'Not viable: Strike Options has no programmatic interface, no order book, 5/20-minute rather than 15-minute durations, and settles on CDNA’s own index against a predetermined strike. Its API trades spot and perpetuals, declared under crypto-spot instead.',
   },
@@ -96,6 +109,12 @@ export function providerMarketCapability(providerId: TradingProviderId, marketId
 /** Providers declared for a market, whether or not they are currently capable or enabled. */
 export function marketProviders(marketId: MarketId): TradingProviderId[] {
   return CAPABILITIES.filter((item) => item.marketId === marketId).map((item) => item.providerId);
+}
+
+/** Markets that may receive real provider allocation. Research or paper capability never grants budget authority. */
+export function providerFundedMarkets(providerId: TradingProviderId): MarketDescriptor[] {
+  const ids = new Set(CAPABILITIES.filter((item) => item.providerId === providerId && item.live).map((item) => item.marketId));
+  return MARKETS.filter((market) => ids.has(market.id)).map((market) => ({ ...market }));
 }
 
 /**

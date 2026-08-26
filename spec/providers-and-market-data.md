@@ -114,3 +114,9 @@ Never assume venue contracts resolve identically. A normalized market must retai
 - A `comparability` state: exact, approximate, or not comparable.
 - Provider and provider-variant IDs plus immutable contract-target and rules fingerprints.
 - Whether the capability is `research`, `paper`, or independently promoted `live`; unsupported capability must fail closed.
+
+For the accepted Kalshi hourly threshold H1 surface, normalization treats floor-strike ABOVE/YES and cap-strike
+BELOW/YES as independent contracts. It requires exact ticker, strike relation/value, rules fingerprint, open/close
+timestamps, and a 3,600-second duration. Missing or ambiguous directional rows remain unavailable; ticker patterns,
+row order, subtitles, another contract's NO book, and longer-duration rows cannot fill a gap. H1 grants public
+market-data visibility only and has no paper or live capability.

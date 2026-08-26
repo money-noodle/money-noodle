@@ -3,7 +3,7 @@ import { isAuthenticatedRequest } from '@/lib/auth';
 import { isStatelessDeployment, STATELESS_WORKER_MESSAGE } from '@/lib/runtime-environment';
 import { getProviderBudgets, providerBudget, updateProviderBudget } from '@/lib/provider-budget-store';
 import { allocationsValid } from '@/lib/provider-budget-policy';
-import { MARKETS, isMarketId } from '@/lib/market-registry';
+import { MARKETS, isMarketId, providerFundedMarkets, providerMarketCapability } from '@/lib/market-registry';
 import { TRADING_PROVIDER_IDS } from '@/lib/trading-provider-config-store';
 import { getTradingControl } from '@/lib/trading-control';
 import { getExecutionOrders } from '@/lib/paper-execution';
@@ -53,7 +53,7 @@ export async function GET(request: NextRequest) {
           liveCapable: Boolean(capable?.liveEnabled),
           paperCapable: Boolean(capable?.paperEnabled),
           liveLimitCents: budget?.liveLimitCents ?? 0,
-          markets: MARKETS.map((market) => {
+          markets: providerFundedMarkets(providerId).map((market) => {
             const allocation = budget?.allocations.find((item) => item.marketId === market.id);
             const percent = allocation?.percent ?? 0;
             const capCents = Math.floor(providerEquityCents * percent / 100);
@@ -94,6 +94,9 @@ export async function PATCH(request: NextRequest) {
     if (!isMarketId(body.marketId)) return NextResponse.json({ error: 'Unknown market.' }, { status: 400 });
     const providerId = body.providerId as TradingProviderId;
     const marketId = body.marketId;
+    if (providerMarketCapability(providerId, marketId)?.live !== true) {
+      return NextResponse.json({ error: `${providerId} ${marketId} has no funded allocation capability.` }, { status: 400 });
+    }
     const budgets = await getProviderBudgets();
     const existing = providerBudget(budgets, providerId);
     if (!existing) return NextResponse.json({ error: `No ${providerId} budget to allocate.` }, { status: 400 });

@@ -27,8 +27,8 @@
       "id": "req-provider-contract-normalization",
       "module": "spec/providers-and-market-data.md",
       "coverage": "full",
-      "sources": ["src/lib/market-registry.ts", "src/lib/feeds.ts"],
-      "tests": ["src/lib/venue-target-integrity.test.ts", "src/lib/market-registry.test.ts"]
+      "sources": ["src/lib/market-registry.ts", "src/lib/asset-registry.ts", "src/lib/feeds.ts", "src/lib/hourly-threshold-market.ts", "src/lib/hourly-threshold-market-service.ts"],
+      "tests": ["src/lib/venue-target-integrity.test.ts", "src/lib/market-registry.test.ts", "src/lib/asset-registry.test.ts", "src/lib/hourly-threshold-market.test.ts", "src/lib/hourly-threshold-market-service.test.ts", "src/lib/hourly-threshold-isolation.test.ts"]
     },
     {
       "id": "req-policy-mirror-invariant",
@@ -55,8 +55,8 @@
       "id": "req-trading-market-keying",
       "module": "spec/trading-risk-and-budget.md",
       "coverage": "full",
-      "sources": ["src/lib/market-registry.ts", "src/lib/provider-budget-policy.ts", "src/lib/strategy-registry.ts"],
-      "tests": ["src/lib/market-registry.test.ts", "src/lib/provider-budget-policy.test.ts", "src/lib/strategy-isolation.test.ts"]
+      "sources": ["src/lib/market-registry.ts", "src/lib/asset-registry.ts", "src/lib/hourly-threshold-market.ts", "src/lib/provider-budget-policy.ts", "src/lib/strategy-registry.ts"],
+      "tests": ["src/lib/market-registry.test.ts", "src/lib/asset-registry.test.ts", "src/lib/hourly-threshold-market.test.ts", "src/lib/hourly-threshold-isolation.test.ts", "src/lib/provider-budget-policy.test.ts", "src/lib/strategy-isolation.test.ts"]
     },
     {
       "id": "req-trading-budget-model",
