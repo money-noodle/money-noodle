@@ -6,7 +6,10 @@
 
 A personal crypto prediction research and trading tool built with Next.js, TypeScript, Tailwind CSS, and shadcn/ui. **[Open the live research dashboard →](https://noodle.money)**
 
-**Start here:** [`docs/live-opportunity-decision-flow.md`](docs/live-opportunity-decision-flow.md) is the short, ordered introduction to how a market observation becomes a signal, candidate, live authorization, and venue outcome. Follow its cited symbols before changing the funded-entry path; code remains authoritative and [`SPEC.md`](SPEC.md) records decisions and why.
+**Conceptual tour:** [`docs/live-opportunity-decision-flow.md`](docs/live-opportunity-decision-flow.md) is the short,
+ordered introduction to how an observation becomes a signal, candidate, authorization, and venue outcome.
+**Contributors start with [`AGENTS.md`](AGENTS.md), then [`SPEC.md`](SPEC.md)** and its routed canonical modules before
+using the tour's cited symbols. Code remains authoritative for current behavior.
 
 **What this file is.** Orientation and setup for a human arriving at the repository. It is not implementation,
 requirement, or operational authority, and it is deliberately light on current thresholds and behavior so it
@@ -84,6 +87,9 @@ npm start
 npm run verify:spec
 npm run verify:docs
 npm run verify:status
+npm run verify:agents
+npm run verify       # all documentation integrity gates
+npm run check        # verify, typecheck, lint, test, production build
 npm run archive:local
 npm run restore:local -- --destination /tmp/money-noodle-restore/data
 npm run cleanup:next-cache

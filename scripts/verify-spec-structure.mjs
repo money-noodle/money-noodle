@@ -8,6 +8,7 @@
  * archives/ADRs must be reachable from the decision index.
  */
 
+import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, extname, join, relative, resolve } from 'node:path';
 
@@ -40,6 +41,8 @@ verifyCanonicalModuleIndex();
 verifySizeBoundaries();
 verifyLocalLinks();
 verifyDecisionIndex();
+verifyDecisionIds();
+verifyRequirementIds();
 verifyOpenDecisionIds();
 
 if (errors.length > 0) {
@@ -184,6 +187,98 @@ function verifyDecisionIndex() {
 }
 
 /** Open-decision identifiers are permanent citation handles: unique, sequential, never reused. */
+/** Stable requirement aliases remain unique without disturbing inherited heading anchors. */
+function verifyRequirementIds() {
+  const seen = new Map();
+  const modules = [specRoot, ...canonicalModules
+    .filter((name) => !['decision-log.md', 'open-decisions.md'].includes(name))
+    .map((name) => join(specDir, name))];
+
+  for (const file of modules) {
+    const ids = [...contents.get(file).matchAll(/<a id="(req-[a-z0-9-]+)"><\/a>/g)]
+      .map((match) => match[1]);
+    if (ids.length === 0) errors.push(`${display(file)} declares no stable req- requirement identifiers`);
+    for (const id of ids) {
+      const prior = seen.get(id);
+      if (prior) errors.push(`requirement ID ${id} is duplicated in ${display(prior)} and ${display(file)}`);
+      else seen.set(id, file);
+    }
+  }
+}
+
+/**
+ * Immutable decision rows cannot be edited to insert IDs. The sidecar binds every
+ * current/archive row by source, logical row ordinal, date, and SHA-256 instead.
+ */
+function verifyDecisionIds() {
+  const mapFile = join(decisionDir, 'decision-id-map.json');
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(mapFile, 'utf8'));
+  } catch (error) {
+    errors.push(`spec/decisions/decision-id-map.json is unreadable: ${String(error)}`);
+    return;
+  }
+  if (manifest.version !== 1 || !Array.isArray(manifest.decisions)) {
+    errors.push('spec/decisions/decision-id-map.json has an unsupported shape');
+    return;
+  }
+
+  const sources = [...decisionArchiveFiles(), join(specDir, 'decision-log.md')];
+  const actual = sources.flatMap((file) => decisionRows(file).map((row, index) => ({ file, row, ordinal: index + 1 })));
+  const expectedByKey = new Map();
+  const ids = new Set();
+  for (const entry of manifest.decisions) {
+    if (!/^DEC-\d{8}-\d{2}$/.test(entry.id ?? '')) errors.push(`invalid decision ID ${entry.id ?? 'missing'}`);
+    if (ids.has(entry.id)) errors.push(`duplicate decision ID ${entry.id}`);
+    ids.add(entry.id);
+    const key = `${entry.source}:${entry.rowOrdinal}`;
+    if (expectedByKey.has(key)) errors.push(`decision map binds ${key} more than once`);
+    expectedByKey.set(key, entry);
+  }
+
+  for (const { file, row, ordinal } of actual) {
+    const source = display(file);
+    const key = `${source}:${ordinal}`;
+    const entry = expectedByKey.get(key);
+    if (!entry) {
+      errors.push(`decision map does not bind ${key}`);
+      continue;
+    }
+    const date = row.match(/^\| (\d{4}-\d{2}-\d{2}) \|/)?.[1];
+    if (entry.date !== date) errors.push(`${entry.id} maps date ${entry.date}, row has ${date}`);
+    const digest = createHash('sha256').update(row).digest('hex');
+    if (entry.rowSha256 !== digest) errors.push(`${entry.id} digest no longer matches ${key}`);
+    if (file === join(specDir, 'decision-log.md') && !row.includes(`**${entry.id}**`)) {
+      errors.push(`current decision ${entry.id} does not publish its ID in spec/decision-log.md`);
+    }
+    expectedByKey.delete(key);
+  }
+  for (const key of expectedByKey.keys()) errors.push(`decision map has orphaned binding ${key}`);
+  if (manifest.decisions.length !== actual.length) {
+    errors.push(`decision map contains ${manifest.decisions.length} entries; decision ledger contains ${actual.length}`);
+  }
+}
+
+function decisionRows(file) {
+  const rows = [];
+  let current;
+  for (const line of readFileSync(file, 'utf8').split('\n')) {
+    if (/^\| \d{4}-\d{2}-\d{2} \|/.test(line)) {
+      if (current !== undefined) errors.push(`${display(file)} contains an unterminated decision row`);
+      current = line;
+    } else if (current !== undefined) {
+      current += `\n${line}`;
+    }
+    if (current?.endsWith(' |')) {
+      rows.push(current);
+      current = undefined;
+    }
+  }
+  if (current !== undefined) errors.push(`${display(file)} contains an unterminated final decision row`);
+  return rows;
+}
+
 function verifyOpenDecisionIds() {
   const text = contents.get(join(specDir, 'open-decisions.md'));
   const ids = [...text.matchAll(/^### OD-(\d+) +— /gm)].map((match) => Number(match[1]));
@@ -202,7 +297,7 @@ function verifyOpenDecisionIds() {
 }
 
 function headingAnchors(text) {
-  const result = new Set();
+  const result = new Set([...text.matchAll(/<a id="([a-z0-9-]+)"><\/a>/g)].map((match) => match[1]));
   const occurrences = new Map();
   for (const match of text.matchAll(/^#{1,6} +(.*)$/gm)) {
     const base = githubSlug(match[1]);

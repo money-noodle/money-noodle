@@ -5,7 +5,7 @@
 > **Implementation:** Complete
 > **Created:** 2026-08-20
 > **Canonical requirements:** [`spec/product-and-surfaces.md`](../spec/product-and-surfaces.md), [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md)
-> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Decision record:** [`DEC-20260820-04`](../spec/decisions/decision-id-map.json)
 > **Design index:** [`docs/README.md`](README.md)
 
 > Approved by the maintainer on 2026-08-20. This is an authenticated, observation-only UI change. It adds

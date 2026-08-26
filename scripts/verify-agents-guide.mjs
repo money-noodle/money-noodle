@@ -40,6 +40,7 @@ const agentsFile = join(repoRoot, 'AGENTS.md');
 const readmeFile = join(repoRoot, 'README.md');
 const reportsDir = join(repoRoot, 'reports');
 const reportsIndex = join(reportsDir, 'README.md');
+const specFile = join(repoRoot, 'SPEC.md');
 
 const AGENTS_WORD_LIMIT = 3_000;
 
@@ -61,10 +62,11 @@ const governed = [agentsFile, readmeFile, reportsIndex];
 /** Link-checked but not path/symbol-checked: reports are prose, not pointers into code. */
 const linkChecked = [...governed, ...reportFiles().map((name) => join(reportsDir, name))];
 const errors = [];
-const contents = new Map(governed.map((file) => [file, readFileSync(file, 'utf8')]));
+const contents = new Map([...governed, specFile].map((file) => [file, readFileSync(file, 'utf8')]));
 const bindingCache = new Map();
 
 verifyWordBudget();
+verifyAuthorityRestatement();
 verifyCitedPaths();
 verifySymbolClaims();
 verifyLocalLinks();
@@ -83,6 +85,46 @@ console.log(
   `Agent guidance verified: ${governed.length} governed files, ${checkedPaths} cited path(s), ` +
   `${checkedSymbols} symbol claim(s), ${reportFiles().length} indexed and link-checked report(s).`,
 );
+
+/** Shared authority rows are an exact compressed restatement of canonical SPEC.md wording. */
+function verifyAuthorityRestatement() {
+  const canonical = authorityRows(contents.get(specFile), '### Authority outside the specification');
+  const restatement = authorityRows(contents.get(agentsFile), '### Required sources');
+  for (const key of ['STATUS.md', 'status/roadmap.md', 'status/archive/*.md', 'reports/*.md', 'docs/README.md', 'README.md']) {
+    const expected = canonical.get(key);
+    const actual = restatement.get(key);
+    if (!expected) errors.push(`SPEC.md canonical authority table is missing ${key}`);
+    else if (!actual) errors.push(`AGENTS.md authority restatement is missing ${key}`);
+    else if (actual !== expected) {
+      errors.push(`AGENTS.md authority for ${key} diverges from SPEC.md: expected "${expected}", found "${actual}"`);
+    }
+  }
+}
+
+function authorityRows(text, heading) {
+  const start = text.indexOf(heading);
+  if (start < 0) return new Map();
+  const tail = text.slice(start + heading.length);
+  const end = tail.search(/^##{1,3} /m);
+  const section = end < 0 ? tail : tail.slice(0, end);
+  const result = new Map();
+  for (const match of section.matchAll(/^\| (.+?) \| (.+?) \|$/gm)) {
+    const source = match[1];
+    const key = authorityKey(source);
+    if (key) result.set(key, match[2].trim().replace(/\.$/, ''));
+  }
+  return result;
+}
+
+function authorityKey(source) {
+  if (source.includes('status/roadmap.md')) return 'status/roadmap.md';
+  if (source.includes('status/archive/')) return 'status/archive/*.md';
+  if (source.includes('reports/')) return 'reports/*.md';
+  if (source.includes('docs/README.md')) return 'docs/README.md';
+  if (source.includes('STATUS.md')) return 'STATUS.md';
+  if (source.includes('README.md')) return 'README.md';
+  return undefined;
+}
 
 function verifyWordBudget() {
   const words = wordCount(contents.get(agentsFile));
@@ -268,7 +310,7 @@ function reportFiles() {
 }
 
 function headingAnchors(text) {
-  const result = new Set();
+  const result = new Set([...text.matchAll(/<a id="([a-z0-9-]+)"><\/a>/g)].map((match) => match[1]));
   const occurrences = new Map();
   for (const match of text.matchAll(/^#{1,6} +(.*)$/gm)) {
     const base = githubSlug(match[1]);

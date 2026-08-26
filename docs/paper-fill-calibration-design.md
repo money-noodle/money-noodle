@@ -5,7 +5,7 @@
 > **Implementation:** Complete
 > **Created:** 2026-08-21
 > **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
-> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Decision record:** Legacy — no single archived row names this design; see [`spec/decision-log.md`](../spec/decision-log.md)
 > **Design index:** [`docs/README.md`](README.md)
 
 Status: approved in prose by the maintainer on 2026-08-21 and implemented. This design preceded

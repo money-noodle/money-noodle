@@ -5,7 +5,7 @@
 > **Implementation:** Complete
 > **Created:** 2026-08-26
 > **Canonical requirements:** [`spec/product-and-surfaces.md`](../spec/product-and-surfaces.md), [`spec/providers-and-market-data.md`](../spec/providers-and-market-data.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
-> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Decision record:** [`DEC-20260826-03`](../spec/decisions/decision-id-map.json)
 > **Design index:** [`docs/README.md`](README.md)
 
 > **Decision:** Add one read-only attribution vocabulary to signed order, open-position, and performance surfaces.

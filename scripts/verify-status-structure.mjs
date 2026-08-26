@@ -45,6 +45,7 @@ const currentFiles = [statusFile, indexFile, roadmapFile];
 const contents = new Map(currentFiles.map((file) => [file, readFileSync(file, 'utf8')]));
 
 verifyCurrentProjection();
+verifyActiveIdentityProjection();
 verifyArchive();
 verifyLocalLinks();
 
@@ -86,6 +87,43 @@ function verifyCurrentProjection() {
   if (!/^> \*\*Status:\*\* Non-normative planning projection/m.test(roadmap)) {
     errors.push('status/roadmap.md is missing its non-normative status metadata');
   }
+}
+
+/** Compare only exact identities with one clear source owner; prose measurements remain human projections. */
+function verifyActiveIdentityProjection() {
+  const status = contents.get(statusFile);
+  const dashboard = readFileSync(join(repoRoot, 'lib/dashboard.ts'), 'utf8');
+  const predictionPolicy = readFileSync(join(repoRoot, 'lib/prediction-policy.ts'), 'utf8');
+  const executionPolicy = readFileSync(join(repoRoot, 'lib/entry-execution-policy.ts'), 'utf8');
+  const sizingPolicy = readFileSync(join(repoRoot, 'lib/entry-sizing-policy.ts'), 'utf8');
+  const paperCalibration = readFileSync(join(repoRoot, 'lib/paper-fill-calibration.ts'), 'utf8');
+  const strategyRegistry = readFileSync(join(repoRoot, 'lib/strategy-registry.ts'), 'utf8');
+
+  const identities = [
+    sourceConstant(dashboard, 'MODEL_VERSION'),
+    sourceConstant(predictionPolicy, 'BUY_POLICY_VERSION'),
+    sourceConstant(executionPolicy, 'ENTRY_EXECUTION_POLICY_VERSION'),
+    sourceConstant(sizingPolicy, 'ENTRY_SIZING_POLICY_VERSION'),
+  ];
+  const prefix = sourceConstant(paperCalibration, 'PAPER_EXECUTION_VERSION_PREFIX', false);
+  const generation = paperCalibration.match(/PAPER_NEUTRAL_EXECUTION_VERSION = `\$\{PAPER_EXECUTION_VERSION_PREFIX\}(\d+)`/)?.[1];
+  if (prefix && generation) identities.push(`${prefix}${generation}`);
+  else errors.push('could not derive PAPER_NEUTRAL_EXECUTION_VERSION from lib/paper-fill-calibration.ts');
+
+  for (const identity of identities.filter(Boolean)) {
+    if (!status.includes(identity)) errors.push(`STATUS.md active identities omit source-owned ${identity}`);
+  }
+  if (!/id: 'long-shot-round-trip',[\s\S]*?status: 'retired'/.test(strategyRegistry)) {
+    errors.push('lib/strategy-registry.ts does not retain long-shot-round-trip as retired');
+  } else if (!status.includes('Long-shot strategy | Retired registry identity only')) {
+    errors.push('STATUS.md does not project the retired long-shot registry identity');
+  }
+}
+
+function sourceConstant(text, name, reportMissing = true) {
+  const value = text.match(new RegExp(`(?:export )?const ${name} = ['\\\"]([^'\\\"]+)['\\\"]`))?.[1];
+  if (!value && reportMissing) errors.push(`could not read ${name} from its source module`);
+  return value;
 }
 
 function verifyArchive() {
@@ -193,7 +231,7 @@ function checkLimit(file, text, maximumWords, maximumBytes) {
 }
 
 function headingAnchors(text) {
-  const result = new Set();
+  const result = new Set([...text.matchAll(/<a id="([a-z0-9-]+)"><\/a>/g)].map((match) => match[1]));
   const occurrences = new Map();
   for (const match of text.matchAll(/^#{1,6} +(.*)$/gm)) {
     const base = githubSlug(match[1]);

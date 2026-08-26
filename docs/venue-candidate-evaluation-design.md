@@ -5,7 +5,7 @@
 > **Implementation:** Not started
 > **Created:** 2026-08-24
 > **Canonical requirements:** [`spec/providers-and-market-data.md`](../spec/providers-and-market-data.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
-> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Decision record:** [`DEC-20260825-08`](../spec/decisions/decision-id-map.json)
 > **Design index:** [`docs/README.md`](README.md)
 
 > **Status:** Approved analysis plan, queued strictly after the confirmed-signal final review in

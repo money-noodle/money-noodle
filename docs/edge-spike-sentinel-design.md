@@ -5,7 +5,7 @@
 > **Implementation:** Removed
 > **Created:** 2026-08-17
 > **Canonical requirements:** [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
-> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Decision record:** Legacy — no single archived row names this design; see [`spec/decision-log.md`](../spec/decision-log.md)
 > **Design index:** [`docs/README.md`](README.md)
 
 > Design written before the code, 2026-08-17. Evidence: [reports/edge-policy-review-2026-08-17.md](../reports/edge-policy-review-2026-08-17.md) §3.

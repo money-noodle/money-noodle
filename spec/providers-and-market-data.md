@@ -1,6 +1,6 @@
 # Providers and market data
 
-> **Status:** Normative · **Parent:** [`SPEC.md`](../SPEC.md) · **Structurally verified:** 2026-08-25  
+> **Status:** Normative · **Parent:** [`SPEC.md`](../SPEC.md) · **Structurally verified:** 2026-08-26
 > **Canonical for:** data sources, trading-provider variants, venue-specific findings, adapter boundaries, and contract normalization.  
 > **Read with:** [`trading-risk-and-budget.md`](trading-risk-and-budget.md) for funded capability and account controls.
 >
@@ -8,7 +8,11 @@
 > changed by the extraction. If this module appears to conflict with `SPEC.md` or another canonical module, stop
 > and resolve the specification conflict rather than choosing one silently.
 
+<a id="req-provider-integrations"></a>
+
 ## 5. Data sources and integrations
+
+<a id="req-provider-source-set"></a>
 
 ### Current initial sources
 
@@ -21,6 +25,8 @@
 | CoinDesk RSS | Recent headlines | Public | 10 minutes |
 | Kraken OHLC | Multi-year weekly seasonal baseline | Public | 24 hours |
 | Local price history | Supplemental long-term baseline | Local | Hourly snapshots |
+
+<a id="req-provider-registry-variants"></a>
 
 ### Trading-provider registry and variants
 
@@ -47,47 +53,57 @@ Define a common `PredictionVenue` interface while preserving provider-specific c
 - `cancelOrder(id)`
 - `subscribe(listener)` for quotes, orders, fills, and account events
 
+<a id="req-provider-polymarket"></a>
+
 #### Polymarket
 
 Read path: Gamma API plus CLOB market/order-book APIs.  
 Private path: CLOB authentication/signing, allowance/funding checks, orders, fills, and positions. Network/chain IDs and collateral semantics must be validated before enabling trade controls.
+
+<a id="req-provider-kalshi"></a>
 
 #### Kalshi
 
 Read path: market/event and order-book APIs.  
 Private path: signed API requests for balance, positions, orders, fills, placement, and cancellation. Environment (demo vs production) must be visually unmistakable.
 
+<a id="req-provider-crypto-com"></a>
+
 #### Crypto.com
 
-**Verified 2026-08-13: not viable for `crypto-15m`. Retains research-only status; capabilities stay false.**
+Crypto.com remains research-only for `crypto-15m`; market-data, paper, and live event-contract capabilities fail
+closed. Its documented Strike Options product lacks a matching 15-minute target, programmatic event-contract
+placement, a central limit order book, managed post-only execution, and comparable cycle-open settlement.
 
-The binary product is **Strike Options**, offered by Crypto.com | Derivatives North America (CDNA) under CFTC oversight, US only. Durations are 5 minutes, 20 minutes, 2 hours, daily, and weekly — there is no 15-minute contract. Three findings independently block integration:
+Spot, perpetual, futures, and margin APIs belong to a separately specified future market, not an adapter variant of
+`crypto-15m`. Reconsideration requires official evidence of programmatic event-contract market data and placement,
+operator eligibility, exact settlement semantics, and a separately designed dealer-quoted IOC execution model.
+Consumer scraping or browser automation cannot supply capability. The dated investigation is preserved in the
+ordinary decision history; absence of public documentation alone is not proof that no institutional interface
+exists.
 
-1. **No programmatic access.** The Exchange API v1 covers spot, margin, perpetual swaps, and standard futures. Strike Options and Up/Down are not tradeable through it, and the Predictions API exposes data only with execution restricted on event-based elements. CDNA is a separate entity from Crypto.com Exchange. Scraping or browser automation cannot authorize live trading, so there is no path.
-2. **No order book, and the venue is the counterparty.** Orders are market orders with protection on an immediate-or-cancel basis against a platform-quoted price; the trader sees an indicative amount and may fill anywhere within a slippage tolerance. Money Noodle's live edge is managed post-only maker placement, which cannot exist here, and no two-sided book means no observable spread from which to derive implied volatility. The counterparty sets the price knowing its own index.
-3. **Not comparable.** Settlement uses CDNA's own indicative index price, taken from BID/ASK midpoints once per second, against a predetermined strike rather than a cycle-open reference, with a fixed US$10 payout. Under contract normalization this is `not comparable` to the 15-minute target, so it could not serve even as a benchmark price.
-
-Even treated as its own market, the gap is structural rather than a recalibration: a dealer-quoted IOC binary needs a different execution model entirely — slippage tolerance, indicative-versus-fill reconciliation, no maker path, and no cancellation lifecycle.
-
-**Connectivity verified 2026-08-13.** Public Exchange v1 reads require no credentials at all and are broad: 930 instruments comprising 577 spot pairs and 343 perpetual swaps, with real order-book depth and a $0.01 spread on BTC around $63.7k. Signed private reads also work: HMAC-SHA256 over the sorted key-value concatenation `method + id + apiKey + params + nonce` authenticated on first attempt, validating the construction against the live API. This is the strongest research surface of any candidate provider, and it needs no account to use.
-
-What the API *does* support — spot, margin, perpetual swaps, futures — maps onto a **future** market rather than this one. Perpetual funding rates are an observable drift signal, unlike the current zero-drift model, so that work is gated behind directional-alpha research and not adapter plumbing. Before reversing this finding, confirm with CDNA or Crypto.com institutional support whether Strike Options market data and order placement are available programmatically; absence of public documentation is not proof that no interface exists.
+<a id="req-provider-forecastex"></a>
 
 #### ForecastEx
 
 Planned read/paper-first adapter using official ForecastEx/authorized broker interfaces. Normalize exchange contracts separately from any introducing-broker account layer; verify participant eligibility, market-data access, settlement authority, fees, quantity/tick rules, order lifecycle, and authoritative fills/positions before live work.
 
+<a id="req-provider-robinhood"></a>
+
 #### Robinhood
 
-**Verified 2026-08-13: no event-contract API. Not viable for `crypto-15m`.**
+Robinhood remains unsupported for `crypto-15m`; market-data, paper, and live event-contract capabilities fail closed.
+Its documented official API covers crypto trading rather than event contracts and supplies no verified
+programmatic event-contract path or full order book. Reported routing of prediction markets to another supported
+venue is unverified and cannot grant capability.
 
-The only documented official interface is the **Crypto Trading API** at `trading.robinhood.com`: crypto only, US only, authenticated per request with an API key plus an Ed25519 signature carried in `x-api-key`, `x-timestamp`, and `x-signature`. Read-only actions cover accounts, holdings, orders, products, and quotes; order types are market, limit, stop-loss, and stop-limit. The official crypto-API article makes no mention of event contracts, prediction markets, equities, or options.
+A future authenticated `crypto-spot` integration is a separate market with its own forecast, spread, depth,
+eligibility, credential, and execution requirements. Before reconsidering event contracts, verify an official API,
+exact contract ownership/routing, settlement target, order lifecycle, fees, and operator eligibility. Consumer
+scraping or browser automation cannot supply capability. Dated connectivity and spread measurements remain in the
+decision history rather than this requirement module.
 
-Two consequences for event contracts. There is no programmatic path, so live and paper are both unreachable. And Robinhood's prediction markets are widely reported to route to the Kalshi-regulated exchange with data sourced through Kalshi's API — if that holds, a Robinhood event-contract adapter would duplicate contracts Money Noodle already trades directly on Kalshi, adding a broker hop without adding a market. Treat the routing claim as reported rather than officially confirmed; it is a reason to deprioritize, not a verified fact.
-
-**Connectivity verified 2026-08-13.** Signed reads of accounts and holdings work — Ed25519 over `apiKey + timestamp + path + method + body`, authenticated on first attempt. Market data, however, is spread-inclusive and has **no order book**: `best_bid_ask` returns `bid_inclusive_of_sell_spread` and `ask_inclusive_of_buy_spread` with an explicit spread of ~0.945% each way, roughly 1.9% round trip, against $0.01 on Crypto.com for the same asset. Robinhood is therefore usable as an account data source and unusable as a price reference or execution venue; no edge measured against a 1.9% round trip survives.
-
-The crypto API is a genuine interface for a **future** `crypto-spot` market. Note that even quotes are account-authenticated, so unlike Crypto.com there is no unauthenticated market-data path: an adapter cannot be exercised at all without operator credentials. Market data appears limited to best bid/ask, estimated fill prices, and supported pairs, with no documented full-depth book or historical candles, so it is thinner than the Kalshi and Polymarket books the current policy assumes.
+<a id="req-provider-contract-normalization"></a>
 
 ### Contract normalization
 

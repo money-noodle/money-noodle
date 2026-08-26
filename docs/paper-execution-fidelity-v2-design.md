@@ -5,7 +5,7 @@
 > **Implementation:** Partial
 > **Created:** 2026-08-25
 > **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
-> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Decision record:** [`DEC-20260825-04`](../spec/decisions/decision-id-map.json)
 > **Design index:** [`docs/README.md`](README.md)
 
 > **Status:** approved in prose by the maintainer on 2026-08-25. Phase F1 engineering parity is complete. Phase

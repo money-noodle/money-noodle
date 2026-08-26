@@ -1,12 +1,14 @@
 # Product and surfaces
 
-> **Status:** Normative · **Parent:** [`SPEC.md`](../SPEC.md) · **Structurally verified:** 2026-08-25  
+> **Status:** Normative · **Parent:** [`SPEC.md`](../SPEC.md) · **Structurally verified:** 2026-08-26
 > **Canonical for:** users, jobs, prediction/research/account surfaces, trading surface semantics, and provider controls.  
 > **Read with:** [`SPEC.md`](../SPEC.md) and the domain module governing any behavior exposed by the surface.
 >
 > This module contains requirements extracted from the former monolithic `SPEC.md`. Product behavior was not
 > changed by the extraction. If this module appears to conflict with `SPEC.md` or another canonical module, stop
 > and resolve the specification conflict rather than choosing one silently.
+
+<a id="req-product-users-jobs"></a>
 
 ## 2. Users and jobs
 
@@ -21,7 +23,11 @@ Core jobs:
 - Monitor balances, positions, fills, P&L, and exposure.
 - Place a controlled trade without leaving the research workflow.
 
+<a id="req-product-surfaces"></a>
+
 ## 3. Product surfaces
+
+<a id="req-product-predictions"></a>
 
 ### 3.1 Predictions (initial landing page)
 
@@ -52,6 +58,8 @@ Global controls:
 - An always-visible active-policy badge shows the current buy-policy version and selected-side floor. Expanding it opens a Policy view with the complete active forecast, buy, execution, exit, switch, regime-gate, and provider-variant versions; exact thresholds; activation time; rationale/evidence; and whether each component is production, paper, or observation-only.
 - Policy history is immutable and chronological. It shows superseded versions, parameter diffs, activation/deactivation times, evidence reports and dataset fingerprints, operator promotion/rollback events, and linked order/performance cohorts. Viewing history cannot promote, roll back, arm, or trade.
 
+<a id="req-product-prediction-detail"></a>
+
 ### 3.2 Prediction detail
 
 - Full price chart and market countdown.
@@ -61,6 +69,8 @@ Global controls:
 - Model version and calculation notes.
 - Historical forecast calibration and prior similar windows (future).
 - Trade ticket (future, gated).
+
+<a id="req-product-research"></a>
 
 ### 3.3 Research workspace
 
@@ -74,6 +84,8 @@ Global controls:
 - Implemented direct provider adapters: OpenAI, Anthropic, Google Gemini, OpenRouter, Groq, xAI, Mistral, DeepSeek, and local OpenAI-compatible Ollama servers, plus isolated Pi bridge providers discovered from the local Pi registry.
 - API keys remain server-side and are never returned to the browser.
 
+<a id="req-product-accounts"></a>
+
 ### 3.4 Accounts and portfolio (post-initial)
 
 Per venue and consolidated:
@@ -82,14 +94,20 @@ Per venue and consolidated:
 - Account synchronization health and last event timestamp.
 - Alerts for fills, nearing expiry, stale orders, limits, and source disconnects.
 
+<a id="req-product-trading"></a>
+
 ### 3.5 Trading (post-initial)
 
-- Provider-normalized order previews, placement, cancellation, and status monitoring. Kalshi is the only currently live-enabled provider; Polymarket, Crypto.com, ForecastEx, and Robinhood require separate capability promotion.
+- Provider-normalized order previews, placement, cancellation, and status monitoring. The UI derives live capability
+  from the provider × market registry intersection; every provider/market without independently promoted live
+  implementation remains visibly unavailable and fail-closed.
 - Trading-provider quote comparison normalized for exact contract semantics, fees, spread, quantity granularity, and estimated slippage.
 - Default order type: limit.
 - Required preview displays side, contracts, limit, maximum loss, estimated fee, estimated payout, edge, expiry, and account impact.
 - Manual mode requires explicit final confirmation. A separate opt-in automated mode may submit qualified trades without per-order confirmation only while armed, funded, within all risk limits, and not paused.
 - Selling is always reduce-only: it may close owned UP/YES or DOWN/NO quantity to cash or as the first leg of a protected switch, but cannot create or reverse exposure. New DOWN/NO exposure is opened only through the separately priced binary buy path.
+
+<a id="req-product-provider-controls"></a>
 
 ### 3.5a Trading-provider and variant controls
 

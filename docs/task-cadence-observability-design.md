@@ -5,7 +5,7 @@
 > **Implementation:** Complete
 > **Created:** 2026-08-20
 > **Canonical requirements:** [`spec/storage-and-architecture.md`](../spec/storage-and-architecture.md)
-> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Decision record:** [`DEC-20260820-12`](../spec/decisions/decision-id-map.json)
 > **Design index:** [`docs/README.md`](README.md)
 
 > Status: **approved observability-only implementation.** Written 2026-08-20 after the maintainer asked to

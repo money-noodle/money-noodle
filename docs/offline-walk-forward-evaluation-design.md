@@ -5,7 +5,7 @@
 > **Implementation:** Complete
 > **Created:** 2026-08-23
 > **Canonical requirements:** [`spec/forecasting-and-evidence.md`](../spec/forecasting-and-evidence.md), [`spec/storage-and-architecture.md`](../spec/storage-and-architecture.md)
-> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Decision record:** [`DEC-20260823-01`](../spec/decisions/decision-id-map.json)
 > **Design index:** [`docs/README.md`](README.md)
 
 > **Status: approved direction; implementation design.** Written 2026-08-23 after the activated reconciliation

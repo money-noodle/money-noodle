@@ -1,0 +1,1318 @@
+{
+  "version": 1,
+  "policy": "Archived rows are digest-bound without rewriting. Current rows also publish their ID in prose. IDs are permanent and never reused.",
+  "decisions": [
+    {
+      "id": "DEC-20260808-01",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 1,
+      "rowSha256": "b545f4f8b3ed3d2ba0875aafaec358438ecbc3f5c93abe289cc076471fba62dc",
+      "summary": "Use Next.js to keep UI and server integrations in one portable TypeScript app."
+    },
+    {
+      "id": "DEC-20260808-02",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 2,
+      "rowSha256": "c64f94bfca16516aadb8e32a0149cf3fbc70dd497ab1cc74d172c1c0c6f6b895",
+      "summary": "Use Tailwind CSS with local shadcn/ui components."
+    },
+    {
+      "id": "DEC-20260808-03",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 3,
+      "rowSha256": "f6673d2ae627f38df51caafc0efb2e24ca976db0ae778b21c284aac743df8f88",
+      "summary": "Start with local JSON cache/history; isolate storage for later MongoDB."
+    },
+    {
+      "id": "DEC-20260808-04",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 4,
+      "rowSha256": "7834696e91d81411139dbbc0fcf410ae523dad7d4bef3ab3bff63db9b3fa597f",
+      "summary": "Build seasonality from Kraken weekly OHLC and keep insufficient-history assets neutral instead of fabricating a value."
+    },
+    {
+      "id": "DEC-20260808-05",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 5,
+      "rowSha256": "ae57a90128167838564d09366ebcc5c29df61747b3decce3dcb163237fb6091e",
+      "summary": "Add Polymarket and Kalshi research/account/trading after the initial read-only dashboard; live execution remains confirmation-gated."
+    },
+    {
+      "id": "DEC-20260808-06",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 6,
+      "rowSha256": "487dda1b65435ba686313d0c08d0398c66621edc2ea8b3e6bacc4bc57dd34b78",
+      "summary": "Treat Kalshi 15m contracts as approximate comparisons and down-weight them because CF Benchmarks and Chainlink resolution rules differ."
+    },
+    {
+      "id": "DEC-20260808-07",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 7,
+      "rowSha256": "5b4612affffb0e1b00141d4e3ddaa75105d780e1baef551dafb8c25995a607da",
+      "summary": "Blend 0.2 lowers smoothed prediction-market context from 42% to 15%; BUY/SELL initially required both 60% likelihood and 60% confidence."
+    },
+    {
+      "id": "DEC-20260808-08",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 8,
+      "rowSha256": "b36e71f2e4722550c2dbb79197fdac3999187e32798129538941c41f55650dcd",
+      "summary": "Initially track the first qualifying recommendation per contract and prohibit automatic model adjustment from a small sample."
+    },
+    {
+      "id": "DEC-20260808-09",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 9,
+      "rowSha256": "f1ce31b08f90b12f5abf0ec11df999e958a9c3a0c540569a1029a26c4aa79e86",
+      "summary": "Recommendation policy v2 kept 60% directional likelihood and lowered minimum model confidence from 60% to 57%."
+    },
+    {
+      "id": "DEC-20260808-10",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 10,
+      "rowSha256": "a0936b05d6cf63165c910fecfb23bc5d666c34f2674550ecf13bea108c606781",
+      "summary": "Recommendation policy v3 sets both directional likelihood and model confidence to 57%; historical records retain their original policy version."
+    },
+    {
+      "id": "DEC-20260808-11",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 11,
+      "rowSha256": "0c1de90b515021a7093427da59bdcadb462c7caa21d254fddf111d323ebc0d86",
+      "summary": "Keep conviction internals collapsed by default but expose exact likelihood, confidence components, threshold gaps, and ranking strength for debugging every market."
+    },
+    {
+      "id": "DEC-20260808-12",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 12,
+      "rowSha256": "0858c06be16794f2ca399cc1ffbd700d01cdcb3b34e694b8dafd0e8a910f1f3f",
+      "summary": "Replace first-signal-only tracking with every qualifying 15-second update; report both update-level and cycle-balanced accuracy. The calibration threshold was later corrected to 10…"
+    },
+    {
+      "id": "DEC-20260808-13",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 13,
+      "rowSha256": "b75df74342d9e5cbd8319691918485be2de7c402f87cd23abb06cfab9ff09cf7",
+      "summary": "Show raw current Polymarket/Kalshi predictions beside Money Noodle in positive-edge and debug views while retaining smoothed venue context inside the model."
+    },
+    {
+      "id": "DEC-20260808-14",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 14,
+      "rowSha256": "966fa87386eb1da571d95fbda9eadf945d78ab51dfc489fd88476471cdbc1391",
+      "summary": "Recommendation policy v4 adds a strict under-97¢ recommended-side gate: at least one live Polymarket/Kalshi quote must leave nominal payout room; execution profitability still requ…"
+    },
+    {
+      "id": "DEC-20260808-15",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 15,
+      "rowSha256": "8f239f8074f279b8b471d857606210219c7f30ea8dcc2a68a8b8fe491b7b8791",
+      "summary": "Initially expose runtime-driven cadence and disclose browser-dependent polling."
+    },
+    {
+      "id": "DEC-20260808-16",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 16,
+      "rowSha256": "2321aaebc007629aaf6273cb40412ec753c1e3fea89822bde0d7db179a08d665",
+      "summary": "Add a Node-runtime background collector through Next.js instrumentation so collection continues with the browser closed while the local server remains running."
+    },
+    {
+      "id": "DEC-20260808-17",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 17,
+      "rowSha256": "f65db3d29efb33b373b51cc371f934472c35522b90b9153c58362364d4f545df",
+      "summary": "Add a durable working-budget control plane with percentage sizing, funding checks, pause/resume/depletion controls, and paper-first validation before automated live execution."
+    },
+    {
+      "id": "DEC-20260808-18",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 18,
+      "rowSha256": "d6f4ff7c154416271c2d0c76dd8427aef4d394c77cd61c97f4990fee9d0f64d3",
+      "summary": "Replace percentage sizing with a signed-balance-verified total live budget and a fixed all-in per-purchase cap; principal is reduced for fees, actual venue fees replace estimates,…"
+    },
+    {
+      "id": "DEC-20260808-19",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 19,
+      "rowSha256": "19e9b0008d6ae6e779ec0b773937fb08659bc1439e5d3f77bfb33dce12ed0506",
+      "summary": "Use managed post-only Kalshi v2 maker limits, passive repricing, final cancellation, and fill-ledger reconciliation instead of marketable IOC taker orders."
+    },
+    {
+      "id": "DEC-20260808-20",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 20,
+      "rowSha256": "d0b2d0ffaffe1ff0d9908e1316171ed2fb7d6522125655f2cb68123a84a5233d",
+      "summary": "Use Kalshi v2 fractional quantities in 0.01-contract increments so the current-price goal can fit inside a small all-in purchase cap; retain whole-contract sizing for Polymarket."
+    },
+    {
+      "id": "DEC-20260808-21",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 21,
+      "rowSha256": "9a7b907ca3994905a4e0377a3246d844968f23cea4c32adc612cdccd0427bcb5",
+      "summary": "Permit live reduce-only switching at the position cap only when future-wealth gain remains positive after liquidation loss and all exit/entry costs; withhold replacement after a pa…"
+    },
+    {
+      "id": "DEC-20260808-22",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 22,
+      "rowSha256": "d78b1bea62e197968acbc267d2a4b7cf8fe4e165e670013616903d22b792a5e7",
+      "summary": "Add a server-only Polymarket CLOB account connector using viem signing, optional derived/existing API credentials, collateral balance, open orders, and public funder positions."
+    },
+    {
+      "id": "DEC-20260808-23",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 23,
+      "rowSha256": "c02198b82e7bf611d2f964c3b76af4623772726cf630a7c21a1f3ad147f064ff",
+      "summary": "Allow Kalshi and Polymarket automation to be enabled independently; resume needs at least one enabled trade-ready venue, and new reservations are rejected for disabled/unready venu…"
+    },
+    {
+      "id": "DEC-20260808-24",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 24,
+      "rowSha256": "daa7ceab1769d7119005eafd58dfa042ac74d5047e433b665b507c391a166487",
+      "summary": "Present positive-edge outputs as UP/DOWN calculations, not BUY/SELL recommendations; keep all below-gate calculations available in the debugger."
+    },
+    {
+      "id": "DEC-20260808-25",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 25,
+      "rowSha256": "ba8b2e27cf2b44f02f6544052d515922e5c695add75efbcb33a0458d4f772f5c",
+      "summary": "Buy policy v5 evaluates under-97¢ eligibility only from executable selected-side asks on Budget-enabled venues; disabled venues and missing asks fail closed."
+    },
+    {
+      "id": "DEC-20260808-26",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 26,
+      "rowSha256": "2903ef1d79592cbda465795a7031af5df7f0cc6369e340399e7c74420a2fcea4",
+      "summary": "Clear positive-edge buys once their 15-second observation window expires, independently of network refresh success, and show calculation time plus live age."
+    },
+    {
+      "id": "DEC-20260808-27",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 27,
+      "rowSha256": "30d861e843471ed18d81e0afe4d57c9a0391ffad0895a7706687dea8436def98",
+      "summary": "Manage LLM enablement, current provider, and model names durably in the UI while keeping credentials environment-only; automatic research falls back only across enabled providers."
+    },
+    {
+      "id": "DEC-20260808-28",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 28,
+      "rowSha256": "d0a087f57c0efb6ba827ed6f26134bec63fa9e205ced1d5792b16e0f22a7f3c5",
+      "summary": "Expose Kalshi signed-connector setup and retesting in Budget, report demo/production environment, and continue blocking resume until the separate execution-engine requirement is sa…"
+    },
+    {
+      "id": "DEC-20260808-29",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 29,
+      "rowSha256": "ef4bd4d656b9df68223f9a6ab63714d22c9a4b278706feb508bdd23caa738314",
+      "summary": "Buy policy v6 is buy-only: qualify from UP likelihood/confidence and enabled actionable UP asks; defer a separately designed sell/down policy and preserve historical directions."
+    },
+    {
+      "id": "DEC-20260808-30",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 30,
+      "rowSha256": "9783ff5550078a9b2e1236817930268c88f484b4f09e8dabd36b3aa78d9961e3",
+      "summary": "Discover Pi-authenticated Anthropic, OpenAI Codex, GitHub Copilot, and Google providers through an isolated local Pi bridge rather than duplicating Pi credentials; enable all disco…"
+    },
+    {
+      "id": "DEC-20260808-31",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 31,
+      "rowSha256": "d8915639c47e8c3aed247110be885e2061ed7d06e9b5bb2b7914a6511f5a6bfd",
+      "summary": "Replace one-shot research with a browser-local multi-turn chat over fresh snapshots; cap history and enforce 18-second attempt, 45-second automatic, 30-second selected-provider, an…"
+    },
+    {
+      "id": "DEC-20260808-32",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 32,
+      "rowSha256": "f2feda235f1dd3a493b9e214a06a648c9304b57d35904820e9d6ccae002c5f42",
+      "summary": "Blend 0.4 removes the venue price from the tradeable forecast and replaces the likelihood gate with an expected-value gate net of venue fees, after review showed the previous gate…"
+    },
+    {
+      "id": "DEC-20260808-33",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 33,
+      "rowSha256": "e6555f80293b3e47e0bd5e52aa8a9b35d2d52db239fa4bc50992c9c22095ae57",
+      "summary": "Contract basis is computed within a single exchange series after a live check found the previous current-price field was stale by 0.06%, larger than the signal itself, and inverted…"
+    },
+    {
+      "id": "DEC-20260808-34",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 34,
+      "rowSha256": "5caadd9893a0687bae24d829eb9684662d52e61e69f1668f50e1c5e96e3339ce",
+      "summary": "Confidence no longer penalises venue disagreement, because suppressing disagreement suppresses the only trades with edge; realized-versus-predicted edge becomes the primary metric."
+    },
+    {
+      "id": "DEC-20260808-35",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 35,
+      "rowSha256": "cc2a5e1f4eb7e10353f9c527eca16b9faa92ffcf2fde04281eb57b4068044ae1",
+      "summary": "Blend 0.3 replaces momentum-led forecasting with an oracle-reference contract-basis model after review of 156 resolved records showed the previous model was near-constant (P(UP) 0.…"
+    },
+    {
+      "id": "DEC-20260808-36",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 36,
+      "rowSha256": "363c4452e85e9962e405d5d498b413322c5b9d054d859d6ac45217bc60c6cf6d",
+      "summary": "Record every calculation for unbiased calibration, sampled once a minute for non-qualifying rows, and benchmark the model against the coin flip, basis term, and both venues."
+    },
+    {
+      "id": "DEC-20260808-37",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 37,
+      "rowSha256": "6a215b54bfc38c89a175e0132a76a3d20dc946a6f3d02de824e419a2e42062a8",
+      "summary": "Confidence now measures evidence quality and independent basis/venue agreement instead of correlated factor-sign agreement, which had made confidence anti-informative."
+    },
+    {
+      "id": "DEC-20260808-38",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 38,
+      "rowSha256": "f42d32dea19e52af18ca1893c135d9ab887653a2d33f78c48433e3383d29a25e",
+      "summary": "Implement paper-only automated execution with enabled actionable venue selection, conservative whole-contract fills/fees, idempotent reservations and settlements, three-position ex…"
+    },
+    {
+      "id": "DEC-20260808-39",
+      "date": "2026-08-08",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 39,
+      "rowSha256": "a89e76be329046571c5d59673268fcfe257e2125c43eb1c12b1d2ee1b6150188",
+      "summary": "Derive and query a Kalshi 15-minute series for every configured dashboard asset rather than maintaining an outdated asset allowlist."
+    },
+    {
+      "id": "DEC-20260809-01",
+      "date": "2026-08-09",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 40,
+      "rowSha256": "395c4fccdebf93ecc59a9e8b0675bfe5456b83fed35eec9db7f43d6bd3949d90",
+      "summary": "Keep tradeable probability and confidence independent of venue prices; venue agreement/divergence is benchmark and execution context only. Count calibration evidence by unique sett…"
+    },
+    {
+      "id": "DEC-20260809-02",
+      "date": "2026-08-09",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 41,
+      "rowSha256": "92bff8e6bbbc509f2ce4ba305a879e8e898e4d6627bbbb247da2b98e4f09b9bb",
+      "summary": "Require durable Kalshi identities, complete authoritative startup/manual/periodic reconciliation, guarded auto-resume only for eligible system suspensions, and a quiescent Pause/dr…"
+    },
+    {
+      "id": "DEC-20260809-03",
+      "date": "2026-08-09",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 42,
+      "rowSha256": "d97f345f79f4c167f4e173d5dc3dc91fc02ad2861f62f63e8d1e7bd450fc9b16",
+      "summary": "Use bounded maker recovery, constrained portfolio selection, reduce-only switch protection, and an observation-only maker adverse-selection funnel; queue-depth/priority capture can…"
+    },
+    {
+      "id": "DEC-20260809-04",
+      "date": "2026-08-09",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 43,
+      "rowSha256": "c45f620ddc66286f8a5ab181ee149037cfd908da950f5e893c2692ca5a772002",
+      "summary": "Before the 100-window review, require venue-specific contract provenance and outcomes so a Kalshi price is never scored against a Polymarket result; harden evaluator non-regression…"
+    },
+    {
+      "id": "DEC-20260809-05",
+      "date": "2026-08-09",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 44,
+      "rowSha256": "c997e6d52f224581e46612dea1410f9c208af842abb2596b6d0e610669e1fb6a",
+      "summary": "Preserve lifetime live evidence across budget reconfiguration through durable epochs, add loss/drawdown and stake-expansion gates, and complete same-origin plus backup/restore hard…"
+    },
+    {
+      "id": "DEC-20260809-06",
+      "date": "2026-08-09",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 45,
+      "rowSha256": "29a7a64fba0d6ff33593381caf4f79008990012e8cfcd5a52d2f23356e0f7e3e",
+      "summary": "Add reduce-only sell recommendations for owned UP/YES positions as unified HOLD/EXIT/SWITCH/BUY future-wealth choices. Learn thesis-break and position-specific profit-lock/reversal…"
+    },
+    {
+      "id": "DEC-20260809-07",
+      "date": "2026-08-09",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 46,
+      "rowSha256": "83be62c36d533a52ed9977e668117b51fd69ee8e3279c0cc836027623b72932f",
+      "summary": "A 40-minute live observation across three settlement boundaries produced five losses from five fills, moving lifetime live P&L to −87.83¢/−23.0%; attempt 2 stood at 1/11 wins and −…"
+    },
+    {
+      "id": "DEC-20260809-08",
+      "date": "2026-08-09",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 47,
+      "rowSha256": "6dc2767a56897b0a5a0ce0ed32dc685b7a7de4c4d15278664679800e1751cea9",
+      "summary": "Quiescently paused and deployed P0 containment: 25% current-budget and 50¢ lifetime-live default loss stops, Resume blocked by both observed breaches, one live maker attempt by def…"
+    },
+    {
+      "id": "DEC-20260809-09",
+      "date": "2026-08-09",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 48,
+      "rowSha256": "11f6f4a1f04cdfc9744e4dc4b000d5987f8f8d7e2355a6a19745a0378580565f",
+      "summary": "Deployed append-only full-rules contract provenance plus compact issuance fingerprints and independent venue resolvers. New venue entries fail closed on missing/mismatched outcome…"
+    },
+    {
+      "id": "DEC-20260810-01",
+      "date": "2026-08-10",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 49,
+      "rowSha256": "0debfb67220a377b0393be10e417ed78fabbcfae7e372d0b9ffccfb17c7ecf03",
+      "summary": "A 58.6-minute monitor observed four matched paper/live settlements with zero API/reconciliation errors. Live maker execution gained 27.51¢ versus conservative paper's 21¢ due bette…"
+    },
+    {
+      "id": "DEC-20260811-01",
+      "date": "2026-08-11",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 50,
+      "rowSha256": "70921af7f500552957917f5c391b88ac0544c3ca73ca664fb187dd59e8979f5b",
+      "summary": "Review after the one-attempt/aligned-contract deployment found lifetime live +57.23¢ and a post-15:23 cohort +202.60¢, but two cheap wins supplied 96.6% of recent profit and cluste…"
+    },
+    {
+      "id": "DEC-20260811-02",
+      "date": "2026-08-11",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 51,
+      "rowSha256": "9ee99b8178b2f3559fd4097b5e2d2ece03c9d862eca41453fcf2a40b260670cc",
+      "summary": "A subsequent 52-minute/four-boundary monitor had five live fills, all losses (−42.08¢), while reconciliation and execution remained mechanically healthy. Lifetime live fell to +5.9…"
+    },
+    {
+      "id": "DEC-20260811-03",
+      "date": "2026-08-11",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 52,
+      "rowSha256": "bed9c220277eb892be4e3f861b55943bdbe737afefb0a308919cc204b19ddfd8",
+      "summary": "Promote opening DOWN/NO from deferred research to binary buy policy v10 under the existing small live caps. Use executable side asks and side probabilities, signed Kalshi maker/red…"
+    },
+    {
+      "id": "DEC-20260811-04",
+      "date": "2026-08-11",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 53,
+      "rowSha256": "dc34f5a46201c6be23bf2f0f787e0c05d31c884650200256bff00d6b223b7e19",
+      "summary": "Add two standalone reduce-only sell paths: one fresh strict-value snapshot when Kalshi net cash beats optimistic independent hold value by 1¢, and a +75%-armed profit reversal when…"
+    },
+    {
+      "id": "DEC-20260811-05",
+      "date": "2026-08-11",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 54,
+      "rowSha256": "88f266296a99bb0d0c77aa75fecd74a2a4123427cd76b1b9fcd35a274926c8f2",
+      "summary": "Increase the execution warm-up from 60 to 90 seconds after 34 live fills during seconds 60–90 lost 75.52¢ at −28.5% capital ROI across 30 windows. Preserve the three-snapshot/30-se…"
+    },
+    {
+      "id": "DEC-20260811-06",
+      "date": "2026-08-11",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 55,
+      "rowSha256": "571e6245addb949c1599fcef3795d695723164558ba9e070ac1bb53621e97650",
+      "summary": "Promote binary buy policy v11 with a symmetric 55% independent selected-side probability floor. Full fixed-snapshot replay across 228 windows raised clustered win rate from 33.27%…"
+    },
+    {
+      "id": "DEC-20260811-07",
+      "date": "2026-08-11",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 56,
+      "rowSha256": "4f15fddf655e04c05dd3adede57d98e746a068c2847d192432f4f147c5c29f9c",
+      "summary": "Manual operator promotion: deploy binary buy policy v12 with a narrowly relaxed 52.5% selected-side probability floor to increase real Kalshi candidate flow. The observed 52.5–55%…"
+    },
+    {
+      "id": "DEC-20260812-01",
+      "date": "2026-08-12",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 57,
+      "rowSha256": "b4fb391e710e618fe05b4e5351119cc0caab93fac0cd79167420933bb3d8bebe",
+      "summary": "Deploy binary buy policy v13 and restore the 55% selected-side probability floor for both live and paper. Prospective v12 monitoring found 14 near-floor live intents, seven fills,…"
+    },
+    {
+      "id": "DEC-20260812-02",
+      "date": "2026-08-12",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 58,
+      "rowSha256": "38f784a96805c72d0c72297be14b21d481dbf890a11c6a3e432168fb29464456",
+      "summary": "Plan a normalized trading-provider registry adding Crypto.com, ForecastEx, and Robinhood read/paper-first. Run every versioned provider/model variant in an isolated paper track, en…"
+    },
+    {
+      "id": "DEC-20260811-08",
+      "date": "2026-08-11",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 59,
+      "rowSha256": "6c0c521ce10f1dd4dd7e731d9604262c9e56dc3f58e79ddce354fb85eae99bf8",
+      "summary": "Extend authoritative hold counterfactual settlement from switches to every full standalone exit, and report standalone exit-versus-hold totals separately. Initial reconstruction fo…"
+    },
+    {
+      "id": "DEC-20260811-09",
+      "date": "2026-08-11",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 60,
+      "rowSha256": "a06aee15b6b7e9c9924028ac42083541f6c1f23683637e524a61b80d79163570",
+      "summary": "Retain zero Kalshi weight in tradeable probability after exact-contract replay. Positive Kalshi weights improved Brier score but all lost after actionable Kalshi ask/fee; expanding…"
+    },
+    {
+      "id": "DEC-20260811-10",
+      "date": "2026-08-11",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 61,
+      "rowSha256": "abb2a4f9f13bece19ab30b194500621e91a6a2e84fc39e1474e096ee48e55636",
+      "summary": "Add a permissive adaptive regime gate rather than fixed clock windows or raw loss streaks. A bankroll-independent exact-contract sentinel learns bounded fee-aware return by indepen…"
+    },
+    {
+      "id": "DEC-20260811-11",
+      "date": "2026-08-11",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 62,
+      "rowSha256": "b137e4dda79aacf50be7ac454a24c621a8c381534dfc0e47e2ad3d471c7155de",
+      "summary": "Rename the application to Money Noodle and rename all server configuration variables from SIGNALDESK to MONEYNOODLE. Preserve pre-rename durable order/client IDs and migrate browse…"
+    },
+    {
+      "id": "DEC-20260811-12",
+      "date": "2026-08-11",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 63,
+      "rowSha256": "816b2ff9f245af058ed908c9604ea6006360a9ac21424a76ae51caed177856d5",
+      "summary": "Add a guarded maker/taker execution-style policy after 442 maker attempts showed 53.0% accepted-order fills but −9.49% ask-side counterfactual return for accepted non-fills. Keep l…"
+    },
+    {
+      "id": "DEC-20260813-01",
+      "date": "2026-08-13",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 64,
+      "rowSha256": "8e9bee1c61d27d1dd28d8145bd4d2900cbbd7237cd4af1665dc1e67a899689f8",
+      "summary": "Split the working budget by provider rather than allocating dynamically per trade, resolving the prior open decision. Cash is not fungible across providers: funds sit in a provider…"
+    },
+    {
+      "id": "DEC-20260813-02",
+      "date": "2026-08-13",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 65,
+      "rowSha256": "7f7a0d24c5370644be3a35c7de70f44d7df49089b11a63762805439dc62240e1",
+      "summary": "Key the forecast model and its calibration by market, never by provider. One diffusion engine is shared because threshold, horizon, and volatility are already parameters; fitted pa…"
+    },
+    {
+      "id": "DEC-20260813-03",
+      "date": "2026-08-13",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 66,
+      "rowSha256": "0bfa4d2e483377851f4bb017cd874f8c631369b4fd7014e2a82bfc2f73cf0298",
+      "summary": "Key entry thresholds, sizing, and execution style by provider and market together, since they depend on that venue's fees, tick and quantity rules, and market structure. Keep posit…"
+    },
+    {
+      "id": "DEC-20260813-04",
+      "date": "2026-08-13",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 67,
+      "rowSha256": "11cd1f3433213d1da12043835971315a6a8ee86b6e02d4f877c83f1508c996dd",
+      "summary": "Declare provider capability per (provider, market) pair rather than per provider, and carry an explicit marketId on every budget, order, policy row, and reported summary while only…"
+    },
+    {
+      "id": "DEC-20260813-05",
+      "date": "2026-08-13",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 68,
+      "rowSha256": "7555cea29d1cc5364b38d2971836b81d4f79480677f7f285bfafbfcea58aa925",
+      "summary": "Order live candidate selection as feasibility-then-objective: shared forecast, per-provider policy gates, hard readiness gates, per-(provider, market) funding, global exposure caps…"
+    },
+    {
+      "id": "DEC-20260813-06",
+      "date": "2026-08-13",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 69,
+      "rowSha256": "57879855e48292654fa3908fc0bef77a8e35d5396d7cd8a95fbd763dc16e1ba5",
+      "summary": "Withdraw the Crypto.com event-contract adapter as not viable after verifying the official product. Strike Options is a CDNA dealer-quoted IOC binary with no programmatic interface,…"
+    },
+    {
+      "id": "DEC-20260813-07",
+      "date": "2026-08-13",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 70,
+      "rowSha256": "edde3a584ab551c7883eed678b8cefd35556ac9796e8388c272b940d36d0ff66",
+      "summary": "Withdraw the Robinhood event-contract adapter as not viable. The only official interface is a crypto-only Trading API — API key plus Ed25519 request signing, US only, covering acco…"
+    },
+    {
+      "id": "DEC-20260813-08",
+      "date": "2026-08-13",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 71,
+      "rowSha256": "6d0823d917e92e006c2e79dca4d910874b05c11fd6d181d91df6f9125eb5023b",
+      "summary": "Add crypto-spot as a research-only market rather than extending either provider into crypto-15m. Both Crypto.com and Robinhood expose crypto trading APIs and no event-contract API,…"
+    },
+    {
+      "id": "DEC-20260813-09",
+      "date": "2026-08-13",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 72,
+      "rowSha256": "111260707bac6b16d6c18b7e93b0c0083764d0fa6d8042157cf3580f69424eb7",
+      "summary": "Keep private keys outside the repository working tree and reference them by path. The Kalshi signing key had been committed in the first implementation commit and was present in ev…"
+    },
+    {
+      "id": "DEC-20260813-10",
+      "date": "2026-08-13",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 73,
+      "rowSha256": "77c8732dcc92f431fc11eb6921b411ec4ba531d85422ab41a80f4ac7f66cdeba",
+      "summary": "Throttle failed sign-ins with a fixed per-failure delay as the primary control and a per-IP lockout as a secondary one. The delay requires no shared state, so it holds under server…"
+    },
+    {
+      "id": "DEC-20260813-11",
+      "date": "2026-08-13",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 74,
+      "rowSha256": "dc2a695fcc0cebe5cc45ed1847d36a3c4d89516d0d4acb4e5fe456f718ac30ed",
+      "summary": "Reject a login body the route cannot parse with 400 and do not count it as a failed attempt. Parsing never reached the password, so a malformed request proves nothing about it and…"
+    },
+    {
+      "id": "DEC-20260813-12",
+      "date": "2026-08-13",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 75,
+      "rowSha256": "0db5d1df4b4050bac9d5268376f59f6b25b6804672b3e6cb0a7be97e4008f2a2",
+      "summary": "Do not pursue a crypto-perp market on current evidence. Bitstamp — owned by Robinhood — publishes perpetual funding rates and mark/index premia without credentials, which is the on…"
+    },
+    {
+      "id": "DEC-20260813-13",
+      "date": "2026-08-13",
+      "source": "spec/decisions/2026-08-08-to-13.md",
+      "rowOrdinal": 76,
+      "rowSha256": "ad1bca8707d8f2ff441c4845ed7855dcb8df221cf8caca0bb5d826db665f82ae",
+      "summary": "Treat Crypto.com as the research surface and Robinhood as an account source only, after verifying both live. Crypto.com's public reads need no credentials and expose 930 instrument…"
+    },
+    {
+      "id": "DEC-20260814-01",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 1,
+      "rowSha256": "52eef7b25998573c19f4a0d0bf3e25aa33842d0258bd233fa3506a4eb792cf28",
+      "summary": "Add a second production policy on crypto-15m rather than a second model, market, or provider. It buys a side at a low executable ask early in the cycle and sells through a resting…"
+    },
+    {
+      "id": "DEC-20260814-02",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 2,
+      "rowSha256": "1a99716be0ab9d6bcbc239180ff698f9136f2ecd6d004b8c495c35f0d985af1d",
+      "summary": "Extend budget keying to provider → market → policy, each a percentage of the level above. Percentages rather than fixed amounts, so a policy's ceiling compounds with its wins and c…"
+    },
+    {
+      "id": "DEC-20260814-03",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 3,
+      "rowSha256": "a6a43da0c485e0f21f52157ac50edafb3c6f95082a99299a3b1d1ee60dc03c0c",
+      "summary": "Size the long-shot ticket as policy equity ÷ 30 with a 10¢ floor, and take its loss stop as the consequence rather than a chosen percentage. The divisor is the drought the policy m…"
+    },
+    {
+      "id": "DEC-20260814-04",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 4,
+      "rowSha256": "db223ca005cbea10d67ce42b2557006f1726dd55a61f0f1115f1a058c31d027d",
+      "summary": "Do not reuse cryptoExposureGroup for the long-shot policy. It encodes directional correlation — market-cap beta tiers — and this policy trades reversal. Screening separated the two…"
+    },
+    {
+      "id": "DEC-20260815-01",
+      "date": "2026-08-15",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 5,
+      "rowSha256": "ebad036912608c4de86d7259fb3b0a7e91689b6582bc9c6c6f8c2d9cccc958b7",
+      "summary": "Keep the current-epoch drawdown stop blended across strategies, and attribute it rather than scoping it. There is one pot of cash: if a strategy loses, the account really is down,…"
+    },
+    {
+      "id": "DEC-20260815-02",
+      "date": "2026-08-15",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 6,
+      "rowSha256": "2f1919bacddc38a5896830ece306acc336642c9baa42d7ebe5e84bc8a32a056a",
+      "summary": "Widen the long-shot entry window from the first three minutes to the first five, on measurement rather than intuition. The first hour of live collection suggested the window rather…"
+    },
+    {
+      "id": "DEC-20260816-01",
+      "date": "2026-08-16",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 7,
+      "rowSha256": "44867746cb557f8351c30747ed6055017e983ce0a3959eaa4ca657ce25b4ae9c",
+      "summary": "Stop tuning the long-shot marks and wait for unbiased sampling. A sweep of five entry marks against four exit marks over 757 recorded windows put every one of the sixteen combinati…"
+    },
+    {
+      "id": "DEC-20260815-03",
+      "date": "2026-08-15",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 8,
+      "rowSha256": "37ce693e823918e74b14356f632dab371ca9651b57ab69f51b0fdcd31ebe7ce4",
+      "summary": "Enter the long-shot position as a price-capped taker IOC at the mark, an explicit exception to maker-only production execution. The trigger is defined as the executable ask reachin…"
+    },
+    {
+      "id": "DEC-20260815-04",
+      "date": "2026-08-15",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 9,
+      "rowSha256": "12cc694ec5678ab52a2810a4d36a49659b5ffee323b329f81db5db27b787255b",
+      "summary": "The paper bankroll belongs to the edge policy alone. Live cash is one real Kalshi balance and settles through the shared control whatever strategy spent it, but ledger.paperBudget…"
+    },
+    {
+      "id": "DEC-20260815-05",
+      "date": "2026-08-15",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 10,
+      "rowSha256": "e2ddfebd97723de388f33a50933b05b08d7815d96fba1ea677f0a98588744937",
+      "summary": "Exit the long-shot position by polling the owned-side bid every second (two at first; tightened 2026-08-16 alongside a one-second entry pass and a shared quote cache) and submittin…"
+    },
+    {
+      "id": "DEC-20260814-05",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 11,
+      "rowSha256": "92437d9e62b0e5bcc2d022e79470e94c32fe406d834949d4ec3e21b4fef0b5bd",
+      "summary": "Exit the long-shot position through a resting reduce-only GTC limit placed as soon as the entry fills, with no stop-loss and no fallback exit. The premise is transient excursions,…"
+    },
+    {
+      "id": "DEC-20260814-06",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 12,
+      "rowSha256": "79fd39dd722026e9164f279ef0e5763a74f8843ffced40725526afd5b38d6272",
+      "summary": "Launch the long-shot policy with no prior-cycle filter, after measuring both readings of the proposed rule. \"Prior cycle reached the high mark\" passes 86–92% of candidates and does…"
+    },
+    {
+      "id": "DEC-20260814-07",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 13,
+      "rowSha256": "b66e1a999448adb96406aa0bdf650fa69a268fb8e894d5211b817069f58de1ce",
+      "summary": "Treat the XRP exclusion as policy-specific. It was removed after clearing −2se on both tracks under a directional policy, and unpredictable direction is precisely what would make a…"
+    },
+    {
+      "id": "DEC-20260814-08",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 14,
+      "rowSha256": "fd79f236307dd595b3eb9afc773d528d3562c96d997cc5116af0b8e00fdc8c12",
+      "summary": "The long-shot policy executes from launch under a bounded learning budget rather than accruing sentinel evidence first — an explicit operator decision, taken with the §12.5 doctrin…"
+    },
+    {
+      "id": "DEC-20260814-09",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 15,
+      "rowSha256": "4bf9ae5ec074c419aabd4dedd57b753accb9d635c9cec31409504d8275ad8eb6",
+      "summary": "A monitored candidate may be read only at the independent unit and under the policy proposed for activation. The missed-buy best-per-window action therefore reports its own window…"
+    },
+    {
+      "id": "DEC-20260814-10",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 16,
+      "rowSha256": "dc59cb49879148c85c3ea50a4c48cff51c6392ad163b782e5084221303cbcb51",
+      "summary": "Clarify the profit-reversal decision: profit-reversal-75-v1 continues to arm and record high-water downturns, but execution is withheld by default and explicitly disabled locally.…"
+    },
+    {
+      "id": "DEC-20260814-11",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 17,
+      "rowSha256": "49386e3a55f8f15619bdc65a2e8ecb72a14345c8c554624621fa4cf47032e6f0",
+      "summary": "Re-scope forecast sharding around retained memory, not a misattributed parse stall. The ten-second block was quadratic summary grouping; parsing costs about 1.2 seconds once per pr…"
+    },
+    {
+      "id": "DEC-20260814-12",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 18,
+      "rowSha256": "e3aca6877391d2f5eba1695002946490c45155e4c9ca506400d55d6454aa5e03",
+      "summary": "Keep settlement off the calculation path, and bound every upstream wait by the cycle it serves. Resolving already-closed windows ran inside the forecast cycle behind a ten-second v…"
+    },
+    {
+      "id": "DEC-20260814-13",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 19,
+      "rowSha256": "8bd8f1dcdaa92c330f59040012a2feac94f9ea0abf8a8d9813b02882ab1c6bad",
+      "summary": "Make estimate quality replayable before attempting to replace its elapsed-time lift. The lift was one term inside the quality penalty — min(0.12, (secondsRemaining/900) × 0.12) — s…"
+    },
+    {
+      "id": "DEC-20260814-14",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 20,
+      "rowSha256": "fdb75a2409917d5b176c7b88b0a13d201f627940692fe67d6dfdfc9467f6450d",
+      "summary": "Give the promotion ledger its first write path, and make promotion a deploy-then-record act rather than a control that changes the model. POST /api/model/promotion refuses any entr…"
+    },
+    {
+      "id": "DEC-20260814-15",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 21,
+      "rowSha256": "0d7ef9930851c7c8bb378822e531dc0d832e83fd4b0fe87719aeb8e11dae7ab3",
+      "summary": "Report each action against the alternative it rejected under action-counterfactual-v1, split by the policy that chose it, clustered by settlement window, and normalized by stake be…"
+    },
+    {
+      "id": "DEC-20260814-16",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 22,
+      "rowSha256": "dff2d052631cb89a2c574b753604766ffc0bdf7fc6b8e791f3174e64055893c6",
+      "summary": "Separate issuance, approved, submitted/amended, and authoritative-fill prices instead of overwriting askPrice; record displayed-depth queue proxies, resting/cancellation timing, an…"
+    },
+    {
+      "id": "DEC-20260814-17",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 23,
+      "rowSha256": "812782447ca18e797c2be3d48e40a58bb23b6c02a1c4d41e06c4a106b66cfe89",
+      "summary": "Keep Polymarket and Kalshi approximate, not exact: both currently publish aligned 60-second opening/closing windows, but Polymarket uses a Chainlink TWAP stream while Kalshi uses a…"
+    },
+    {
+      "id": "DEC-20260814-18",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 24,
+      "rowSha256": "4d97c72187d756fcad5f9d490a69784e0b2168bbe27becab7a417f7d3d694614",
+      "summary": "Calendar effects remain observation-only. Retain an unbiased, non-pruned fixed-five-minute sample and one candidate/no-candidate record per settlement window, scoped by policy. Rev…"
+    },
+    {
+      "id": "DEC-20260814-19",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 25,
+      "rowSha256": "5f49b58289847d14ca47caa519d25edaf5426a18164bf2fd77a98f2168aa7c91",
+      "summary": "Reconciliation treats partial reduce-only exits as already-realized slices of the original entry. Startup and periodic checks compare Kalshi's cumulative entry fills against open r…"
+    },
+    {
+      "id": "DEC-20260814-20",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 26,
+      "rowSha256": "d7e6b85633cafaeee6b3acecf4a0f27cf7a87d8ab38a10b826eacde50d23cd39",
+      "summary": "Budget audits use spendable whole-cent ledger semantics, not exact reporting payouts. Live budget control must roll forward from configured epoch, reservations, releases, settlemen…"
+    },
+    {
+      "id": "DEC-20260814-21",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 27,
+      "rowSha256": "322ce9bee70a711a88d2f8b560fcbd43ab50dc277e43ae8c170568ddde5330f6",
+      "summary": "Do not reduce production persistence from three snapshots on retrospective results. Start persistence-two-consecutive-v1 in the evaluation lane, preserving every other rule and col…"
+    },
+    {
+      "id": "DEC-20260814-22",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 28,
+      "rowSha256": "5d0029ff020e7cadc02d0b15880628ef3aa7ad7bbe7841a9ea74bdbe0adcc7b9",
+      "summary": "Maker retry cooldown begins when an attempt becomes terminal, not when it was submitted, so the 12-second resting horizon cannot consume the requested 30-second pause. Paper uses t…"
+    },
+    {
+      "id": "DEC-20260814-23",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 29,
+      "rowSha256": "35668e6bde27ee45b627dd5ea2addccd7880198a40999c9df785413aece06ebd",
+      "summary": "Paper simulates maker fills rather than filling at the ask. Filling at the ask is taker execution, so paper was paying a spread and fee live does not pay while missing none of the…"
+    },
+    {
+      "id": "DEC-20260814-24",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 30,
+      "rowSha256": "e104e648f242966c8d95e897ade8257326175b132de6075a503d70a43f802025",
+      "summary": "Replace paper's static dashboard-bid/ask-touch approximation after paired same-signal agreement measured only 29.7% over 37 attempts. Share live's exact-contract managed repricing…"
+    },
+    {
+      "id": "DEC-20260814-25",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 31,
+      "rowSha256": "530f767d45e505429fcc1d2b504d80c9667c07134fcbbe7f7e51079f7c4d9ed1",
+      "summary": "The maker fill probability is estimated from what comparable attempts did, not from a first-passage model of the quote. Validation on 623 recorded attempts found the first-passage…"
+    },
+    {
+      "id": "DEC-20260814-26",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 32,
+      "rowSha256": "c9cfcd2cb7e2c818d0c71f2c2757d6059db0eb8d517c2cd2a84b92e0c562db1c",
+      "summary": "Paper mirrors live exactly at the rule layer. The rule functions take no execution-mode parameter, so a policy divergence between tracks cannot be expressed; the tracks differ only…"
+    },
+    {
+      "id": "DEC-20260814-27",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 33,
+      "rowSha256": "a4ad9ed1f19d1dd22a54e671b34e9a041217e6b6f8eca9f53f6cf4b2a8fbe36c",
+      "summary": "Speculative policy changes never run in paper. They run in a third evaluation lane that places no orders and holds no budget, because a paper track carrying experiments cannot serv…"
+    },
+    {
+      "id": "DEC-20260814-28",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 34,
+      "rowSha256": "4c6b3f59aae6d77a7cfa5dd301032bf96545ae997f74f564856e2d1c6fa170e7",
+      "summary": "Retroactive scoring may screen a candidate but may never promote one. Promotion requires forward evidence committed at decision time, following the regime-gate sentinel pattern, af…"
+    },
+    {
+      "id": "DEC-20260814-29",
+      "date": "2026-08-14",
+      "source": "spec/decisions/2026-08-14-to-18.md",
+      "rowOrdinal": 35,
+      "rowSha256": "b504ef57e6e25aa4dcf36d84739c7f5893f8d80ab63dc4d6b807bf33a64dfc33",
+      "summary": "The buy policy becomes a value (BuyPolicy) rather than module constants, so production and every candidate are scored by one evaluator and a candidate's number cannot come from a d…"
+    },
+    {
+      "id": "DEC-20260823-01",
+      "date": "2026-08-23",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 1,
+      "rowSha256": "31465c967107ba4c86eaaca6dfd1c97a0a22a876b75ae814745b8ed884e7f1af",
+      "summary": "Retire automatic evaluator-v2 execution from the funded worker after the 1,250-window checkpoint blocked dashboard, control, and collection for nearly three minutes. background-col…"
+    },
+    {
+      "id": "DEC-20260823-02",
+      "date": "2026-08-23",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 2,
+      "rowSha256": "7a2ae501b13f9ca3cd4c0f102ebe5c5374086049fc3b20327086f3f351c36d11",
+      "summary": "Replace five-minute full-live-tier reconciliation inside the collector with checkpointed incremental background reconciliation. Full current-account audits remain mandatory at star…"
+    },
+    {
+      "id": "DEC-20260822-01",
+      "date": "2026-08-22",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 3,
+      "rowSha256": "79bc5d353299c24d53b16586329481ea867fae8853ad25988614fcf55c2bbd5c",
+      "summary": "Advance the one shared account execution ledger to v9 without changing any order or accounting semantic. Keep every terminal identity, strategy/mode/provider/market attribution, ve…"
+    },
+    {
+      "id": "DEC-20260822-02",
+      "date": "2026-08-22",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 4,
+      "rowSha256": "e1a2cb39a5b5c5ebc6e3a8f49d3b8eb95cc47fc9d1a38423b48edeb3c45dc4f6",
+      "summary": "Make the one shared execution ledger have one process-global owner across independently emitted Next server bundles. Replace module-local execution queues with a globalThis seriali…"
+    },
+    {
+      "id": "DEC-20260822-03",
+      "date": "2026-08-22",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 5,
+      "rowSha256": "c8db6f08fd98f9ef9f846c0915e0bce7cbd2f08789d76e22d0afbbfcf951545e",
+      "summary": "Replace forecast-storage v2's module-local writer and in-place publication protocol after an interleaved-seal incident. Request/render dashboard builds are read-only for forecast e…"
+    },
+    {
+      "id": "DEC-20260821-01",
+      "date": "2026-08-21",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 6,
+      "rowSha256": "a9a1eb43af94345d0bae724ea5fc8ac3b10911c3438e3576976716ab1d5339da",
+      "summary": "Agree the second trading market: crypto-1h, Kalshi hourly crypto threshold (strike) contracts. Verified 2026-08-21 against the live API that Kalshi has no hourly or daily up/down-v…"
+    },
+    {
+      "id": "DEC-20260821-02",
+      "date": "2026-08-21",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 7,
+      "rowSha256": "b90a03757163a0325dc73aff98ee76f09b6724bf1fc691d186691392eea04204",
+      "summary": "Continue the untouched long-shot-round-trip-buy12-sell97-win600-v2 paper cohort through the precommitted long-shot-hold-v2 boundary of 60 independent settlement windows, rather tha…"
+    },
+    {
+      "id": "DEC-20260821-03",
+      "date": "2026-08-21",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 8,
+      "rowSha256": "f581a69421e5a3c6d362674fb0009c963ab339736c626a6d761caf836f3585f1",
+      "summary": "Repair and prospectively measure the paper execution mirror without changing funded behavior. Advance to paper-managed-execution-route-ioc-requalify3-v5; paper generation validatio…"
+    },
+    {
+      "id": "DEC-20260821-04",
+      "date": "2026-08-21",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 9,
+      "rowSha256": "33884f70f2a06aaf32c1420c625462f369658e966aa5e0b6a411d749298e5b62",
+      "summary": "Replace repeated-episode live wire identity with maker-high30-requalify3-fresh1c-idv2-v6 without changing episode economics. Derive a deterministic 40-character live:v2: client ID…"
+    },
+    {
+      "id": "DEC-20260820-01",
+      "date": "2026-08-20",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 10,
+      "rowSha256": "427e7f62dfb402f5957eb5e176b492d6218aa14fa4d5a43d30ce4ae9b4052ae1",
+      "summary": "Extend collection-only trajectory evidence to quote-trajectory-spread-observation-v2 and ledger envelope v7 without changing funded behavior. Retain v1 trailing-60-second and cycle…"
+    },
+    {
+      "id": "DEC-20260820-02",
+      "date": "2026-08-20",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 11,
+      "rowSha256": "03ae9dbc6ec2bc8a0ff5a5698d2fba24d331e238f0bb8007766c8f570cc88f38",
+      "summary": "Add repository verification and narrowly bounded temp-file housekeeping without changing trading behavior. GitHub CI runs npm ci, typecheck, ESLint, all tests, and the production b…"
+    },
+    {
+      "id": "DEC-20260820-03",
+      "date": "2026-08-20",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 12,
+      "rowSha256": "e6c24116c1097fc5a476e4fdf87cc5a12a2aeafdc9ef24301ebf5aa3a14b5377",
+      "summary": "Revise the positive-edge display lifecycle for human inspection without changing qualification. A signal observed in the mounted dashboard now keeps its last qualified snapshot, si…"
+    },
+    {
+      "id": "DEC-20260820-04",
+      "date": "2026-08-20",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 13,
+      "rowSha256": "5193430a8c2741fc7cedb4b50f7c2750786c6e941707172b167afe101d83c937",
+      "summary": "Add an authenticated, stateful, observation-only Kalshi ladder to signed positive-edge cards. Normalize YES/NO bids to the selected UP/DOWN side, label only displayed level and cum…"
+    },
+    {
+      "id": "DEC-20260820-05",
+      "date": "2026-08-20",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 14,
+      "rowSha256": "c33cf5eefa836a8f229e05b5072e54057b7d825f9850e2bdcbb63e8d5d268d33",
+      "summary": "Treat repeated managed-maker episodes as not mechanically cleared after finding that acknowledgement-race client IDs truncate away the episode suffix and reconciliation accepts the…"
+    },
+    {
+      "id": "DEC-20260820-06",
+      "date": "2026-08-20",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 15,
+      "rowSha256": "044342b052d5fc8a9c52a5c73ec2df16ae1628f1d17ba0b4cbee922ba0cb10bc",
+      "summary": "Retain Blend 0.4 after manual review of walk-forward:975:fnv1a-bccfee60; record no promotion. Stored ask-and-hold return was +11.38% candidate versus +8.24% baseline over 488 held-…"
+    },
+    {
+      "id": "DEC-20260820-07",
+      "date": "2026-08-20",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 16,
+      "rowSha256": "76552d895a75712ac9dedf71e6c4affbe9fca60853c6929c427cdc53ef72f4f5",
+      "summary": "Scope the missed-buy forecast rollup by immutable buy-policy identity. The direct summary already filtered to BUYPOLICYVERSION, but forecast-rollup-v1 omitted that identity and mer…"
+    },
+    {
+      "id": "DEC-20260820-08",
+      "date": "2026-08-20",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 17,
+      "rowSha256": "b4ee52735d3654148f484841e51cad8823bebd1a0ecc9b33a1b7a1a4ccacc6e3",
+      "summary": "Complete SPEC §12.8 step 2 and close two modelled mirror asymmetries. (a) Every live skip is journalled as a durable episode carrying a class the calling gate names itself — a clas…"
+    },
+    {
+      "id": "DEC-20260820-09",
+      "date": "2026-08-20",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 18,
+      "rowSha256": "c83c98d68669478171b866cf23299c21a6b2ab4421ce9110a5c2a7e470dfbf21",
+      "summary": "Narrow entry admission to buy policy v22: restore MINNETEDGE to +5pp and narrow the price band to 10–75¢. An operator decision, not an evidence promotion, reversing v20 on evidence…"
+    },
+    {
+      "id": "DEC-20260820-10",
+      "date": "2026-08-20",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 19,
+      "rowSha256": "aea0d773ffebdea601ff71e91394981aa7b1473f30319da3f20418db6483a462",
+      "summary": "Collect quote-trajectory-spread-observation-v1 without changing funded behavior. Preserve source capture timestamps so cache fallback cannot manufacture flat samples; derive signed…"
+    },
+    {
+      "id": "DEC-20260820-11",
+      "date": "2026-08-20",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 20,
+      "rowSha256": "0f0e0b00c0a09d2839e7d81af511139b338d0dbc0a818017363098f48ba5e0ca",
+      "summary": "Show changing owned-side venue bid/ask and observation age on signed open-order rows using the execution engine's existing managed-order and open-position observations. Do not add…"
+    },
+    {
+      "id": "DEC-20260820-12",
+      "date": "2026-08-20",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 21,
+      "rowSha256": "92256e5a5d1850364605b7cb43c29301839b608b15b9960a8000ae0b04ed1e8f",
+      "summary": "Centralize runtime-task cadence metadata and process-local health without centralizing scheduling. The UI separates eight task clocks from input cache TTLs and reports task, interv…"
+    },
+    {
+      "id": "DEC-20260820-13",
+      "date": "2026-08-20",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 22,
+      "rowSha256": "fb00cab5c530a195bf2cba823ff57e4bb44c978a80e71d5332f98662ef1955f4",
+      "summary": "Retain the edge policy's XRP exclusion after reproducing the old executed loss but finding null current-policy signal evidence. Historical realized return remains −45.7% ±21.5 over…"
+    },
+    {
+      "id": "DEC-20260819-01",
+      "date": "2026-08-19",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 23,
+      "rowSha256": "0429c980f56f7dcdda3f10323f8a4c397a9ae6ae6e191d35303835d435d45089",
+      "summary": "Replace v4's whole-window lockout with maker-high30-requalify3-fresh1c-v5. An authoritative current-policy maker zero-fill ends one episode, then the same continuously qualifying s…"
+    },
+    {
+      "id": "DEC-20260819-02",
+      "date": "2026-08-19",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 24,
+      "rowSha256": "228b3be7ebf04c39a0f10e3352dc0fe5d3248ec1c05b2e65e1829ad0e3199012",
+      "summary": "Deploy maker-high30-one-attempt-fresh1c-v4 with entry-sizing-reduce30-below-edge30-v1 by explicit operator decision. Below 30pp, commit 30% of the current base ticket to one manage…"
+    },
+    {
+      "id": "DEC-20260819-03",
+      "date": "2026-08-19",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 25,
+      "rowSha256": "646e3417a4c6ef4dc3c535c99f2a64f58c0b8be0fcdc00f5393f36f491e58b50",
+      "summary": "Replace retroactive contract-selection reconstruction with a prospective, observation-only portfolio-choice-set-v1 journal. After each positive-edge live intent is durable, detach…"
+    },
+    {
+      "id": "DEC-20260819-04",
+      "date": "2026-08-19",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 26,
+      "rowSha256": "14a1540614dda0dfc52991aa0badcccf57f770622161f5d79db2edb85dbc8ea6",
+      "summary": "Resolve mixed maker/taker fee semantics without changing the buy policy. Rename the shared taker-priced quantity ENTRYADMISSIONFEEROLE: it means immediate-execution admission edge…"
+    },
+    {
+      "id": "DEC-20260819-05",
+      "date": "2026-08-19",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 27,
+      "rowSha256": "e60f83aad866168850b1d3c42773d1b8a387899e26e0e792c2c39551de40140a",
+      "summary": "Make the refreshed trailing poll the sole long-shot entry owner. The regular 15-second cycle and the one-second poll both called runLongShot; only the latter applied evaluateTraili…"
+    },
+    {
+      "id": "DEC-20260819-06",
+      "date": "2026-08-19",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 28,
+      "rowSha256": "1e4769384751153ff267138ce02cc05c0f58556e9c626843c1fc68823fd1daa3",
+      "summary": "Replace the inert long-shot hold collector with long-shot-hold-v2. The authoritative paper entry decision stamps and writes the exact trigger record; the detached pass only recover…"
+    },
+    {
+      "id": "DEC-20260819-07",
+      "date": "2026-08-19",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 29,
+      "rowSha256": "cff35343865b917f8322dc6eb76e3f1c1a3a163a631d8f8dc12e0b143a8d31fd",
+      "summary": "Permit at most 1.0¢ of selected-side ask movement between a taker decision and its signed fresh quote, without relaxing the 2¢ spread or any other applicable gate. Size quantity an…"
+    },
+    {
+      "id": "DEC-20260819-08",
+      "date": "2026-08-19",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 30,
+      "rowSha256": "0d99b6c08507b7e4e72876f40b806be2e5eebf15b2ba2ec8a4dae0f9eefd447d",
+      "summary": "Choose selective adaptive execution rather than unconditional taking. Attempt 1 takes only after all six historical strict gates, including the 2¢ spread cost ceiling. One authorit…"
+    },
+    {
+      "id": "DEC-20260819-09",
+      "date": "2026-08-19",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 31,
+      "rowSha256": "d24fbdca9469f5338becf80167fbf6e200a25838a41e0e1c44891054747b9f1e",
+      "summary": "Record, without changing funded behavior, that v21's intended unconditional taker switch was not implemented. MONEYNOODLEENTRYEXECUTIONMODE=taker currently acts on the same strict…"
+    },
+    {
+      "id": "DEC-20260819-10",
+      "date": "2026-08-19",
+      "source": "spec/decisions/2026-08-19-to-23.md",
+      "rowOrdinal": 32,
+      "rowSha256": "e20c554e78e2ce98bb630039dd46a5c91db10a369e37c611b93ccaa8248f34cd",
+      "summary": "Record the active local long-shot configuration as a new paper collection cohort, not a promotion: 12¢ entry, 97¢ exit, at least 600 seconds remaining, with live arming false. It w…"
+    },
+    {
+      "id": "DEC-20260826-01",
+      "date": "2026-08-26",
+      "source": "spec/decisions/2026-08-24-to-26.md",
+      "rowOrdinal": 1,
+      "rowSha256": "99f0ce039d7f1e368caf571103650a01b043e1d2fdbc25faf2a9ea7f3ed26e42",
+      "summary": "Retire long-shot-round-trip-buy12-sell97-win600-v2 after its frozen prospective paper cohort reached 150 resolved attempts across 76 independent settlement windows. Exact P&L was −…"
+    },
+    {
+      "id": "DEC-20260825-01",
+      "date": "2026-08-25",
+      "source": "spec/decisions/2026-08-24-to-26.md",
+      "rowOrdinal": 2,
+      "rowSha256": "b31c4ffb42108b0786f97b5cdb0c5202924f2c821e8829ee1a56cc204867a459",
+      "summary": "Clarify adaptive-regime presentation without changing its arithmetic, thresholds, state transitions, or authority. Name negativeReturnConfidence on user surfaces as estimated negat…"
+    },
+    {
+      "id": "DEC-20260825-02",
+      "date": "2026-08-25",
+      "source": "spec/decisions/2026-08-24-to-26.md",
+      "rowOrdinal": 3,
+      "rowSha256": "c806d6296eb4afa705c1ac4cdb94d76137a0e3fc41ca45c50bed3439b513b36e",
+      "summary": "Replace every hardcoded Kalshi event-order exchangeindex with the exact venue-owned index from a signed active-market read immediately before submission. Validate exact ticker, act…"
+    },
+    {
+      "id": "DEC-20260825-03",
+      "date": "2026-08-25",
+      "source": "spec/decisions/2026-08-24-to-26.md",
+      "rowOrdinal": 4,
+      "rowSha256": "4ac8490e83cb23f4eee810f3d843e0b5b242dd4c4f7a69e64c2b92a6cb22b0c9",
+      "summary": "Narrow current Kalshi position ownership to local lifecycle rows that can still own exposure: open, pendingreservation, uncertain, or exit-pending before contract close. A rejected…"
+    },
+    {
+      "id": "DEC-20260825-04",
+      "date": "2026-08-25",
+      "source": "spec/decisions/2026-08-24-to-26.md",
+      "rowOrdinal": 5,
+      "rowSha256": "f7f02e72b55106c5324cae4426ccea41367822b35da709a3f836acec9742c55c",
+      "summary": "Approve a four-phase paper-execution fidelity workstream without changing funded execution or advancing the seven-layer serial roadmap. F1 repairs the dormant queueClearFraction ow…"
+    },
+    {
+      "id": "DEC-20260825-05",
+      "date": "2026-08-25",
+      "source": "spec/decisions/2026-08-24-to-26.md",
+      "rowOrdinal": 6,
+      "rowSha256": "aaa4e836e31332e72c610d3d708a2fb952ffc3d18439e3b27d8ccab4cb6edc9c",
+      "summary": "Queue attempt-and-outcome evaluation strictly after the live-authorization final review. Keep the shared execution and budget ledgers authoritative; add only a detached append-only…"
+    },
+    {
+      "id": "DEC-20260825-06",
+      "date": "2026-08-25",
+      "source": "spec/decisions/2026-08-24-to-26.md",
+      "rowOrdinal": 7,
+      "rowSha256": "d65bdf8ba8a94fc731506c79c5f2c9f02b68e4be7e441170d05c363311072215",
+      "summary": "Queue live-authorization evaluation strictly after the portfolio-selection final review. Preserve live-skip-v1 as a first-blocker episode journal and add a separate detached manife…"
+    },
+    {
+      "id": "DEC-20260825-07",
+      "date": "2026-08-25",
+      "source": "spec/decisions/2026-08-24-to-26.md",
+      "rowOrdinal": 8,
+      "rowSha256": "6f992fe607cbf319fe0ceae4ab737eb0bbdadfd493cba13c72c1db4f4999fd60",
+      "summary": "Queue portfolio-selection evaluation strictly after the venue-candidate final review. Keep portfolio-choice-set-v1 unchanged as the conditional issued-order integrity sentinel and…"
+    },
+    {
+      "id": "DEC-20260825-08",
+      "date": "2026-08-25",
+      "source": "spec/decisions/2026-08-24-to-26.md",
+      "rowOrdinal": 9,
+      "rowSha256": "c0c7ccc94a032564eea5b2db32742086e2dbb258b0656789ad2b47424b00665e",
+      "summary": "Queue venue-candidate evaluation strictly after the confirmed-signal final review. Ask which exact-provider checks independently select a cohort and whether displayed value survive…"
+    },
+    {
+      "id": "DEC-20260825-09",
+      "date": "2026-08-25",
+      "source": "spec/decisions/2026-08-24-to-26.md",
+      "rowOrdinal": 10,
+      "rowSha256": "7278fb2e9f843f46e12c06c9350ee61932ce1cbdd8d828daf6a139f7136204d7",
+      "summary": "Queue confirmed-signal evaluation strictly after the base-signal final review; its clock does not start at the current three-day forecast-candidate checkpoint. Freeze one exact pro…"
+    },
+    {
+      "id": "DEC-20260825-10",
+      "date": "2026-08-25",
+      "source": "spec/decisions/2026-08-24-to-26.md",
+      "rowOrdinal": 11,
+      "rowSha256": "8e4df25002e01e2961d2fe65d568d93acf42cdc1a131839b4c5f30c5b657d9b7",
+      "summary": "Activate Phase 2 forecast-candidate-registry-v1 as an observation-only probability family after extracting and proving a pure Blend 0.4 production boundary. Prospectively stamp six…"
+    },
+    {
+      "id": "DEC-20260824-01",
+      "date": "2026-08-24",
+      "source": "spec/decisions/2026-08-24-to-26.md",
+      "rowOrdinal": 12,
+      "rowSha256": "f10f36ed31dd89079cf8cf803dc7e9a6249925cc3f694a48fdb0f51b6cffd527",
+      "summary": "Approve bounded-taker-pilot-v1 as a funded but hard-bounded production execution experiment, not a buy-policy candidate or promotion. Under execution generation maker-high30-requal…"
+    },
+    {
+      "id": "DEC-20260824-02",
+      "date": "2026-08-24",
+      "source": "spec/decisions/2026-08-24-to-26.md",
+      "rowOrdinal": 13,
+      "rowSha256": "4380d582c15bdf7371736817faeacd3c82f0e1caf823a4277a4e4ef9fa2ba228",
+      "summary": "Start exit-policy-sentinel-v2 as a new prospective evidence generation without changing production strict-value-v1 or selecting new arms after outcomes. Preserve v1 files as immuta…"
+    },
+    {
+      "id": "DEC-20260824-03",
+      "date": "2026-08-24",
+      "source": "spec/decisions/2026-08-24-to-26.md",
+      "rowOrdinal": 14,
+      "rowSha256": "a99b345616d8712dd623ee93acba030e067b63409b3105c3bff878160ddf3cf8",
+      "summary": "Separate local disk reclamation into rebuildable-cache cleanup, verified off-machine restore, and owner-aware immutable tiering. S3-compatible object storage never replaces POSIX h…"
+    },
+    {
+      "id": "DEC-20260826-06",
+      "date": "2026-08-26",
+      "source": "spec/decision-log.md",
+      "rowOrdinal": 1,
+      "rowSha256": "341735fd8f7992b4a365caedb9cbdead07faf98c5b7973cb82f3491f28e2dc49",
+      "summary": "Keep canonical modules normative, add stable requirement and ordinary-decision identifiers, route designs by domain/workstream as well as lifecycle, strengthen mechanically provabl…"
+    },
+    {
+      "id": "DEC-20260826-02",
+      "date": "2026-08-26",
+      "source": "spec/decision-log.md",
+      "rowOrdinal": 2,
+      "rowSha256": "47a3a3c8f1edca7f5305a3edd08e2d77d60c5a7b7dc0f67841638fadc3aff793",
+      "summary": "Verify the always-loaded agent guidance and require module-qualified citation. npm run verify:agents governs AGENTS.md, README.md, and reports/README.md in CI: cited paths must res…"
+    },
+    {
+      "id": "DEC-20260826-03",
+      "date": "2026-08-26",
+      "source": "spec/decision-log.md",
+      "rowOrdinal": 3,
+      "rowSha256": "c53baec8e831176c24ab3388807da67f7635e2e5fded54eb91c3a0e6f3b79087",
+      "summary": "Use one read-only order-attribution vocabulary across signed open-order, decision-history, and performance surfaces: track, provider, provider variant, market, forecast model, buy…"
+    },
+    {
+      "id": "DEC-20260826-04",
+      "date": "2026-08-26",
+      "source": "spec/decision-log.md",
+      "rowOrdinal": 4,
+      "rowSha256": "baa9139636e81ae61bdb581059341ea6da84ff7a0f5079092c722e4a8d77ad24",
+      "summary": "Keep AGENTS.md as one compact always-loaded operating guide rather than another module tree. Preserve the generated Next.js block, stable §§0–10 and §5 item numbering used by histo…"
+    },
+    {
+      "id": "DEC-20260826-05",
+      "date": "2026-08-26",
+      "source": "spec/decision-log.md",
+      "rowOrdinal": 5,
+      "rowSha256": "419dd8a8fa06d331d5aeeb57ab435d8e97c58c37666c170a51f0ae38deeab4d0",
+      "summary": "Separate current implementation status, planning, and history. Keep STATUS.md as a compact dated projection; move non-normative sequencing to status/roadmap.md; index reading and m…"
+    },
+    {
+      "id": "DEC-20260825-11",
+      "date": "2026-08-25",
+      "source": "spec/decision-log.md",
+      "rowOrdinal": 6,
+      "rowSha256": "225eef0698998b903e59e4e3d6193499901814a8bf6af69a3901ff0518b13b55",
+      "summary": "Establish a controlled lifecycle and complete discovery index for all top-level design documents. docs/README.md indexes every design, evaluation plan, reference, and exploration e…"
+    },
+    {
+      "id": "DEC-20260825-12",
+      "date": "2026-08-25",
+      "source": "spec/decision-log.md",
+      "rowOrdinal": 7,
+      "rowSha256": "8353040ecdcc8f0d80fc1e99c42ef427d6f562e49d7cc8b9075c4b4e43a3d6e6",
+      "summary": "Modularize the living product specification using a hub-and-spoke structure. Keep SPEC.md as the stable entry point for the product statement, global principles, authority, routing…"
+    }
+  ]
+}

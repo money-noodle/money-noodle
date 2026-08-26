@@ -17,6 +17,8 @@
     "verify:docs": "node scripts/verify-design-docs.mjs",
     "verify:status": "node scripts/verify-status-structure.mjs",
     "verify:agents": "node scripts/verify-agents-guide.mjs",
+    "verify": "npm run verify:spec && npm run verify:docs && npm run verify:status && npm run verify:agents",
+    "check": "npm run verify && npm run typecheck && npm run lint && npm test && npm run build",
     "analyze:cycle-streaks": "node scripts/analyze-cycle-streaks.mjs",
     "analyze:kalshi-weight": "node --max-old-space-size=3072 scripts/analyze-kalshi-forecast-weight.mjs",
     "analyze:time-of-day": "node --max-old-space-size=3072 scripts/analyze-time-of-day.mjs",

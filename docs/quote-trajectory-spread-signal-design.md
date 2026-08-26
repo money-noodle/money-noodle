@@ -5,7 +5,7 @@
 > **Implementation:** Complete
 > **Created:** 2026-08-20
 > **Canonical requirements:** [`spec/forecasting-and-evidence.md`](../spec/forecasting-and-evidence.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
-> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Decision record:** [`DEC-20260820-10`](../spec/decisions/decision-id-map.json)
 > **Design index:** [`docs/README.md`](README.md)
 
 > Status: **approved collection-only implementation**, 2026-08-20. Collection begins when a built runtime

@@ -1,9 +1,11 @@
 # Money Noodle — Living Product Specification
 
-> **Status:** Draft 0.44 · **Structure updated:** 2026-08-25
+> **Status:** Draft 0.45 · **Structure updated:** 2026-08-26
 > This is the stable entry point for product scope, global principles, and the canonical specification map.
 > Detailed normative requirements live in [`spec/`](spec/). Current implementation and latest bounded measurements
 > remain separate in [`STATUS.md`](STATUS.md); [`status/README.md`](status/README.md) indexes planning and history.
+
+<a id="req-global-specification-use"></a>
 
 ## 0. How to use this specification
 
@@ -20,8 +22,9 @@ owns its detailed requirements. Index summaries and compatibility pointers are n
 module. A requirement has one canonical home; other documents should link to it rather than restate it. If two
 canonical documents appear to conflict, stop and resolve the conflict instead of inferring precedence.
 
-Cite named sections or stable requirement identifiers, never source line numbers. **Always name the module beside
-a section number.** Numbering is inherited from the former monolithic specification and is not unique across
+Cite stable requirement identifiers when available, otherwise named sections; never cite source line numbers.
+Requirement anchors use `req-<domain>-<name>`, are permanent, and are never reused. **Always name the module beside
+a legacy section number.** Numbering is inherited from the former monolithic specification and is not unique across
 modules: three modules open at §3, `trading-risk-and-budget` jumps from §3 to §7, and §3.6 and §3.6a are in
 different files. A number alone therefore does not identify a document. `npm run verify:agents` rejects an
 unqualified citation in the always-loaded guidance.
@@ -75,11 +78,19 @@ is always loaded; if the two ever diverge, this table governs.
 | `reports/*.md` | Dated measurements, methods, cohorts, and caveats |
 | [`docs/README.md`](docs/README.md) and indexed `docs/*.md` | Proposed, accepted, superseded, retired, reference, and exploratory designs; never an alternate requirement authority |
 
+Canonical modules contain durable requirements, not dated implementation progress or measurements. Completion is
+projected in `STATUS.md`, sequence in `status/roadmap.md`, evidence in reports, and rationale in designs and
+identified decisions. See [`ADR-0005`](spec/decisions/ADR-0005-agent-context-and-requirement-traceability.md).
+
+<a id="req-global-product-statement"></a>
+
 ## 1. Product statement
 
 Money Noodle is a personal, self-hosted crypto research and prediction terminal. It combines live prediction-market prices, crypto market data, historical/seasonal features, news, and optional LLM research into transparent forecasts for short- and long-horizon investing decisions.
 
 The primary decision surface is active crypto **15-minute Up/Down markets** normalized across supported trading providers. Polymarket and Kalshi are implemented; Crypto.com, ForecastEx, and Robinhood are planned as read/paper-first provider integrations. Account monitoring, continuous paper shadow trading, and explicitly armed Kalshi automation are implemented; every additional provider remains live-disabled until its official API, eligibility, contract semantics, signing, funding, order lifecycle, and reconciliation behavior pass the same safety gates.
+
+<a id="req-global-principles"></a>
 
 ### Principles
 

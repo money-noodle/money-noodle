@@ -1,165 +1,357 @@
 # Trading, risk, and budget
 
-> **Status:** Normative · **Parent:** [`SPEC.md`](../SPEC.md) · **Structurally verified:** 2026-08-25  
-> **Canonical for:** market/budget keying, account funding, paper/live orchestration, exits, auditability, and trading security controls.  
-> **Read with:** [`policy-and-track-separation.md`](policy-and-track-separation.md), plus [`providers-and-market-data.md`](providers-and-market-data.md) for venue capability.
+> **Status:** Normative · **Parent:** [`SPEC.md`](../SPEC.md) · **Structurally verified:** 2026-08-26
+> **Canonical for:** market/budget keying, account funding, paper/live orchestration, entries, exits,
+> reconciliation, auditability, and trading security controls.
+> **Read with:** [`policy-and-track-separation.md`](policy-and-track-separation.md) and
+> [`providers-and-market-data.md`](providers-and-market-data.md).
 >
-> This module contains requirements extracted from the former monolithic `SPEC.md`. Product behavior was not
-> changed by the extraction. If this module appears to conflict with `SPEC.md` or another canonical module, stop
-> and resolve the specification conflict rather than choosing one silently.
+> This module states durable funded and simulated-trading requirements. Version history, implementation progress,
+> and measurements belong in the policy manifest, `STATUS.md`, decisions, designs, and reports.
 
 ## 3. Product surfaces
 
 ### 3.6 Budget and automated-trading control
 
-The trading system has an independent durable working-budget ledger. A venue account balance never silently increases this budget; the user explicitly allocates the amount that automation may risk.
+The trading system has an independent durable working-budget ledger. Venue cash never silently increases the
+amount automation may risk; the operator explicitly allocates it.
+
+<a id="req-trading-market-keying"></a>
 
 #### Markets and keying rules
 
-A **market** is an instrument class plus a horizon and settlement semantics — currently one production
-market: `crypto-15m`, the 15-minute Up/Down contract settling against the cycle-open reference, plus
-`crypto-spot` as a research-only market (2026-08-13 decision log). Every budget, order, policy row, and
-reported summary carries an explicit `marketId`, so a second market is additive rather than a migration.
+A market is an instrument class plus horizon and settlement semantics. Every budget, order, forecast/policy row,
+position, and summary carries explicit `marketId`, `providerId`, `providerVariantId`, and `strategyId` identities as
+applicable. Adding a market is additive rather than a reinterpretation of historical rows.
 
-A second trading market — `crypto-1h`, Kalshi hourly crypto threshold (strike) contracts — is agreed
-and designed at `docs/second-market-hourly-crypto-design.md` (2026-08-21 decision log). It is
-**market-data + paper first, live withheld** (the capability triple grants `marketData + paper`;
-`live` stays false until a separate promotion under
-[`policy-and-track-separation.md` §12.5](policy-and-track-separation.md#125-candidates-and-their-evidence)),
-and it keeps the same four keying axes:
-budget by provider × market, forecast model/calibration by market, entry policy by provider × market,
-and position/correlation caps by market binding within that market only (cross-market exposure is
-deliberately not aggregated; a 15m and a 1h position on the same underlying are separate positions
-with separate caps). The 15m up/down-vs-open product is the only literal up/down family on Kalshi;
-the hourly and daily crypto series are strike/range products, so `crypto-1h` trades threshold
-contracts whose directional side is the hourly analog of the 15m bet.
+Concerns are keyed by their actual dependency:
 
-Four things vary along four different axes, and each is keyed to what it actually depends on:
-
-| Concern | Keyed by | Why |
+| Concern | Key | Requirement |
 | --- | --- | --- |
-| Budget | provider, allocated by percentage across that provider's enabled markets | Cash is not fungible across providers. Funds physically sit in a provider account and cannot fund an order elsewhere, so a combined spendable pool would authorize trades that cannot settle. |
-| Forecast model and calibration | market | The diffusion engine takes threshold, horizon, and volatility as parameters and is shared, but fitted parameters, drift assumptions, and settlement corrections are horizon-specific. Every provider in a market reports the **identical** probability, which is what makes one probability against several prices a meaningful comparison. |
-| Policy — entry thresholds, sizing, execution style | provider × market | These depend on that venue's fees, tick/quantity rules, and market structure. |
-| Position and correlation caps | market, global across providers | Risk is exposure to the underlying, not to a venue. Keying these per provider would let each provider hold a full allowance of the same correlated window, silently multiplying intended exposure. |
+| Budget | provider, allocated across enabled markets | Cash at one provider cannot authorize an order elsewhere. |
+| Forecast model/calibration | market | Providers in one normalized market receive the same venue-independent probability. |
+| Entry/sizing/execution policy | provider × market | Fees, ticks, quantity, and market structure are provider-specific. |
+| Position/correlation caps | market, global across providers | One economic exposure cannot multiply because several providers list it. |
 
-Market allocations are a percentage of **current provider equity** (available plus reserved plus realized P&L), so a market's cap compounds with wins and contracts in drawdown without manual edits. Allocations are hard caps, must sum to no more than 100% of a provider's enabled markets, and any unallocated remainder stays uncommitted. A market's spendable amount is its own cap minus its own reservations, never the provider's total available cash.
+Provider capability is declared independently for every provider × market pair. Configuration cannot promote an
+unimplemented capability, and capability for one market never unlocks another.
 
-Provider capability is declared per **(provider, market)** pair. A single capability triple per provider cannot express a provider that supports live trading on one market and nothing on another, which is the normal case rather than the exception.
+Market allocations are percentages of current provider equity: available plus reserved plus realized P&L.
+Allocations are hard caps, sum to no more than 100% of enabled markets, and leave any remainder uncommitted. A
+market's spendable amount is its own cap minus its own reservations, never total provider cash.
 
-Live candidate selection treats funding as a feasibility filter and price as the objective, in this order: shared forecast; per-provider policy gates; per-provider hard readiness gates; per-(provider, market) funding; global exposure caps; then rank surviving candidates by expected dollar contribution **at the size each provider can actually fill**. Narrowing to a single best-priced venue before the funding check would forfeit trades another provider could have taken, and comparing edge per contract rather than expected profit at fundable size prefers a fatter edge on a stake that cannot be placed. Provider reliability is a hard gate, never a ranking weight; an explicit cents margin expresses venue preference so a negligible price difference cannot flip venues on noise.
+Candidate selection applies this order: shared forecast → provider/market policy → provider readiness →
+provider/market funding → global exposure limits → expected dollar contribution at fundable/fillable size.
+Reliability is a hard gate, not a ranking weight. Venue preference uses an explicit cents margin so negligible quote
+noise cannot flip selection.
+
+The accepted hourly threshold market remains market-data/paper-first with live withheld until a separate promotion.
+Its exact semantics live in [`docs/second-market-hourly-crypto-design.md`](../docs/second-market-hourly-crypto-design.md).
+
+<a id="req-trading-budget-model"></a>
 
 #### Budget model
 
-- Store configured budget and conservative reservations as integer cents; retain venue-authoritative principal, fee, fill-price, quantity, and P&L fields at exact fractional-cent precision. UI may display dollars.
-- Track starting budget, available budget, reserved/open-trade budget, realized P&L, and current working equity **per provider**, and report each market's allocated cap and its own reservations within that provider.
-- The user configures a **live budget per provider**, a **percentage allocation per enabled market** within that provider, and a fixed **all-in amount per purchase**. The purchase amount includes contract principal and venue fees and never exceeds the market's allocated cap, the provider's available budget, or environment stake limits.
-- When Kalshi is enabled, saving verifies the total live budget against the signed available Kalshi cash balance.
-- Execution chooses the largest supported quantity whose principal plus conservative fee reserve fits under the per-purchase cap. Kalshi v2 uses 0.01-contract increments; Polymarket remains whole-contract only. Venue-reported fill prices and fees replace estimates, and unused reserve is released without artificial P&L.
-- Order placement reserves planned all-in spend; settlement releases payout and applies `payout − actual stake` to realized P&L.
-- Budget changes are allowed only while paused and with no unresolved reservation conflict. Every configuration creates a durable budget epoch; reservations, orders, fills, settlements, and reconciliation adjustments retain that epoch ID. Current-epoch P&L may restart, but closed-epoch and lifetime-live results are immutable and remain separately reportable. Every change is audited.
+- Configured budgets and conservative reservations are durable safe integer cents.
+- Venue-authoritative principal, fee, fill price, quantity, payout, and reporting P&L preserve legitimate
+  fractional-cent precision.
+- Starting budget, available budget, reservations, realized P&L, and working equity are tracked per provider; each
+  market reports its allocation and reservations within that provider.
+- The operator configures provider budget, market allocation percentages, and a fixed all-in purchase cap.
+  Principal plus conservative fee reserve may not exceed that cap, market allocation, provider availability, or
+  environment ceiling.
+- Quantity rounds down on the venue lattice until principal plus conservative fee reserve fits. Venue fills/fees
+  replace estimates; unused reserve releases without artificial P&L.
+- Placement reserves planned all-in spend. Settlement releases payout and applies `payout − actual stake` to
+  realized P&L.
+- Budget changes require paused, quiescent state with no unresolved reservation conflict. Every configuration creates
+  a durable epoch retained by reservations, orders, fills, settlements, and reconciliation adjustments.
+- Closed-epoch and lifetime-live results are immutable and separately reportable. Reconfiguration cannot erase
+  evidence used by lifetime safety limits.
 
-#### Account funding
+<a id="req-trading-account-funding"></a>
 
-- Every trading provider has an independent durable `liveEnabled` control. Research visibility and paper tracking remain separate controls; disabling live must not hide quotes or stop paper variants.
-- At least one provider must remain visible for research/paper operation, but zero providers may be live-enabled. Automation may resume only when at least one explicitly live-enabled provider is trade ready. Because live execution currently supports Kalshi only, signed Kalshi available cash must cover the uncommitted live budget.
-- A live-enabled provider must have an authenticated/readable account connector plus an independently verified placement, cancellation, fill, position, cash, and reconciliation path. Disabled or currently unready providers are never selected for new live orders.
-- Live enablement is fail-closed and provider-specific: adding credentials does not enable live, enabling one provider never enables another, and provider/variant changes require quiescent pause plus authoritative reconciliation.
-- Global and correlation exposure limits apply across providers. The same economic contract cannot be bought twice merely because two providers or variants expose it, and opposite exposure still requires the protected reduce-only switch path.
-- Saving a Kalshi budget verifies the total allocation against venue cash. Before each order, Kalshi must also cover the planned all-in reservation.
-- Public profile or position data alone does not count as a trade-ready connector. Signing capability, collateral/allowance state, and venue environment must be validated.
-- Funds remain at the venues; Money Noodle stores a risk allocation ledger, not custody.
-- Kalshi setup uses a dedicated API key ID plus an RSA private-key PEM path held outside the repository. The Budget UI reports demo/production environment, signed connectivity, cash balance, setup steps, and a connection retest without returning credentials to the browser.
+#### Account funding and capability
 
-#### Pause/resume state machine
+- Every provider has independent durable research visibility, paper permission, and `liveEnabled` control. Disabling
+  live does not hide research quotes, stop paper variants, or abandon reduce-only lifecycle handling.
+- Zero providers may be live-enabled. Resume requires at least one explicitly enabled and trade-ready provider.
+- A trade-ready provider has independently verified authentication, eligibility/environment, cash/collateral,
+  placement, cancellation, order, fill, position, and reconciliation paths.
+- Credentials, visible quotes, public positions, or paper history never imply live capability.
+- Enablement changes are provider-specific, fail closed, and require quiescent pause plus authoritative
+  reconciliation. Enabling one provider never enables another.
+- Global and correlation exposure apply across providers. The same economic contract cannot be bought twice merely
+  through different providers/variants; opposite exposure uses the protected reduce-only switch path.
+- Funds remain at providers. Money Noodle stores risk allocation, not custody.
+- Private keys live outside the repository and are referenced by path. The browser receives readiness/status, never
+  key material or secret values.
 
-- States: `unconfigured`, `paused`, `active`, and `depleted`.
-- Automation starts paused and is off by default.
-- Pause immediately withdraws active operator intent and blocks new candidate selection, then enters `draining`: wait behind the serialized execution queue, cancel and confirm every managed remainder, run authoritative order/fill/position/cash/reservation reconciliation, and verify zero pending/uncertain entry or exit intents. Only then may the API/UI report `paused · quiescent · restart safe`. Filled positions may remain durably open and reserved while monitoring and settlement continue.
-- Resume requires configured total/per-purchase budgets, fresh account balances, connector health, risk-limit checks, and an available execution engine.
-- When working equity reaches zero, automation enters `depleted`, blocks all new orders, and cannot resume until the user pauses/reconfigures with a new positive budget.
-- A global kill switch supersedes resume. Stale market/account data, failed reconciliation, venue disconnect, or a configured current-epoch/lifetime realized-loss or drawdown limit blocks new trading. Reconfiguration cannot silently erase the evidence used by lifetime safety limits.
-- Paper mode uses the same buy rule and relative sizing policy as production live execution while retaining track-specific execution/fills and a completely separate bankroll, ledger, P&L, and report. It is not serialized to live's one-order execution path: each cycle may submit every paper-selected candidate that fits the same portfolio, correlation, bankroll, and provider-funding constraints.
-- Kalshi paper maker execution refreshes the exact contract independently at submission, uses the same pure initial-price and progressive-repricing state machine as live, and polls every two seconds over the same six-check managed horizon concurrently with live order management. It keeps live's issuance-sized quantity rather than buying extra paper quantity at the cheaper bid. Fill simulation consumes opposite-outcome public taker trade prints against displayed queue-ahead volume; a sampled ask touch by itself is never a fill. Missing terminal trade evidence excludes the attempt instead of manufacturing a miss. A separate matched-live overlay records authoritative live quantity, price, and fee on contemporaneous paper intents, capped at both observed live fill and paper-requested quantity, without changing independent paper status, bankroll, or P&L.
-- Every configured provider/model variant runs continuously in paper, even when that provider is live-disabled. Variant bankroll/accounting is logically isolated so one variant cannot consume another's opportunity or conceal its return; an additional consolidated view may aggregate only after preserving provider, variant, policy, and independent-window labels.
+<a id="req-trading-pause-resume"></a>
 
-#### Paper execution engine
+#### Control state and pause/drain
 
-- The 15-second background cycle settles due paper positions before evaluating new entries, including while automation is paused.
-- Entries use the active versioned buy policy and calculations generated no more than 15 seconds ago. Side-specific persistence prevents UP evidence from authorizing DOWN and vice versa; direct portfolio selection cannot hold both sides of one asset/window.
-- Paper evaluation fans each normalized market observation out to every eligible provider/model variant. Each paper order stores `providerId`, `providerVariantId`, contract-target version, forecast-model version, buy-policy version, execution-policy version, and exact provider contract provenance. Variants may share the same independent forecast inputs but must settle and score against their own exact provider contract.
-- Venue selection is limited to enabled, authenticated, funded venues and ranks the selected side's executable ask after spread and estimated fees. Missing side-specific bids/asks, asks outside 5¢ through 97¢, spreads above 10¢, entry inside the final 30 seconds, insufficient venue cash, or an inability to buy the venue's minimum quantity fail closed. The entry cutoff was 120 seconds until buy policy v20.
-- Paper fills mirror venue quantity granularity, including 0.01-contract Kalshi quantities, using the same explicit all-in purchase cap against a separate bankroll, conservative estimated fees, the configured open-position and correlation caps, durable states, and idempotent budget hooks.
-- Venue outcomes settle the reserved stake to payout and realized P&L. Unsupported final outcomes return the paper stake as invalid rather than manufacturing a win or loss.
-- The ordinary paper ledger never pauses or resumes live automation. It runs continuously until its independent bankroll is depleted; any paper reset is explicit and cannot mutate the live budget, ledger, intent, or P&L. A separately approved, bankroll-independent adaptive regime sentinel may soft-gate **new live entries only**; this does not mutate paper/live cash, operator intent, or the automation state.
-- The adaptive regime sentinel records at most one highest-edge, exact-Kalshi-contract policy-v11 recommendation per correlated settlement timestamp after every ordinary probability, quality, price, persistence, warm-up, spread, and final-cutoff gate passes. It measures bounded fee-aware realized edge per $1 payout, exponentially discounts older settlement windows with a configurable evidence half-life, learns empirical variance/effective sample size, and remains permissive during a configurable current-policy warm-up. At 99% default confidence of negative recent return it closes the soft entry gate; it automatically reopens below 75% negative confidence. Policy changes start a fresh evidence generation. Closed state retains active operator intent and continues sentinel collection, reconciliation, position monitoring, and reduce-only exits, but prohibits entries and switches that require replacement exposure. Manual Pause and hard economic loss breakers retain their stricter non-auto-resume semantics.
-- Live Kalshi entry receives at most three episodes per asset/side/window. Below 30pp issuance net edge an episode normally uses the managed v2 `post_only` GTC selected-side bid; during `bounded-taker-pilot-v1`, 25% of eligible first episodes receive the separately bounded IOC treatment described in the next bullet. YES entries map to Kalshi YES-book bids; NO entries map to signed YES-book asks while limits, costs, fills, P&L, and UI remain selected-side denominated. Maker joins/improves the selected-side bid over 12 seconds, amends without crossing the issuance cap, confirms remainder cancellation, accepts partial fills, and reconciles exact fees. An authoritative current-policy maker zero-fill ends that episode but may rearm the next one after the ordinary two qualifying snapshots over 15 seconds are observed strictly after maker completion. No intervening nonqualifying observation is required. Any fill, working or uncertain state, rejection, taker result, stale-policy row, or episode 3 ends rearming.
-- The v7 baseline maker/taker policy reruns routing for every episode. Its established high-edge route spends the spread only when both current issuance and refreshed taker net edge are at least 30pp after fees, persistence-median edge is at least 10pp, quality at least 65%, and selected-side spread no wider than 2¢. The old maker-sample and `makerNetEdge × fillRate` comparative gates are reporting-only because measured maker fills are outcome-selected rather than random capture. V7 also contains the explicitly armed `bounded-taker-pilot-v1`: deterministic 25/75 treatment/control assignment for first-episode, sub-30pp baseline makers whose incumbent reduced cap is at most 30¢. Treatment reruns the complete production venue buy rule but not those three stricter execution-style gates and is bounded to 30¢ each, 300¢/10 authorizations, 80 assignments, two authorizations/hour, one/settlement timestamp, 14 days, and 150¢ gross realized losses. Every taker is a marketable IOC **limit**, never an uncapped market order; it accepts at most 1.0¢ ask movement from issuance, capped again at the active 75¢ entry ceiling, and reserves quantity plus fees at the worst permitted price. A fresh gate failure, movement beyond 1¢, or accepted IOC no-fill ends the whole logical sequence; there is no taker fallback. Paper uses the same assignment and route with independent managed-maker or displayed-depth IOC simulation. See `docs/high-edge-execution-reduced-sizing-design.md`, `docs/requalifying-entry-episodes-design.md`, and `docs/bounded-taker-experiment-design.md`.
-- Edge-entry sizing is `entry-sizing-reduce30-below-edge30-v1`: below 30pp, quantize the track's current base all-in ticket to `ceil(base × 0.30 − 1e-9)`; at 30pp+ retain 1× base. There is no arbitrary minimum and no multiplier above one. If the sized cap cannot fund the venue minimum quantity plus conservative fee reserve, refuse the order. Every new order stamps base cap, issuance edge, multiplier, and sized cap. Existing funding, stake, cash, rate, position, correlation, live-risk, and reconciliation ceilings remain binding.
-- `entry-direction-observation-v1` records the issuance ask, fresh pre-submit ask, and first zero-fill management ask on maker paths, classifying the precommitted one-cent refusal/cancel candidates. Those fields are prospective reporting evidence only: production pricing, sizing, routing, management, cancellation, budgets, and reconciliation may neither import nor read the candidate decisions.
-- Cancellation confirmation tolerates Kalshi's bounded read-after-delete consistency delay without assuming success. Poll authoritative order status after DELETE for a short bounded window and confirm terminal `canceled` status, zero remainder, absence from the complete resting-order collection, and refreshed fills. Unknown/resting status, nonzero remainder, contradictory fills/positions, or expiry of the confirmation window still fails closed and triggers full reconciliation.
-- Persist every entry episode separately for authoritative recovery and execution evidence, but group live-ledger presentation by stable asset/window intent. Episode 1 retains the base ID and later v5 episodes use `:episode:2` and `:episode:3`, stamping the predecessor and episode number. Distinguish `post-only race` (never accepted, no spend), `rested · no fill` (accepted, then canceled), pre-submit refusal, and accepted IOC no-fill. Historical multi-attempt generations retain their immutable `:retry:` linkage and labels but cannot authorize a current episode.
-- Every new paper/live order durably captures an immutable `entry-decision-v1` snapshot joining edge-buy evidence to execution: provider/variant identity, policy/calculation identity, UP/DOWN and selected-side probabilities, confidence breakdown, actionable bid/ask, fee, spread, net edge, persistence count/median edge, contract-basis inputs, calibration replay, settlement-average observation, and full factor explanations. Open positions expose this evidence inline. A separately loaded, paginated `/api/trading/history` view combines the same decision snapshot with attempts, fill terms, current/terminal status, outcome, and P&L without inflating the dashboard polling payload. It supports execution-track, provider, variant, and policy-version filters. Legacy orders reconstruct core values and are labeled when richer issuance evidence predates persistence.
-- Raw positive-edge signals remain visible and tracked immediately, but paper/live execution uses a durable maturity gate: first 90 seconds blocked; current snapshot qualified; at least 2 qualifying snapshots spanning 15 seconds (3 over 30 until v21); median net edge at least −5pp; current quality at least 50%; and no new entry in the final 30 seconds. **v21 promoted `persistence-two-consecutive-v1`: two qualifying snapshots spanning 15 seconds, not three spanning 30.** **v20 widened all three of the edge bounds and the cutoff**: the floor moved from 5pp to −5pp, the 35pp ceiling was disarmed, and the cutoff from 120 to 30 seconds, on a measured increment of 686 decisions returning +20.2% stake-weighted and positive on 8 of 8 days. The operational risk the measurement does not cover — a maker order placed with 30 seconds left cannot reprice, retry, or exit — is recorded in the manifest entry. A failed current snapshot resets persistence, and repeated processing of one timestamp cannot manufacture observations. The warm-up increased from 60 to 90 seconds after the 2026-08-11 timing review found the 60–90-second live cohort materially weak; the change does not alter the model or persistence requirements.
-- Signal qualification, execution readiness, venue attempt, and actual position are separate UI states. Each current card is joined to the exact live asset/contract order so unfilled/rejected maker attempts are never presented as open positions, and the automation skip reason distinguishes absent edge from already-attempted signals.
-- Live execution has a hard startup reconciliation barrier. Before any new live order, fetch complete paginated Kalshi cash, positions, orders, fills, and resting orders; match durable client and venue IDs; cancel and confirm Money Noodle resting remainders; recover missing/partial entry and reduce-only fills; validate current position quantities; and align whole-cent local reservations without manufacturing P&L. Unknown managed orders, unrelated resting orders, malformed/incomplete history, contradictory positions, insufficient venue cash, or unconfirmed cancellation block and pause live automation.
-- Full current-account reconciliation is the startup, manual, and pause/drain barrier. The ordinary check runs independently of the 15-second collector every 300 seconds by default, configurable server-side and clamped to 60–3600 seconds. It reads current cash, nonzero/unsettled positions, every resting order, orders/fills in a fixed checkpointed interval with overlap and ID deduplication, and exact order/fill state for every locally open, pending, uncertain, or exit-pending transaction. Kalshi order `min_ts` is creation-based, so known nonterminal orders are always refreshed by ID; a lost-response intent without a venue ID is found by its durable client ID inside the bounded creation interval. `data/kalshi-reconciliation-checkpoint.json` advances only after every page, pure local/venue comparison, ledger/budget commit, and idempotent recovered settlement succeeds. Missing/malformed state or a watermark preceding Kalshi's moving live/historical cutoff escalates to the full current-account audit rather than skipping history. Venue reads run outside the shared ledger serializer while reconciliation `running` fences new live exposure; a short compare-and-commit phase rejects and retries a snapshot if local live authority changed during the reads. Collection, paper settlement, and control reads therefore continue, but ambiguous funded state still blocks new exposure. First periodic failure changes reconciliation to blocked and retries after 30 seconds without changing persisted operator intent; a second consecutive failure safety-suspends and audits. Successful authoritative recovery may guarded-auto-resume only an eligible system suspension, and unchanged successful periodic passes do not write redundant audit events. See `docs/incremental-background-reconciliation-design.md`.
-- Persist explicit operator intent separately from operational state. Manual Pause/kill, reconfiguration, mode changes, depletion, and conservatively migrated legacy pauses withdraw auto-resume permission. System-originated transaction ambiguity or reconciliation failure may preserve active intent only if automation was active beforehand. A successful authoritative reconciliation is the verification trigger, but auto-resume additionally requires all ordinary resume blockers to be clear. A manual pause during suspension cancels pending auto-resume. No free-form pause-reason parsing may grant permission.
-- Entry client intent is durable before submission, and the venue ID is persisted immediately after acceptance. Non-definitive request, schema, amend, cancellation, and exit errors use an `uncertain` state, retain the reservation, safety-suspend, and automatically launch authoritative reconciliation after the current serialized engine operation. Reconciliation retries through a 30-second Kalshi consistency window before treating an absent client ID as rejection. A system-originated suspension may guarded-auto-resume only when active operator intent was retained and every ordinary readiness check passes; manual/kill/configuration pauses never auto-resume. Only a definitively rejected post-only cross can release immediately.
-- Aligned quarter-hour oracle paths are durably sampled once per 15-second bucket and produce observation-only sign-flip rate, lag-one autocorrelation, trend efficiency, range, cycle-local volatility, and regime labels. Issuance-time path prefixes are attached to forecast records for independent-window outcome analysis but are forbidden from production probability, confidence, ranking, and execution until validated.
-- An observation-only settlement-average estimator explicitly models the final 60-second average. Before the window its Brownian effective variance is `σ²(T − 2W/3)`; inside the window it integrates observed log prices and assigns conditional future-integral variance `σ²r³/(3W²)`. It remains a benchmark and does not replace production `P(UP)` before held-out validation.
-- A separate observation-only maker model estimates the probability that Kalshi's ask touches a passive bid during the 12-second managed-order horizon using quote-path volatility and Brownian first passage. It is stored on forecasts/orders and evaluated through an execution funnel that separates submission, post-only acknowledgement race, acceptance, rested no-fill, partial/full queue fill, and settlement. First-passage calibration is conditional on accepted orders; post-only races never count as queue non-fills. Resolved forecast outcomes supply counterfactual settlement results for accepted no-fill attempts without changing their zero-spend ledger state. Report `P(UP | fill)` versus `P(UP | accepted, no fill)`, net return, independent windows, and execution-condition segments. Ask touch is not equated with queue fill or profitability, and none of these estimates may affect gating or sizing before validation.
-- Entry execution audit is prospective and immutable: preserve issuance bid/ask/spread and approved maximum separately from first submitted price, every refreshed quote and accepted/rejected reprice, cancellation timing, and authoritative average fill. Kalshi YES/NO ladders supply optional 20-level displayed-depth observations; selected-side size at the submitted level and better is a queue-ahead proxy, never exact priority. Missing depth cannot block an order. Every fresh open-position cycle records executable liquidation after fee, exact cost, unrealized return, independent probability/quality, basis/regime/clock, and displayed best-level depth. These paths are observation-only and cannot alter price, retry, size, selection, exit, or gate behavior.
-- Standalone qualification and constrained portfolio selection are separate. Paper/live candidates are ranked by expected dollar profit after principal and fees, then constrained by server-side configurable account-wide limits. Source defaults are nine total positions (hard configurable maximum ten), six in one settlement window, three per correlation group/window, and fixed expected-cent penalties; effective environment overrides are stamped as runtime evidence and may be lower. Live Kalshi selection requires the Kalshi quote itself to pass policy; edge available only on Polymarket cannot authorize a Kalshi order.
-- Switches require hold-versus-liquidate-and-replace gain after all costs, configurable minimum gain plus uncertainty margin, a replacement-side probability at least 15pp above the owned side, three distinct qualifying snapshots spanning 30 seconds, minimum-delta hysteresis across that streak, a completed-switch cooldown, and no replacement after zero/partial exit. Same-asset UP↔DOWN reversals require at least a 20pp probability advantage as well as positive net future wealth. Completed switches retain the incumbent's eventual hold outcome and compare counterfactual hold P&L with combined exit-plus-replacement P&L.
-- When all live slots are occupied, a new qualified candidate may replace an incumbent only if net liquidation value plus replacement expected profit exceeds the incumbent's current expected hold value by at least 1¢ after exit spread, exit fee, entry principal, and entry fee. A same-asset opposite-side candidate may enter this protected switch path before the portfolio is full, but can never be added alongside the incumbent and still must clear the stricter probability and future-wealth gates. Original entry cost is treated as sunk for the decision but retained for realized P&L.
-- Switch exits are Kalshi v2 reduce-only IOC orders at the owned side's actionable bid: YES closes through a YES ask and NO closes through the complementary YES bid. A zero fill keeps the incumbent; a partial fill is reconciled and blocks the replacement; only a complete close may submit the replacement. Switching is disabled inside the final 120 seconds and limited to one completed switch per settlement window.
-- The rolling hourly order ceiling counts unique Kalshi entry and exit orders with a nonzero fill. Local candidates, budget failures, schema/venue rejections, and accepted maker orders canceled with zero fill do not consume the ceiling. Switch execution requires room for two potential filled orders: reduce-only exit and replacement entry.
+States are `unconfigured`, `paused`, `active`, and `depleted`; operational suspension/draining metadata is separate
+from persisted operator intent. Automation starts paused and off by default.
+
+Pause performs a quiescent drain:
+
+1. withdraw active operator intent and block new selection;
+2. serialize behind the execution queue;
+3. cancel and authoritatively confirm every managed remainder;
+4. reconcile order, fill, position, cash, and reservations; and
+5. verify no pending or uncertain entry/exit intent.
+
+Only then may the API report `paused · quiescent · restart safe`. Filled positions may remain open and reserved while
+monitoring, exits, and settlement continue.
+
+Resume requires configured budgets, fresh account state, healthy connectors, an available engine, authoritative
+reconciliation, and every risk/capability check. Depleted equity blocks entries until paused reconfiguration funds a
+new positive budget. Kill switch, stale state, venue disconnect, failed reconciliation, or configured epoch/lifetime
+loss or drawdown limits block resume and new exposure.
+
+Manual pause, kill, reconfiguration, mode change, depletion, and conservatively migrated legacy pauses withdraw
+auto-resume permission. A system-originated ambiguity may retain prior active intent. Successful authoritative
+reconciliation may auto-resume only that eligible system suspension after every ordinary readiness check; a manual
+pause during suspension cancels permission. Free-form reason text can never grant authority.
+
+<a id="req-trading-paper-engine"></a>
+
+#### Paper mirror and bankroll
+
+Paper uses the identical entry decision and relative sizing policy required by
+[`policy-and-track-separation.md` req-policy-mirror-invariant](policy-and-track-separation.md#req-policy-mirror-invariant),
+with separate execution, bankroll, ledger, P&L, positions, and report.
+
+- The background cycle settles due paper positions before new entries, including while funded automation is paused.
+- Paper is not serialized to live's one-order path; it may submit every independently selected candidate fitting its
+  own funding and exposure state.
+- Every eligible provider/variant runs continuously in an isolated paper account even when live-disabled. No variant
+  consumes another's opportunity or conceals its return.
+- Each paper order retains provider/variant, market/contract target, forecast, buy, execution, strategy, and exact
+  provenance identities and settles against its own provider contract.
+- Fills use venue quantity granularity, all-in cap, conservative fees, durable states, idempotent budget hooks, and
+  configured position/correlation ceilings.
+- Invalid/unsupported final outcomes return reserved stake as invalid rather than manufacturing P&L.
+- Paper depletion/reset never pauses, resumes, funds, or mutates live state.
+
+Independent maker simulation refreshes the exact contract, uses the shared pure price/reprice transitions and
+issuance-sized quantity, and polls every two seconds over the same six-check/12-second managed horizon. It evaluates
+public aggressor prints against displayed queue ahead. Ask touch alone is not a fill. Missing terminal evidence makes the attempt unavailable rather than a manufactured miss. A matched-live
+overlay may report contemporaneous authoritative fill terms but cannot alter independent paper status, bankroll,
+or P&L. Any calibration is versioned, manually adopted on held-out evidence, and cannot read the live result of the
+row being simulated.
+
+The adaptive regime gate is a shared production-entry rule, not a cash/control state. It records at most one
+highest-edge exact-contract recommendation per correlated settlement window after ordinary gates, measures bounded
+fee-aware return with empirical variance and a default 12-window half-life, and remains permissive during its default
+12-window current-policy warm-up. At 99% default estimated probability of negative return it closes entries; below
+75% it reopens. A policy change starts fresh evidence. Closed state preserves operator intent and continues
+collection, reconciliation, position monitoring, and reduce-only exits while blocking new/replacement exposure.
+Manual pause and hard loss breakers retain non-auto-resume semantics.
+
+<a id="req-trading-entry-maturity"></a>
+
+#### Entry qualification and maturity
+
+- Entry consumes the active manifest policy and a calculation no older than one 15-second observation window.
+- Side-specific evidence cannot authorize the opposite side; selection cannot hold both sides of one asset/window.
+- Provider selection requires fresh side-specific bid/ask, exact capability, funding, selected-side ask within the
+  active policy band, spread no wider than 10¢, supported quantity, and provider-specific qualification. A quote on
+  another provider cannot authorize the order.
+- Raw signals remain immediately visible, but execution requires the first 90 seconds blocked, a currently qualified
+  snapshot, at least two qualifying snapshots spanning 15 seconds, median net edge at least −5pp, quality at least
+  50%, and no new entry in the final 30 seconds.
+- A failed current snapshot resets persistence. Reprocessing one timestamp cannot manufacture observations.
+- Signal qualification, maturity, portfolio selection, live authorization, venue attempt, and actual position are
+  separate typed states on read surfaces.
+
+<a id="req-trading-entry-route"></a>
+
+#### Entry route, episodes, and sizing
+
+Live entry receives at most three episodes per asset/side/window. A managed maker joins or improves the selected-side
+bid, never crosses the issuance cap, manages for the bounded horizon, confirms cancellation, accepts partial fills,
+and reconciles exact fees. YES/NO wire translation may use the venue's complementary book, but all limits, costs,
+fills, P&L, and UI remain selected-side denominated.
+
+An authoritative maker zero-fill may rearm only after ordinary persistence is recollected strictly after completion.
+No nonqualifying gap is required. Any fill, working/uncertain state, rejection, taker result, stale policy, or third
+episode ends rearming.
+
+The production execution policy reruns route selection for every episode. The established high-edge route spends
+the spread only when issuance and fresh taker net edge are each at least 30pp after fees, persistence-median edge is
+at least 10pp, quality is at least 65%, and selected-side spread is no wider than 2¢. Every taker is a marketable IOC
+**limit**, never an uncapped market order; it reruns the complete provider buy rule against a fresh quote, permits at
+most 1.0¢ ask movement from issuance without exceeding the active entry ceiling, reserves at the worst permitted
+price, and has no fallback after refusal or no-fill. The closed
+bounded-taker pilot grants no new authorization; a future experiment requires a new decision and generation.
+
+Entry sizing is `entry-sizing-reduce30-below-edge30-v1`: below 30pp issuance net edge, quantize the base all-in cap
+to `ceil(base × 0.30 − 1e-9)`; at 30pp or above retain 1×. There is no arbitrary minimum or multiplier above one.
+Refuse when the sized cap cannot fund venue minimum quantity plus fee reserve. Every order stamps base cap, issuance
+edge, multiplier, and sized cap; all other funding/risk/reconciliation ceilings remain binding.
+
+<a id="req-trading-intent-identity"></a>
+
+#### Durable intent, identity, and uncertainty
+
+- Persist client intent and reservation before submission; persist venue ID immediately after acceptance.
+- Every episode has collision-resistant identity, predecessor/generation linkage, and separate durable recovery
+  evidence. Presentation may group episodes by stable asset/window intent but cannot merge authority rows.
+- Distinguish never-accepted post-only race, accepted/rested no-fill, pre-submit refusal, IOC no-fill, partial fill,
+  full fill, rejection, and uncertainty.
+- Non-definitive request/schema/amend/cancel/exit errors retain reservation, enter `uncertain`, safety-suspend, and
+  launch authoritative reconciliation after the serialized operation.
+- Only a definitive rejected post-only cross may release immediately. Venue absence is not rejection until the
+  30-second consistency/reconciliation search passes.
+- Every order captures an immutable entry-decision snapshot joining forecast, qualification, persistence, provider
+  quote/cost, route, sizing, model/policy identities, basis/replay inputs, and factor explanations.
+- Legacy rows retain original identity and are labeled when evidence was unavailable; they are never rewritten into
+  the current generation.
+
+<a id="req-trading-cancellation"></a>
+
+#### Cancellation confirmation
+
+DELETE success is not cancellation evidence. Bounded confirmation requires terminal canceled state, zero remainder,
+absence from the complete resting-order set, and refreshed fills. Unknown/resting state, nonzero remainder,
+contradictory fills/positions, or timeout fails closed and triggers full reconciliation.
+
+<a id="req-trading-reconciliation"></a>
+
+#### Reconciliation
+
+Startup, manual, and pause/drain barriers perform a full current-account audit before funded exposure. They fetch
+complete paginated cash, positions, orders, fills, and resting orders; match client and venue IDs; cancel and confirm
+managed remainders; recover missing/partial entry and reduce-only fills; validate quantities; and align whole-cent
+reservations without manufacturing P&L.
+
+Unknown managed orders, unrelated resting orders, malformed/incomplete history, contradictory positions,
+insufficient cash, external/local ownership ambiguity, or unconfirmed cancellation blocks and suspends execution.
+
+Periodic reconciliation runs independently of collection every 300 seconds by default, configurable and clamped to
+60–3,600 seconds. It reads current cash,
+nonzero/unsettled positions, all resting orders, a checkpointed orders/fills interval with overlap and deduplication,
+and exact state for every local nonterminal/uncertain/exit transaction. Known nonterminal orders refresh by ID; a
+lost-response intent searches by durable client ID.
+
+The checkpoint advances only after every page, pure comparison, ledger/budget commit, and recovered settlement
+succeeds. Missing/malformed state or an unsafe venue-history watermark escalates to full audit. Venue reads occur
+outside the ledger serializer while a `running` fence blocks new exposure; compare-and-commit rejects a stale
+snapshot if local authority changed during reads.
+
+First periodic failure blocks and retries after 30 seconds without changing operator intent; a second consecutive
+failure safety-suspends and audits. Successful recovery may resume only under the system-suspension rule above. Unchanged successful passes do
+not create redundant audit events. See
+[`docs/incremental-background-reconciliation-design.md`](../docs/incremental-background-reconciliation-design.md).
+
+<a id="req-trading-observation-isolation"></a>
+
+#### Observation-only evidence isolation
+
+Trajectory, settlement-average, maker-touch, queue/depth, direction, and open-position liquidation observations are
+prospective immutable evidence. They may use already-authorized bounded reads but cannot alter forecast probability,
+confidence, qualification, ranking, route, price, retry, size, selection, exit, budget, or reconciliation before a
+separate held-out review and manual versioned promotion.
+
+Ask touch is not queue fill. Displayed depth is a queue-ahead proxy, never exact priority. Missing optional depth
+cannot authorize or block production behavior. Reports separate submission, acknowledgement race, accepted order,
+rested no-fill, partial/full fill, and settlement and compare fill versus accepted-no-fill cohorts without assigning
+spend to zero-fill rows.
+
+<a id="req-trading-portfolio-switch"></a>
+
+#### Portfolio selection and protected switching
+
+Standalone qualification precedes constrained selection. Candidates rank by expected dollar profit after principal
+and fees, then apply account-wide position, window, correlation, provider-funding, and risk ceilings. Source defaults
+are nine total positions, six in one settlement window, and three per correlation group/window; total positions have
+a hard configurable maximum of ten. Effective configuration may tighten source ceilings and is stamped as runtime
+evidence; it cannot exceed hard maxima.
+
+A replacement requires liquidation-plus-replacement future wealth to exceed optimistic hold after every spread,
+fee, uncertainty, and configured minimum-gain margin. It also requires replacement probability at least 15pp above
+the owned side, three distinct qualifying snapshots spanning 30 seconds, hysteresis, cooldown, and fresh readiness.
+Same-asset opposite-side replacement additionally requires at least a 20pp probability advantage and positive net
+future wealth; it can never coexist with the incumbent. When the portfolio is full, replacement value must exceed
+incumbent hold by at least 1¢ after all exit and entry costs. Original cost is sunk for future action but retained in
+realized P&L.
+
+Switch exit is reduce-only IOC at the owned-side actionable bid. Zero fill keeps the incumbent; partial fill
+reconciles and blocks replacement; only complete close may submit replacement. No replacement follows ambiguous
+exit. Switching is disabled in the final 120 seconds and limited to one completed switch per settlement window.
+The filled-order ceiling reserves capacity for both potential switch legs and counts only unique orders with nonzero
+fills.
+
+<a id="req-trading-reduce-only-sells"></a>
 
 #### Reduce-only sell recommendations
 
-`SELL` means reducing the side already owned; it never means opening or reversing exposure. A new DOWN/NO position is a separately qualified buy at the actionable NO ask. The recommendation engine evaluates four portfolio actions under one expected-wealth scale:
+`SELL` reduces the owned side and never opens reverse exposure. New DOWN/NO exposure is a separately qualified buy.
+The action set is:
 
 - **HOLD:** retain the incumbent to settlement.
-- **EXIT TO CASH:** initially attempt to close the full remaining held quantity without replacement; partial fills are reconciled execution outcomes, not an invitation to reverse or over-sell.
-- **SWITCH:** sell the incumbent and conditionally buy a superior selected replacement.
-- **BUY:** add a selected position when budget and exposure capacity allow.
+- **EXIT TO CASH:** reduce held quantity without replacement.
+- **SWITCH:** reduce incumbent, then conditionally buy a superior replacement only after complete exit.
+- **BUY:** add a selected position when capital and exposure allow.
 
-For held quantity `q` and owned-side probability `P(side)` (`P(UP)` or `1 − P(UP)`), expected hold payout is `H = q × 100¢ × P(side)`. Executable liquidation is `L = q × owned-side actionable bid − exit fee`, adjusted for available depth and partial-fill risk. Entry cost is sunk for choosing future action, but remains in realized-P&L and profit/loss labels. With venue-independent probability uncertainty `u`, optimistic hold value is `H⁺ = q × 100¢ × min(1, P(side) + u)`. A strict alpha exit requires `L − H⁺` to exceed a minimum-cent improvement after spread, fee, persistence, and freshness. Therefore `P(owned side) < 50%`, current unrealized profit, or a recent winning streak alone cannot trigger a sell.
+For held quantity `q` and owned-side probability `P(side)`, expected hold payout is
+`H = q × 100¢ × P(side)`. Executable liquidation is `L = q × owned-side bid − exit fee`, adjusted for depth and
+partial-fill risk. Entry cost is sunk for deciding future action but remains in P&L. With probability uncertainty
+`u`, optimistic hold is `H⁺ = q × 100¢ × min(1, P(side)+u)`. A value exit requires `L − H⁺` to exceed the configured
+minimum after spread, fee, persistence, and freshness. Probability below 50%, unrealized profit, or a prior winning
+streak alone cannot trigger sale.
 
-Use three sell families:
+Sell families are separately versioned:
 
-1. **Upgrade switch:** existing liquidation-plus-replacement future-wealth comparison. Switches retain their three-snapshot/30-second persistence and probability-advantage gates.
-2. **Thesis-break/value exit:** one fresh snapshot may sell when executable Kalshi net cash exceeds uncertainty-adjusted optimistic model hold value by at least 1¢, without requiring a replacement.
-3. **75% profit-reversal exit:** arm—do not sell—when net executable profit reaches +75%. Persist the highest executable net liquidation value and owned-side model probability. One later fresh snapshot may sell when both values have declined from that high-water observation. Kalshi supplies the executable bid; it never enters the independent probability.
+1. **Upgrade switch:** liquidation plus replacement beats hold under the protected-switch requirements.
+2. **Thesis-break/value exit:** one fresh snapshot may exit when executable net cash exceeds uncertainty-adjusted
+   optimistic hold by the required margin.
+3. **Profit reversal:** after executable net profit reaches +75%, one later fresh snapshot may exit only when both
+   executable value and owned-side probability decline from durable high-water observations.
 
-Winning streaks across prior trades are forbidden as inputs. Recommendations rank by risk-adjusted **incremental expected cents versus no action**, so buys, exits, and switches remain comparable.
+Winning streaks across trades are forbidden inputs. Recommendations rank by risk-adjusted incremental expected cents
+versus no action.
 
-Standalone exits use a fresh quote, reduce-only Kalshi IOC quantity no greater than held amount, bounded owned-side bid, durable exit/client ID before submission, and exact fill/fee reconciliation. Zero or partial fill never authorizes replacement or automatic exit retry. Ambiguity retains the reservation/position state and safety-suspends for authoritative reconciliation.
+Standalone exits use fresh quote, reduce-only IOC quantity no greater than held amount, bounded owned-side price,
+durable intent/client ID before submission, and exact fill/fee reconciliation. Zero/partial fill never authorizes
+replacement or automatic retry. Ambiguity retains state and safety-suspends.
 
-A completed standalone exit clears prior entry persistence and starts a 60-second cooldown. After that, any number of same-asset/window re-entries may occur, but every one requires three newly collected qualifying buy snapshots and all normal edge, spread, fee, timing, portfolio, budget, reconciliation, and hourly-order gates. Each generation has a new durable logical/client ID.
+A completed standalone exit clears prior persistence and starts a 60-second cooldown. Any later same-window
+re-entry requires three newly collected qualifying snapshots and all ordinary policy, timing, portfolio, budget,
+risk, and reconciliation gates under a new durable generation.
+
+<a id="req-trading-audit"></a>
 
 #### Auditability
 
-- Persist every budget configuration, pause/resume, reservation, settlement, P&L adjustment, depletion, and connector failure.
-- Every event records timestamp, reason, previous/new state, related forecast/order IDs, venue, and model/policy versions where applicable.
-- LLM output cannot configure, resume, or place trades.
+Persist every budget configuration, operator-intent/control transition, reservation, order, fill, cancellation,
+settlement, P&L adjustment, depletion, connector failure, reconciliation result, and guarded recovery. Events retain
+timestamp, typed reason, prior/new state, related forecast/order IDs, provider/market/strategy identity, budget
+epoch, and model/policy versions where applicable. LLM output cannot configure, arm, resume, reconcile, or trade.
+
+<a id="req-trading-security-controls"></a>
 
 ## 7. Security and trading controls
 
-- Secrets only in server environment variables or OS keychain/secret manager.
-- **No private key may live inside the repository working tree, even ignored.** Keys live under `~/.config/money-noodle/` and are referenced by path (`KALSHI_PRIVATE_KEY_PATH`), never inlined into an env file. A key inside the tree was committed once and had to be rotated; `.gitignore` covers `*.pem`, `*.key`, `*.p8`, `id_rsa*`, and `.env*.bak*` so a credential or credential backup cannot be re-added, but the ignore rules are a second line of defence rather than the control.
-- Rotating a key requires restarting the worker. Replacing the key file alone leaves the previous key ID loaded in memory, which pairs an old ID with a new key and fails every signed request at the next venue call rather than at startup.
-- Separate read-only and trading credentials where venues support them.
-- Read-only provider connectors contain no order, cancellation, or position-mutation function at all, so a bug cannot exceed the capability the registry grants. Prefer a venue-side read-only key as well, so a defect in this code also cannot trade.
-- The sign-in endpoint must throttle failed attempts. A fixed per-failure delay is the control that bounds guessing, because it needs no shared state and therefore survives serverless instance fan-out and source-address rotation; a per-process lockout counter is an optimisation for the single-source case and is weak wherever requests are spread across instances.
-- Browser receives capability/status flags, never secret values.
-- CSRF protection and same-origin checks on all mutation routes and billable research requests.
-- Idempotency key on every order submission.
-- Immutable local audit record for preview, confirmation, venue response, fill, cancel, and error.
-- Configurable limits: max order loss, daily loss, open exposure, orders/minute, allowed venues/assets, and price slippage.
-- Global trading kill switch, off by default.
-- Stale quote, stale account state, changed market, or disconnected venue blocks submission.
-- Demo/paper mode ships before production order placement.
-- LLM output can draft research or a ticket but can never directly submit an order.
-- Recording a model promotion or rollback is a real-money control and carries the same guards as a trading mutation: authenticated same-origin session, paused automation, quiescent restart-safe drain, zero reserved budget, a written reason, and an exactly typed confirmation phrase. A promotion must cite the newest walk-forward run by id and clear every eligibility criterion. A rollback is deliberately not eligibility-gated — reverting must stay available exactly when the evidence for the current model has fallen apart. The route may only record a model version and parameter set the running code actually forecasts with, so the published `unrecorded` flag cannot be made to lie.
+- Secrets live only in server environment variables or OS keychain/secret manager.
+- No private key may exist inside the repository worktree, even ignored. Keys live outside it and are referenced by
+  path; ignore rules are only a second line of defense.
+- Key rotation requires worker restart so key ID and loaded material cannot diverge.
+- Separate read and trading credentials/capabilities where supported. Read-only connectors contain no mutation
+  methods; prefer venue-side read-only keys too.
+- Authentication throttles failed guesses with a control effective across process/serverless fan-out.
+- Browser responses contain capability/status only, never secrets or signed payloads.
+- Every mutation and billable research route enforces authentication, same-origin/CSRF protection, and bounded input.
+- Every order submission has an idempotency key and immutable preview/confirmation/response/fill/cancel/error audit.
+- Configurable ceilings include order loss, epoch/lifetime loss and drawdown, exposure, filled-order rate, allowed
+  providers/assets/markets, and price movement/slippage.
+- Global kill switch is off by default and supersedes resume.
+- Stale quote/account state, changed contract, disconnected provider, identity mismatch, or failed reconciliation
+  blocks submission.
+- Demo/paper capability precedes production placement.
+- LLM output may draft research or a ticket but can never submit an order.
+- Model promotion/rollback is a funded control: authenticated same-origin session, paused quiescent drain, zero
+  reservation, written reason, typed phrase, exact runnable model identity, and immutable audit. Promotion cites an
+  eligible run; rollback remains available without promotion eligibility because safety may require reverting.

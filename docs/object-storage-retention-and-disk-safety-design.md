@@ -5,7 +5,7 @@
 > **Implementation:** Partial
 > **Created:** 2026-08-24
 > **Canonical requirements:** [`spec/storage-and-architecture.md`](../spec/storage-and-architecture.md)
-> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Decision record:** [`DEC-20260824-03`](../spec/decisions/decision-id-map.json)
 > **Design index:** [`docs/README.md`](README.md)
 
 **Status:** approved design; phased implementation begins 2026-08-24

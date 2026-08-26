@@ -5,7 +5,7 @@
 > **Implementation:** Complete
 > **Created:** 2026-08-25
 > **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md)
-> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Decision record:** [`DEC-20260825-03`](../spec/decisions/decision-id-map.json)
 > **Design index:** [`docs/README.md`](README.md)
 
 > **Status: approved implementation design.** Written 2026-08-25 after operator confirmation that venue positions

@@ -5,7 +5,7 @@
 > **Implementation:** Complete
 > **Created:** 2026-08-20
 > **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
-> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Decision record:** [`DEC-20260820-08`](../spec/decisions/decision-id-map.json)
 > **Design index:** [`docs/README.md`](README.md)
 
 **Status:** implemented 2026-08-20. Supersedes nothing; completes SPEC §12.8 step 2 and closes two

@@ -31,15 +31,15 @@ loses to it on any divergence.
 | --- | --- |
 | `SPEC.md` | Product statement, global principles, authority, and canonical specification map. |
 | `spec/*.md` | Detailed normative requirements and decision history by domain. |
-| `STATUS.md` | Dated current implementation and measurement projection; never live operational authority. |
-| `status/roadmap.md` | Non-normative sequencing; never implementation authority. |
-| `status/archive/*.md` | Immutable historical status; outside ordinary orientation. |
+| `STATUS.md` | Compact dated projection of what is implemented and most recently measured; never live operational authority. |
+| `status/roadmap.md` | Non-normative sequencing and pending work; never implementation authority. |
+| `status/archive/*.md` | Immutable historical status and superseded measurements; read only when history is material. |
 | `lib/trading-provider-registry.ts` | Which venues exist and what each may do. |
 | `lib/market-registry.ts` | Which markets exist and what each may do per lane (market data / paper / live). |
 | `lib/strategy-registry.ts` | Which strategies exist and which is default. |
 | `lib/policy-manifest.ts` | Every buy policy that has been live. |
-| `reports/*.md`, indexed by `reports/README.md` | Dated measurements, methods, and caveats. |
-| `docs/README.md` and indexed `docs/*.md` | Design lifecycle and supporting rationale; never requirement authority. |
+| `reports/*.md`, indexed by `reports/README.md` | Dated measurements, methods, cohorts, and caveats. |
+| `docs/README.md` and indexed `docs/*.md` | Proposed, accepted, superseded, retired, reference, and exploratory designs; never an alternate requirement authority. |
 | `README.md` | Human orientation and setup; never requirement, implementation, or operational authority. |
 
 ### Change routing
@@ -246,6 +246,8 @@ npm run verify:spec   # specification module, link, anchor, archive, and ADR int
 npm run verify:docs   # design index, lifecycle metadata, authority, link, and anchor integrity
 npm run verify:status # current status, roadmap, archive, hash, link, and size integrity
 npm run verify:agents # this file's and README's paths, symbols, links, citations, and the report index
+npm run verify        # all four documentation/agent integrity gates
+npm run check         # verify, typecheck, lint, test, and production build
 ```
 
 Do not stop or restart the server to edit, typecheck, or test. Restart only when the maintainer asks or a change

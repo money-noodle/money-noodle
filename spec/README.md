@@ -11,8 +11,12 @@ index. This folder contains detailed normative modules; this README deliberately
   [`../status/roadmap.md`](../status/roadmap.md), and immutable status history under [`../status/archive/`](../status/archive/), not here.
 - Keep pre-implementation designs indexed by lifecycle in [`../docs/README.md`](../docs/README.md) and dated
   measurement reports in [`../reports/`](../reports/).
-- Cite named sections or stable requirement IDs, never source lines.
+- Cite stable `req-<domain>-<name>` requirement IDs when available, otherwise named sections; never source lines.
+  IDs are permanent and never reused even when wording moves.
+- Keep dated implementation progress in `STATUS.md`, sequencing in `status/roadmap.md`, measurements in reports,
+  and implementation rationale in designs/decisions. Canonical modules state durable required behavior.
 - If canonical modules conflict, stop and resolve the conflict; do not guess which requirement wins.
-- Record accepted requirement changes in [`decision-log.md`](decision-log.md). Use an ADR for a load-bearing,
-  cross-domain decision without rewriting its historical ledger row.
+- Record accepted requirement changes in [`decision-log.md`](decision-log.md). Cite ordinary decisions by their
+  permanent `DEC-YYYYMMDD-NN` ID and use an ADR for a load-bearing, cross-domain decision without rewriting its
+  historical ledger row.
 - Run `npm run verify:spec` after changing the root, a module, a decision archive, or an ADR.

@@ -30,6 +30,10 @@ const allowedStatuses = new Set(['Accepted', 'Exploratory', 'Proposed', 'Referen
 const allowedImplementation = new Set(['Complete', 'Not applicable', 'Not started', 'Partial', 'Removed']);
 const errors = [];
 const index = readFileSync(indexFile, 'utf8');
+const decisionIds = new Set(
+  JSON.parse(readFileSync(join(repoRoot, 'spec/decisions/decision-id-map.json'), 'utf8'))
+    .decisions.map((entry) => entry.id),
+);
 const metadata = new Map();
 
 for (const file of designFiles) verifyMetadata(file);
@@ -77,18 +81,21 @@ function verifyMetadata(file) {
   if (value.designIndex !== '[`docs/README.md`](README.md)') errors.push(`${display(file)} does not link to docs/README.md`);
 
   const hasCanonicalLink = /\]\(\.\.\/spec\/[^)]+\.md\)/.test(value.canonical);
-  const hasDecisionLink = value.decision === '[`spec/decision-log.md`](../spec/decision-log.md)';
+  const decisionId = value.decision.match(/^\[`(DEC-\d{8}-\d{2})`\]\(\.\.\/spec\/decisions\/decision-id-map\.json\)$/)?.[1];
+  const legacyDecision = value.decision === 'Legacy — no single archived row names this design; see [`spec/decision-log.md`](../spec/decision-log.md)';
+  const hasDecisionAuthority = decisionId !== undefined || legacyDecision;
+  if (decisionId && !decisionIds.has(decisionId)) errors.push(`${display(file)} cites unknown decision ${decisionId}`);
   if (['Accepted', 'Retired', 'Superseded'].includes(value.status)) {
     if (!hasCanonicalLink) errors.push(`${display(file)} is ${value.status} without canonical requirement links`);
-    if (!hasDecisionLink) errors.push(`${display(file)} is ${value.status} without the accepted decision index`);
+    if (!hasDecisionAuthority) errors.push(`${display(file)} is ${value.status} without an exact or explicitly legacy decision record`);
   }
   if (value.status === 'Proposed') {
     if (value.implementation !== 'Not started') errors.push(`${display(file)} is proposed but implementation is ${value.implementation}`);
-    if (hasCanonicalLink || hasDecisionLink) errors.push(`${display(file)} is proposed but claims accepted authority`);
+    if (hasCanonicalLink || hasDecisionAuthority) errors.push(`${display(file)} is proposed but claims accepted authority`);
   }
   if (value.status === 'Exploratory') {
     if (value.implementation !== 'Not applicable') errors.push(`${display(file)} is exploratory but implementation is ${value.implementation}`);
-    if (hasCanonicalLink || hasDecisionLink) errors.push(`${display(file)} is exploratory but claims accepted authority`);
+    if (hasCanonicalLink || hasDecisionAuthority) errors.push(`${display(file)} is exploratory but claims accepted authority`);
   }
   if (value.status === 'Reference' && value.implementation !== 'Not applicable') {
     errors.push(`${display(file)} is a reference but implementation is ${value.implementation}`);
@@ -101,12 +108,12 @@ function verifyMetadata(file) {
 function verifyIndex() {
   for (const file of designFiles) {
     const name = relative(docsDir, file);
-    const count = [...index.matchAll(new RegExp(`\\]\\(${escapeRegExp(name)}\\)`, 'g'))].length;
-    if (count !== 1) errors.push(`docs/README.md indexes ${name} ${count} times; expected exactly once`);
-
     const status = metadata.get(file).status;
     const section = sectionText(index, status);
-    if (!section.includes(`](${name})`)) errors.push(`docs/README.md does not place ${name} under ## ${status}`);
+    const primaryCount = [...section.matchAll(new RegExp(`\\]\\(${escapeRegExp(name)}\\)`, 'g'))].length;
+    if (primaryCount !== 1) {
+      errors.push(`docs/README.md indexes ${name} ${primaryCount} times under ## ${status}; expected one primary lifecycle entry`);
+    }
   }
 }
 
@@ -154,7 +161,7 @@ function sectionText(text, heading) {
 }
 
 function headingAnchors(text) {
-  const result = new Set();
+  const result = new Set([...text.matchAll(/<a id="([a-z0-9-]+)"><\/a>/g)].map((match) => match[1]));
   const occurrences = new Map();
   for (const match of text.matchAll(/^#{1,6} +(.*)$/gm)) {
     const base = githubSlug(match[1]);

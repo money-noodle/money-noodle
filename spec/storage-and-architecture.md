@@ -1,6 +1,6 @@
 # Storage and architecture
 
-> **Status:** Normative · **Parent:** [`SPEC.md`](../SPEC.md) · **Structurally verified:** 2026-08-25  
+> **Status:** Normative · **Parent:** [`SPEC.md`](../SPEC.md) · **Structurally verified:** 2026-08-26
 > **Canonical for:** durable storage, migration boundaries, technical architecture, runtime cadence, and non-functional requirements.  
 > **Read with:** [`trading-risk-and-budget.md`](trading-risk-and-budget.md) when storage can affect funded authority or reconciliation.
 >
@@ -9,6 +9,8 @@
 > and resolve the specification conflict rather than choosing one silently.
 
 ## 6. Storage
+
+<a id="req-storage-local"></a>
 
 ### Initial local storage
 
@@ -22,9 +24,29 @@ Planned repository boundaries:
 - `OrderAuditRepository`
 - `ResearchSessionRepository`
 
-The single-array forecast snapshot is now a memory-residency and startup risk, not the event-loop culprit it was first reported to be. Direct measurement found that parsing the roughly 190 MB snapshot costs about 1.2 seconds once per process behind a promise cache; the observed ten-second stalls came from quadratic copy-on-append grouping in `summarizePerformance`, now fixed at roughly 0.6–0.7 seconds. The process still retains roughly 396 MB of parsed history to serve a hot set near 100 rows and grows about 40 MB per day. `ForecastRepository` therefore moves to a small open set, sealed immutable daily shards, and per-shard rollups. `summarizeFromRollups` is implemented beside the direct path and must reproduce the complete summary under a field-by-field gate before any reader switches. Counts and identities are exact; floating aggregates use a `1e-12 × max(1, |left|, |right|)` combined absolute/relative bound for unavoidable summation-order noise. Policy-scoped statistics retain policy identity in their compact rollup keys: an unscoped legacy counterfactual may never be attributed to the active buy policy, and the verifier fails if excluding it would hide active-policy sealed rows. A worker boundary is deferred because it relocates work without reducing retained memory. Retention is deliberately unchanged — making unbounded history affordable is not the same decision as choosing what to discard. See [`docs/forecast-storage-design.md`](../docs/forecast-storage-design.md).
+Forecast history uses a bounded open set, sealed immutable content-addressed daily shards, and per-shard rollups.
+Summary readers use rollups and must not load sealed shards to answer a summary question. Counts and identities are
+exact; floating aggregates use a `1e-12 × max(1, |left|, |right|)` combined absolute/relative comparison bound for
+unavoidable summation-order noise. Policy-scoped statistics retain policy identity in compact keys: an unscoped
+legacy counterfactual is never attributed to the active policy. A reader may switch generations only after the
+field-by-field semantic verifier passes. See
+[`docs/forecast-storage-design.md`](../docs/forecast-storage-design.md) and
+[`docs/forecast-storage-generation-repair-design.md`](../docs/forecast-storage-generation-repair-design.md).
 
-The persistent local worker also maintains an optional S3-compatible off-machine archive. Every 24 hours a detached, low-priority process compresses durable JSON/JSONL files and their frozen corrupt/superseded derivatives into SHA-256-addressed immutable blobs, uploads only missing content, reads every new blob back through gzip while verifying its original checksum and byte count, and commits a timestamped manifest only after all files pass. Vercel/stateless workers cannot start it. Archive v1 never deletes or mutates local source data. An independent restore must reject unsafe paths and reproduce every manifest byte under its original checksum before any eviction is considered. Local removal is a separate owner-aware tier transaction: only allowlisted immutable content may be remote-primary, hot ledgers/journals/indexes/open sets remain local, and the latest durable tier catalog must retain remote-only identities. No sole local copy may be removed until the object set has enforceable retention/Object Lock or an independently verified second bucket. Credentials belong only to a dedicated object-read/write application in local environment configuration, never Vercel or the repository. See [`docs/object-storage-retention-and-disk-safety-design.md`](../docs/object-storage-retention-and-disk-safety-design.md).
+Retention is a separate decision from storage affordability. Sharding or compaction does not authorize deletion.
+
+An optional S3-compatible off-machine archive runs only on the persistent worker. A detached low-priority process
+compresses allowlisted durable files and frozen corrupt/superseded derivatives into SHA-256-addressed immutable
+blobs, uploads only missing content, reads every new blob back through decompression while verifying original
+checksum and byte count, and publishes a timestamped manifest only after all files pass.
+
+Archive publication never deletes or mutates local source data. Independent restore rejects unsafe paths and
+reproduces every manifest byte under its original checksum before eviction can be considered. Remote-primary
+removal is a separate owner-aware tier transaction: only allowlisted immutable content may move; hot ledgers,
+journals, indexes, and open sets remain local; and a durable tier catalog retains remote-only identities. No sole
+local copy may be removed until enforceable retention/Object Lock or an independently verified second bucket exists.
+Archive credentials belong only to a dedicated local application identity, never the repository or stateless host.
+See [`docs/object-storage-retention-and-disk-safety-design.md`](../docs/object-storage-retention-and-disk-safety-design.md).
 
 The persistent worker also performs best-effort startup reclamation of orphaned atomic-write temp files under
 `data/` and `.cache/`. A `${target}.<pid>.<rand>.tmp` may be removed only when it is older than 60 seconds
@@ -32,9 +54,13 @@ and the real rename target already exists; an absent target, fresh file, symlink
 name, or stateless host is never touched. This housekeeping cannot rewrite a ledger or be the only owner of
 durable content, and it never delays startup reconciliation or collector activation.
 
+<a id="req-storage-mongodb"></a>
+
 ### MongoDB migration
 
 Replace repository implementations without changing domain/services. Add TTL indexes for raw cache records and durable collections for forecasts, outcomes, trades, and audit events. Credentials do **not** belong in MongoDB documents in plaintext.
+
+<a id="req-storage-architecture"></a>
 
 ## 8. Technical architecture
 
@@ -58,6 +84,8 @@ Recommended future service boundaries:
 - `lib/llm/*` — provider adapters and grounded research orchestration.
 - `lib/repositories/*` — filesystem then MongoDB implementations.
 - `lib/trading/*` — risk checks, previews, idempotency, audit.
+
+<a id="req-storage-nonfunctional"></a>
 
 ## 9. Non-functional requirements
 

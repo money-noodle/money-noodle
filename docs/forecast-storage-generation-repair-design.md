@@ -5,7 +5,7 @@
 > **Implementation:** Complete
 > **Created:** 2026-08-22
 > **Canonical requirements:** [`spec/storage-and-architecture.md`](../spec/storage-and-architecture.md)
-> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Decision record:** [`DEC-20260822-03`](../spec/decisions/decision-id-map.json)
 > **Design index:** [`docs/README.md`](README.md)
 
 > Design · 2026-08-22 · approved for implementation after the live desk was paused and drained

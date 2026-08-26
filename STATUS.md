@@ -21,9 +21,11 @@ corrected on 2026-08-21. Exact dynamic exchange identity and external-position o
 2026-08-25. The former long-shot strategy was retired and removed from runtime/product authority on 2026-08-26;
 its historical identity and evidence remain durable.
 
-The 2026-08-26 documentation migration changed no product, policy, capital, execution, reconciliation, or funded
-behavior. The former 34,588-word root status is preserved byte-for-byte in bounded immutable fragments indexed by
-[`status/README.md`](status/README.md).
+The 2026-08-26 documentation migrations changed no product, policy, capital, execution, reconciliation, or funded
+behavior. Canonical modules now separate durable requirements from dated progress/evidence, stable requirement and
+decision IDs are verified, designs route by workstream as well as lifecycle, and selected authority/status identities
+are checked against source. The former 34,588-word root status remains byte-preserved in bounded immutable fragments
+indexed by [`status/README.md`](status/README.md).
 
 ## Implementation by area
 
@@ -38,14 +40,14 @@ behavior. The former 34,588-word root status is preserved byte-for-byte in bound
 | Storage | Forecast storage v3 uses one owning writer, immutable content-addressed shards/rollups, checksums, journal replay, and publish-last generations. Execution ledger v9 keeps money/control rows hot and hydrates immutable terminal evidence from verified batches. Atomic stores and append-only journals retain owner boundaries. |
 | Archive and restore | Local-only object archival, full read-back checksum verification, manifests, independent restore, disk-capacity checks, and rebuildable Next-cache cleanup are implemented. Remote-primary deletion is not authorized. |
 | Hosted runtime | Hosted deployment is stateless and reads only bounded sanitized paper projections. It has no credentials, collection, reconciliation, ledger-write, control, or funded order authority. |
-| Governance | Versioned registries, policy manifest, immutable model-promotion ledger, canonical modular specification, controlled design/status lifecycles, and CI documentation/application gates are implemented. `AGENTS.md` remains one bounded always-loaded guide with stable historical citations and explicit change routing, and is now verified against the code it cites by `verify:agents`. |
+| Governance | Versioned registries, policy manifest, immutable model-promotion ledger, canonical modular specification, controlled design/status lifecycles, stable requirement/decision IDs, workstream design routing, and CI documentation/application gates are implemented. `AGENTS.md` remains one bounded always-loaded guide with stable historical citations and explicit change routing; `verify:agents` checks its code citations and canonical authority restatement. |
 
 ## Active identities
 
 | Concern | Current identity or state |
 | --- | --- |
 | Production forecast | Blend 0.4; prospective candidates cannot affect it |
-| Shared entry policy | Buy policy v22: +5pp minimum net edge and 10–75¢ entry band, with the remaining current gates unchanged |
+| Shared entry policy | `buy-binary-edge-net5-nocap-quality50-owned55-price10to75-late30-persist2of15-v22`: +5pp minimum net edge and 10–75¢ entry band |
 | Live execution | `maker-high30-requalify3-fresh1c-bounded-taker-pilot-v7`; the bounded pilot is closed and subsequent eligible intents retain incumbent maker execution |
 | Paper execution | `paper-managed-execution-route-ioc-requalify3-calibrated-v6`, neutral `queueClearFraction = 0` |
 | Entry sizing | `entry-sizing-reduce30-below-edge30-v1`; no multiplier above one |

@@ -5,7 +5,7 @@
 > **Implementation:** Removed
 > **Created:** 2026-08-18
 > **Canonical requirements:** [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
-> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Decision record:** Legacy — no single archived row names this design; see [`spec/decision-log.md`](../spec/decision-log.md)
 > **Design index:** [`docs/README.md`](README.md)
 
 > Design document, 2026-08-18. Agreed in prose with the maintainer before any code. It adds durable

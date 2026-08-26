@@ -21,6 +21,38 @@ Designs explain how and why. They never silently override the canonical specific
 or code. Apparent conflicts must be resolved explicitly. Run `npm run verify:docs` after changing this index or a
 top-level document.
 
+## Domain and workstream routing
+
+Use this view after `SPEC.md` identifies the governing domain. It highlights active or load-bearing context; the
+lifecycle tables below remain the complete primary index. Read a linked design completely before changing its
+mechanism. A queued or proposed row still grants no implementation authority.
+
+| Workstream | Read when | Active/load-bearing designs |
+| --- | --- | --- |
+| Forecast and evidence | Forecast formula, replay, calibration, confirmation, or outcome scoring | [`Forecast model/evaluator v3`](forecast-model-and-evaluator-v3-design.md) → [`confirmed signal`](confirmed-signal-evaluation-design.md) |
+| Provider and market candidacy | Provider identity, quote feasibility, contract target, or a new market | [`Venue candidacy`](venue-candidate-evaluation-design.md), [`hourly threshold market`](second-market-hourly-crypto-design.md), [`venue traffic`](venue-traffic-and-rate-limits.md) |
+| Portfolio through venue outcome | Selection, authorization, durable intent, order/position/cash lifecycle | [`Portfolio selection`](portfolio-selection-evaluation-design.md) → [`live authorization`](live-authorization-evaluation-design.md) → [`attempt/outcome`](attempt-outcome-evaluation-design.md) |
+| Paper/live fidelity | Mirror routing, queue simulation, timing, calibration, or exact pair attribution | [`Paper fidelity v2`](paper-execution-fidelity-v2-design.md), [`fill calibration`](paper-fill-calibration-design.md), [`mirror fidelity`](mirror-fidelity-and-skip-attribution-design.md) |
+| Funded safety and reconciliation | Signing identity, external ownership, cancellation, reconciliation, or ledger authority | [`Incremental reconciliation`](incremental-background-reconciliation-design.md), [`exchange index`](kalshi-exchange-index-wire-design.md), [`external ownership`](external-venue-position-ownership-design.md), [`ledger v9`](execution-ledger-v9-design.md) |
+| Execution and exits | Entry route/episodes/sizing, maker restrictions, or reduce-only exit evidence | [`Requalifying episodes`](requalifying-entry-episodes-design.md), [`execution/exit sentinels`](positive-edge-execution-exit-sentinel-design.md) |
+| Storage and runtime | Forecast/execution storage, object archive, bounded reads, or cadence ownership | [`Forecast storage`](forecast-storage-design.md), [`generation repair`](forecast-storage-generation-repair-design.md), [`object retention`](object-storage-retention-and-disk-safety-design.md), [`reporting reads`](reporting-read-path-design.md) |
+| Product attribution and observation | Dashboard identity/filtering, signal lifecycle, or observation-only ladders | [`Attribution visibility`](provider-policy-attribution-visibility-design.md), [`order-book monitor`](edge-order-book-monitor-design.md), [`live decision flow`](live-opportunity-decision-flow.md) |
+| Future platform shape | Website/engine split, tenants, identity, and connections | [`Engine separation`](execution-engine-separation-design.md), [`multitenancy`](multitenancy-design.md), [`multitenant UI`](multitenant-web-ui-design.md) — all Proposed |
+
+The strict evaluation sequence is forecast → confirmed signal → venue candidacy → portfolio selection → live
+authorization → attempt/outcome. Current collection state and scheduling remain in
+[`status/roadmap.md`](../status/roadmap.md), not this index.
+
+### Load-bearing supersession chains
+
+| Historical design | Current routing |
+| --- | --- |
+| [`Adaptive fallback`](adaptive-entry-fallback-design.md) → [`high-edge route/reduced sizing`](high-edge-execution-reduced-sizing-design.md) | Current episode boundary is [`requalifying episodes`](requalifying-entry-episodes-design.md); the funded bounded pilot is [`Retired`](bounded-taker-experiment-design.md). |
+| [`Edge-proportional sizing`](edge-proportional-sizing-design.md) | Superseded by the fixed reduce-below-30pp sizing recorded in the current execution policy. |
+| [`Edge-spike gate`](edge-spike-sentinel-design.md) | Removed as production authority; prospective maker restrictions live in [`execution/exit sentinels`](positive-edge-execution-exit-sentinel-design.md). |
+| [`Original maker-post observer`](maker-post-observation-design.md) | Retired; current mirror attribution uses [`paper/live repair`](paper-live-mirror-fidelity-repair-design.md) and [`paper fidelity v2`](paper-execution-fidelity-v2-design.md). |
+| [`Long-shot policy`](long-shot-policy-design.md) | Retired and removed; historical strategy identity only. |
+
 ## Accepted
 
 | Document | Type | Implementation | Canonical requirements |
