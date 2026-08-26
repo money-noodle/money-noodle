@@ -17,7 +17,7 @@ Money Noodle is operational as a local research dashboard, continuous paper shad
 
 The **repeated-episode order-identity defect found on 2026-08-20 was mechanically repaired and its known ledger damage corrected on 2026-08-21**. New live episode IDs retain collision-resistant identity through every create retry; reconciliation no longer fuzzy-matches truncated legacy IDs and blocks one venue order from owning multiple local entries. Ledger v9 preserves the HYPE before/after correction and trading control preserves the +54¢ whole-cent audit event. V9 retains every identity/control/money row in the shared account ledger while hydrating heavy immutable terminal evidence from verified content-addressed batches on demand. Separately, current economic evidence does not justify stake expansion, unconditional taker execution, an automatic entry relaxation, queue-aware live gates, or adding a second live venue. The shared buy rule remains **v22** — a 2026-08-20 operator narrowing to a +5pp edge floor and a 10–75¢ price band, not an evidence promotion. Live execution identity is now `maker-high30-requalify3-fresh1c-bounded-taker-pilot-v7`; its bounded v1 treatment completed at the compiled 10-authorization / 300¢ ceiling and subsequent eligible intents retain incumbent maker execution. Episode policy and sizing are unchanged.
 
-A 2026-08-21 mirror review found that paper v4 first attempts were useful but its generation check suppressed every episode after episode 1. The defect was repaired under `paper-managed-execution-route-ioc-requalify3-v5`, with exact prospective four-cell pairing and bounded public trade/queue evidence; neutral calibration then advanced current paper execution to `paper-managed-execution-route-ioc-requalify3-calibrated-v6`. The closed v4 sample matched route and quantity 69/69 and fill/no-fill 79.7%, but captured only 62.5% of fills among 61 accepted paired live makers. Each generation remains separate and no history was rewritten. Paper does not feed funded execution, so no live order rule changed.
+A 2026-08-21 mirror review found that paper v4 first attempts were useful but its generation check suppressed every episode after episode 1. The defect was repaired under v5 and neutral calibration advanced current paper execution to `paper-managed-execution-route-ioc-requalify3-calibrated-v6`. The 2026-08-26 exact live-v7/paper-v6 review now covers 170 terminal exact pairs across 93 windows. Conditional on 122 accepted same-route/same-quantity live makers, paper captured only 24/66 live fills (36.4%), with 63.1% fill agreement and clustered paper-minus-live fill rate −35.93pp ±5.72pp. Paper remains a materially conservative approximation, not live-equivalent; F2 continues and no calibration or live rule changed.
 
 The former long-shot round trip is **retired**. Its frozen 12¢→97¢/600s paper cohort completed 150 attempts across 76 independent windows, lost 1,410.93¢ exact on 4,979¢ staked, and measured the 97¢ exit at −98.93¢ versus holding. Its live lane was never armed. Execution, polling, collection, UI/API, estimators, and strategy-level allocation splitting are removed; historical ledger identity and durable evidence remain. The edge policy and capital ceilings are unchanged.
 
@@ -26,7 +26,7 @@ The former long-shot round trip is **retired**. Its frozen 12¢→97¢/600s pape
 | Dashboard and public paper track record | Functional locally and hosted; bounded summary/full-report split implemented. Managed Postgres access recovered and durable production projections returned 200 after the 2026-08-22 deployment. |
 | Forecast and performance tracking | Collection is implemented; the 2026-08-22 interleaved-writer corruption was repaired into checksum-valid, content-addressed v3 after restoring 88 qualified archived rows. Automatic v3 seals and a 138-file independent Scaleway restore passed on 2026-08-24; aggregate economic conclusions still require recalculation. |
 | Live execution | Kalshi live-capable; repeated-episode and external-position ownership are repaired. Dynamic exchange identity is runtime-confirmed. Bounded taker v1 completed with three accepted IOC submissions, no treatment safety stop, negative/inconclusive treatment-minus-control evidence, and no route promotion. |
-| Paper execution | Continuous under neutral v6. F1 is complete; F2's written wiring review passed with 45/45 complete records across 20 windows, but its 100-pair and 300-pair/30-race gates remain closed and F3 is unactivated. |
+| Paper execution | Continuous under neutral v6. Exact live-v7/paper-v6 review found material undercapture over 122 accepted comparable makers. F2 has 121/121 complete records across 53 windows, but its 100-window and 300-window/30-race gates remain closed and F3 is unactivated. |
 | Model evaluation | Evaluator v2 remains barred from promotion and production remains Blend 0.4. Phase 2's written wiring review passed at 45 closed windows with 5,169/5,169 complete-family rows and zero replay error; 100/300 gates remain closed. Confirmed-signal evaluation stays queued after the base final review, followed strictly by venue, portfolio, authorization, and lifecycle layers. |
 | Provider expansion | Registry, permissions, variants, and budgets implemented; only Kalshi is live-capable |
 | Operational safety | Collision-resistant bounded live IDs, exact reconciliation ownership, quiescent drain, account reconciliation, kill switch, and budget/risk ceilings are implemented. Runtime readiness and operator state must be read from the live control surfaces named above, not inferred from this table. |
@@ -40,6 +40,14 @@ The primary paired exit comparison was **−2.47pp ±0.85pp per dollar / −98.9
 Long-shot entry/exit/trailing pollers, paper/live execution, sentinel/candidate writes, Postgres replication, authenticated UI/API, funding command, and strategy-specific analysis tools are removed. Active allocation is again provider → market only; legacy strategy-allocation fields are dropped during runtime normalization and receive no read or write authority. `long-shot-round-trip` remains a retired registry identity for historical ledger, compaction, P&L, corrections, and reconciliation attribution. Durable worker files and the applied database migration were not deleted or rewritten. No edge forecast, admission, execution, exit, sizing, market, or capital setting changed.
 
 Validation passed typecheck, 133 test files / 998 tests, lint with zero errors / 26 inherited warnings, production build, and `git diff --check`. The generated route manifest omits `/api/long-shot`; the restarted worker returned HTTP 404 for it. Before activation, an unrelated BNB cancellation ambiguity correctly held a 30¢ reservation and system pause through contract close; periodic reconciliation then proved zero positions/orders/fills, released the reservation, and guarded-auto-resumed without manual mutation. The built worker restarted with operator intent unchanged and completed startup full reconciliation READY at revision 7,057 / `2026-08-26T02:01:25.667Z`, with 1,525¢ available and zero reservations or open positions. Obsolete local `MONEY_NOODLE_LONG_SHOT_*` settings were removed; Vercel's production environment contained no matching variables. Production deployment `dpl_AdJoZGjQ4ihWyQLEN3an8LMs8pqH` reached READY and was aliased to `https://noodle.money`; the homepage and compact paper summary returned HTTP 200 and `/api/long-shot` returned 404.
+
+### Exact live-v7 / paper-v6 mirror reviewed; paper remains conservative, 2026-08-26
+
+[`reports/paper-live-exact-v7-mirror-review-2026-08-26.md`](reports/paper-live-exact-v7-mirror-review-2026-08-26.md) replaces the stale v4-only analyzer scope with the prospective exact `entry-execution-mirror-pair-v1` cohort. From the first live-v7 intent through `2026-08-26T02:14:27.274Z`, it found 171 exact pairs, 170 terminal pairs across 93 independent close windows, 77 paper-only IDs, 16 live-only IDs, and zero ambiguous IDs. All six route/quantity mismatches were expected paper-treatment/live-capacity-withheld pilot cases; there were zero unexpected route mismatches.
+
+The primary accepted same-route/same-quantity maker subset has 122 pairs across 77 windows: 24 both filled, three paper-only, 42 live-only, and 53 neither. Paper fill rate was 22.13% against live 54.10%; agreement was 63.11%, live-fill capture 36.36%, and paper-positive precision 88.89%. Window-clustered paper-minus-live fill rate was **−35.93pp ±5.72pp SE**. The 24 both-filled makers acquired equal quantity and paper paid 0.958¢ more per contract on average. The paper bankroll tied exactly at 10,000¢ start − 3,802¢ realized − 0¢ open = 6,198¢ available.
+
+This is diagnostic fidelity evidence, not a return selector. Exact FIFO position and cancellations ahead remain private, different fill cells deploy different capital, and the earlier v4 cohort used a looser one-second retrospective pairing method. No queue-clear fraction, horizon, paper generation, funded route, entry, exit, sizing, or capital changed. F2 remains frozen at 121/121 complete records across 53/100 windows, 69 known live pairs, one observed create race, and zero grace-induced fill changes; F3 remains blocked.
 
 ### Kalshi event-order routing now uses exact dynamic exchange identity, 2026-08-25
 
@@ -2412,20 +2420,21 @@ Interpretation: the newer exact ledger snapshot is slightly negative lifetime an
 
 ## Current Priorities
 
-1. **Continue untouched forecast Phase 2 to its 100- and 300-window gates.** The 2026-08-26T01:20Z read had 88/100
-   closed windows, 95.29% funded-provider outcome coverage, complete six-arm families, 100% candidate availability,
-   and zero replay error. The 458 unscoreable rows all lacked Kalshi contract provenance at issuance; no row with a
-   Kalshi contract lacked its funded outcome. At 100, explain this class in the written coverage review; do not rank
+1. **Continue untouched forecast Phase 2 to its 100- and 300-window gates.** The 2026-08-26T02:07Z read had 91/100
+   closed windows, 95.30% funded-provider outcome coverage, complete six-arm families, 100% candidate availability,
+   and zero replay error. The previously classified unscoreable rows lacked Kalshi contract provenance at issuance;
+   no row with Kalshi contract provenance lacked its funded outcome. At 100, explain this class in the written coverage review; do not rank
    arms, start Phase 3, or begin confirmed-signal collection early.
 2. **Keep reasoned exit-v3 deferred.** V2 conflates a fresh zero owned-side bid with missing evidence, and every
    cycle-coverage incomplete position was a loss. Do not reinterpret old generic events or review v2 efficacy.
    No v3 design or implementation starts until the maintainer returns to it. All four arms and production
    `strict-value-v1` stay unchanged; traffic-caller attribution is also deferred.
-3. **Continue maker-restriction v1 without tuning.** Live spread has 13/20 divergent windows and paper support is
-   weak; spike has ten live divergences and is negative in paper. Counts, raw cash, and an isolated t-statistic do
+3. **Continue maker-restriction v1 without tuning.** Live spread has 18/20 divergent windows; paper spread has 65,
+   while spike has 14 live divergences. Every joint `reviewUnlocked` remains false. Counts, raw cash, and an isolated t-statistic do
    not bypass the locked joint gate.
-4. **Continue paper timing F2 to 100 and 300 exact-pair gates.** The 10-window wiring review passed, but F3 remains
-   unactivated until F2 freezes retained acceptance/evidence mechanics after 300 pairs, 30 observed create races,
+4. **Continue paper timing F2 to 100 and 300 exact-pair gates.** The 10-window wiring review passed and the current
+   read has 121/121 complete records across 53 windows, 69 known live pairs, and one observed create race. F3 remains
+   unactivated until F2 freezes retained acceptance/evidence mechanics after 300 windows, 30 observed create races,
    95% coverage, and the non-interference review.
 5. **Repeat fixed-UTC live/paper operational and economic monitoring.** Preserve signal, execution, exact P&L,
    whole-cent bankroll, no-fill, exit, and fidelity views separately. Negative return alone does not tune policy;
@@ -2439,8 +2448,9 @@ Interpretation: the newer exact ledger snapshot is slightly negative lifetime an
    portfolio, and maker journals each need their own checksum/generation/concurrency/crash-window design.
 8. **Run due evaluator-v2 checkpoints only during planned paused/stopped maintenance.** The maintainer chose not to
    pause now; evaluator v2 remains monitoring-only, offline-only, and barred from promotion.
-9. **Complete untouched long-shot v2, exact v7 mirror, and first-organic-switch evidence; then address provider
-   visibility, alerts, restore testing, dependency pinning, and auth hardening.**
+9. **Long-shot v2 and the exact live-v7/paper-v6 mirror are complete.** Continue first-organic-switch evidence
+   without forcing another switch; then address provider visibility, alerts, restore testing, dependency pinning,
+   and auth hardening.
 
 ## Detailed Roadmap and Historical Delivery Record
 

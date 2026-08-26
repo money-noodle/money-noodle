@@ -3,6 +3,10 @@
 **Status:** implemented and activated locally on 2026-08-21 after approval in prose by the maintainer and
 review of `reports/paper-live-mirror-fidelity-2026-08-21.md`. This design preceded execution-code changes.
 
+**Current diagnostic review, 2026-08-26:** the prospective exact live-v7/paper-v6 cohort is recorded in
+`reports/paper-live-exact-v7-mirror-review-2026-08-26.md`. It found material paper undercapture but authorized
+no calibration or production change; F2/F3 gates remain controlling.
+
 ## 0. Decision
 
 Repair the current paper execution mirror without changing funded execution:
@@ -143,9 +147,9 @@ a gate, size input, or fill override.
 
 ## 5. Accounting and track meaning
 
-The edge paper bankroll remains separate from the long-shot paper funding. The drift dry-run diagnostic is
-narrowed to edge-policy open stake so independently funded long-shot positions cannot manufacture a false
-residual. It writes nothing unless explicitly run with `--write`; this repair requires no correction.
+The edge paper bankroll was historically separate from the now-retired long-shot paper funding. The drift
+check remains narrowed to edge-policy open stake so retired foreign-strategy history cannot manufacture a
+false residual. It writes nothing unless explicitly run with `--write`; this repair requires no correction.
 
 Paper continues to ignore live operator pause, risk stops, hourly limits, reconciliation blocks, and live
 capital. That is the SPEC §12.3 mirror used to measure stop/limit drag. A literal operational live twin would
