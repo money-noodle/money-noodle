@@ -107,7 +107,8 @@ Fixed-window operational reads. Each is a snapshot of a stated past interval, ne
 
 | Report | Question it answers |
 | --- | --- |
-| [`live-paper-economic-monitor-2026-08-25`](live-paper-economic-monitor-2026-08-25.md) | How live and paper economics compared over a fixed 24-hour window — **cited by current status** |
+| [`live-paper-economic-monitor-2026-08-26`](live-paper-economic-monitor-2026-08-26.md) | Whether the latest fixed day preserved the positive-signal/negative-fill split across live and paper — **cited by current status** |
+| [`live-paper-economic-monitor-2026-08-25`](live-paper-economic-monitor-2026-08-25.md) | How live and paper economics compared over the prior fixed 24-hour review |
 | [`live-opportunity-review-2026-08-24`](live-opportunity-review-2026-08-24.md) | Which live opportunities appeared over a fixed 24 hours and what became of them |
 | [`incremental-reconciliation-monitor-2026-08-23`](incremental-reconciliation-monitor-2026-08-23.md) | Whether incremental background reconciliation activated and behaved as designed |
 | [`live-health-monitor-2026-08-23`](live-health-monitor-2026-08-23.md) | Whether the funded desk was healthy across its safety and reconciliation checks |
