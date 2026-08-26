@@ -117,7 +117,7 @@ Nothing, per AGENTS §5.5. Concretely:
 - **The interesting subset is n=16 over 13 windows**, found by splitting the best of thirty cells.
 - **Touch rates are floors** at fifteen-second sampling. Cohorts are compared like-for-like so the floor
   largely cancels in `lift`, but every absolute `ratio` here is understated; see
-  [long-shot-gap-sweep-2026-08-17.md](/Users/raiphairow/code/money/reports/long-shot-gap-sweep-2026-08-17.md)
+  [long-shot-gap-sweep-2026-08-17.md](long-shot-gap-sweep-2026-08-17.md)
   for the measured correction.
 - **Filters are estimated at ≤30¢ and applied at ≤10¢**, which assumes transferability the data does not
   demonstrate — and in the one case it can be checked, the filter does *not* transfer.

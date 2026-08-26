@@ -37,6 +37,9 @@ jobs:
       - name: Verify status structure
         run: npm run verify:status
 
+      - name: Verify agent guidance
+        run: npm run verify:agents
+
       - name: Typecheck
         run: npm run typecheck
 

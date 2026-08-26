@@ -121,6 +121,10 @@ function verifyLinks() {
     for (const match of text.matchAll(/\]\(([^)]+)\)/g)) {
       const destination = match[1].trim();
       if (/^(https?:|mailto:)/.test(destination)) continue;
+      if (destination.startsWith('/')) {
+        errors.push(`${display(file)} uses the absolute link ${destination}; absolute paths resolve only on the authoring machine — use a relative link`);
+        continue;
+      }
       const [rawPath, rawFragment] = destination.split('#', 2);
       const target = rawPath ? resolve(dirname(file), decodeURIComponent(rawPath)) : file;
       if (!exists(target)) {

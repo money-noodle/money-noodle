@@ -40,6 +40,7 @@ verifyCanonicalModuleIndex();
 verifySizeBoundaries();
 verifyLocalLinks();
 verifyDecisionIndex();
+verifyOpenDecisionIds();
 
 if (errors.length > 0) {
   console.error(`Specification verification failed with ${errors.length} error(s):`);
@@ -54,8 +55,12 @@ const currentCount = countDecisionRows(contents.get(join(specDir, 'decision-log.
 console.log(
   `Specification verified: ${canonicalModules.length} canonical modules, ` +
   `${markdownFiles.length} Markdown files, ${archiveCount} archived decisions, ` +
-  `${currentCount} current decision(s).`,
+  `${currentCount} current decision(s), ${openDecisionCount()} open decision(s).`,
 );
+
+function openDecisionCount() {
+  return [...contents.get(join(specDir, 'open-decisions.md')).matchAll(/^### OD-\d+ +— /gm)].length;
+}
 
 function markdownFilesUnder(directory) {
   return readdirSync(directory, { withFileTypes: true })
@@ -121,6 +126,10 @@ function verifyLocalLinks() {
         rawDestination.startsWith('https://') ||
         rawDestination.startsWith('mailto:')
       ) continue;
+      if (rawDestination.startsWith('/')) {
+        errors.push(`${display(file)} uses the absolute link ${rawDestination}; absolute paths resolve only on the authoring machine — use a relative link`);
+        continue;
+      }
 
       const [rawPath, rawFragment] = rawDestination.split('#', 2);
       const target = rawPath.length === 0 ? file : resolve(dirname(file), decodeURIComponent(rawPath));
@@ -172,6 +181,24 @@ function verifyDecisionIndex() {
       errors.push(`spec/decision-log.md does not index ${destination}`);
     }
   }
+}
+
+/** Open-decision identifiers are permanent citation handles: unique, sequential, never reused. */
+function verifyOpenDecisionIds() {
+  const text = contents.get(join(specDir, 'open-decisions.md'));
+  const ids = [...text.matchAll(/^### OD-(\d+) +— /gm)].map((match) => Number(match[1]));
+  if (ids.length === 0) {
+    errors.push('spec/open-decisions.md declares no OD-<n> entries');
+    return;
+  }
+  const seen = new Set();
+  for (const id of ids) {
+    if (seen.has(id)) errors.push(`spec/open-decisions.md declares OD-${id} more than once`);
+    seen.add(id);
+  }
+  ids.forEach((id, index) => {
+    if (id !== index + 1) errors.push(`spec/open-decisions.md lists OD-${id} in position ${index + 1}; ids must be sequential`);
+  });
 }
 
 function headingAnchors(text) {
