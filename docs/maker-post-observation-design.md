@@ -1,5 +1,13 @@
 # Observing whether the sentinel's entries would have filled
 
+> **Document type:** Evaluation design
+> **Design status:** Retired
+> **Implementation:** Removed
+> **Created:** 2026-08-18
+> **Canonical requirements:** [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > Design document, 2026-08-18. Agreed in prose with the maintainer before any code. It adds durable
 > per-intent fill observation to `persistence-two-consecutive-v1` (SPEC §12.5, §706) and retires a
 > reported number that cannot be wrong.

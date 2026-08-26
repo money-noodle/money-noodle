@@ -1,5 +1,13 @@
 # Window-consensus direction gate: data collection and evaluation plan
 
+> **Document type:** Evaluation design
+> **Design status:** Accepted
+> **Implementation:** Complete
+> **Created:** 2026-08-20
+> **Canonical requirements:** [`spec/forecasting-and-evidence.md`](../spec/forecasting-and-evidence.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > Status: **approved collection-only implementation, 2026-08-20.** The maintainer approved execution of
 > the data contract after the committed design review. Nothing here authorizes a change to the forecast,
 > entry rule, execution lane, or budget. This prescribes what to collect and how to evaluate a possible

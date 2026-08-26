@@ -1,5 +1,13 @@
 # Positive-edge maker restriction and exit-policy sentinels
 
+> **Document type:** Evaluation design
+> **Design status:** Accepted
+> **Implementation:** Partial
+> **Created:** 2026-08-19
+> **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > Design approved and implemented in the working tree, 2026-08-19, following
 > [`reports/maker-adverse-selection-and-exit-depth-2026-08-19.md`](../reports/maker-adverse-selection-and-exit-depth-2026-08-19.md).
 > The maintainer chose to keep live trading running. This changes no entry, execution, sizing, or exit

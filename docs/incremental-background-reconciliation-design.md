@@ -1,5 +1,13 @@
 # Incremental background reconciliation
 
+> **Document type:** Safety design
+> **Design status:** Accepted
+> **Implementation:** Complete
+> **Created:** 2026-08-23
+> **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/storage-and-architecture.md`](../spec/storage-and-architecture.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > **Status: approved direction; implementation design.** Written 2026-08-23 after a one-hour funded-runtime
 > observation and current Kalshi API verification. This changes reconciliation scope and scheduling, not entry,
 > exit, sizing, budget, or fail-closed policy. Activation still requires a quiescent build/restart and successful

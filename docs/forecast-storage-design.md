@@ -1,5 +1,13 @@
 # Forecast storage redesign — sharding and rollups
 
+> **Document type:** Architecture design
+> **Design status:** Accepted
+> **Implementation:** Complete
+> **Created:** 2026-08-14
+> **Canonical requirements:** [`spec/storage-and-architecture.md`](../spec/storage-and-architecture.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > Design · 2026-08-14 · **implemented, with publication/ownership superseded by v3 on 2026-08-22**
 > Companion to [`SPEC.md`](../SPEC.md) §6 Storage. Nothing here changes the model, execution, or any gate.
 > The sharding and rollup algebra below remain authoritative; writer ownership, content-addressed generations,

@@ -1,5 +1,13 @@
 # Multi-tenant identity, API, and execution-cell design
 
+> **Document type:** Architecture design
+> **Design status:** Proposed
+> **Implementation:** Not started
+> **Created:** 2026-08-22
+> **Canonical requirements:** None — proposal or exploration only
+> **Decision record:** None — no accepted product decision
+> **Design index:** [`docs/README.md`](README.md)
+
 > **Status: proposed for maintainer review; not approved or implemented.**
 > Written 2026-08-22. This is a follow-on to
 > [`execution-engine-separation-design.md`](execution-engine-separation-design.md), not part of its initial

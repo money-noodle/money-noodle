@@ -1,5 +1,13 @@
 # Prospective portfolio choice-set journal
 
+> **Document type:** Evaluation design
+> **Design status:** Accepted
+> **Implementation:** Complete
+> **Created:** 2026-08-19
+> **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > Approved 2026-08-19 after the corrected historical replay withdrew the apparent contract-selection
 > leak. This is an observation-only evaluation lane under SPEC §12. It changes no forecast, entry gate,
 > persistence rule, regime rule, retry, sizing, portfolio constraint, execution style, budget, order, or

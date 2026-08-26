@@ -1,5 +1,13 @@
 # Collision-resistant live entry identity and HYPE ledger correction
 
+> **Document type:** Safety design
+> **Design status:** Accepted
+> **Implementation:** Complete
+> **Created:** 2026-08-20
+> **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > Approved by the maintainer on 2026-08-21 before implementation. This repairs the repeated-entry-episode
 > identity defect recorded in `reports/kalshi-order-size-and-fill-mechanics-2026-08-20.md` §6. It changes
 > identity and reconciliation safety, not the buy rule, episode policy, sizing, route selection, or exits.

@@ -1,5 +1,13 @@
 # Paper/live mirror fidelity repair
 
+> **Document type:** Execution design
+> **Design status:** Accepted
+> **Implementation:** Complete
+> **Created:** 2026-08-21
+> **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 **Status:** implemented and activated locally on 2026-08-21 after approval in prose by the maintainer and
 review of `reports/paper-live-mirror-fidelity-2026-08-21.md`. This design preceded execution-code changes.
 

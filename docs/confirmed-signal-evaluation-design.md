@@ -1,5 +1,13 @@
 # Confirmed-signal evaluation design
 
+> **Document type:** Evaluation design
+> **Design status:** Accepted
+> **Implementation:** Not started
+> **Created:** 2026-08-24
+> **Canonical requirements:** [`spec/forecasting-and-evidence.md`](../spec/forecasting-and-evidence.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > **Status:** Approved design, queued behind completion of the base-signal program in
 > [`docs/forecast-model-and-evaluator-v3-design.md`](forecast-model-and-evaluator-v3-design.md). No confirmed-signal
 > candidate is collecting, and no production confirmation, forecast, buy policy, execution, capital, or live

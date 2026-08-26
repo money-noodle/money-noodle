@@ -1,5 +1,13 @@
 # Website / extensible execution-engine separation
 
+> **Document type:** Architecture design
+> **Design status:** Proposed
+> **Implementation:** Not started
+> **Created:** 2026-08-22
+> **Canonical requirements:** None — proposal or exploration only
+> **Decision record:** None — no accepted product decision
+> **Design index:** [`docs/README.md`](README.md)
+
 > **Status: proposed for maintainer review; not approved or implemented.**
 > Written 2026-08-22; broadened 2026-08-22 after architecture review. This design changes runtime,
 > data-plane, and control-plane boundaries, not trading policy. No funded behavior should change until each

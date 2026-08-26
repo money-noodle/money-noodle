@@ -1,5 +1,13 @@
 # Live opportunity decision flow
 
+> **Document type:** Reference
+> **Design status:** Reference
+> **Implementation:** Not applicable
+> **Created:** 2026-08-24
+> **Canonical requirements:** [`spec/forecasting-and-evidence.md`](../spec/forecasting-and-evidence.md), [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
+> **Decision record:** None — no accepted product decision
+> **Design index:** [`docs/README.md`](README.md)
+
 This is the shortest practical introduction to how Money Noodle turns one market observation into a funded
 entry attempt. It describes the current `edge-binary-buy` path in decision order and gives each stage one name.
 It is intentionally simpler than the implementation and [`SPEC.md`](../SPEC.md).

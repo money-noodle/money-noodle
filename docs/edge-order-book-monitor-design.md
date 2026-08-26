@@ -1,5 +1,13 @@
 # Edge order-book monitor and stable signal transitions
 
+> **Document type:** Product design
+> **Design status:** Accepted
+> **Implementation:** Complete
+> **Created:** 2026-08-20
+> **Canonical requirements:** [`spec/product-and-surfaces.md`](../spec/product-and-surfaces.md), [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > Approved by the maintainer on 2026-08-20. This is an authenticated, observation-only UI change. It adds
 > no durable store, execution input, policy gate, sizing input, order action, or public hosted polling.
 

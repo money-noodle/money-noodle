@@ -14,33 +14,53 @@ Research dashboard, continuous paper shadow trader, and live trading desk across
 venues, in one Next.js app. Real money moves through `lib/live-orders.ts`. Treat every change as though it
 executes against a funded account tonight.
 
-Orient before touching money paths: `SPEC.md` §12 (track separation) → `STATUS.md` (current measurements) → the
-§0 table below.
+Before touching money paths, read in order: `SPEC.md` → every relevant canonical `spec/*.md` module completely,
+including `spec/policy-and-track-separation.md` §12 → `STATUS.md` → the §0 map below → the relevant source. Read
+`status/roadmap.md` only for planning and `status/archive/*.md` only when history is material.
 
-## Where authority lives
+## Orientation, authority, and change routing
 
-Read the relevant source before proposing anything. Never reconstruct current behavior from memory — read it.
-Code is authoritative for what the system *does*; `SPEC.md` for what it is *meant* to do and why.
+### Required sources
+
+Read the relevant source before proposing anything; never reconstruct current behavior from memory. Code is authoritative for what the system *does*; `SPEC.md` and
+its canonical modules define what it is *meant* to do and why. Resolve conflicting canonical text instead of
+choosing silently.
 
 | Source | Authority |
 | --- | --- |
-| `SPEC.md` | Decisions and *why*. §12 governs track separation and policy evaluation. |
-| `STATUS.md` | What is implemented and currently measured. |
+| `SPEC.md` | Product statement, global principles, authority, and canonical specification map. |
+| `spec/*.md` | Detailed normative requirements and decision history by domain. |
+| `STATUS.md` | Dated current implementation and measurement projection; never live operational authority. |
+| `status/roadmap.md` | Non-normative sequencing; never implementation authority. |
+| `status/archive/*.md` | Immutable historical status; outside ordinary orientation. |
 | `lib/trading-provider-registry.ts` | Which venues exist and what each may do. |
 | `lib/market-registry.ts` | Which markets exist and what each may do per lane (market data / paper / live). |
-| `lib/strategy-registry.ts` | Which strategies exist; which is default. |
+| `lib/strategy-registry.ts` | Which strategies exist and which is default. |
 | `lib/policy-manifest.ts` | Every buy policy that has been live. |
-| `reports/*.md` | Every measurement, dated, with caveats. |
-| `docs/*.md` | Designs written before the code they describe. |
+| `reports/*.md` | Dated measurements, methods, and caveats. |
+| `docs/README.md` and indexed `docs/*.md` | Design lifecycle and supporting rationale; never requirement authority. |
 
-**Design before code.** For anything structural — a new policy, store, lane, or schema — agree the design in
-prose with the maintainer, then write the doc, then the code.
+### Change routing
 
-**Venues, markets, and strategies are registry data.** Do not copy registry enumerations here or into generic
-comments; read the versioned registry (`TRADING_PROVIDER_REGISTRY_VERSION`). A provider's `implementation` is
-intersected per market and lane with `productionMarketCapability` (`lib/market-registry.ts`): one market never unlocks another, and config
-cannot make an unimplemented adapter live. New providers and markets **fail closed**. Name a venue only for
-venue-specific mechanics; otherwise use role-based language.
+| Change | Required record |
+| --- | --- |
+| Structural policy, store, lane, or schema | Agree prose with the maintainer; write and index the design; record the accepted decision and canonical spec change; then code. |
+| Implementation truth or current measurement | Replace stale `STATUS.md` text; do not append a delivery diary. |
+| Pending-work sequence | Update `status/roadmap.md`; it grants no authority. |
+| Superseded status wording not preserved elsewhere | Add a bounded archive under `status/README.md` rules before removal; never edit an indexed archive. |
+| Design approval, implementation, supersession, or retirement | Update the design metadata and `docs/README.md` together. |
+
+Read every relevant design completely. `Proposed` and `Exploratory` authorize no implementation; `Superseded` and
+`Retired` authorize no current behavior. Present funded state comes only from the authenticated Automation surface
+and `data/trading-control.json`.
+
+### Registry capability boundaries
+
+Do not copy venue, market, or strategy enumerations into generic instructions; read the versioned registries,
+starting with `TRADING_PROVIDER_REGISTRY_VERSION`. Provider `implementation` is intersected per market and lane with
+`productionMarketCapability` (`lib/market-registry.ts`): one market never unlocks another, and configuration cannot
+make an unimplemented adapter live. New providers and markets **fail closed**. Name a venue only for venue-specific
+mechanics; otherwise use role-based language.
 
 ## 0. Shared orchestration and the default-strategy path
 
@@ -70,7 +90,7 @@ arbitrary-precision number libraries.**
 | --- | --- | --- |
 | **Wire** | fixed-decimal strings at venue precision | Format with `toFixed` only in order-body builders; validate inbound immediately. |
 | **Exact** | float cents in flight and reporting | Preserve legitimate sub-cent fills and fees until a whole-cent control boundary. |
-| **Budget control** | durable integer cents | Quantize once, with a direction and epsilon; budget counters see only integers. |
+| **Budget control** | durable integer cents | Quantize once per order at the whole-cent boundary, with direction and epsilon; sum only integers. |
 
 Guards are sized to current venues' wire precision; **a finer-precision venue means re-deriving them.**
 
@@ -81,8 +101,6 @@ Guards are sized to current venues' wire precision; **a finer-precision venue me
 - Nonzero modeled fees round **up** with a 1¢ floor (`venueFeeCents`, `lib/venue-fill.ts`); quantity rounds
   **down** until `price × count + fees` fits the all-in cap.
 - **Never `toFixed()` for arithmetic** — formatting only: wire, error messages, display.
-- **Quantize once**, at the whole-cent control boundary, per order; then sum integers. Budget aggregates never
-  add floats.
 - **Never `===` a computed money or price value.** Use only the named tolerances: `1e-12` for probability and edge
   gates (`evaluateEntryExecutionPolicy`), `1e-9` for prices and cents (`lib/live-orders.ts`), and `1e-6` for book
   levels (`quantityAt`, `lib/order-book-depth.ts`). Within epsilon is equal; beyond it fails closed. Never widen or
@@ -182,8 +200,9 @@ a superseded report.
 - **Label uncertainty and judgment.** Say what you checked and what would settle an open question. Evaluative terms
   need current support; otherwise identify them as hypotheses.
 - **Cite auditable claims.** Ground current behavior, policy, results, and venue mechanics in repo evidence or a
-  live API response. Cite symbols and files, `SPEC.md §N`, or reports—not source lines—and label load-bearing
-  outside knowledge. Date `STATUS.md` and report figures in the past tense; recalculate current numbers.
+  live API response. Cite symbols and files, canonical `spec/<module>.md` sections, `SPEC.md`, or reports—not
+  source lines—and label load-bearing outside knowledge. Date `STATUS.md` and report figures in the past tense;
+  recalculate current numbers.
 - **Expose disagreement.** Verify the source behind each claim. Report exact-versus-whole-cent, live-versus-paper,
   and materially different route results instead of smoothing or cherry-picking them.
 
@@ -195,7 +214,7 @@ text. Preserve `callProvider` prompt constraints unless the maintainer agrees ot
 
 - **Bump the version and add matching `history`** in `lib/policy-manifest.ts`: full version, change, and evidence
   link. `lib/policy-manifest.test.ts` enforces this.
-- **Hold the mirror invariant** (SPEC §12.3): live and paper entry decisions are identical. The rule layer takes no
+- **Hold the mirror invariant** (`spec/policy-and-track-separation.md` §12.3): live and paper entry decisions are identical. The rule layer takes no
   execution mode; `lib/mirror-invariant.test.ts` asserts arity. Tracks differ **only** in execution and capital:
   fills, budget and sizing, rate limits, risk stops, and reconciliation.
 - **Walk-forward evaluation never changes production automatically.** Promotion is a manual act recorded in an
@@ -203,7 +222,7 @@ text. Preserve `callProvider` prompt constraints unless the maintainer agrees ot
 
 ## 8. Tests
 
-- Vitest, colocated as `lib/<module>.test.ts`; `npm test` runs everything. **Start server-touching tests with
+- Keep Vitest tests colocated as `lib/<module>.test.ts`. **Start server-touching tests with
   `vi.mock('server-only', () => ({}))`.**
 - **Test pure rule modules over a grid of inputs**, not a fixture — the claim is "no input reaches a different
   answer".
@@ -219,13 +238,16 @@ npm run start        # how the server is run: the dashboard and the background c
 npm run dev          # testing only — never the way the server is left running
 npm run typecheck    # tsc --noEmit
 npm test             # vitest run
+npm run verify:spec   # specification module, link, anchor, archive, and ADR integrity
+npm run verify:docs   # design index, lifecycle metadata, authority, link, and anchor integrity
+npm run verify:status # current status, roadmap, archive, hash, link, and size integrity
 ```
 
 Do not stop or restart the server to edit, typecheck, or test. Restart only when the maintainer asks or a change
 must take effect in the running process; build first, then start. Never leave `npm run dev` serving.
 
 **Run `npm run typecheck` and `npm test` before reporting a change complete.** On failure, report the command and
-relevant exact output, not only a summary. A failing invariant test remains wrong until proven otherwise under §8.
+relevant exact output, not only a summary.
 
 Read `package.json` for `analyze:*` and `verify:*`. Deploys are **manual** (`npx vercel --prod`); pushing `main`
 deploys nothing.
@@ -234,7 +256,9 @@ deploys nothing.
 
 - **Commit subjects state the finding or the change in the imperative**, not the file touched — "Replay 26
   alternative exit rules; none beats strict-value-v1", not "update analysis script".
-- **Update `STATUS.md` in the same change** when work changes what is true about the system; update `SPEC.md` and
-  its decision log when it changes a decision.
+- **Update records in the same change** using the change-routing table above. Requirement changes update the owning
+  `spec/*.md` module and `spec/decision-log.md`; product statement, principle, authority, or map changes also update
+  `SPEC.md`.
 - **Never report a measurement without its date, its sample size, and the caveat that most threatens it.**
+- Keep `AGENTS.md` below 3,000 words. Consolidate before adding; never remove a funded invariant only to meet the limit.
 - Nothing here is financial advice, and the app says so. Keep it that way in anything user-facing.

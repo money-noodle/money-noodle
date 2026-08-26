@@ -1,5 +1,13 @@
 # Bounded taker execution pilot
 
+> **Document type:** Execution design
+> **Design status:** Retired
+> **Implementation:** Complete
+> **Created:** 2026-08-24
+> **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > Agreed with the maintainer on 2026-08-24 before implementation. The v1 pilot completed on 2026-08-25 at its
 > compiled 10-authorization / 300¢ ceiling: three signed IOC submissions were accepted, no treatment safety stop
 > occurred, and treatment-minus-control was negative with broad uncertainty in both live and paper. It closed

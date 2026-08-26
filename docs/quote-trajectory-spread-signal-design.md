@@ -1,5 +1,13 @@
 # Quote trajectory and spread signal collection
 
+> **Document type:** Evaluation design
+> **Design status:** Accepted
+> **Implementation:** Complete
+> **Created:** 2026-08-20
+> **Canonical requirements:** [`spec/forecasting-and-evidence.md`](../spec/forecasting-and-evidence.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > Status: **approved collection-only implementation**, 2026-08-20. Collection begins when a built runtime
 > containing this generation starts; no funded behavior is authorized by this document. A later candidate
 > design must predeclare its rule and evidence bar before any collected feature can affect selection,

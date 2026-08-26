@@ -1,5 +1,13 @@
 # Paper bankroll fundings
 
+> **Document type:** Architecture design
+> **Design status:** Accepted
+> **Implementation:** Complete
+> **Created:** 2026-08-17
+> **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > Design written before the code, 2026-08-17. Agreed in prose: detach paper from the live epoch, and give
 > paper a history by reset that mirrors live's history by epoch. **No code changes with this document.**
 

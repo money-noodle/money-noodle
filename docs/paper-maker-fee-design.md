@@ -1,5 +1,13 @@
 # Paper is charged a taker fee on maker fills
 
+> **Document type:** Execution design
+> **Design status:** Accepted
+> **Implementation:** Complete
+> **Created:** 2026-08-17
+> **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > Design written before the code, 2026-08-17. Defect found while asking why the paper track lost more
 > than live under one shared entry policy. **No code changes with this document.**
 

@@ -67,6 +67,9 @@ npm run dev
 npm run typecheck
 npm run build
 npm start
+npm run verify:spec
+npm run verify:docs
+npm run verify:status
 npm run archive:local
 npm run restore:local -- --destination /tmp/money-noodle-restore/data
 npm run cleanup:next-cache
@@ -79,7 +82,11 @@ npm run check:disk
 
 This is research software, not financial advice. Paper shadow trading runs continuously. Live Kalshi execution is environment-gated, typed-confirmation armed, stake/rate capped, kill-switch protected, and blocked on startup until authoritative cash/position/order/fill/resting-order reconciliation passes. Startup/manual/drain remain full barriers; the ordinary five-minute pass independently reads current account safety state plus checkpointed order/fill deltas and exact active transactions, escalating gaps to a full audit. System safety suspensions retain separately persisted operator intent and may auto-resume only after authoritative reconciliation plus every normal readiness check; manual pauses and the kill switch never auto-resume. A user Pause drains the serialized execution queue and authoritatively reconciles before the UI reports the process restart-safe. It uses durable client IDs, managed post-only v2 selected-side limits (YES bids or signed NO-opening asks), 12-second passive repricing with progressive tick backoff, one live attempt by default (a second is hard-capped and disabled pending validation), grouped retry outcomes, bounded cancellation-confirmation polling, actual fill/fee reconciliation, automatic API resolution with retained reservations for ambiguous outcomes, all-in transaction caps, non-auto-resumable current-budget and lifetime-live loss stops, constrained same-window/correlation-group portfolio selection, no simultaneous opposite-side exposure, persistent loss-aware switching, and side-aware reduce-only standalone exits. A strict exit sells when executable cash beats optimistic model hold value; a separate profit lock arms at +75% executable profit and sells on one fresh joint Kalshi-value/model-probability reversal snapshot. Full exits clear persistence and permit uncapped same-window re-entry generations after a 60-second cooldown and fresh buy qualification. Switches require positive future wealth after costs plus a 15pp replacement probability advantage, increased to 20pp for same-asset UP↔DOWN reversals. Polymarket live placement is not implemented.
 
-See [`SPEC.md`](SPEC.md) for the living product/architecture specification and [`STATUS.md`](STATUS.md) for the current implementation summary. Both documents are updated as the app evolves.
+Start with [`SPEC.md`](SPEC.md) for the product principles and canonical specification map, then read its
+indexed [`spec/`](spec/) domain modules for detailed normative requirements and decision history. See
+[`STATUS.md`](STATUS.md) for the compact current implementation projection,
+[`status/README.md`](status/README.md) for roadmap/history discovery, and [`docs/README.md`](docs/README.md) for the
+controlled lifecycle index of designs, evaluation plans, references, and explorations.
 
 ## License
 

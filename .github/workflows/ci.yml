@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   verify:
-    name: typecheck, lint, test
+    name: docs, typecheck, lint, test
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -27,6 +27,15 @@ jobs:
 
       - name: Install
         run: npm ci
+
+      - name: Verify specification structure
+        run: npm run verify:spec
+
+      - name: Verify design documents
+        run: npm run verify:docs
+
+      - name: Verify status structure
+        run: npm run verify:status
 
       - name: Typecheck
         run: npm run typecheck

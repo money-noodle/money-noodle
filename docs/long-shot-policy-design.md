@@ -1,5 +1,13 @@
 # Long-shot round-trip policy — design
 
+> **Document type:** Policy design
+> **Design status:** Retired
+> **Implementation:** Removed
+> **Created:** 2026-08-14
+> **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > Draft 1 · 2026-08-14 · **Retired 2026-08-26**
 > Product scope and safety doctrine live in [`SPEC.md`](../SPEC.md). This is the preserved historical
 > design for a policy that was implemented paper-only and then removed after its precommitted review.

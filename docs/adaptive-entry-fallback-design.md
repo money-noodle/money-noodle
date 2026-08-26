@@ -1,5 +1,13 @@
 # Adaptive entry execution and one-miss taker fallback
 
+> **Document type:** Execution design
+> **Design status:** Superseded
+> **Implementation:** Removed
+> **Created:** 2026-08-19
+> **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > **Superseded on 2026-08-19 by**
 > [`high-edge-execution-reduced-sizing-design.md`](high-edge-execution-reduced-sizing-design.md). Historical
 > v3 orders retain these semantics; v4 permitted one attempt and no fallback. V5 still forbids taker

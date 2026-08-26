@@ -1,5 +1,13 @@
 # Paper fill calibration design
 
+> **Document type:** Execution design
+> **Design status:** Accepted
+> **Implementation:** Complete
+> **Created:** 2026-08-21
+> **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 Status: approved in prose by the maintainer on 2026-08-21 and implemented. This design preceded
 implementation. Scope: ship the machinery (`queueClearFraction: 0` = exact current model, fresh v6
 cohort), provide the held-out re-evaluation, no funded-execution or rule change. The evaluator denominator was

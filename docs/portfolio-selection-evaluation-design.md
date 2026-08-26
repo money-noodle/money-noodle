@@ -1,5 +1,13 @@
 # Portfolio-selection evaluation design
 
+> **Document type:** Evaluation design
+> **Design status:** Accepted
+> **Implementation:** Not started
+> **Created:** 2026-08-24
+> **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > **Status:** Approved analysis plan, queued strictly after the venue-candidate final review in
 > [`docs/venue-candidate-evaluation-design.md`](venue-candidate-evaluation-design.md). No new portfolio family or
 > full-cycle journal is collecting. The existing `portfolio-choice-set-v1` issued-order integrity lane continues

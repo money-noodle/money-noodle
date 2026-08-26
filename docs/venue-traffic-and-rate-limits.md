@@ -1,5 +1,13 @@
 # Venue Traffic, Rate Limits, and Throttle Recovery — Canonical Reference
 
+> **Document type:** Reference
+> **Design status:** Reference
+> **Implementation:** Not applicable
+> **Created:** 2026-08-21
+> **Canonical requirements:** [`spec/providers-and-market-data.md`](../spec/providers-and-market-data.md), [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md)
+> **Decision record:** None — no accepted product decision
+> **Design index:** [`docs/README.md`](README.md)
+
 > Living reference · 2026-08-26. This is the single place that states, per venue, what traffic the
 > system produces, the worst case, and how a throttle is recovered. Every design that adds a subject
 > (a market, an asset, a cadence, a reader) must reconcile its numbers here before landing. It cites

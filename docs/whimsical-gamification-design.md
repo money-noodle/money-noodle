@@ -1,5 +1,13 @@
 # Noodle Land and whimsical gamification — design direction
 
+> **Document type:** Product design
+> **Design status:** Exploratory
+> **Implementation:** Not applicable
+> **Created:** 2026-08-22
+> **Canonical requirements:** None — proposal or exploration only
+> **Decision record:** None — no accepted product decision
+> **Design index:** [`docs/README.md`](README.md)
+
 > **Direction locked 2026-08-22; refinement required before specification.** The maintainer approved the
 > complete direction in this document: one noodle equals one cent; Noodle Land is an ambient layer with
 > optional deeper immersion; progression rewards learning and evidence rather than trading activity or

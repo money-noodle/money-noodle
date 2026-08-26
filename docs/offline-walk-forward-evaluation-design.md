@@ -1,5 +1,13 @@
 # Offline walk-forward evaluation design
 
+> **Document type:** Evaluation design
+> **Design status:** Accepted
+> **Implementation:** Complete
+> **Created:** 2026-08-23
+> **Canonical requirements:** [`spec/forecasting-and-evidence.md`](../spec/forecasting-and-evidence.md), [`spec/storage-and-architecture.md`](../spec/storage-and-architecture.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > **Status: approved direction; implementation design.** Written 2026-08-23 after the activated reconciliation
 > monitor isolated a 177.868-second shared-worker stall at evaluator v2's 1,250-window checkpoint. This changes
 > evaluation scheduling only. It changes no model, forecast, entry, execution, exit, budget, or promotion rule.

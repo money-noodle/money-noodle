@@ -1,5 +1,13 @@
 # Edge-spike gate and its sentinel
 
+> **Document type:** Policy design
+> **Design status:** Superseded
+> **Implementation:** Removed
+> **Created:** 2026-08-17
+> **Canonical requirements:** [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > Design written before the code, 2026-08-17. Evidence: [reports/edge-policy-review-2026-08-17.md](../reports/edge-policy-review-2026-08-17.md) §3.
 > Ships as buy policy v18 with `edge-spike-sentinel-v1` recording every decision the gate declines.
 

@@ -1,5 +1,13 @@
 # High-edge taker routing and reduce-only sizing
 
+> **Document type:** Execution design
+> **Design status:** Superseded
+> **Implementation:** Complete
+> **Created:** 2026-08-19
+> **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > Approved for live deployment by the maintainer on 2026-08-19 after
 > [`reports/execution-direction-sizing-review-2026-08-19.md`](../reports/execution-direction-sizing-review-2026-08-19.md).
 > This is an explicit operator decision on retrospective evidence. It changes execution and capital, not

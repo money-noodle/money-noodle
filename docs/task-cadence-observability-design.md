@@ -1,5 +1,13 @@
 # Runtime task cadence observability — design note
 
+> **Document type:** Architecture design
+> **Design status:** Accepted
+> **Implementation:** Complete
+> **Created:** 2026-08-20
+> **Canonical requirements:** [`spec/storage-and-architecture.md`](../spec/storage-and-architecture.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > Status: **approved observability-only implementation.** Written 2026-08-20 after the maintainer asked to
 > centralize polling information in the UI. The runtime-loop separation and the no-policy-change boundary
 > were agreed in prose before this note and before code.

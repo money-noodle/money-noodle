@@ -1,5 +1,13 @@
 # Multi-tenant web identity, profile, and venue-connection UI
 
+> **Document type:** Product design
+> **Design status:** Proposed
+> **Implementation:** Not started
+> **Created:** 2026-08-22
+> **Canonical requirements:** None — proposal or exploration only
+> **Decision record:** None — no accepted product decision
+> **Design index:** [`docs/README.md`](README.md)
+
 > **Status: proposed for maintainer review; not approved or implemented.**
 > Written 2026-08-22; revised 2026-08-22 to define local and cloud runtime profiles. This is a UI follow-on to
 > [`execution-engine-separation-design.md`](execution-engine-separation-design.md) and

@@ -1,5 +1,13 @@
 # Object-storage retention and local-disk safety
 
+> **Document type:** Architecture design
+> **Design status:** Accepted
+> **Implementation:** Partial
+> **Created:** 2026-08-24
+> **Canonical requirements:** [`spec/storage-and-architecture.md`](../spec/storage-and-architecture.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 **Status:** approved design; phased implementation begins 2026-08-24
 **Scope:** persistent worker durability, verified restore, bounded local retention, and disk-pressure behavior
 **Non-goals:** no policy, forecast, order, fee, sizing, budget, reconciliation, or execution-semantic change

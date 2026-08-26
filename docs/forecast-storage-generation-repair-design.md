@@ -1,5 +1,13 @@
 # Forecast storage single-writer and generation repair
 
+> **Document type:** Architecture design
+> **Design status:** Accepted
+> **Implementation:** Complete
+> **Created:** 2026-08-22
+> **Canonical requirements:** [`spec/storage-and-architecture.md`](../spec/storage-and-architecture.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > Design · 2026-08-22 · approved for implementation after the live desk was paused and drained
 >
 > This extends [`forecast-storage-design.md`](forecast-storage-design.md). It changes only forecast evidence

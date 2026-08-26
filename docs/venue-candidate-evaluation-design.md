@@ -1,5 +1,13 @@
 # Venue-candidate evaluation design
 
+> **Document type:** Evaluation design
+> **Design status:** Accepted
+> **Implementation:** Not started
+> **Created:** 2026-08-24
+> **Canonical requirements:** [`spec/providers-and-market-data.md`](../spec/providers-and-market-data.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > **Status:** Approved analysis plan, queued strictly after the confirmed-signal final review in
 > [`docs/confirmed-signal-evaluation-design.md`](confirmed-signal-evaluation-design.md). No venue-candidate
 > observation family is collecting, and this document changes no forecast, buy policy, confirmation, sizing,

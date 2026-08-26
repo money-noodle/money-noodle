@@ -1,5 +1,13 @@
 # Kalshi dynamic exchange-index wire identity
 
+> **Document type:** Safety design
+> **Design status:** Accepted
+> **Implementation:** Complete
+> **Created:** 2026-08-25
+> **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/providers-and-market-data.md`](../spec/providers-and-market-data.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > **Status: approved implementation design.** Written 2026-08-25 after the operator approved an immediate
 > fail-closed repair and funded automation was paused/drained at revision 6,633. This changes venue wire routing
 > identity only; it does not change forecast, entry, route, price, quantity, fee, exit policy, capital, or paper.

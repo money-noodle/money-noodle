@@ -1,5 +1,13 @@
 # Second Market: Kalshi Hourly Crypto (Strike Contracts) — Design
 
+> **Document type:** Product design
+> **Design status:** Accepted
+> **Implementation:** Not started
+> **Created:** 2026-08-21
+> **Canonical requirements:** [`spec/forecasting-and-evidence.md`](../spec/forecasting-and-evidence.md), [`spec/providers-and-market-data.md`](../spec/providers-and-market-data.md), [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > **Approved 2026-08-21** · Decisions locked: T-only, 8pp edge floor, 3/2/1 caps, 60s cadence,
 > cross-market exposure ignored, strike-grid helper, all ten assets. · Status: design, implementation
 > pending. Product/architecture truth lives in `SPEC.md §3.6` (markets & keying), `market-registry.ts`,

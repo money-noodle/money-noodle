@@ -1,5 +1,13 @@
 # External venue position ownership boundary
 
+> **Document type:** Safety design
+> **Design status:** Accepted
+> **Implementation:** Complete
+> **Created:** 2026-08-25
+> **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > **Status: approved implementation design.** Written 2026-08-25 after operator confirmation that venue positions
 > created outside Money Noodle are acceptable. This narrows which local lifecycle states claim an exact contract;
 > it does not import external activity into Money Noodle accounting or permit ambiguous shared ownership.

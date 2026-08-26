@@ -1,5 +1,13 @@
 # Forecast model boundary and evaluator v3 design
 
+> **Document type:** Evaluation design
+> **Design status:** Accepted
+> **Implementation:** Partial
+> **Created:** 2026-08-24
+> **Canonical requirements:** [`spec/forecasting-and-evidence.md`](../spec/forecasting-and-evidence.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > **Status:** Phase 1 implemented on 2026-08-24. Phase 2 prospective collection activated locally at
 > 2026-08-25T03:17:17.456Z. Its written 10-window wiring review passed on 2026-08-25 with 5,169/5,169
 > complete-family rows, 45 closed windows, and zero production replay error; the 100-window coverage and 300-window

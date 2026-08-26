@@ -1,5 +1,13 @@
 # Bounded dashboard and public-projection read paths
 
+> **Document type:** Architecture design
+> **Design status:** Accepted
+> **Implementation:** Complete
+> **Created:** 2026-08-22
+> **Canonical requirements:** [`spec/product-and-surfaces.md`](../spec/product-and-surfaces.md), [`spec/storage-and-architecture.md`](../spec/storage-and-architecture.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > **Status: implemented.** Agreed 2026-08-22 after the local performance and hosted
 > projection incident. This is a reporting/read-model change only. It changes no forecast, entry rule,
 > execution route, fill, sizing, budget control, reconciliation, or live authority.

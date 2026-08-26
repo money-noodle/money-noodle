@@ -1,5 +1,13 @@
 # Attempt-and-outcome evaluation design
 
+> **Document type:** Evaluation design
+> **Design status:** Accepted
+> **Implementation:** Not started
+> **Created:** 2026-08-24
+> **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > **Status:** Approved analysis plan, queued strictly after the live-authorization final review in
 > [`docs/live-authorization-evaluation-design.md`](live-authorization-evaluation-design.md). No lifecycle manifest,
 > transition journal, or candidate generation is collecting. This document changes no forecast, buy policy,

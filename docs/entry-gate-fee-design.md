@@ -1,5 +1,13 @@
 # The entry gate charges a fee the desk does not pay
 
+> **Document type:** Policy design
+> **Design status:** Accepted
+> **Implementation:** Complete
+> **Created:** 2026-08-17
+> **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > Planning document, 2026-08-17. **No code changes with this document, and none should follow until §7
 > is decided.** Measured with `data/forecast-history-shards` over 11,479 admitted rows in 2,154
 > settlement windows.

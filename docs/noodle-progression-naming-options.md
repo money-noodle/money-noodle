@@ -1,5 +1,13 @@
 # Noodle progression naming options
 
+> **Document type:** Exploration
+> **Design status:** Exploratory
+> **Implementation:** Not applicable
+> **Created:** 2026-08-22
+> **Canonical requirements:** None — proposal or exploration only
+> **Decision record:** None — no accepted product decision
+> **Design index:** [`docs/README.md`](README.md)
+
 > **Saved for later · 2026-08-22 · decision deferred.** These are naming explorations for the Noodle Land
 > evidence progression. No group is selected, no current prototype label is changed by this document, and no
 > names are ready for `SPEC.md` or implementation. Before any real-noodle origin copy becomes user-facing,

@@ -1,5 +1,13 @@
 # Paper execution fidelity v2 design
 
+> **Document type:** Execution design
+> **Design status:** Accepted
+> **Implementation:** Partial
+> **Created:** 2026-08-25
+> **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 > **Status:** approved in prose by the maintainer on 2026-08-25. Phase F1 engineering parity is complete. Phase
 > F2's detached implementation is complete and loaded by the persistent worker after READY startup reconciliation
 > on 2026-08-25. Its prospective clock began with the first durable decision at 2026-08-25T06:47:41.724Z. The

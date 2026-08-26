@@ -1,5 +1,13 @@
 # Process-global execution-ledger ownership
 
+> **Document type:** Architecture design
+> **Design status:** Accepted
+> **Implementation:** Complete
+> **Created:** 2026-08-22
+> **Canonical requirements:** [`spec/storage-and-architecture.md`](../spec/storage-and-architecture.md), [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 **Status:** implemented 2026-08-22; extended by [execution-ledger v9](execution-ledger-v9-design.md)
 **Scope:** runtime ownership and storage cost only; no policy, execution, sizing, budget, reconciliation, or order semantic change
 

@@ -1,5 +1,13 @@
 # Execution ledger v9: immutable terminal evidence and a bounded funded hot set
 
+> **Document type:** Architecture design
+> **Design status:** Accepted
+> **Implementation:** Complete
+> **Created:** 2026-08-22
+> **Canonical requirements:** [`spec/storage-and-architecture.md`](../spec/storage-and-architecture.md), [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md)
+> **Decision record:** [`spec/decision-log.md`](../spec/decision-log.md)
+> **Design index:** [`docs/README.md`](README.md)
+
 **Status:** approved in prose 2026-08-22; implementation gated by this document
 **Scope:** storage layout and read models only. No policy, execution, fill, sizing, budget, reconciliation, paper/live, strategy, or accounting semantic change.
 
