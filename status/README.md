@@ -12,8 +12,8 @@ It is not a live control surface, a specification, a roadmap, or a chronological
 5. Verify current behavior in code and versioned registries. Verify funded operational state through the authenticated
    Automation surface and `data/trading-control.json`, never through Markdown.
 
-Reports remain canonical for dated quantitative methods and results. The controlled design lifecycle lives in
-[`../docs/README.md`](../docs/README.md). Status text cannot create a requirement or authorize an implementation.
+[`../SPEC.md`](../SPEC.md) holds the canonical authority table for every document class; consult it rather than a
+restatement. The one rule this index adds: status text cannot create a requirement or authorize an implementation.
 
 ## Current files
 

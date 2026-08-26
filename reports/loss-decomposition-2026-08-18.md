@@ -57,7 +57,7 @@ double-counts contract selection by roughly a factor of two.** Every previous re
 used the inflated version.
 
 **4. The maker discount helps**: +3.4pp live, +1.5pp paper — confirming
-[take-the-ask-2026-08-18.md](/Users/raiphairow/code/money/reports/take-the-ask-2026-08-18.md) from a second
+[take-the-ask-2026-08-18.md](take-the-ask-2026-08-18.md) from a second
 direction. Switching to taking would forfeit it.
 
 **5. The exit rule is the desk's best component: +14.6pp live, +17.8pp paper.** Holding to settlement is

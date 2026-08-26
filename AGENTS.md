@@ -24,7 +24,8 @@ including `spec/policy-and-track-separation.md` §12 → `STATUS.md` → the §0
 
 Read the relevant source before proposing anything; never reconstruct current behavior from memory. Code is authoritative for what the system *does*; `SPEC.md` and
 its canonical modules define what it is *meant* to do and why. Resolve conflicting canonical text instead of
-choosing silently.
+choosing silently. `SPEC.md` holds the canonical authority table; this is its always-loaded restatement and
+loses to it on any divergence.
 
 | Source | Authority |
 | --- | --- |
@@ -37,8 +38,9 @@ choosing silently.
 | `lib/market-registry.ts` | Which markets exist and what each may do per lane (market data / paper / live). |
 | `lib/strategy-registry.ts` | Which strategies exist and which is default. |
 | `lib/policy-manifest.ts` | Every buy policy that has been live. |
-| `reports/*.md` | Dated measurements, methods, and caveats. |
+| `reports/*.md`, indexed by `reports/README.md` | Dated measurements, methods, and caveats. |
 | `docs/README.md` and indexed `docs/*.md` | Design lifecycle and supporting rationale; never requirement authority. |
+| `README.md` | Human orientation and setup; never requirement, implementation, or operational authority. |
 
 ### Change routing
 
@@ -75,7 +77,7 @@ default strategy's forecast and entry path; strategy-specific engines and polici
 | Execution style | `evaluateEntryExecutionPolicy` (`lib/entry-execution-policy.ts`) |
 | Both lanes | `processPaperTradingCycle` (`lib/paper-execution.ts`) — the orchestrator |
 | Live wire | `lib/live-orders.ts` |
-| Exits | `lib/exit-policy.ts` (strict-value, profit-reversal), `lib/target-exit-policy.ts` (reduce-only IOC) |
+| Exits | `evaluateExitPolicy` (`lib/exit-policy.ts`) decides strict-value and profit-reversal; the reduce-only IOC sell is `placeKalshiSell` (`lib/live-orders.ts`) |
 | Fills and fees | `estimatePaperFill`, `venueFeeCents` (`lib/venue-fill.ts`) |
 | Reconciliation | `reconcileExecutionLedger` (`lib/execution-reconciliation.ts`), scheduled by `maybeRunPeriodicReconciliation` (`lib/periodic-reconciliation.ts`) |
 
@@ -201,7 +203,9 @@ a superseded report.
   need current support; otherwise identify them as hypotheses.
 - **Cite auditable claims.** Ground current behavior, policy, results, and venue mechanics in repo evidence or a
   live API response. Cite symbols and files, canonical `spec/<module>.md` sections, `SPEC.md`, or reports—not
-  source lines—and label load-bearing outside knowledge. Date `STATUS.md` and report figures in the past tense;
+  source lines—and label load-bearing outside knowledge. **Always name the module beside a `spec/*.md` section
+  number**, which is inherited from the former monolith and no longer identifies a file: three modules open at
+  §3, and §3.6 and §3.6a are in different files. Date `STATUS.md` and report figures in the past tense;
   recalculate current numbers.
 - **Expose disagreement.** Verify the source behind each claim. Report exact-versus-whole-cent, live-versus-paper,
   and materially different route results instead of smoothing or cherry-picking them.
@@ -241,6 +245,7 @@ npm test             # vitest run
 npm run verify:spec   # specification module, link, anchor, archive, and ADR integrity
 npm run verify:docs   # design index, lifecycle metadata, authority, link, and anchor integrity
 npm run verify:status # current status, roadmap, archive, hash, link, and size integrity
+npm run verify:agents # this file's and README's paths, symbols, links, citations, and the report index
 ```
 
 Do not stop or restart the server to edit, typecheck, or test. Restart only when the maintainer asks or a change
@@ -252,6 +257,11 @@ relevant exact output, not only a summary.
 Read `package.json` for `analyze:*` and `verify:*`. Deploys are **manual** (`npx vercel --prod`); pushing `main`
 deploys nothing.
 
+**A push is not finished until CI is green.** Watch the run (`gh run watch`), and report the outcome rather than
+assuming it passed. On failure, read the failing step (`gh run view --log-failed`) and fix it; never leave `main`
+red. Local success does not predict CI: absolute links, machine-specific paths, and case-sensitive filenames
+resolve on a macOS worktree and fail on the Linux runner.
+
 ## 10. Writing it down
 
 - **Commit subjects state the finding or the change in the imperative**, not the file touched — "Replay 26
@@ -260,5 +270,6 @@ deploys nothing.
   `spec/*.md` module and `spec/decision-log.md`; product statement, principle, authority, or map changes also update
   `SPEC.md`.
 - **Never report a measurement without its date, its sample size, and the caveat that most threatens it.**
-- Keep `AGENTS.md` below 3,000 words. Consolidate before adding; never remove a funded invariant only to meet the limit.
+- Keep `AGENTS.md` below 3,000 words (enforced by `verify:agents`). Consolidate before adding; never remove a
+  funded invariant only to meet the limit.
 - Nothing here is financial advice, and the app says so. Keep it that way in anything user-facing.

@@ -645,7 +645,7 @@ candidates reached 90¢ 0.9% of the time against 2.6% for stalled ones — but i
 ## 14b. Gap sweep, 2026-08-17 — §14a's method is superseded, its conclusion is not
 
 `npm run analyze:long-shot-gaps`, written up in
-[reports/long-shot-gap-sweep-2026-08-17.md](/Users/raiphairow/code/money/reports/long-shot-gap-sweep-2026-08-17.md).
+[reports/long-shot-gap-sweep-2026-08-17.md](../reports/long-shot-gap-sweep-2026-08-17.md).
 Over 1,506 windows across 62 hours, asking which **gap** between buy and sell is achieved often enough to
 pay, rather than which fixed marks work.
 

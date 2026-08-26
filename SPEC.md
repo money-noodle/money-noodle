@@ -20,9 +20,30 @@ owns its detailed requirements. Index summaries and compatibility pointers are n
 module. A requirement has one canonical home; other documents should link to it rather than restate it. If two
 canonical documents appear to conflict, stop and resolve the conflict instead of inferring precedence.
 
-Cite named sections or stable requirement identifiers, never source line numbers. Existing numbered-section
-citations remain usable through the compatibility pointers below while references migrate to canonical module
-paths.
+Cite named sections or stable requirement identifiers, never source line numbers. **Always name the module beside
+a section number.** Numbering is inherited from the former monolithic specification and is not unique across
+modules: three modules open at §3, `trading-risk-and-budget` jumps from §3 to §7, and §3.6 and §3.6a are in
+different files. A number alone therefore does not identify a document. `npm run verify:agents` rejects an
+unqualified citation in the always-loaded guidance.
+
+### Legacy section numbers
+
+Numbers are retained so the 157 preserved decisions in [`spec/decisions/`](spec/decisions/) and the immutable
+[`status/archive/`](status/archive/) keep resolving; those files cannot be updated, which is why the numbers
+cannot be reassigned. This table is the redirect.
+
+| Section | Owning module |
+| --- | --- |
+| §2, §3.1–§3.5a | [`spec/product-and-surfaces.md`](spec/product-and-surfaces.md) |
+| §3.6 | [`spec/trading-risk-and-budget.md`](spec/trading-risk-and-budget.md) |
+| §3.6a, §3.6b, §3.7, §4 | [`spec/forecasting-and-evidence.md`](spec/forecasting-and-evidence.md) |
+| §5 | [`spec/providers-and-market-data.md`](spec/providers-and-market-data.md) |
+| §6, §8, §9 | [`spec/storage-and-architecture.md`](spec/storage-and-architecture.md) |
+| §7 | [`spec/trading-risk-and-budget.md`](spec/trading-risk-and-budget.md) |
+| §10, §11 | [`spec/delivery-and-acceptance.md`](spec/delivery-and-acceptance.md) |
+| §12, §12.1–§12.10 | [`spec/policy-and-track-separation.md`](spec/policy-and-track-separation.md) |
+| §13 | [`spec/open-decisions.md`](spec/open-decisions.md) |
+| §14 | [`spec/decision-log.md`](spec/decision-log.md) |
 
 ### Specification map
 
@@ -40,6 +61,9 @@ paths.
 
 ### Authority outside the specification
 
+This table is canonical for document authority. [`AGENTS.md`](AGENTS.md) restates it in compressed form because it
+is always loaded; if the two ever diverge, this table governs.
+
 | Source | Authority |
 | --- | --- |
 | Code and versioned registries | What the system currently does and which capabilities currently exist |
@@ -47,6 +71,7 @@ paths.
 | [`status/roadmap.md`](status/roadmap.md) | Non-normative sequencing and pending work; never implementation authority |
 | [`status/archive/`](status/archive/) | Immutable historical status and superseded measurements; read only when history is material |
 | [`AGENTS.md`](AGENTS.md) | Compact always-loaded agent workflow and safety constraints; never alternate requirement or runtime authority |
+| [`README.md`](README.md) | Human orientation and setup; never requirement, implementation, or operational authority |
 | `reports/*.md` | Dated measurements, methods, cohorts, and caveats |
 | [`docs/README.md`](docs/README.md) and indexed `docs/*.md` | Proposed, accepted, superseded, retired, reference, and exploratory designs; never an alternate requirement authority |
 

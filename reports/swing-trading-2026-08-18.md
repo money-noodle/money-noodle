@@ -106,7 +106,7 @@ And every configuration still loses. The best is −0.0699 ± 0.0034 — twenty 
 ## Why it loses, stated once
 
 The direction is unpredictable (eighteen signal variants, all 48–50%, reported in
-[maker-fill-adverse-selection-2026-08-18.md](/Users/raiphairow/code/money/reports/maker-fill-adverse-selection-2026-08-18.md)),
+[maker-fill-adverse-selection-2026-08-18.md](maker-fill-adverse-selection-2026-08-18.md)),
 and every round trip pays a toll of roughly 4¢ at mid prices even at a large ticket, 8¢ at the current
 one. A bet with no edge, played against a toll, loses at the rate of the toll. Better exits change how fast.
 

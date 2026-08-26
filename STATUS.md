@@ -38,7 +38,7 @@ behavior. The former 34,588-word root status is preserved byte-for-byte in bound
 | Storage | Forecast storage v3 uses one owning writer, immutable content-addressed shards/rollups, checksums, journal replay, and publish-last generations. Execution ledger v9 keeps money/control rows hot and hydrates immutable terminal evidence from verified batches. Atomic stores and append-only journals retain owner boundaries. |
 | Archive and restore | Local-only object archival, full read-back checksum verification, manifests, independent restore, disk-capacity checks, and rebuildable Next-cache cleanup are implemented. Remote-primary deletion is not authorized. |
 | Hosted runtime | Hosted deployment is stateless and reads only bounded sanitized paper projections. It has no credentials, collection, reconciliation, ledger-write, control, or funded order authority. |
-| Governance | Versioned registries, policy manifest, immutable model-promotion ledger, canonical modular specification, controlled design lifecycle, and CI documentation/application gates are implemented. |
+| Governance | Versioned registries, policy manifest, immutable model-promotion ledger, canonical modular specification, controlled design/status lifecycles, and CI documentation/application gates are implemented. `AGENTS.md` remains one bounded always-loaded guide with stable historical citations and explicit change routing, and is now verified against the code it cites by `verify:agents`. |
 
 ## Active identities
 
@@ -92,10 +92,12 @@ for unresolved normative questions.
 
 ## Latest recorded operational snapshot
 
-At the published snapshot on 2026-08-26, `data/trading-control.json` was active / `live`, revision 7,057, with
-1,525¢ available, zero reserved, and operator intent active. Startup full reconciliation completed READY at
-`2026-08-26T02:01:25.667Z` with zero local/venue managed positions, resting orders, or reservations. The maintainer
-had chosen continued funded collection rather than Pause while economic gates matured.
+At the published snapshot on 2026-08-26, the requested documentation rollout used the authenticated Pause path:
+revision 7,097 became operator-paused / `live`, quiescent, and restart-safe after manual full reconciliation passed
+with zero local/venue managed positions, resting orders, or reservations. After the provider/policy attribution
+build loaded, startup full reconciliation completed READY at `2026-08-26T04:49:07.312Z`; revision 7,099 retained
+operator-paused intent, 1,861¢ available, zero reserved, no blockers, and zero open positions. Paper collection
+continues, but funded execution was not implicitly resumed.
 
 That state may have changed immediately after publication. Do not infer present permission, exposure, cash,
 readiness, or restart safety from it.

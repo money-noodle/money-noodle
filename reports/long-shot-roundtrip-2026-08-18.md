@@ -106,7 +106,7 @@ Nothing yet, and specifically it does **not** authorize a new entry filter. Conc
   spike between samples, so every touch rate above is understated while the settlement rate it is compared
   against is exact. The measurement is therefore run on data that penalizes the exit mark, and finer
   sampling can only move the mark's numbers **up**. Every negative `gap` in the table is an upper bound on
-  how negative it really is. See [long-shot-fine-marks-2026-08-18.md](long-shot-fine-marks-2026-08-18.md).
+  how negative it really is. The finer-sampling follow-up named here as `long-shot-fine-marks-2026-08-18.md` was never written; the long-shot workstream was retired before it was produced.
 - The one positive holding cell is **9 winners in 77 entries** with a ±72-point interval.
 - Entries are bought at the recorded ask with no fill model; the long-shot path rests a maker order.
 - Exits are priced optimistically at exactly the mark; a bid gapping through fills worse.

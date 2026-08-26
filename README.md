@@ -8,6 +8,12 @@ A personal crypto prediction research and trading tool built with Next.js, TypeS
 
 **Start here:** [`docs/live-opportunity-decision-flow.md`](docs/live-opportunity-decision-flow.md) is the short, ordered introduction to how a market observation becomes a signal, candidate, live authorization, and venue outcome. Follow its cited symbols before changing the funded-entry path; code remains authoritative and [`SPEC.md`](SPEC.md) records decisions and why.
 
+**What this file is.** Orientation and setup for a human arriving at the repository. It is not implementation,
+requirement, or operational authority, and it is deliberately light on current thresholds and behavior so it
+cannot drift against the records that are governed. [`STATUS.md`](STATUS.md) is the dated implementation
+projection, [`SPEC.md`](SPEC.md) and its [`spec/`](spec/) modules are canonical for requirements, and code plus
+the versioned registries remain authoritative for what the system does right now.
+
 ## Run locally
 
 ```bash
@@ -40,19 +46,27 @@ The budget projection is written on every ledger write; the track record is scor
 
 ## What works
 
-- Discovers current Polymarket and Kalshi crypto 15-minute markets.
-- Compares venue probabilities while labeling Kalshi contracts as approximate matches because their oracle rules differ.
-- Forecasts the condition the contract actually settles on: `P(settlement ≥ cycle-open reference)`, from the live basis, realized volatility, and time remaining, computed within a single price series. The tradeable forecast deliberately contains no venue price, because edge is measured against that price.
-- Qualifies buys on expected value after venue fees rather than directional confidence, so a likely outcome at an expensive price is correctly rejected.
-- Shows top-ranked positive-edge binary buys that may select UP/YES or DOWN/NO. Calculations refresh every 15 seconds, hard-expire after 15 seconds, display calculation time/age, and apply the active fee-aware buy policy. The current v22 rule requires at least 55% venue-independent probability for the selected side and an executable ask from 10¢ through 75¢ on an enabled trading venue; the policy manifest remains authoritative for current thresholds.
-- Durably records every calculation, not only qualifying signals, and stores compact issuance references into an append-only full-rules Polymarket/Kalshi contract-provenance registry. New outcomes resolve independently by venue and simulated return requires the same contract venue as its entry price; legacy or mismatched real entries cannot contribute walk-forward return. Reports accuracy, Brier/log loss, calibration bins, accuracy by time to settlement, contract-level streaks, and benchmarks against a coin flip, the basis term, Polymarket, and Kalshi. Calibration remains locked until 100 unique resolved settlement timestamps; repeated updates and correlated assets sharing a close count as one window.
-- Provides a versioned five-fold expanding-window evaluation at 100 independent windows and every 25 thereafter. Venue-independent `calibration-replay-v1` snapshots preserve issuance-time basis, volatility, clock, slow-term log odds, caps, and production probability; exact replay is verified, legacy reconstruction is labeled, and candidate grids cover volatility scale and probability caps as well as weights/thresholds. It fits only on past windows, scores unseen windows after fees, feature-fingerprints and persists each run, and exposes results in the Walk-forward tab. Evaluator v2 is monitoring-only, never changes production, and runs only through the explicit paused/stopped offline command documented in `docs/offline-walk-forward-evaluation-design.md`; it never runs in the funded collector.
-- Reports an observation-only maker funnel from submission through post-only race, acceptance, queue fill, and settlement. A strict adaptive maker/taker policy now records shadow taker recommendations and counterfactual returns while live remains maker by default. If explicitly activated later, taker entries are marketable IOC limits capped at the approved ask—not uncapped market orders—and maker, shadow-taker, and actual-taker results remain separate.
-- Shows model/market edge, action state, charts, countdowns, and full factor drill-down.
-- Runs a local 15-second background collector while the Next.js server is active, even when the browser is closed.
-- Caches external data atomically in local `.cache/*.json` files.
-- Builds same-month seasonal features from cached Kraken weekly history.
-- Provides grounded quick research through OpenAI, Anthropic, Gemini, OpenRouter, Groq, xAI, Mistral, DeepSeek, or a local OpenAI-compatible server.
+- Discovers current Polymarket and Kalshi crypto 15-minute markets and compares venue probabilities, labeling
+  Kalshi contracts as approximate matches because their oracle rules differ.
+- Forecasts the condition the contract actually settles on — `P(settlement ≥ cycle-open reference)` — from the
+  live basis, realized volatility, and time remaining, within a single price series. The tradeable forecast
+  deliberately contains no venue price, because edge is measured against that price.
+- Qualifies buys on expected value after venue fees rather than directional confidence, so a likely outcome at
+  an expensive price is correctly rejected, and ranks positive-edge binary buys that may select UP/YES or
+  DOWN/NO.
+- Durably records every calculation, not only qualifying signals, resolves outcomes per venue, and reports
+  accuracy, Brier/log loss, calibration bins, lead-time slices, streaks, and benchmarks — plus a versioned
+  expanding-window walk-forward evaluation that never promotes a model automatically.
+- Runs a continuous paper shadow trader and an observation-only maker execution funnel alongside an
+  environment-gated, explicitly armed live Kalshi desk. Paper and live keep separate ledgers and bankrolls.
+- Runs a local 15-second background collector while the server is up, caches external data atomically under
+  `.cache/`, and builds seasonal features from cached Kraken weekly history.
+- Provides grounded quick research through OpenAI, Anthropic, Gemini, OpenRouter, Groq, xAI, Mistral, DeepSeek,
+  or a local OpenAI-compatible server. Research is advisory and terminal: it never reaches a forecast, policy,
+  budget, or order.
+
+Current policy versions, thresholds, entry bands, sizing, and the latest measurements with their caveats live in
+[`STATUS.md`](STATUS.md); [`lib/policy-manifest.ts`](lib/policy-manifest.ts) is authoritative for entry policy.
 
 For a signed Kalshi connection, create a dedicated API key, keep its RSA PEM outside the repository, and set `KALSHI_API_KEY_ID`, `KALSHI_PRIVATE_KEY_PATH`, and `KALSHI_BASE_URL` in `.env.local`. Validate against Kalshi demo first. Budget → Account funding → Kalshi signed connection setup can test the connection after restarting the server.
 
@@ -80,7 +94,21 @@ npm run check:disk
 
 ## Data and safety
 
-This is research software, not financial advice. Paper shadow trading runs continuously. Live Kalshi execution is environment-gated, typed-confirmation armed, stake/rate capped, kill-switch protected, and blocked on startup until authoritative cash/position/order/fill/resting-order reconciliation passes. Startup/manual/drain remain full barriers; the ordinary five-minute pass independently reads current account safety state plus checkpointed order/fill deltas and exact active transactions, escalating gaps to a full audit. System safety suspensions retain separately persisted operator intent and may auto-resume only after authoritative reconciliation plus every normal readiness check; manual pauses and the kill switch never auto-resume. A user Pause drains the serialized execution queue and authoritatively reconciles before the UI reports the process restart-safe. It uses durable client IDs, managed post-only v2 selected-side limits (YES bids or signed NO-opening asks), 12-second passive repricing with progressive tick backoff, one live attempt by default (a second is hard-capped and disabled pending validation), grouped retry outcomes, bounded cancellation-confirmation polling, actual fill/fee reconciliation, automatic API resolution with retained reservations for ambiguous outcomes, all-in transaction caps, non-auto-resumable current-budget and lifetime-live loss stops, constrained same-window/correlation-group portfolio selection, no simultaneous opposite-side exposure, persistent loss-aware switching, and side-aware reduce-only standalone exits. A strict exit sells when executable cash beats optimistic model hold value; a separate profit lock arms at +75% executable profit and sells on one fresh joint Kalshi-value/model-probability reversal snapshot. Full exits clear persistence and permit uncapped same-window re-entry generations after a 60-second cooldown and fresh buy qualification. Switches require positive future wealth after costs plus a 15pp replacement probability advantage, increased to 20pp for same-asset UP↔DOWN reversals. Polymarket live placement is not implemented.
+This is research software, not financial advice.
+
+Research is the default and paper shadow trading runs continuously. Live execution is environment-gated, armed
+only by typed confirmation, stake- and rate-capped, kill-switch protected, and blocked at startup until
+cash/position/order/fill/resting-order reconciliation passes, with a periodic incremental pass afterward. Sell
+paths are reduce-only and side-aware, so an exit can never open reverse exposure. Operator intent is stored
+separately from operational state: a manual pause or the kill switch never auto-resumes. Ambiguous venue state
+suspends the desk rather than guessing. Polymarket live placement is not implemented, and every unimplemented
+provider fails closed.
+
+`data/` and `.cache/` are worker-local durable state, not build artifacts — never commit them, hand-edit a
+ledger, or delete a journal to reset. The exact controls, their current parameters, and the evidence behind them
+are in [`spec/trading-risk-and-budget.md`](spec/trading-risk-and-budget.md) and [`STATUS.md`](STATUS.md).
+Present funded state comes only from the authenticated Automation surface and `data/trading-control.json` —
+never from this file.
 
 Start with [`SPEC.md`](SPEC.md) for the product principles and canonical specification map, then read its
 indexed [`spec/`](spec/) domain modules for detailed normative requirements and decision history. See
