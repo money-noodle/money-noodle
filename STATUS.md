@@ -29,7 +29,7 @@ behavior. The former 34,588-word root status is preserved byte-for-byte in bound
 
 | Area | Current implementation |
 | --- | --- |
-| Product surfaces | Local dashboard, signed Automation/Budget/Performance controls, public sanitized paper summary, factor and policy drill-downs, selected-side order-book ladder, stable signal transitions, and explicit stale/degraded states are implemented. |
+| Product surfaces | Local dashboard, signed Automation/Budget/Performance controls, public sanitized paper summary, factor and policy drill-downs, selected-side order-book ladder, stable signal transitions, explicit stale/degraded states, and read-only track/provider/variant/market/forecast/buy/execution attribution scopes are implemented. Current-card scope is presentation-only; signed open orders, history, and trading performance share one pure order-identity vocabulary and keep live/paper totals separate. |
 | Forecasting | Venue-independent Blend 0.4 production probability, immutable forecast history, exact provenance, outcome resolution, calibration/performance reports, pure forecast boundary, and prospective candidate-family collection are implemented. Evaluator v2 is offline monitoring only and cannot promote. |
 | Entry and portfolio | Shared buy policy v22, mode-free rule evaluation, post-qualification execution style, persistence, up to three requalified episodes, sizing, global position/window/correlation ceilings, and prospective choice-set evidence are implemented. |
 | Paper execution | Independent managed-maker/IOC simulation, displayed-depth queue proxy, public trade evidence, reduce-only depth exits, exact mirror-pair IDs, separate paper bankroll, and neutral versioned calibration are implemented. Paper is diagnostic rather than live-equivalent. |
@@ -82,6 +82,8 @@ claim or decision.
   owner-aware tier catalog and verified hydration.
 - Stake expansion, another live venue, queue-aware live gates, unconditional taker execution, and automatic entry
   relaxation remain unsupported or blocked.
+- Provider/policy attribution visibility is implemented without a ledger rewrite or public-payload expansion.
+  Durable unified policy lineage and parameter diffs remain a separate structural design.
 - The accepted hourly threshold-market design is not implemented. Proposed engine separation and multitenancy have
   no implementation authority. Noodle Land remains exploratory and outside application/runtime authority.
 

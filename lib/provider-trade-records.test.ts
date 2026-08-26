@@ -2,19 +2,20 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-import { buildProviderTradeRecords, buildTradeRecord, orderMarketId, orderProviderId } from './execution-report';
+import { buildAttributedTradeRecords, buildProviderTradeRecords, buildTradeRecord, orderMarketId, orderProviderId } from './execution-report';
 import { CRYPTO_15M } from './market-registry';
+import { EMPTY_ORDER_ATTRIBUTION_FILTERS, orderMatchesAttribution } from './order-attribution';
 import type { ExecutionMode, PaperOrder, PaperOrderStatus, TradingProviderId } from './types';
 
 let sequence = 0;
 function order(overrides: {
-  mode: ExecutionMode; venue?: 'polymarket' | 'kalshi'; providerId?: TradingProviderId;
+  mode: ExecutionMode; venue?: 'polymarket' | 'kalshi'; providerId?: TradingProviderId; providerVariantId?: string;
   status?: PaperOrderStatus; pnlCents?: number; marketId?: 'crypto-15m';
 }): PaperOrder {
-  const { mode, venue = 'kalshi', providerId, status = 'won', pnlCents = 100, marketId } = overrides;
+  const { mode, venue = 'kalshi', providerId, providerVariantId, status = 'won', pnlCents = 100, marketId } = overrides;
   sequence += 1;
   return {
-    id: `order-${sequence}`, executionMode: mode, providerId, marketId,
+    id: `order-${sequence}`, executionMode: mode, providerId, providerVariantId, marketId,
     symbol: 'BTC', venue, contractId: `c-${sequence}`, side: 'UP', status,
     createdAt: '2026-08-11T00:01:00Z', calculationAt: '2026-08-11T00:00:30Z',
     closesAt: `2026-08-11T0${sequence % 9}:15:00Z`,
@@ -76,5 +77,20 @@ describe('per-provider trade records', () => {
     expect(split.reduce((sum, item) => sum + item.record.realizedPnlCents, 0)).toBe(combined.realizedPnlCents);
     expect(split.reduce((sum, item) => sum + item.record.settled, 0)).toBe(combined.settled);
     expect(split.reduce((sum, item) => sum + item.record.unfilled + item.record.rejected, 0)).toBe(combined.unfilled + combined.rejected);
+  });
+
+  it('does not blend provider variants in exact attribution rows', () => {
+    const generationRows = [
+      order({ mode: 'live', providerId: 'kalshi', providerVariantId: 'variant-a', pnlCents: 40 }),
+      order({ mode: 'live', providerId: 'kalshi', providerVariantId: 'variant-b', pnlCents: -20 }),
+    ];
+    const records = buildAttributedTradeRecords(generationRows, 'live');
+    expect(records.map((item) => item.attribution.providerVariantId).sort()).toEqual(['variant-a', 'variant-b']);
+    expect(records.reduce((sum, item) => sum + item.record.realizedPnlCents, 0)).toBe(20);
+    const filtered = generationRows.filter((item) => orderMatchesAttribution(item, {
+      ...EMPTY_ORDER_ATTRIBUTION_FILTERS, modes: ['live'], providerVariantIds: ['variant-a'],
+    }));
+    expect(buildTradeRecord(filtered, 'live').realizedPnlCents).toBe(40);
+    expect(buildTradeRecord(filtered, 'paper').settled).toBe(0);
   });
 });

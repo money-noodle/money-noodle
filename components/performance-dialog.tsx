@@ -1,17 +1,22 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { AlertTriangle, BarChart3, CheckCircle2, Clock3, Loader2, XCircle } from 'lucide-react';
+import { AttributionFilterControls } from '@/components/attribution-filter-controls';
 import { PerformanceChart } from '@/components/performance-chart';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DATA_FRESHNESS } from '@/lib/freshness';
+import {
+  EMPTY_ORDER_ATTRIBUTION_FILTERS, orderAttributionSearchParams,
+  type AttributedTradeRecord, type OrderAttributionFacets, type OrderAttributionFilters,
+} from '@/lib/order-attribution';
 import { MIN_ESTIMATE_QUALITY, MIN_NET_EDGE } from '@/lib/prediction-policy';
 import type { EpochResult } from '@/lib/budget-epoch';
 import type { PromotionEligibility } from '@/lib/model-promotion';
-import type { CalendarEvaluationReport, ContractComparabilityReport, CyclePathReport, ForecastHistoryRow, MakerFillReport, MakerObservedFillSummary, ModelPromotionEntry, PerformanceSlice, PerformanceSummary, PersistenceCandidateReport, ProviderTradeRecord, SegmentGroup, TradeTrackRecord, WalkForwardEvaluationHistory } from '@/lib/types';
+import type { CalendarEvaluationReport, ContractComparabilityReport, CyclePathReport, ForecastHistoryRow, MakerFillReport, MakerObservedFillSummary, ModelPromotionEntry, PerformanceSlice, PerformanceSummary, PersistenceCandidateReport, SegmentGroup, TradeTrackRecord, WalkForwardEvaluationHistory } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 /**
@@ -115,24 +120,20 @@ function MissedBuyPanel({ summary }: { summary: PerformanceSummary }) {
  * purpose: a provider that rejects or fails to fill much of what it is sent is not comparable to one
  * that fills it, and a combined record hides exactly that difference.
  */
-function ProviderRecordRows({ records, label }: { records: ProviderTradeRecord[]; label: string }) {
+function AttributionRecordRows({ records, label }: { records: AttributedTradeRecord[]; label: string }) {
   if (!records.length) return null;
   return <div className="mt-3 overflow-hidden rounded-lg border">
-    <div className="border-b bg-background/60 px-3 py-2"><p className="text-[10px] font-medium">{label} by provider</p><p className="text-[9px] text-muted-foreground">Fills, unfilled maker attempts, and rejections kept separate per provider and market. Records written before provider identity existed are attributed to their venue.</p></div>
-    <div className="grid grid-cols-[1fr_58px_56px_62px_70px] gap-2 border-b px-3 py-1.5 font-mono text-[8px] uppercase tracking-wider text-muted-foreground"><span>Provider · market</span><span className="text-right">settled</span><span className="text-right">win</span><span className="text-right">attempts</span><span className="text-right">P&amp;L</span></div>
-    <div className="divide-y">{records.map(({ providerId, marketId, record }) => (
-      <div key={`${providerId}:${marketId}`} className="grid grid-cols-[1fr_58px_56px_62px_70px] items-center gap-2 px-3 py-2 text-[10px]">
-        <div><span className="font-semibold">{providerId}</span><span className="ml-1.5 font-mono text-[8px] text-muted-foreground">{marketId}</span></div>
+    <div className="border-b bg-background/60 px-3 py-2"><p className="text-[10px] font-medium">{label} by exact attribution generation</p><p className="text-[9px] text-muted-foreground">Provider, variant, market, forecast, buy, and execution identities remain separate. Historical missing identity is “unattributed,” never the current version.</p></div>
+    <div className="grid grid-cols-[1fr_58px_62px_72px] gap-2 border-b px-3 py-1.5 font-mono text-[8px] uppercase tracking-wider text-muted-foreground"><span>Exact generation</span><span className="text-right">settled</span><span className="text-right">attempts</span><span className="text-right">P&amp;L</span></div>
+    <div className="divide-y">{records.map(({ attribution, record }) => {
+      const attempts = record.settled + record.unfilled + record.rejected + record.pending;
+      return <div key={JSON.stringify(attribution)} className="grid grid-cols-[1fr_58px_62px_72px] items-center gap-2 px-3 py-2 text-[10px]" title={`forecast ${attribution.forecastModelVersion} · buy ${attribution.buyPolicyVersion} · execution ${attribution.executionPolicyVersion}`}>
+        <div className="min-w-0"><p className="truncate"><span className="font-semibold">{attribution.providerId}</span><span className="ml-1.5 font-mono text-[8px] text-muted-foreground">{attribution.providerVariantId} · {attribution.marketId}</span></p><p className="truncate font-mono text-[8px] text-muted-foreground">{attribution.buyPolicyVersion} · {attribution.executionPolicyVersion}</p></div>
         <span className="text-right font-mono">{record.settled}<span className="ml-0.5 text-[8px] text-muted-foreground">/{record.windows}w</span></span>
-        <span className="text-right font-mono">{record.winRate === null ? '—' : `${(record.winRate * 100).toFixed(0)}%`}</span>
-        <span className="text-right font-mono text-[9px]" title={`${record.unfilled} unfilled · ${record.rejected} rejected · ${record.sold} sold · ${record.pending} open`}>
-          {record.unfilled || record.rejected
-            ? <span className="text-warn">{record.unfilled}u {record.rejected}r</span>
-            : <span className="text-muted-foreground">clean</span>}
-        </span>
+        <span className="text-right font-mono text-[9px]" title={`${record.unfilled} unfilled · ${record.rejected} rejected · ${record.pending} open`}>{attempts}</span>
         <span className={cn('text-right font-mono', record.realizedPnlCents > 0 ? 'text-gain' : record.realizedPnlCents < 0 ? 'text-loss' : '')}>{usd.format(record.realizedPnlCents / 100)}</span>
-      </div>
-    ))}</div>
+      </div>;
+    })}</div>
   </div>;
 }
 
@@ -395,7 +396,7 @@ function FundingHistory({ live, paper }: { live: EpochResult[]; paper: EpochResu
   return <div className="mt-4 rounded-lg border">
     <div className="border-b px-3 py-2">
       <h3 className="text-xs font-semibold">Funding history</h3>
-      <p className="mt-0.5 text-[9px] text-muted-foreground">Every funding of each budget. Live is funded by reconfiguring the control, paper by resetting the bankroll. Realized is the whole-cent budget view and includes any bankroll correction, so it reconciles with that funding&apos;s starting balance. It will not equal the exact realized figure in the record above, which reports what the orders themselves recorded.</p>
+      <p className="mt-0.5 text-[9px] text-muted-foreground">Every funding of each budget. Live is funded by reconfiguring the control, paper by resetting the bankroll. Realized is the whole-cent budget view and includes any bankroll correction, so it reconciles with that funding&apos;s starting balance. It will not equal the exact realized figure in the record above, which reports what the orders themselves recorded. Funding history is account context and is never narrowed by the attribution filter.</p>
     </div>
     <div className="overflow-x-auto"><table className="w-full min-w-[38rem] text-[10px]">
       <thead className="text-muted-foreground"><tr className="border-b">
@@ -419,36 +420,45 @@ function FundingHistory({ live, paper }: { live: EpochResult[]; paper: EpochResu
 }
 
 export function PerformanceDialog({ publicView = false }: { publicView?: boolean }) {
-  const [data, setData] = useState<{ summary: PerformanceSummary; forecasts: ForecastHistoryRow[]; paperRecord?: TradeTrackRecord; liveRecord?: TradeTrackRecord; cyclePaths?: CyclePathReport; contractComparability?: ContractComparabilityReport; makerFillReport?: MakerFillReport; persistenceCandidate?: PersistenceCandidateReport; calendarEvaluation?: CalendarEvaluationReport; modelEvaluations?: WalkForwardEvaluationHistory; promotionEligibility?: PromotionEligibility; promotionLedger?: ModelPromotionEntry[]; paperProviderRecords?: ProviderTradeRecord[]; liveProviderRecords?: ProviderTradeRecord[]; liveEpochs?: EpochResult[]; paperEpochs?: EpochResult[]; durable?: boolean; generatedAt?: string; forecastStorage?: { layout: string; openRows: number; sealedRows: number; shards: number; missingRollups: number; degraded: boolean; reason: string } } | null>(null);
+  const [data, setData] = useState<{ summary: PerformanceSummary; forecasts: ForecastHistoryRow[]; paperRecord?: TradeTrackRecord; liveRecord?: TradeTrackRecord; cyclePaths?: CyclePathReport; contractComparability?: ContractComparabilityReport; makerFillReport?: MakerFillReport; persistenceCandidate?: PersistenceCandidateReport; calendarEvaluation?: CalendarEvaluationReport; modelEvaluations?: WalkForwardEvaluationHistory; promotionEligibility?: PromotionEligibility; promotionLedger?: ModelPromotionEntry[]; paperAttributionRecords?: AttributedTradeRecord[]; liveAttributionRecords?: AttributedTradeRecord[]; liveEpochs?: EpochResult[]; paperEpochs?: EpochResult[]; durable?: boolean; generatedAt?: string; attribution?: { filters: OrderAttributionFilters; facets: OrderAttributionFacets; matchedOrders: number }; forecastStorage?: { layout: string; openRows: number; sealedRows: number; shards: number; missingRollups: number; degraded: boolean; reason: string } } | null>(null);
+  const [filters, setFilters] = useState<OrderAttributionFilters>({ ...EMPTY_ORDER_ATTRIBUTION_FILTERS });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const requestSequence = useRef(0);
 
-  async function load() {
+  async function load(nextFilters = filters) {
+    const requestId = ++requestSequence.current;
     setLoading(true); setError('');
     try {
-      const response = await fetch(publicView ? '/api/paper-performance' : '/api/performance', { cache: 'no-store' });
+      const search = orderAttributionSearchParams(nextFilters);
+      const response = await fetch(publicView ? '/api/paper-performance' : `/api/performance${search.size ? `?${search}` : ''}`, { cache: 'no-store' });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error || 'Unable to load history');
-      setData(body);
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to load history'); }
-    finally { setLoading(false); }
+      if (requestId === requestSequence.current) setData(body);
+    } catch (reason) {
+      if (requestId === requestSequence.current) setError(reason instanceof Error ? reason.message : 'Unable to load history');
+    } finally { if (requestId === requestSequence.current) setLoading(false); }
   }
+
+  function changeFilters(next: OrderAttributionFilters) { setFilters(next); void load(next); }
+  const showLive = filters.modes.length === 0 || filters.modes.includes('live');
+  const showPaper = filters.modes.length === 0 || filters.modes.includes('paper');
 
   return <Dialog onOpenChange={(open) => { if (open) void load(); }}>
     <DialogTrigger asChild><Button variant="outline" size="sm"><BarChart3/> Full track record</Button></DialogTrigger>
     <DialogContent className="max-w-4xl p-0">
       <DialogHeader className="border-b p-5 pr-12"><DialogTitle>Positive-edge performance</DialogTitle><DialogDescription>{publicView ? 'Immutable qualifying calculations and the simulated paper track, grouped without excluding losses or pending outcomes.' : 'Immutable qualifying calculations, grouped without excluding losses or pending outcomes.'}</DialogDescription></DialogHeader>
       <div className="p-5">
-        {loading && !data ? <div className="grid h-64 place-items-center"><Loader2 className="animate-spin text-muted-foreground"/></div> : error ? <p className="rounded-lg border border-loss/20 bg-loss/5 p-3 text-xs text-loss">{error}</p> : data && <>{publicView && (data.durable === false ? <StaleProjectionNotice/> : <PublishedStamp generatedAt={data.generatedAt}/>)}{!publicView && data.forecastStorage?.degraded && <DegradedStorageNotice storage={data.forecastStorage}/>}<SampleWarning summary={data.summary}/><CalibrationStatus summary={data.summary}/><MissedBuyPanel summary={data.summary}/><Tabs defaultValue="breakdown">
+        {loading && !data ? <div className="grid h-64 place-items-center"><Loader2 className="size-5 animate-spin text-muted-foreground"/></div> : error ? <p className="rounded-lg border border-loss/20 bg-loss/5 p-3 text-xs text-loss">{error}</p> : data && <>{publicView && (data.durable === false ? <StaleProjectionNotice/> : <PublishedStamp generatedAt={data.generatedAt}/>)}{!publicView && data.forecastStorage?.degraded && <DegradedStorageNotice storage={data.forecastStorage}/>}<SampleWarning summary={data.summary}/><CalibrationStatus summary={data.summary}/><MissedBuyPanel summary={data.summary}/>{!publicView && data.attribution && <div className="mb-4"><AttributionFilterControls filters={filters} facets={data.attribution.facets} onChange={changeFilters}/><p className="mt-1 text-[8px] text-muted-foreground">{loading ? 'Refreshing filtered trade cohort…' : `${data.attribution.matchedOrders} order rows match.`} The scope applies to Trades and Maker execution only; signal calibration, funding, sentinels, risk, and promotion state retain their complete authoritative populations.</p></div>}<Tabs defaultValue="breakdown">
           <TabsList className="h-auto w-full flex-wrap justify-start gap-0.5"><TabsTrigger value="trades">Trades</TabsTrigger>{!publicView && <><TabsTrigger value="policy-candidate">Policy candidate</TabsTrigger><TabsTrigger value="calendar">Calendar</TabsTrigger><TabsTrigger value="targets">Target integrity</TabsTrigger><TabsTrigger value="walk-forward">Walk-forward</TabsTrigger><TabsTrigger value="maker">Maker execution</TabsTrigger></>}<TabsTrigger value="breakdown">Signal quality</TabsTrigger><TabsTrigger value="benchmarks">Benchmarks</TabsTrigger><TabsTrigger value="segments">Segments</TabsTrigger><TabsTrigger value="regimes">Cycle regimes</TabsTrigger><TabsTrigger value="history">Signal history ({data.forecasts.length})</TabsTrigger></TabsList>
           <TabsContent value="trades">
             <p className="mb-3 text-[10px] leading-relaxed text-muted-foreground">{publicView ? 'Executed simulated trades only, taken from the paper order ledger. These include modelled fill prices and venue fees, so they answer what the shadow bankroll did — not how good the forecast looked.' : 'Executed trades only, taken from the order ledger, with paper and live kept completely separate. These include real fill prices and venue fees, so they answer what the money did — not how good the forecast looked.'}</p>
             <div className="space-y-3">
               {/* The public endpoint already omits live data, but the render boundary enforces the same
                   rule independently so a stale or widened response can never add a live card. */}
-              {!publicView && data.liveRecord && <div><TradeRecordCard record={data.liveRecord}/><ProviderRecordRows records={data.liveProviderRecords ?? []} label="Live"/></div>}
+              {!publicView && showLive && data.liveRecord && <div><TradeRecordCard record={data.liveRecord}/><AttributionRecordRows records={data.liveAttributionRecords ?? []} label="Live"/></div>}
               <FundingHistory live={publicView ? [] : data.liveEpochs ?? []} paper={data.paperEpochs ?? []}/>
-              {data.paperRecord && <div><TradeRecordCard record={data.paperRecord}/><ProviderRecordRows records={data.paperProviderRecords ?? []} label="Paper"/></div>}
+              {showPaper && data.paperRecord && <div><TradeRecordCard record={data.paperRecord}/><AttributionRecordRows records={data.paperAttributionRecords ?? []} label="Paper"/></div>}
             </div>
           </TabsContent>
           <TabsContent value="breakdown">

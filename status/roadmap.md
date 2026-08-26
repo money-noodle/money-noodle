@@ -61,7 +61,6 @@ No layer may gain order, budget, reconciliation, or automatic-promotion authorit
 - Implement the accepted read/paper-first hourly threshold market only through its registry, contract-provenance,
   settlement, budget, and target-integrity gates. Live capability remains a separate promotion. See
   [`second-market-hourly-crypto-design.md`](../docs/second-market-hourly-crypto-design.md).
-- Improve provider/variant/market/policy visibility and durable policy lineage before adding another live adapter.
 - Verify the first organic live switch end to end without forcing one: reduce-only action, venue fills and fees,
   remaining quantity, reservation release, replacement withholding, and switch-versus-hold accounting.
 - Continue prospective strict-value/profit-reversal and maker queue/depth evidence without reinterpreting historical
@@ -85,6 +84,6 @@ No layer may gain order, budget, reconciliation, or automatic-promotion authorit
 
 ## Closed workstreams
 
-The bounded taker pilot and long-shot round trip are complete and retired. Their code or traffic must not be revived
+Provider/policy attribution visibility is complete; durable policy lineage remains separate structural work. The bounded taker pilot and long-shot round trip are complete and retired. Their code or traffic must not be revived
 through roadmap wording. Historical implementation and evidence remain in the status archives, design index, policy
 history, and dated reports.

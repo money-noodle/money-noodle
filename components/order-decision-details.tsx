@@ -2,6 +2,7 @@
 
 import { ChevronDown } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { orderAttribution } from '@/lib/order-attribution';
 import type { PaperOrder } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
@@ -11,6 +12,7 @@ const cents = (value: number) => `${value.toFixed(2)}¢`;
 
 export function OrderDecisionDetails({ order, defaultOpen = false }: { order: PaperOrder; defaultOpen?: boolean }) {
   const snapshot = order.entryDecision;
+  const attribution = orderAttribution(order);
   const selectedProbability = snapshot?.selectedSideProbability ?? (order.side === 'UP' ? order.modelProbabilityUp : 1 - order.modelProbabilityUp);
   const feeRate = snapshot?.feeRate ?? ((order.actualFeeCents ?? order.feeCents) / Math.max(1, order.potentialPayoutCents));
   const decisionAsk = snapshot?.actionableAsk ?? order.askPrice;
@@ -42,7 +44,9 @@ export function OrderDecisionDetails({ order, defaultOpen = false }: { order: Pa
 
       <div className="rounded-md border p-2">
         <div className="flex flex-wrap items-center justify-between gap-1"><p className="text-[8px] uppercase tracking-wider text-muted-foreground">Decision identity</p><span className="font-mono text-[8px] text-muted-foreground">{snapshot?.version ?? 'legacy reconstruction'}</span></div>
-        <p className="mt-1 break-all font-mono text-[8px] text-muted-foreground">{snapshot?.policyVersion ?? 'Policy version was not persisted'} · calculated {new Date(snapshot?.calculationAt ?? order.calculationAt).toLocaleString()}</p>
+        <p className="mt-1 break-all font-mono text-[8px] text-muted-foreground">{attribution.providerId} · {attribution.providerVariantId} · {attribution.marketId}</p>
+        <p className="mt-1 break-all font-mono text-[8px] text-muted-foreground">forecast {attribution.forecastModelVersion} · buy {attribution.buyPolicyVersion} · execution {attribution.executionPolicyVersion}</p>
+        <p className="mt-1 break-all font-mono text-[8px] text-muted-foreground">calculated {new Date(snapshot?.calculationAt ?? order.calculationAt).toLocaleString()}</p>
         {snapshot && <p className="mt-1 font-mono text-[8px] text-muted-foreground">P(UP) {percent(snapshot.probabilityUp)} · P(DOWN) {percent(snapshot.probabilityDown)} · {snapshot.secondsRemaining.toFixed(0)}s remaining</p>}
       </div>
 

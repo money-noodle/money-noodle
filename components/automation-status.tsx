@@ -1,6 +1,8 @@
 'use client';
 
+import { useState } from 'react';
 import { AlertTriangle, ChevronDown, FlaskConical, Pause, Radio, ShieldAlert } from 'lucide-react';
+import { AttributionFilterControls } from '@/components/attribution-filter-controls';
 import { OrderDecisionDetails } from '@/components/order-decision-details';
 import { TradeHistoryDialog } from '@/components/trade-history-dialog';
 import { Badge } from '@/components/ui/badge';
@@ -8,6 +10,10 @@ import { usePublicPaperBudget } from '@/components/use-public-paper';
 import { DATA_FRESHNESS } from '@/lib/freshness';
 import { fundingOpenedLabel, fundingScopeLine, fundingScopeTitle } from '@/lib/funding-label';
 import { latestOpenOrderVenueQuote } from '@/lib/open-order-quote';
+import {
+  buildOrderAttributionFacets, EMPTY_ORDER_ATTRIBUTION_FILTERS, orderAttribution,
+  orderMatchesAttribution, type OrderAttributionFilters,
+} from '@/lib/order-attribution';
 import type {
   ExecutionSummary, PaperOrder, PaperOrderStatus, PublicPaperExecutionRecord,
   PublicPaperPerformanceSummary, TradingControlData,
@@ -101,6 +107,7 @@ function TrackPanel({ track, title, subtitle, equityLabel }: { track: TrackFigur
 }
 
 function OpenOrderRow({ order }: { order: PaperOrder }) {
+  const attribution = orderAttribution(order);
   const ownedProbability = order.latestOwnedSideProbability ?? (order.side === 'UP' ? order.modelProbabilityUp : 1 - order.modelProbabilityUp);
   const exactStake = order.actualStakeCents ?? order.stakeCents;
   const entryProbability = order.entryDecision?.selectedSideProbability ?? (order.side === 'UP' ? order.modelProbabilityUp : 1 - order.modelProbabilityUp);
@@ -120,7 +127,7 @@ function OpenOrderRow({ order }: { order: PaperOrder }) {
       <div className="flex items-center gap-1.5">
         <Badge variant="outline" className={cn('h-4 px-1.5 font-mono text-[8px]', order.executionMode === 'live' ? 'border-live/30 text-live' : 'border-primary/25 text-primary')}>{order.executionMode}</Badge>
         <span className="text-[10px] font-semibold">{order.symbol} {order.side}</span>
-        <span className="font-mono text-[8px] uppercase text-muted-foreground">{order.venue}</span>
+        <span className="font-mono text-[8px] uppercase text-muted-foreground">{attribution.providerId}</span>
       </div>
       <Badge variant="outline" className={cn('h-4 px-1.5 font-mono text-[8px]', state.includes('pending') || state === 'uncertain' ? 'border-warn/30 text-warn' : 'text-muted-foreground')}>{state}</Badge>
     </div>
@@ -136,7 +143,7 @@ function OpenOrderRow({ order }: { order: PaperOrder }) {
     {venueQuote
       ? <div className={cn('mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 rounded border px-2 py-1 font-mono text-[9px]', venueQuoteStale ? 'border-warn/20 bg-warn/[.03]' : 'border-data/20 bg-data/[.03]')} title={`Latest owned-side ${order.venue} quote captured by the ${venueQuote.source === 'position' ? 'open-position' : 'order-management'} cycle at ${new Date(venueQuote.observedAt).toLocaleString()}.`}><span className={cn('size-1.5 rounded-full', venueQuoteStale ? 'bg-warn' : 'bg-data')}/><span className="text-muted-foreground">{venueQuoteStale ? 'venue quote' : 'venue now'}</span><strong className="font-medium text-foreground">{(venueQuote.bid * 100).toFixed(1)}¢ bid</strong><span className="text-muted-foreground">{(venueQuote.ask * 100).toFixed(1)}¢ ask</span><span className={cn('ml-auto text-[8px]', venueQuoteStale ? 'text-warn' : 'text-muted-foreground')}>{venueQuoteAgeSeconds}s ago</span></div>
       : <div className="mt-1.5 rounded border border-dashed px-2 py-1 font-mono text-[8px] text-muted-foreground">Venue quote awaiting the first execution/open-position observation.</div>}
-    <p className="mt-1 truncate font-mono text-[8px] text-muted-foreground" title={order.contractId}>{order.contractId}</p>
+    <p className="mt-1 truncate font-mono text-[8px] text-muted-foreground" title={`${attribution.providerVariantId} · ${attribution.marketId} · ${order.contractId}`}>{attribution.providerVariantId} · {attribution.marketId} · {order.contractId}</p>
     {order.entryExecutionDecision && <p className="mt-1 text-[8px] text-muted-foreground">Execution: <span className="uppercase text-foreground">{order.entryExecutionDecision.executedStyle}</span>{order.entryExecutionDecision.recommendedStyle !== order.entryExecutionDecision.executedStyle ? ` · shadow recommends ${order.entryExecutionDecision.recommendedStyle}` : ''}</p>}
     {order.profitLockArmedAt && <p className="mt-1 text-[8px] text-warn">75% profit lock armed · high water {order.peakNetProfitPercent === undefined ? '—' : `+${(order.peakNetProfitPercent * 100).toFixed(1)}%`}</p>}
     <OrderDecisionDetails order={order}/>
@@ -144,9 +151,13 @@ function OpenOrderRow({ order }: { order: PaperOrder }) {
 }
 
 function OpenOrdersPanel({ live, paper }: { live?: ExecutionSummary; paper?: ExecutionSummary }) {
+  const [filters, setFilters] = useState<OrderAttributionFilters>({ ...EMPTY_ORDER_ATTRIBUTION_FILTERS });
   const openStatuses = new Set(['pending_reservation', 'uncertain', 'open']);
-  const liveOrders = (live?.recentOrders ?? []).filter((order) => openStatuses.has(order.status));
-  const paperOrders = (paper?.recentOrders ?? []).filter((order) => openStatuses.has(order.status));
+  const population = [...(live?.recentOrders ?? []), ...(paper?.recentOrders ?? [])]
+    .filter((order) => openStatuses.has(order.status));
+  const facets = buildOrderAttributionFacets(population);
+  const liveOrders = population.filter((order) => order.executionMode === 'live' && orderMatchesAttribution(order, filters));
+  const paperOrders = population.filter((order) => order.executionMode === 'paper' && orderMatchesAttribution(order, filters));
   const total = liveOrders.length + paperOrders.length;
   return <details className="group border-t">
     <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-2.5 marker:content-none hover:bg-secondary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">
@@ -158,6 +169,7 @@ function OpenOrdersPanel({ live, paper }: { live?: ExecutionSummary; paper?: Exe
       <ChevronDown className="size-3.5 text-muted-foreground transition-transform group-open:rotate-180"/>
     </summary>
     <div className="space-y-3 border-t bg-background/20 p-3">
+      {!!population.length && <AttributionFilterControls filters={filters} facets={facets} onChange={setFilters} compact/>}
       {!total && <p className="py-2 text-center text-[9px] text-muted-foreground">No open positions or unresolved order intents.</p>}
       {!!liveOrders.length && <div><p className="mb-1.5 text-[8px] font-semibold uppercase tracking-wider text-live">Live · real money</p><div className="grid gap-2 lg:grid-cols-2">{liveOrders.map((order) => <OpenOrderRow key={order.id} order={order}/>)}</div></div>}
       {!!paperOrders.length && <div><p className="mb-1.5 text-[8px] font-semibold uppercase tracking-wider text-primary">Paper · simulated shadow</p><div className="grid gap-2 lg:grid-cols-2">{paperOrders.map((order) => <OpenOrderRow key={order.id} order={order}/>)}</div></div>}

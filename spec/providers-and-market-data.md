@@ -36,7 +36,7 @@ Each provider exposes one or more immutable, versioned **provider/model variants
 
 Provider variants **must not blend provider prices into tradeable probability or confidence**. Prices remain benchmark and execution-cost inputs. A genuinely different forecast formula is a separate forecast-model variant and follows immutable evaluation/manual-promotion rules.
 
-All provider variants run in isolated paper tracks from the same issuance stream. At most one explicitly promoted variant per provider may be live-enabled initially. Every order and evaluation row retains `providerId`, `providerVariantId`, `forecastModelVersion`, `buyPolicyVersion`, and `executionPolicyVersion`, so variants never share outcomes or P&L accidentally.
+All provider variants run in isolated paper tracks from the same issuance stream. At most one explicitly promoted variant per provider may be live-enabled initially. Every current order and evaluation row retains `providerId`, `providerVariantId`, `forecastModelVersion`, `buyPolicyVersion`, and `executionPolicyVersion`, so variants never share outcomes or P&L accidentally. Historical rows written before a field existed are not rewritten: provider may normalize from its then-equivalent venue and market from the sole then-existing market, while every non-inferable missing variant or policy identity remains explicitly `unattributed` in read models.
 
 Define a common `PredictionVenue` interface while preserving provider-specific contract semantics:
 - `listMarkets(filter)`

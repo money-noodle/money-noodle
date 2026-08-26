@@ -20,7 +20,7 @@ describe('bounded reporting read paths', () => {
     const dialog = source('components/performance-dialog.tsx');
     expect(dashboard).toContain("fetch('/api/performance/summary'");
     expect(dashboard).not.toContain("fetch('/api/performance',");
-    expect(dialog).toContain("publicView ? '/api/paper-performance' : '/api/performance'");
+    expect(dialog).toContain("publicView ? '/api/paper-performance' : `/api/performance");
     expect(dialog).toContain('if (open) void load()');
   });
 
@@ -53,9 +53,9 @@ describe('bounded reporting read paths', () => {
     expect(dialog).toContain("fetch('/api/trading/control?details=1'");
   });
 
-  it('keeps fixed order readers on compact v9 control rows', () => {
+  it('keeps fixed order readers compact while explicit attributed history hydrates on demand', () => {
     expect(source('app/api/performance/summary/route.ts')).toContain('includeArchivedEvidence: false');
-    expect(source('app/api/trading/history/route.ts')).toContain('includeArchivedEvidence: false');
+    expect(source('app/api/trading/history/route.ts')).toContain('includeArchivedEvidence: true');
     expect(source('app/api/trading/allocations/route.ts')).toContain('includeArchivedEvidence: false');
     expect(source('lib/public-paper-performance.ts')).toContain("strategyId: EDGE_BINARY_BUY, includeArchivedEvidence: false");
     expect(source('app/api/performance/route.ts')).toContain('getExecutionOrders()');

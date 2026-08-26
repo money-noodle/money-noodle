@@ -36,8 +36,9 @@ import {
   type RetainedSignal,
 } from '@/lib/signal-display-lifecycle';
 import type {
-  DashboardData, DashboardViewData, Direction, ExecutionSignalReadiness, Factor, PerformanceSummary,
+  DashboardData, DashboardViewData, Direction, ExecutionMode, ExecutionSignalReadiness, Factor, PerformanceSummary,
   Prediction, PublicPaperPerformanceSummary, TradeTrackRecord, TradeTrackSummary, TradingControlData,
+  TradingProviderId,
 } from '@/lib/types';
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
@@ -450,6 +451,14 @@ function PerformancePanel({ performance }: { performance: DashboardData['perform
   </section>;
 }
 
+function predictionHasProvider(prediction: Prediction, providerId: TradingProviderId): boolean {
+  switch (providerId) {
+    case 'polymarket': return prediction.market.live;
+    case 'kalshi': return prediction.kalshi?.live === true;
+    case 'crypto-com': case 'forecastex': case 'robinhood': return false;
+  }
+}
+
 function LoadingState() {
   return <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{Array.from({ length: 7 }).map((_, index) => <Card key={index}><CardHeader><Skeleton className="h-8 w-28"/></CardHeader><CardContent><Skeleton className="h-10 w-32"/><Skeleton className="mt-6 h-16 w-full"/><Skeleton className="mt-5 h-10 w-full"/></CardContent></Card>)}</div>;
 }
@@ -487,6 +496,9 @@ export function Dashboard({ initialData, authenticated, deskAvailable, stateless
   const [error, setError] = useState('');
   const [isPending, startTransition] = useTransition();
   const [query, setQuery] = useState('');
+  const [cardModes, setCardModes] = useState<ExecutionMode[]>([]);
+  const [providerScope, setProviderScope] = useState<TradingProviderId[]>([]);
+  const [policyScope, setPolicyScope] = useState('current');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   // One owner for each read model: duplicate component polls previously doubled ledger/database work.
   const publicPaper = usePublicPaperPerformanceSummary(!deskAvailable);
@@ -523,7 +535,22 @@ export function Dashboard({ initialData, authenticated, deskAvailable, stateless
     return () => { cancelled = true; if (timer !== undefined) window.clearTimeout(timer); };
   }, [stateless]);
 
-  const predictions = useMemo(() => data?.predictions.filter((item) => `${item.symbol} ${item.name}`.toLowerCase().includes(query.toLowerCase())) ?? [], [data, query]);
+  const currentProviders = useMemo(() => data?.tradingProviders?.filter((provider) =>
+    provider.marketCapabilities.some((capability) => capability.marketId === 'crypto-15m' && capability.marketData)) ?? [], [data]);
+  const visibleCurrentProviders = useMemo(() => currentProviders.filter((provider) => cardModes.length === 0
+    || cardModes.some((mode) => mode === 'live' ? provider.liveEnabled : provider.paperEnabled)), [cardModes, currentProviders]);
+  const activeBuyPolicy = data?.policyManifest.activeBuyPolicyVersion;
+  const selectedBuyPolicy = policyScope === 'current' ? activeBuyPolicy : policyScope;
+  const currentPolicyMatches = !activeBuyPolicy || selectedBuyPolicy === activeBuyPolicy;
+  const predictions = useMemo(() => currentPolicyMatches ? data?.predictions.filter((item) =>
+    `${item.symbol} ${item.name}`.toLowerCase().includes(query.toLowerCase())
+    && (cardModes.length === 0 && providerScope.length === 0 || visibleCurrentProviders.some((provider) =>
+      (providerScope.length === 0 || providerScope.includes(provider.id)) && predictionHasProvider(item, provider.id)))) ?? [] : [],
+  [cardModes.length, currentPolicyMatches, data, providerScope, query, visibleCurrentProviders]);
+  const toggleCardMode = (mode: ExecutionMode) => setCardModes((current) =>
+    current.includes(mode) ? current.filter((item) => item !== mode) : [...current, mode]);
+  const toggleProviderScope = (providerId: TradingProviderId) => setProviderScope((current) =>
+    current.includes(providerId) ? current.filter((item) => item !== providerId) : [...current, providerId]);
 
   /**
    * Forces the live venue quotes and the oracle reference only. CoinGecko and news keep their TTLs:
@@ -572,8 +599,10 @@ export function Dashboard({ initialData, authenticated, deskAvailable, stateless
         </div>
       </section>
 
+      {authenticated && currentProviders.length > 0 && <section className="mb-5 rounded-lg border bg-card/45 p-3"><div className="flex flex-wrap items-center gap-1.5"><span className="mr-1 text-[8px] font-medium uppercase tracking-wider text-muted-foreground">Current card scope</span>{(['live', 'paper'] as const).map((mode) => <button type="button" key={mode} onClick={() => toggleCardMode(mode)} className={cn('rounded border px-2 py-1 font-mono text-[8px]', cardModes.length === 0 || cardModes.includes(mode) ? mode === 'live' ? 'border-live/30 text-live' : 'border-primary/25 text-primary' : 'text-muted-foreground opacity-55')}>{mode}</button>)}{currentProviders.map((provider) => <button type="button" key={provider.id} onClick={() => toggleProviderScope(provider.id)} className={cn('rounded border px-2 py-1 font-mono text-[8px]', (providerScope.length === 0 || providerScope.includes(provider.id)) && visibleCurrentProviders.some((item) => item.id === provider.id) ? 'border-data/25 text-data' : 'text-muted-foreground opacity-55')} title={`${provider.name} · ${provider.selectedVariantId}`}>{provider.id} · {provider.selectedVariantId}</button>)}{providerScope.length > 0 && <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[8px]" onClick={() => setProviderScope([])}>All providers</Button>}<label className="ml-1 text-[8px] uppercase text-muted-foreground">Policy</label><select value={policyScope} onChange={(event) => setPolicyScope(event.target.value)} className="h-6 max-w-72 rounded border bg-background px-1.5 font-mono text-[8px]"><option value="current">Current · {activeBuyPolicy}</option>{data?.policyManifest.history.filter((entry) => entry.version !== activeBuyPolicy).map((entry) => <option key={entry.version} value={entry.version}>{entry.version}</option>)}</select></div><p className="mt-1.5 text-[8px] text-muted-foreground">View only: narrows current signal and market cards. Forecast probability, production ranking, execution readiness, and orders remain unchanged.</p></section>}
+
       {deskAvailable ? <AutomationStatus data={tradingControl}/> : <PublicAutomationStatus deskElsewhere={authenticated} performance={publicPaper.performance} performanceError={publicPaper.error}/>}
-      {data && <PositiveEdgeBuys predictions={data.predictions} updatedAt={data.generatedAt} publicView={!deskAvailable} executionSignals={tradingControl?.executionSignals} executionSignalsLoaded={Boolean(tradingControl)} onRefresh={refresh} refreshing={isPending}/>}
+      {data && <PositiveEdgeBuys predictions={predictions} updatedAt={data.generatedAt} publicView={!deskAvailable} executionSignals={tradingControl?.executionSignals} executionSignalsLoaded={Boolean(tradingControl)} onRefresh={refresh} refreshing={isPending}/>}
       {authenticated && deskAvailable
         ? data?.performance && <PerformancePanel performance={data.performance}/>
         : <PublicPaperPerformancePanel performance={publicPaper.performance} error={publicPaper.error}/>}
@@ -584,7 +613,7 @@ export function Dashboard({ initialData, authenticated, deskAvailable, stateless
           <div className="flex items-center gap-4 text-[10px] text-muted-foreground"><span className="flex items-center gap-1"><Clock3 className="size-3"/>{data ? `Updated ${new Date(data.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Loading'}</span><span className="hidden items-center gap-1 sm:flex"><ShieldCheck className="size-3"/>Sorted by buy strength</span></div>
         </div>
         {error && <div className="mb-4 flex items-center gap-2 rounded-lg border border-loss/20 bg-loss/5 p-3 text-xs text-loss"><Info className="size-4"/>{error}</div>}
-        {!data && !error ? <LoadingState/> : predictions.length ? <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{predictions.map((prediction) => <PredictionCard key={prediction.symbol} prediction={prediction} news={data?.news ?? []}/>)}</div> : <Card className="grid min-h-52 place-items-center text-sm text-muted-foreground">No matching markets.</Card>}
+        {!data && !error ? <LoadingState/> : predictions.length ? <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{predictions.map((prediction) => <PredictionCard key={prediction.symbol} prediction={prediction} news={data?.news ?? []}/>)}</div> : <Card className="grid min-h-52 place-items-center p-6 text-center text-sm text-muted-foreground">{!currentPolicyMatches ? <span>No current cards use {selectedBuyPolicy}. Historical policy cohorts remain in decision history and performance.</span> : 'No matching markets.'}</Card>}
       </section>
 
       <section className="mt-8 grid gap-3 md:grid-cols-3">

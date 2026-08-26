@@ -1,41 +1,52 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { History, Loader2 } from 'lucide-react';
+import { AttributionFilterControls } from '@/components/attribution-filter-controls';
 import { OrderDecisionDetails } from '@/components/order-decision-details';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import {
+  EMPTY_ORDER_ATTRIBUTION_FILTERS, orderAttribution, orderAttributionSearchParams,
+  type OrderAttributionFacets, type OrderAttributionFilters,
+} from '@/lib/order-attribution';
 import { tradeHistoryPnlDisplay } from '@/lib/trade-history-pnl';
 import type { PaperOrder } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
-interface HistoryResponse { orders: PaperOrder[]; total: number; offset: number; limit: number; hasMore: boolean }
+interface HistoryResponse {
+  orders: PaperOrder[]; total: number; offset: number; limit: number; hasMore: boolean;
+  attribution: { filters: OrderAttributionFilters; facets: OrderAttributionFacets };
+}
 
 export function TradeHistoryDialog({ triggerLabel = 'Trade history' }: { triggerLabel?: string }) {
   const [data, setData] = useState<HistoryResponse | null>(null);
-  const [mode, setMode] = useState('all');
+  const [filters, setFilters] = useState<OrderAttributionFilters>({ ...EMPTY_ORDER_ATTRIBUTION_FILTERS });
   const [state, setState] = useState('all');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const requestSequence = useRef(0);
 
-  async function load(options: { append?: boolean; nextMode?: string; nextState?: string } = {}) {
-    const selectedMode = options.nextMode ?? mode, selectedState = options.nextState ?? state;
+  async function load(options: { append?: boolean; nextFilters?: OrderAttributionFilters; nextState?: string } = {}) {
+    const selectedFilters = options.nextFilters ?? filters, selectedState = options.nextState ?? state;
     const offset = options.append ? data?.orders.length ?? 0 : 0;
+    const requestId = ++requestSequence.current;
     setLoading(true); setError('');
     try {
-      const query = new URLSearchParams({ limit: '50', offset: String(offset) });
-      if (selectedMode !== 'all') query.set('mode', selectedMode);
+      const query = orderAttributionSearchParams(selectedFilters);
+      query.set('limit', '50'); query.set('offset', String(offset));
       if (selectedState !== 'all') query.set('state', selectedState);
       const response = await fetch(`/api/trading/history?${query}`, { cache: 'no-store' });
       const body = await response.json() as HistoryResponse & { error?: string };
       if (!response.ok) throw new Error(body.error || 'Unable to load decision history');
-      setData(options.append && data ? { ...body, orders: [...data.orders, ...body.orders] } : body);
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to load decision history'); }
-    finally { setLoading(false); }
+      if (requestId === requestSequence.current) setData(options.append && data ? { ...body, orders: [...data.orders, ...body.orders] } : body);
+    } catch (reason) {
+      if (requestId === requestSequence.current) setError(reason instanceof Error ? reason.message : 'Unable to load decision history');
+    } finally { if (requestId === requestSequence.current) setLoading(false); }
   }
 
-  function changeMode(value: string) { setMode(value); void load({ nextMode: value }); }
+  function changeFilters(value: OrderAttributionFilters) { setFilters(value); void load({ nextFilters: value }); }
   function changeState(value: string) { setState(value); void load({ nextState: value }); }
 
   return <Dialog onOpenChange={(open) => { if (open) void load(); }}>
@@ -43,12 +54,13 @@ export function TradeHistoryDialog({ triggerLabel = 'Trade history' }: { trigger
     <DialogContent className="max-w-5xl p-0">
       <DialogHeader className="border-b p-5 pr-12"><DialogTitle className="flex items-center gap-2"><History className="size-4 text-primary"/>Trade decision history</DialogTitle><DialogDescription>Issuance-time probability, edge, basis, factors, persistence, execution choice, and eventual trade result remain attached to the same durable order.</DialogDescription></DialogHeader>
       <div className="flex max-h-[82vh] flex-col">
-        <div className="flex flex-wrap items-center gap-2 border-b p-3">
-          <label className="text-[8px] uppercase text-muted-foreground">Track</label>
-          <select value={mode} onChange={(event) => changeMode(event.target.value)} className="h-7 rounded-md border bg-background px-2 text-[9px]"><option value="all">All</option><option value="live">Live</option><option value="paper">Paper</option></select>
-          <label className="ml-2 text-[8px] uppercase text-muted-foreground">Result</label>
-          <select value={state} onChange={(event) => changeState(event.target.value)} className="h-7 rounded-md border bg-background px-2 text-[9px]"><option value="all">All</option><option value="open">Open</option><option value="settled">Settled</option><option value="unfilled">Unfilled/rejected</option></select>
-          <span className="ml-auto font-mono text-[9px] text-muted-foreground">{data ? `${data.orders.length}/${data.total}` : '—'} orders</span>
+        <div className="space-y-2 border-b p-3">
+          {data && <AttributionFilterControls filters={filters} facets={data.attribution.facets} onChange={changeFilters} compact/>}
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="text-[8px] uppercase text-muted-foreground">Result</label>
+            <select value={state} onChange={(event) => changeState(event.target.value)} className="h-7 rounded-md border bg-background px-2 text-[9px]"><option value="all">All</option><option value="open">Open</option><option value="settled">Settled</option><option value="unfilled">Unfilled/rejected</option></select>
+            <span className="ml-auto font-mono text-[9px] text-muted-foreground">{data ? `${data.orders.length}/${data.total}` : '—'} orders</span>
+          </div>
         </div>
         <div className="overflow-y-auto p-3">
           {error && <div className="mb-3 rounded-md border border-loss/20 bg-loss/5 p-3 text-[10px] text-loss">{error}</div>}
@@ -63,13 +75,14 @@ export function TradeHistoryDialog({ triggerLabel = 'Trade history' }: { trigger
 }
 
 function HistoryOrder({ order }: { order: PaperOrder }) {
+  const attribution = orderAttribution(order);
   const selectedProbability = order.entryDecision?.selectedSideProbability ?? (order.side === 'UP' ? order.modelProbabilityUp : 1 - order.modelProbabilityUp);
   const feeRate = order.entryDecision?.feeRate ?? ((order.actualFeeCents ?? order.feeCents) / Math.max(1, order.potentialPayoutCents));
   const edge = order.entryDecision?.netEdge ?? selectedProbability - (order.issuanceAskPrice ?? order.askPrice) - feeRate;
   const { pnl, label: pnlLabel } = tradeHistoryPnlDisplay(order);
   return <div className="rounded-lg border p-3">
     <div className="flex flex-wrap items-start justify-between gap-2">
-      <div><div className="flex flex-wrap items-center gap-1.5"><span className="text-[11px] font-semibold">{order.symbol} {order.side}</span><Badge variant="outline" className={order.executionMode === 'live' ? 'border-live/30 text-live' : 'border-primary/25 text-primary'}>{order.executionMode}</Badge><Badge variant="outline">{order.status.replaceAll('_', ' ')}</Badge>{order.liquidityRole && <Badge variant="outline">{order.liquidityRole}</Badge>}</div><p className="mt-1 font-mono text-[8px] text-muted-foreground">{new Date(order.createdAt).toLocaleString()} · closes {new Date(order.closesAt).toLocaleString()} · {order.contractId}</p></div>
+      <div><div className="flex flex-wrap items-center gap-1.5"><span className="text-[11px] font-semibold">{order.symbol} {order.side}</span><Badge variant="outline" className={order.executionMode === 'live' ? 'border-live/30 text-live' : 'border-primary/25 text-primary'}>{order.executionMode}</Badge><Badge variant="outline">{attribution.providerId}</Badge><Badge variant="outline">{order.status.replaceAll('_', ' ')}</Badge>{order.liquidityRole && <Badge variant="outline">{order.liquidityRole}</Badge>}</div><p className="mt-1 font-mono text-[8px] text-muted-foreground">{attribution.providerVariantId} · {attribution.marketId}</p><p className="mt-1 font-mono text-[8px] text-muted-foreground">{new Date(order.createdAt).toLocaleString()} · closes {new Date(order.closesAt).toLocaleString()} · {order.contractId}</p></div>
       <div className="text-right"><p className="font-mono text-[10px]">P({order.side}) {(selectedProbability * 100).toFixed(1)}% · edge {edge >= 0 ? '+' : ''}{(edge * 100).toFixed(1)}pp</p><p className={cn('font-mono text-[10px]', (pnl ?? 0) > 0 ? 'text-gain' : (pnl ?? 0) < 0 ? 'text-loss' : 'text-muted-foreground')}>{pnlLabel}</p></div>
     </div>
     <OrderDecisionDetails order={order}/>

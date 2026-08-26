@@ -2,6 +2,7 @@ import { ACTION_COUNTERFACTUAL_VERSION, buildActionCounterfactuals, clusterByWin
 import { buildExecutionMirrorPairReport } from './execution-mirror-pair';
 import { entryDecisionNetEdge, makerExecutionStyle } from './execution-order-evidence';
 import { normalizeMarketId } from './market-registry';
+import { orderAttribution, type AttributedTradeRecord } from './order-attribution';
 import { EDGE_BINARY_BUY, normalizeStrategyId } from './strategy-registry';
 import { BUY_POLICY_VERSION } from './prediction-policy';
 import type { ExecutionMode, MakerExecutionSegment, MakerFillReport, MarketId, PaperOrder, ProviderTradeRecord, SegmentGroup, SegmentStat, StrategyId, TrackedForecast, TradeTrackRecord, TradeTrackSummary, TradingProviderId } from './types';
@@ -357,6 +358,25 @@ export function buildProviderTradeRecords(orders: PaperOrder[], mode: ExecutionM
   return [...groups.values()]
     .map((group) => ({ providerId: group.providerId, marketId: group.marketId, record: buildTradeRecord(group.orders, mode, strategyId) }))
     .sort((a, b) => b.record.settled - a.record.settled || a.providerId.localeCompare(b.providerId));
+}
+
+/** Full issuance generations; unlike provider-only rows these never blend variants or policy versions. */
+export function buildAttributedTradeRecords(
+  orders: PaperOrder[], mode: ExecutionMode, strategyId: StrategyId = EDGE_BINARY_BUY,
+): AttributedTradeRecord[] {
+  const groups = new Map<string, { attribution: ReturnType<typeof orderAttribution>; orders: PaperOrder[] }>();
+  for (const order of strategyOrders(orders, strategyId).filter((item) => item.executionMode === mode)) {
+    const attribution = orderAttribution(order);
+    const key = JSON.stringify(attribution);
+    const group = groups.get(key) ?? { attribution, orders: [] };
+    group.orders.push(order);
+    groups.set(key, group);
+  }
+  return [...groups.values()].map((group) => ({
+    attribution: group.attribution, record: buildTradeRecord(group.orders, mode, strategyId),
+  })).sort((a, b) => b.record.settled - a.record.settled
+    || a.attribution.providerId.localeCompare(b.attribution.providerId)
+    || a.attribution.executionPolicyVersion.localeCompare(b.attribution.executionPolicyVersion));
 }
 
 /** Bounded dashboard figures without constructing segments or action counterfactuals. */
