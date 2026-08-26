@@ -72,10 +72,14 @@ function summarize(mode: ExecutionMode) {
   const legacyComplete = resolved.filter((sentinel) => legacyPathComplete(withRecordedCycles(sentinel)));
   const closeBoundedComplete = resolved.filter(exitSentinelPathComplete);
   const legacyIncomplete = resolved.filter((sentinel) => !legacyPathComplete(withRecordedCycles(sentinel)));
+  const closeBoundedIncomplete = resolved.filter((sentinel) => !exitSentinelPathComplete(sentinel));
   const allCycles = resolved.flatMap((sentinel) => withRecordedCycles(sentinel).evaluationCycles
     .map((cycle) => ({ sentinel, cycle })));
   const postClose = allCycles.filter(({ sentinel, cycle }) => Date.parse(cycle.at) >= Date.parse(sentinel.closesAt));
   const preClose = allCycles.filter(({ sentinel, cycle }) => isExitEvaluationOpportunity(sentinel, cycle.at));
+  const preCloseUnavailable = preClose.filter(({ cycle }) => cycle.classification === 'unavailable');
+  const secondsBeforeClose = preCloseUnavailable.map(({ sentinel, cycle }) =>
+    (Date.parse(sentinel.closesAt) - Date.parse(cycle.at)) / 1_000);
   return {
     positions: positions.length,
     resolvedPositions: resolved.length,
@@ -85,7 +89,14 @@ function summarize(mode: ExecutionMode) {
       total: allCycles.length,
       preClose: preClose.length,
       preCloseObserved: preClose.filter(({ cycle }) => cycle.classification === 'observed').length,
-      preCloseUnavailable: preClose.filter(({ cycle }) => cycle.classification === 'unavailable').length,
+      preCloseUnavailable: preCloseUnavailable.length,
+      preCloseUnavailableBySecondsBeforeClose: {
+        atMost15: secondsBeforeClose.filter((seconds) => seconds <= 15).length,
+        over15To30: secondsBeforeClose.filter((seconds) => seconds > 15 && seconds <= 30).length,
+        over30To60: secondsBeforeClose.filter((seconds) => seconds > 30 && seconds <= 60).length,
+        over60To90: secondsBeforeClose.filter((seconds) => seconds > 60 && seconds <= 90).length,
+        over90: secondsBeforeClose.filter((seconds) => seconds > 90).length,
+      },
       postClose: postClose.length,
       postCloseObserved: postClose.filter(({ cycle }) => cycle.classification === 'observed').length,
       postCloseUnavailable: postClose.filter(({ cycle }) => cycle.classification === 'unavailable').length,
@@ -94,6 +105,21 @@ function summarize(mode: ExecutionMode) {
       completePositions: closeBoundedComplete.length,
       coverage: resolved.length ? closeBoundedComplete.length / resolved.length : 0,
       authority: 'official v2 reporting semantics approved 2026-08-25',
+    },
+    resolvedOutcomes: {
+      wins: resolved.filter((sentinel) => sentinel.outcome === sentinel.side).length,
+      losses: resolved.filter((sentinel) => sentinel.outcome && sentinel.outcome !== sentinel.side).length,
+    },
+    closeBoundedCompleteOutcomes: {
+      wins: closeBoundedComplete.filter((sentinel) => sentinel.outcome === sentinel.side).length,
+      losses: closeBoundedComplete.filter((sentinel) => sentinel.outcome && sentinel.outcome !== sentinel.side).length,
+    },
+    closeBoundedIncompleteOutcomes: {
+      positions: closeBoundedIncomplete.length,
+      wins: closeBoundedIncomplete.filter((sentinel) => sentinel.outcome === sentinel.side).length,
+      losses: closeBoundedIncomplete.filter((sentinel) => sentinel.outcome && sentinel.outcome !== sentinel.side).length,
+      zeroEligibleCycles: closeBoundedIncomplete.filter((sentinel) => precloseCycles(sentinel).length === 0).length,
+      missingPaperTriggerBook: closeBoundedIncomplete.filter((sentinel) => triggerMissingPaperBook(sentinel).length > 0).length,
     },
     legacyIncompletePositions: legacyIncomplete.map((currentSentinel) => {
       const sentinel = withRecordedCycles(currentSentinel);
@@ -109,6 +135,8 @@ function summarize(mode: ExecutionMode) {
         recordedAt: sentinel.recordedAt,
         resolvedAt: sentinel.resolvedAt,
         productionStatus: sentinel.production.status,
+        outcome: sentinel.outcome,
+        economicOutcome: sentinel.outcome === sentinel.side ? 'win' : 'loss',
         preCloseCycles: preClose.length,
         preCloseObserved,
         preCloseCoverage: preClose.length ? preCloseObserved / preClose.length : 0,

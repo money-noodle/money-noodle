@@ -6,9 +6,9 @@
 > **Operational-state warning:** this document records dated snapshots; it is not a live interlock or the
 > authority for whether funded execution is running. Before any operational action, read the authenticated
 > Automation surface and `data/trading-control.json`. At the latest operational snapshot, the control record
-> updated at 2026-08-25T16:47:50Z was active / `live`, revision 6,755, with 1,760¢ available, 29¢
-> reserved for one open position, and operator intent active. Startup reconciliation completed READY at
-> 2026-08-25T16:47:50.436Z with no blocker. The adaptive gate was open and allowed entries. The maintainer
+> updated at 2026-08-26T01:15:08Z was active / `live`, revision 7,026, with 1,525¢ available, zero
+> reserved, and operator intent active. Periodic reconciliation completed READY at
+> 2026-08-26T01:15:08.438Z with no blocker. The adaptive gate was open and allowed entries. The maintainer
 > explicitly chose continued funded collection rather than Pause while the written economic gates mature. That
 > state may change after publication.
 
@@ -99,6 +99,35 @@ Four fixed reviews now record the active collection posture without changing pro
 - [`reports/live-paper-economic-monitor-2026-08-25.md`](reports/live-paper-economic-monitor-2026-08-25.md): the fixed day ending 14:30Z found 47 live fills across 34 windows and −259.466¢ exact P&L on one attribution route, versus 52 paper fills across 42 windows and −258.308¢. The complete ask-priced signal surface remained positive while fills were negative, preserving implementation selection and exits as leads rather than promoting a retrospective filter.
 
 The maker restrictions remain locked: live spread has only 13/20 divergent windows and weak paper support; spike has ten live divergences and is negative in paper. Exit v2's later approved accounting repair now reports 48/50 complete live positions across 36 windows and 47/52 complete paper positions across 39 windows. Coverage passes 90%, but every arm remains below the separate 60-window and 20-divergence gates and `reviewUnlocked` remains false. Stake expansion is explicitly ineligible because current-epoch clustered return was −7.9% ±8.7pp over 189 windows, peak drawdown was 26.6%, and lifetime exact P&L was negative. These observations authorize continued frozen collection and fixed-UTC review, not tuning.
+
+### Remaining exit-v2 gaps are outcome-selected zero-bid states, 2026-08-26
+
+[`reports/exit-sentinel-preclose-availability-diagnosis-2026-08-26.md`](reports/exit-sentinel-preclose-availability-diagnosis-2026-08-26.md)
+replays 9,240 v2 events across 150 sentinels. Official close-bounded coverage was 71/78 live (91.03%) and
+62/72 paper (86.11%). Aggregate cycle observation remained above 97%, but 52/57 live and 48/50 paper pre-close
+unavailable cycles occurred within 90 seconds of close. Durable forecast rows show representative losing sides
+converging from a 0.1–0.2¢ bid to a fresh one-sided market with zero owned-side bid. `exitObservationTerms`
+correctly refuses zero liquidation value, but v2 then conflates known non-executability with missing evidence.
+
+The selection is load-bearing: every position made incomplete by cycle coverage was a loss (six live, nine paper).
+The only two incomplete winners were separately explained by after-close enrolment and missing paper trigger-depth
+evidence. Candidate economics over complete paths are therefore not promotion-grade even if raw counts reach 60;
+every `reviewUnlocked` remains false. Historical generic unavailable events cannot be relabelled safely because
+they retain no rejected quote or reason. The evaluated option is a fresh prospective v3 event distinguishing
+`observed_executable`, `observed_non_executable`, and genuine `unavailable`; it requires maintainer approval and a
+written design before implementation.
+
+The same read found 190 public exact-market Kalshi 429 messages across seven contracts in one 20:15Z window. That
+burst did not coincide with an incomplete exit position and F2 remained 100% available, so it is not assigned as
+the exit-coverage cause. It does invalidate the traffic reference's prior “solid” assessment: caller/time
+attribution and effective-burst accounting are incomplete. Long-shot live arming remained false.
+
+During this read-only review, a separate BTC maker cancellation race produced 14 periodic reconciliation failures:
+the venue's resting list named order `01a03b96-6c48-7f6e-8322-4eb6c765e3e2`, while cancel and exact lookup returned
+`not_found`. The desk correctly system-paused, retained the 30¢ reservation, and did not auto-resume while state was
+ambiguous. After the 01:15Z contract close, periodic reconciliation proved zero local/venue positions, fills,
+resting orders, and reservations; it released the reservation and system-auto-resumed at revision 7,026. No manual
+resume or ledger mutation was performed.
 
 ### Exit-v2 coverage now uses close-bounded evaluator opportunities, 2026-08-25
 
@@ -2385,10 +2414,11 @@ Interpretation: the newer exact ledger snapshot is slightly negative lifetime an
 
 1. **Continue untouched forecast Phase 2 to its 100- and 300-window gates.** The wiring review passed at 45 closed
    windows; do not rank arms from survivor counts, start Phase 3, or begin confirmed-signal collection early.
-2. **Continue close-bounded exit-v2 evidence without efficacy review.** Option A is implemented and official
-   coverage is 96.0% live / 90.38% paper at the fixed repair boundary. Keep every genuine pre-close and paper
-   trigger-depth gap, all four arms, and production `strict-value-v1` unchanged. The 60-window, 20-divergence,
-   Holm, positive-cash, and simultaneous-track gates remain mandatory; no arm is reviewable.
+2. **Decide whether to design a prospective reasoned exit-v3 cycle.** V2 now conflates a fresh zero owned-side
+   bid with missing evidence, and every cycle-coverage incomplete position was a loss. Do not reinterpret old
+   generic events or review v2 efficacy. The evaluated v3 option records executable, known non-executable, and
+   genuinely unavailable states prospectively; all four arms and production `strict-value-v1` stay unchanged.
+   Separately design caller/time attribution for the observed public 429 burst before changing traffic cadence.
 3. **Continue maker-restriction v1 without tuning.** Live spread has 13/20 divergent windows and paper support is
    weak; spike has ten live divergences and is negative in paper. Counts, raw cash, and an isolated t-statistic do
    not bypass the locked joint gate.

@@ -1,6 +1,6 @@
 # Venue Traffic, Rate Limits, and Throttle Recovery — Canonical Reference
 
-> Living reference · 2026-08-21. This is the single place that states, per venue, what traffic the
+> Living reference · 2026-08-26. This is the single place that states, per venue, what traffic the
 > system produces, the worst case, and how a throttle is recovered. Every design that adds a subject
 > (a market, an asset, a cadence, a reader) must reconcile its numbers here before landing. It cites
 > code constants (`lib/freshness.ts`, `lib/task-cadence.ts`, `lib/kalshi-rate-limit.ts`,
@@ -9,8 +9,8 @@
 
 ## 1. The load-bearing facts
 
-- **Kalshi is the only venue with purpose-built throttle machinery.** It has (a) a public-read
-  backoff/pause (`lib/kalshi-rate-limit.ts`), (b) separate signed read and signed write buckets each
+- **Kalshi is the only venue with purpose-built throttle machinery, but observed public bursts still exceed the
+  effective limit.** It has (a) a public-read backoff/pause (`lib/kalshi-rate-limit.ts`), (b) separate signed read and signed write buckets each
   with 3-attempt 429-only retry (`lib/kalshi-api.ts`), and (c) a per-ticker single-flight quote cache
   (`lib/kalshi-quote-cache.ts`) so the entry path, manager, and reports deduplicate.
 - **Polymarket, Kraken, and CoinGecko have no 429 awareness at all.** Their failures are absorbed by
@@ -112,7 +112,7 @@ How each venue recovers when it says "slow down":
 
 | Venue | Mechanism in code | Recovery behaviour | Notes / gaps |
 | --- | --- | --- | --- |
-| Kalshi public | `kalshi-rate-limit.ts` backoff | exponential 250ms→8s, jittered, `pausedUntilMs`; any success clears the pause; a cached value may be served stale | solid |
+| Kalshi public | `kalshi-rate-limit.ts` backoff | exponential 250ms→8s, jittered, `pausedUntilMs`; any success clears the pause; a cached value may be served stale | mechanism works, but a 190-response exact-market 429 burst in one 2026-08-25 window proves caller/time attribution and effective-burst accounting are incomplete |
 | Kalshi signed read/write | `kalshi-api.ts`, 3 attempts, `backoffMs` | 429-only retry; **write retries only on explicit 429** (a timeout/drop keeps the uncertain+reconcile path, because the order may exist) | correct and important |
 | Kalshi quote cache | `cachedKalshiRead` single-flight | failed load resolves `undefined`, dropped not cached, next caller retries; `allowStale` optional | solid |
 | Polymarket | none | `cached` serves previous value (stale) or throws on cold | **no 429 awareness/backoff** |
@@ -134,6 +134,10 @@ separately, because the hourly case shows they diverge.
 
 ## Change log
 
+- 2026-08-26 · Recorded the 190-response public exact-market 429 burst across seven 20:15Z contracts. The existing
+  log does not retain caller/time attribution, so dense long-shot watching is a source-based hypothesis rather than
+  a settled cause. F2 remained 100% available and no incomplete exit-v2 position belonged to that window; see
+  [`reports/exit-sentinel-preclose-availability-diagnosis-2026-08-26.md`](../reports/exit-sentinel-preclose-availability-diagnosis-2026-08-26.md).
 - 2026-08-25 · Added the prospective F2 paper timing shadow: three public reads per observed paper maker, capped
   at six intents/calculation, no retries; at most 18 reads/calculation or 1.2/s continuously saturated, with the
   inspected 160-maker day implying about 0.006/s average.
