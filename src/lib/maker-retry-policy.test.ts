@@ -18,65 +18,56 @@ afterEach(() => {
   delete process.env.MONEY_NOODLE_MAX_LIVE_MAKER_ATTEMPTS;
 });
 
-describe('requalifying adaptive entry episodes', () => {
+describe('maker then two-taker adaptive sequence', () => {
   const makerMiss = (patch: Partial<PaperOrder> = {}) => order({
-    liquidityRole: 'maker', makerCompletedAt: '2026-01-01T00:01:20Z',
+    liquidityRole: 'maker', noFillReason: 'rested_no_fill', makerCompletedAt: '2026-01-01T00:01:20Z',
     entryExecutionDecision: {
       policyVersion: ENTRY_EXECUTION_POLICY_VERSION, configuredMode: 'adaptive', executedStyle: 'maker', recommendedStyle: 'maker',
-      reason: 'maker', takerNetEdge: 0.18, medianNetEdge: 0.14, makerNetEdge: 0.2,
-      makerExpectedCapturedEdge: 0.1, takerAdvantage: 0.08, makerCohort: 'x', makerSamples: 40,
-      makerFillRate: 0.5,
-    },
+      route: 'ordinary-maker', reason: 'maker', takerNetEdge: 0.18, medianNetEdge: 0.14, makerNetEdge: 0.2,
+      makerExpectedCapturedEdge: 0.1, takerAdvantage: 0.08, makerCohort: 'x', makerSamples: 40, makerFillRate: 0.5,
+    }, ...patch,
+  });
+  const takerMiss = (patch: Partial<PaperOrder> = {}) => makerMiss({
+    id: `${logical}:episode:2`, attemptNumber: 2, createdAt: '2026-01-01T00:02:00Z',
+    liquidityRole: 'taker', noFillReason: 'ioc_no_fill',
+    entryExecutionDecision: { ...makerMiss().entryExecutionDecision!, executedStyle: 'taker', recommendedStyle: 'taker', route: 'maker-miss-taker-fallback' },
     ...patch,
   });
 
-  it('opens a new episode after an authoritative current-policy maker zero-fill', () => {
+  it('opens taker one only after authoritative maker zero-fill', () => {
     expect(adaptiveEntryEpisodeDecision([makerMiss()], ENTRY_EXECUTION_POLICY_VERSION)).toMatchObject({
-      allowed: true, attemptNumber: 2, retryOfOrderId: logical,
+      allowed: true, attemptNumber: 2, retryOfOrderId: logical, takerFallback: true,
     });
+    expect(adaptiveEntryEpisodeDecision([makerMiss({ noFillReason: 'post_only_race' })], ENTRY_EXECUTION_POLICY_VERSION).allowed).toBe(false);
   });
 
-  it('uses the simulator generation for a production-shaped paper row that also carries the shared route generation', () => {
-    const paperMiss = makerMiss({
-      executionMode: 'paper',
-      entryDecision: {
-        version: 'entry-decision-v2', providerId: 'kalshi', forecastModelVersion: 'test',
-        executionPolicyVersion: PAPER_MANAGED_MAKER_EXECUTION_VERSION, policyVersion: 'test',
-        calculationAt: '2026-01-01T00:01:00Z', side: 'UP', probabilityUp: 0.7, probabilityDown: 0.3,
-        selectedSideProbability: 0.7, confidence: 0.7,
-        confidenceBreakdown: { base: 0.3, dataQuality: 0.2, sampleQuality: 0.2, uncertaintyPenalty: 0 }, actionableAsk: 0.4,
-        actionableBid: 0.39, feeRate: 0.01, netEdge: 0.29, spread: 0.01, secondsRemaining: 840,
-        qualifyingSnapshots: 2, medianNetEdge: 0.28, factors: [],
-      },
+  it('opens one final taker only after an accepted IOC zero-fill', () => {
+    expect(adaptiveEntryEpisodeDecision([makerMiss(), takerMiss()], ENTRY_EXECUTION_POLICY_VERSION)).toMatchObject({
+      allowed: true, attemptNumber: 3, takerFallback: true,
     });
-    expect(paperMiss.entryExecutionDecision?.policyVersion).toBe(ENTRY_EXECUTION_POLICY_VERSION);
-    expect(adaptiveEntryEpisodeDecision([paperMiss], PAPER_MANAGED_MAKER_EXECUTION_VERSION)).toMatchObject({
-      allowed: true, attemptNumber: 2,
-    });
-    expect(adaptiveEntryEpisodeDecision([paperMiss], 'paper-managed-execution-route-ioc-v4')).toMatchObject({
-      allowed: false, reason: 'A prior execution-policy generation cannot authorize a current entry episode.',
-    });
+    expect(adaptiveEntryEpisodeDecision([makerMiss(), takerMiss({ noFillReason: 'pre_submit_quote_moved' })], ENTRY_EXECUTION_POLICY_VERSION).allowed).toBe(false);
+    expect(adaptiveEntryEpisodeDecision([makerMiss(), takerMiss({ status: 'rejected' })], ENTRY_EXECUTION_POLICY_VERSION).allowed).toBe(false);
   });
 
-  it('caps the sequence after three maker episodes', () => {
-    const second = makerMiss({ id: `${logical}:episode:2`, attemptNumber: 2, entryEpisode: 2, createdAt: '2026-01-01T00:02:00Z' });
-    const third = makerMiss({ id: `${logical}:episode:3`, attemptNumber: 3, entryEpisode: 3, createdAt: '2026-01-01T00:03:00Z' });
-    expect(adaptiveEntryEpisodeDecision([makerMiss(), second], ENTRY_EXECUTION_POLICY_VERSION)).toMatchObject({ allowed: true, attemptNumber: 3 });
-    const ended = adaptiveEntryEpisodeDecision([makerMiss(), second, third], ENTRY_EXECUTION_POLICY_VERSION);
-    expect(ended.allowed).toBe(false);
-    expect(ended.reason).toContain('Maximum 3 entry episodes');
-  });
-
-  it('never follows a fill, uncertainty, taker, rejection, or retired-policy row', () => {
+  it('ends after the second taker and never follows fill, partial, ambiguity, or old generation', () => {
+    const third = takerMiss({ id: `${logical}:episode:3`, attemptNumber: 3, createdAt: '2026-01-01T00:03:00Z' });
+    expect(adaptiveEntryEpisodeDecision([makerMiss(), takerMiss(), third], ENTRY_EXECUTION_POLICY_VERSION).reason).toContain('Maximum 3 entry intents');
     expect(adaptiveEntryEpisodeDecision([makerMiss({ status: 'open', filledCount: 0.1 })], ENTRY_EXECUTION_POLICY_VERSION).allowed).toBe(false);
     expect(adaptiveEntryEpisodeDecision([makerMiss({ status: 'uncertain' })], ENTRY_EXECUTION_POLICY_VERSION).allowed).toBe(false);
-    expect(adaptiveEntryEpisodeDecision([makerMiss({
-      entryExecutionDecision: { ...makerMiss().entryExecutionDecision!, executedStyle: 'taker' },
-    })], ENTRY_EXECUTION_POLICY_VERSION).allowed).toBe(false);
-    expect(adaptiveEntryEpisodeDecision([makerMiss({ status: 'rejected' })], ENTRY_EXECUTION_POLICY_VERSION).allowed).toBe(false);
-    expect(adaptiveEntryEpisodeDecision([makerMiss({
-      entryExecutionDecision: { ...makerMiss().entryExecutionDecision!, policyVersion: 'retired-v1' },
-    })], ENTRY_EXECUTION_POLICY_VERSION).allowed).toBe(false);
+    expect(adaptiveEntryEpisodeDecision([makerMiss({ fallbackSequenceEndedAt: '2026-01-01T00:01:21Z', fallbackSequenceEndReason: 'edge refused' })], ENTRY_EXECUTION_POLICY_VERSION)).toMatchObject({ allowed: false, reason: 'edge refused' });
+    expect(adaptiveEntryEpisodeDecision([makerMiss({ entryExecutionDecision: { ...makerMiss().entryExecutionDecision!, policyVersion: 'retired-v1' } })], ENTRY_EXECUTION_POLICY_VERSION).allowed).toBe(false);
+  });
+
+  it('uses the paper simulator generation for paper lifecycle authority', () => {
+    const paperMiss = makerMiss({ executionMode: 'paper', entryDecision: {
+      version: 'entry-decision-v2', providerId: 'kalshi', forecastModelVersion: 'test', executionPolicyVersion: PAPER_MANAGED_MAKER_EXECUTION_VERSION,
+      policyVersion: 'test', calculationAt: '2026-01-01T00:01:00Z', side: 'UP', probabilityUp: 0.7, probabilityDown: 0.3,
+      selectedSideProbability: 0.7, confidence: 0.7, confidenceBreakdown: { base: 0.3, dataQuality: 0.2, sampleQuality: 0.2, uncertaintyPenalty: 0 },
+      actionableAsk: 0.4, actionableBid: 0.39, feeRate: 0.01, netEdge: 0.29, spread: 0.01, secondsRemaining: 840,
+      qualifyingSnapshots: 2, medianNetEdge: 0.28, factors: [],
+    } });
+    expect(adaptiveEntryEpisodeDecision([paperMiss], PAPER_MANAGED_MAKER_EXECUTION_VERSION).allowed).toBe(true);
+    expect(adaptiveEntryEpisodeDecision([paperMiss], 'paper-managed-execution-route-ioc-v4').allowed).toBe(false);
   });
 });
 

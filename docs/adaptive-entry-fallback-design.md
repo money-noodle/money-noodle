@@ -3,7 +3,7 @@
 > **Document type:** Execution design
 > **Design status:** Superseded
 > **Implementation:** Removed
-> **Current use:** Historical only — current episodes use [`requalifying-entry-episodes-design.md`](requalifying-entry-episodes-design.md); the later bounded pilot is retired.
+> **Current use:** Historical only — current sequencing uses [`maker-miss-two-taker-fallback-design.md`](maker-miss-two-taker-fallback-design.md); the later bounded pilot is retired.
 > **Created:** 2026-08-19
 > **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
 > **Decision record:** [`DEC-20260819-08`](../spec/decisions/decision-id-map.json)

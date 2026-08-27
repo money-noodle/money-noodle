@@ -93,8 +93,9 @@ describe('published policy manifest', () => {
     expect(detail('regime', 'Status')).toBe('Disabled; entries are not gated');
     expect(detail('regime', 'Warm-up')).toBe('20 policy windows');
     expect(detail('switch', 'Replacement advantage')).toBe('25pp');
-    expect(detail('execution', 'Live entry episodes per side/window')).toBe('3');
-    expect(detail('execution', 'Maker miss rearming')).toContain('strictly after completion');
+    expect(detail('execution', 'Live entry intents per side/window')).toBe('3');
+    expect(detail('execution', 'Maker miss rearming')).toContain('Immediate after authoritative cancellation');
+    expect(detail('execution', 'Fallback price')).toContain('125%');
     expect(detail('execution', 'Sizing')).toBe('0.3× below 30pp; 1× at or above; no upsizing');
     expect(manifest().components.find((item) => item.kind === 'regime')?.status).toBe('observation');
   });

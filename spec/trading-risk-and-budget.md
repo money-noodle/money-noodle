@@ -179,22 +179,25 @@ Manual pause and hard loss breakers retain non-auto-resume semantics.
 
 #### Entry route, episodes, and sizing
 
-Live entry receives at most three episodes per asset/side/window. A managed maker joins or improves the selected-side
-bid, never crosses the issuance cap, manages for the bounded horizon, confirms cancellation, accepts partial fills,
-and reconciles exact fees. YES/NO wire translation may use the venue's complementary book, but all limits, costs,
-fills, P&L, and UI remain selected-side denominated.
+Live entry receives one logical sequence of at most three distinct intents per asset/side/window: one managed maker
+and, only after its authoritative cancellation and zero fill, at most two bounded taker IOCs. The maker joins or
+improves the selected-side bid, never crosses the issuance cap, manages for the bounded horizon, confirms
+cancellation, accepts partial fills, and reconciles exact fees. YES/NO wire translation may use the venue's
+complementary book, but all limits, costs, fills, P&L, and UI remain selected-side denominated.
 
-An authoritative maker zero-fill may rearm only after ordinary persistence is recollected strictly after completion.
-No nonqualifying gap is required. Any fill, working/uncertain state, rejection, taker result, stale policy, or third
-episode ends rearming.
+The first fallback does not wait for another persistence interval. It forces a fresh model/venue snapshot, rechecks
+all live operational and account authority, and creates a new durable intent. Its signed exact-contract quote sets a
+limit no greater than fresh ask plus two current venue ticks, 125% of the final submitted maker limit, or 75¢. The
+selected-side midpoint may not decline by more than one current tick from the predecessor's final fresh quote. Edge
+at the submitted limit after the charged whole-cent taker fee must be strictly positive; the ordinary 5pp admission
+margin is not reimposed on this continuation.
 
-The production execution policy reruns route selection for every episode. The established high-edge route spends
-the spread only when issuance and fresh taker net edge are each at least 30pp after fees, persistence-median edge is
-at least 10pp, quality is at least 65%, and selected-side spread is no wider than 2¢. Every taker is a marketable IOC
-**limit**, never an uncapped market order; it reruns the complete provider buy rule against a fresh quote, permits at
-most 1.0¢ ask movement from issuance without exceeding the active entry ceiling, reserves at the worst permitted
-price, and has no fallback after refusal or no-fill. The closed
-bounded-taker pilot grants no new authorization; a future experiment requires a new decision and generation.
+Only an accepted first IOC with authoritative zero fill permits the second and final IOC. Before it, force another
+fresh model/venue snapshot and signed exact-contract quote, then rerun the same direction, two-tick, 125%, 75¢,
+positive-edge, sizing, funding, exposure, rate, stop-loss, kill-switch, reconciliation, and identity checks. Its
+limit may rise from the first IOC when the refreshed ask rises. Any fill or partial fill, pre-submit policy refusal,
+rejection, uncertainty, stale generation, or third intent ends the sequence. Every taker is an IOC **limit**, never
+an uncapped market order. The closed bounded-taker pilot grants no authority in this generation.
 
 Entry sizing is `entry-sizing-reduce30-below-edge30-v1`: below 30pp issuance net edge, quantize the base all-in cap
 to `ceil(base × 0.30 − 1e-9)`; at 30pp or above retain 1×. There is no arbitrary minimum or multiplier above one.

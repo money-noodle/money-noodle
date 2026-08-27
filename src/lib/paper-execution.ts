@@ -5,16 +5,13 @@ import { beginLiveTransaction, blockExecutionDrain, completeExecutionDrain, endL
 import { CALENDAR_EVALUATION_VERSION, calendarFixedSnapshotDue, updateCalendarEvaluationStore, type CalendarEvaluationCycle } from './calendar-evaluation-store';
 import { reconcileExecutionLedger } from './execution-reconciliation';
 import { ENTRY_EXECUTION_POLICY_VERSION, MAX_ENTRY_EPISODES_PER_WINDOW, entrySideProbability, evaluateEntryExecutionPolicy, makerCohortEvidence, parseEntryExecutionMode, type EntryExecutionDecision } from './entry-execution-policy';
-import {
-  BOUNDED_TAKER_PER_ORDER_CAP_CENTS, applyBoundedTakerPlan, boundedTakerExperimentEnabled,
-  planBoundedTakerExperiment,
-} from './bounded-taker-experiment';
 import { executionMirrorPairStamp } from './execution-mirror-pair';
 import { hydrateExecutionOrders, readExecutionLedgerFile } from './execution-ledger-storage';
 import { observeEntryDirection } from './entry-direction-observation';
 import { evaluateEntrySizing } from './entry-sizing-policy';
 import { POST_EXIT_REENTRY_COOLDOWN_MS, evaluateExitPolicy } from './exit-policy';
 import { estimateMakerFill } from './maker-fill-model';
+import { boundedTakerLimit } from './managed-maker';
 import { fetchKalshiManagedMakerQuote, fetchKalshiTradePrintsSince } from './kalshi-market-data';
 import { observeKalshiOrderBook } from './kalshi-depth';
 import { immediateBuyFill, immediateSellFill } from './ioc-fill-model';
@@ -91,7 +88,7 @@ import {
 import { REQUIRED_SWITCH_SNAPSHOTS, REQUIRED_SWITCH_SPAN_MS, advanceSwitchPersistence, switchCooldownRemainingMs, switchEvidenceReady, switchEvidenceSpanMs, type SwitchPersistenceState } from './switch-hysteresis';
 import { evaluateSwitchProbabilityGate, switchPolicySettings, valueSwitch } from './switch-policy';
 import { autoResumeTradingAfterReconciliation, getTradingControl, pauseTrading, reconcileTradingBudget, recordTradingReconciliationFailure, releaseTradingBudget, reserveTradingBudget, settleTradingBudget, stopTradingForLiveRisk, suspendTrading } from './trading-control';
-import { refreshedAskFitsTakerCap, takerQuoteCap } from './taker-quote-policy';
+import { MAKER_MISS_TAKER_CUSHION_TICKS, makerMissTakerHardCeiling, makerMissTakerNetEdge, makerMissTakerQuoteRefusal, refreshedAskFitsTakerCap, takerQuoteCap } from './taker-quote-policy';
 import type { BinaryOrderBook, DashboardData, ExecutionMode, ExecutionSignalReadiness, ExecutionSummary, LiveLedgerCorrection, MarketFunding, MarketId, PaperOrder, PortfolioDecisionView, PositionLifecycleObservation, PositionSide, Prediction, ProviderBudgetConfiguration, PublicPaperBudget, PublicPaperExecutionRecord, StrategyId, TradingControlData, TradingProviderId } from './types';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
@@ -332,13 +329,14 @@ interface LiveAttemptState {
   retry: MakerRetryDecision;
   eligibility: SignalEligibility;
   requalifyingEpisode: boolean;
+  takerFallback: boolean;
   requalifiedAfterOrderId?: string;
 }
 
 /**
- * One source of truth for every live selection/readiness/submission call site. Adaptive v5 permits up to
- * three episodes, but each later episode must earn production persistence strictly after the preceding
- * authoritative maker zero-fill. Other configured modes retain the historical bounded-retry helper.
+ * One source of truth for every live selection/readiness/submission call site. Adaptive v8 permits one
+ * managed maker and two immediate fresh-check taker continuations; ordinary persistence applies only to
+ * the first intent. Other configured modes retain the historical bounded-retry helper.
  */
 function liveAttemptState(
   prediction: Prediction, side: PositionSide, ledger: Ledger, nowMs = Date.now(),
@@ -348,12 +346,15 @@ function liveAttemptState(
   const retry = adaptive
     ? adaptiveEntryEpisodeDecision(attempts, ENTRY_EXECUTION_POLICY_VERSION)
     : makerRetryDecision(attempts, nowMs, prediction.market.closesAt, maximumLiveMakerAttempts());
+  const takerFallback = adaptive && Boolean(retry.takerFallback);
   const requalifyingEpisode = adaptive && retry.allowed && retry.attemptNumber > 1 && Boolean(retry.retryOfOrderId);
   const parent = requalifyingEpisode ? attempts.find((attempt) => attempt.id === retry.retryOfOrderId) : undefined;
   const state = ledger.signalPersistence[persistenceKey(prediction, side)];
+  const eligibility = takerFallback
+    ? { eligible: true, reason: 'Authoritative predecessor permits immediate fresh fallback checks.', cycleAgeMs: 0, remainingMs: 0, qualifyingSnapshots: 1, medianNetEdge: null, edgeSpike: null }
+    : evaluateEntryEpisodePersistence(state, nowMs);
   return {
-    attempts, retry, requalifyingEpisode, requalifiedAfterOrderId: parent?.id,
-    eligibility: evaluateEntryEpisodePersistence(state, nowMs, requalifyingEpisode ? parent?.makerCompletedAt : undefined),
+    attempts, retry, requalifyingEpisode, takerFallback, requalifiedAfterOrderId: parent?.id, eligibility,
   };
 }
 
@@ -522,7 +523,7 @@ function calendarEvaluationCycle(dashboard: DashboardData, ledger: Ledger): Cale
 
 function entryExecutionDecision(
   prediction: Prediction, side: PositionSide, order: PaperOrder, ledger: Ledger,
-  attempt: Pick<LiveAttemptState, 'eligibility'>,
+  attempt: Pick<LiveAttemptState, 'eligibility'> & Partial<Pick<LiveAttemptState, 'takerFallback' | 'requalifiedAfterOrderId'>>,
   refreshedQuote?: { bid: number; ask: number; spread: number },
 ): EntryExecutionDecision {
   const settings = entryExecutionSettings();
@@ -540,39 +541,9 @@ function entryExecutionDecision(
     spread,
     makerNetEdge: probability - bid - venueFeeRate('kalshi', bid, 'maker'),
     makerEvidence: evidence,
+    makerMissFallback: Boolean(attempt.takerFallback),
+    fallbackFromOrderId: attempt.requalifiedAfterOrderId,
   });
-}
-
-function boundedTakerAuthorizationCap(order: PaperOrder): number {
-  return Math.min(order.entrySizingDecision?.stakeLimitCents ?? 0, BOUNDED_TAKER_PER_ORDER_CAP_CENTS);
-}
-
-function boundedTakerTreatmentFeasible(order: PaperOrder, authorizationCapCents: number): boolean {
-  const cap = takerQuoteCap(order.issuanceAskPrice ?? order.askPrice);
-  return Boolean(cap && Number.isSafeInteger(authorizationCapCents) && authorizationCapCents > 0
-    && estimatePaperFill(authorizationCapCents, cap.maximumPrice, order.venue));
-}
-
-function applyBoundedTakerExperiment(
-  prediction: Prediction, order: PaperOrder, baseline: EntryExecutionDecision, ledger: Ledger,
-): EntryExecutionDecision {
-  const authorizationCapCents = boundedTakerAuthorizationCap(order);
-  const plan = planBoundedTakerExperiment({
-    enabled: boundedTakerExperimentEnabled(),
-    mode: order.executionMode,
-    nowMs: Date.parse(order.createdAt),
-    identity: {
-      marketId: orderMarketId(order), strategyId: orderStrategyId(order), symbol: order.symbol,
-      side: order.side, closesAt: order.closesAt,
-    },
-    order,
-    baseline,
-    treatmentFeasible: boundedTakerTreatmentFeasible(order, authorizationCapCents),
-    authorizationCapCents,
-    orders: ledger.orders,
-  });
-  order.boundedTakerExperiment = plan.stamp;
-  return applyBoundedTakerPlan(baseline, plan);
 }
 
 /** Re-runs the active venue buy rule on the selected-side signed quote; no experiment threshold is copied. */
@@ -597,6 +568,33 @@ export function boundedTakerFreshQuoteRefusal(
   if (!qualifiesVenueBuyEdge(refreshed, 'kalshi', side)) {
     return `Refreshed ${side} ask ${(quote.ask * 100).toFixed(1)}c no longer clears the active production venue buy rule.`;
   }
+  return undefined;
+}
+
+function terminalEntryLimit(order: PaperOrder): number {
+  return [...(order.entryExecutionObservations ?? [])].reverse().find((item) => Number.isFinite(item.limitPrice))?.limitPrice
+    ?? order.initialSubmittedPrice ?? order.askPrice;
+}
+
+function terminalEntryMidpoint(order: PaperOrder): number {
+  const observation = [...(order.entryExecutionObservations ?? [])].reverse()
+    .find((item) => Number.isFinite(item.selectedBid) && Number.isFinite(item.selectedAsk));
+  return observation ? (observation.selectedBid! + observation.selectedAsk!) / 2
+    : ((order.issuanceBidPrice ?? order.bidPrice) + (order.issuanceAskPrice ?? order.askPrice)) / 2;
+}
+
+export function applyMakerMissTakerReserve(order: PaperOrder, stakeLimitCents: number, firstMaker: PaperOrder): string | undefined {
+  if (order.venue !== 'kalshi') return 'Maker-miss taker fallback is implemented only for Kalshi.';
+  const maximumPrice = makerMissTakerHardCeiling(terminalEntryLimit(firstMaker));
+  if (!maximumPrice) return 'Final maker limit cannot produce a valid fallback ceiling.';
+  const fill = estimatePaperFill(stakeLimitCents, maximumPrice, order.venue);
+  if (!fill) return `${stakeLimitCents}c all-in cap cannot reserve the minimum quantity at the fallback ceiling.`;
+  order.approvedMaximumPrice = maximumPrice;
+  order.quantity = fill.quantity;
+  order.requestedQuantity = fill.quantity;
+  order.stakeCents = fill.stakeCents;
+  order.feeCents = fill.feeCents;
+  order.potentialPayoutCents = fill.potentialPayoutCents;
   return undefined;
 }
 
@@ -638,7 +636,7 @@ function venueQuote(prediction: Prediction, venue: 'polymarket' | 'kalshi', side
  * Builds a candidate order for one mode, applying every deterministic risk check. Returns the reason
  * when it declines, because a silently skipped order is indistinguishable from a broken engine.
  */
-function buildOrder(prediction: Prediction, side: PositionSide, status: TradingControlData, ledger: Ledger, calculationAt: string, modelVersion: string, mode: ExecutionMode, stakeLimitCents: number, venueFilter?: 'kalshi', eligibilityOverride?: SignalEligibility, paperExecutionPolicyVersion: string = PAPER_MANAGED_MAKER_EXECUTION_VERSION): { order: PaperOrder } | { reason: string } {
+function buildOrder(prediction: Prediction, side: PositionSide, status: TradingControlData, ledger: Ledger, calculationAt: string, modelVersion: string, mode: ExecutionMode, stakeLimitCents: number, venueFilter?: 'kalshi', eligibilityOverride?: SignalEligibility, paperExecutionPolicyVersion: string = PAPER_MANAGED_MAKER_EXECUTION_VERSION, minimumNetEdge = MIN_NET_EDGE): { order: PaperOrder } | { reason: string } {
   if (stakeLimitCents <= 0) return { reason: 'Stake sizing produces zero cents. Raise the budget or purchase percentage.' };
   const rejections: string[] = [];
   const candidates = status.venues.flatMap((readiness) => {
@@ -646,7 +644,9 @@ function buildOrder(prediction: Prediction, side: PositionSide, status: TradingC
     if (venueFilter && readiness.venue !== venueFilter) return [];
     const quote = venueQuote(prediction, readiness.venue, side);
     const entry = bestVenueEntry(prediction, readiness.venue, side);
-    if (!entry || !qualifiesVenueBuyEdge(prediction, readiness.venue, side)) return [];
+    if (!entry || (minimumNetEdge > 0
+      ? !qualifiesVenueBuyEdge(prediction, readiness.venue, side)
+      : !(entry.netEdge > 1e-12))) return [];
     if (!quote || quote.ask > MAX_FILLABLE_ASK || quote.ask <= 0 || quote.bid <= 0 || quote.bid > quote.ask) return [];
     const spread = quote.ask - quote.bid;
     if (spread > MAX_SPREAD) { rejections.push(`${readiness.venue} spread ${(spread * 100).toFixed(1)}c exceeds the ${MAX_SPREAD * 100}c limit`); return []; }
@@ -774,7 +774,11 @@ function updatePortfolioDecisions(
     && (order.status === 'open' || order.status === 'pending_reservation' || order.status === 'uncertain'));
   const exposures = activeOrders.map((order) => ({ symbol: order.symbol, closesAt: order.closesAt }));
 
-  for (const prediction of dashboard.predictions.filter((item) => item.market.live && qualifiesAsBuyEdge(item))) {
+  for (const prediction of dashboard.predictions.filter((item) => {
+    if (!item.market.live) return false;
+    const side = selectedSide(item);
+    return qualifiesAsBuyEdge(item) || Boolean(side && liveAttemptState(item, side, ledger).takerFallback);
+  })) {
     const entry = bestEntry(prediction);
     if (!entry) continue;
     const side = entry.side;
@@ -796,24 +800,28 @@ function updatePortfolioDecisions(
       continue;
     }
     retryNumbers.set(key, retry.attemptNumber);
-    if (!qualifiesVenueBuyEdge(prediction, 'kalshi', side)) {
-      next[key] = { state: 'blocked', reason: `Standalone ${side} signal qualifies, but the Kalshi-specific ${side} quote does not clear the live net-edge and price gates.`, updatedAt: now };
+    const venueEntry = bestVenueEntry(prediction, 'kalshi', side);
+    if (attempt.takerFallback ? !(venueEntry && venueEntry.netEdge > 1e-12) : !qualifiesVenueBuyEdge(prediction, 'kalshi', side)) {
+      next[key] = { state: 'blocked', reason: `The Kalshi-specific ${side} quote does not clear this intent's edge and price gates.`, updatedAt: now };
       continue;
     }
     const maturity = attempt.eligibility;
     if (!maturity.eligible) {
-      next[key] = { state: 'qualified', reason: `${attempt.requalifyingEpisode ? 'Maker miss confirmed; the next episode is requalifying from post-completion evidence.' : 'Standalone expected-value policy passes; execution evidence is still collecting.'} ${maturity.reason}`, updatedAt: now };
+      next[key] = { state: 'qualified', reason: `${attempt.takerFallback ? 'A zero-spend predecessor permits immediate fallback checks.' : 'Standalone expected-value policy passes; execution evidence is still collecting.'} ${maturity.reason}`, updatedAt: now };
       continue;
     }
-    const candidate = buildOrder(prediction, side, status, ledger, dashboard.generatedAt, dashboard.modelVersion, 'live', Math.min(status.proposedStakeCents, maxLiveStakeCents()), 'kalshi', attempt.eligibility);
+    const candidate = buildOrder(prediction, side, status, ledger, dashboard.generatedAt, dashboard.modelVersion, 'live', Math.min(status.proposedStakeCents, maxLiveStakeCents()), 'kalshi', attempt.eligibility,
+      PAPER_MANAGED_MAKER_EXECUTION_VERSION, attempt.takerFallback ? 0 : MIN_NET_EDGE);
     if ('reason' in candidate) {
       next[key] = { state: 'blocked', reason: candidate.reason, updatedAt: now };
       continue;
     }
     const decision = entryExecutionDecision(prediction, side, candidate.order, ledger, attempt);
     if (decision.executedStyle === 'taker') {
-      const reserveFailure = applyTakerQuoteMovementReserve(candidate.order, candidate.order.entrySizingDecision?.stakeLimitCents
-        ?? Math.min(status.proposedStakeCents, maxLiveStakeCents()));
+      const stakeLimit = candidate.order.entrySizingDecision?.stakeLimitCents ?? Math.min(status.proposedStakeCents, maxLiveStakeCents());
+      const reserveFailure = decision.route === 'maker-miss-taker-fallback'
+        ? applyMakerMissTakerReserve(candidate.order, stakeLimit, attempt.attempts[0]!)
+        : applyTakerQuoteMovementReserve(candidate.order, stakeLimit);
       if (reserveFailure) {
         next[key] = { state: 'blocked', reason: reserveFailure, updatedAt: now };
         continue;
@@ -1098,9 +1106,9 @@ async function managePaperMakerOrder(order: PaperOrder, ledger: Ledger): Promise
  * Simulates the taker branch as the IOC it is: refresh the exact contract, re-check the same gates live
  * re-checks, then cross whatever displayed depth the limit reaches.
  *
- * Live's taker path re-reads the quote before submitting and refuses on two conditions this mirrors —
- * the ask moved past the one-cent cap, and the refreshed quote no longer clears the taker gates. What it
- * cannot mirror is `post_only_race`, which has no meaning for an order that never rests.
+ * Live's taker path re-reads the quote before submitting and this mirror applies the same route-specific
+ * structural ceiling, tick cushion, direction, and charged-fee edge checks. What it cannot mirror is a
+ * signed transport race; paper uses the exact public quote and independently displayed depth.
  */
 async function managePaperTakerOrder(order: PaperOrder, ledger: Ledger, authorize?: PaperTakerAuthorizer): Promise<void> {
   const quoteRun = beginTaskCadenceRun('exact-pre-submit-quote');
@@ -1115,12 +1123,23 @@ async function managePaperTakerOrder(order: PaperOrder, ledger: Ledger, authoriz
       order.makerCompletedAt = new Date().toISOString();
       ledger.paperBudget.availableCents += reservedCents;
     };
-    const cap = takerQuoteCap(order.issuanceAskPrice ?? order.askPrice);
-    if (!cap) return refuse('pre_submit_quote_moved', 'Issuance ask cannot produce a valid one-cent taker cap.');
-    if (!refreshedAskFitsTakerCap(quote.ask, cap)) {
-      return refuse('pre_submit_quote_moved', `Refreshed ask ${(quote.ask * 100).toFixed(1)}c moved beyond the ${(cap.maximumPrice * 100).toFixed(1)}c taker cap.`);
+    const fallback = order.entryExecutionDecision?.route === 'maker-miss-taker-fallback';
+    const approvedMaximum = order.approvedMaximumPrice ?? order.askPrice;
+    if (!fallback) {
+      const cap = takerQuoteCap(order.issuanceAskPrice ?? order.askPrice);
+      if (!cap) return refuse('pre_submit_quote_moved', 'Issuance ask cannot produce a valid one-cent taker cap.');
+      if (!refreshedAskFitsTakerCap(quote.ask, cap)) {
+        return refuse('pre_submit_quote_moved', `Refreshed ask ${(quote.ask * 100).toFixed(1)}c moved beyond the ${(cap.maximumPrice * 100).toFixed(1)}c taker cap.`);
+      }
     }
-    const refusal = authorize?.({ bid: quote.bid, ask: quote.ask, spread: quote.ask - quote.bid });
+    const terms = boundedTakerLimit({
+      ask: quote.ask, maximumPrice: approvedMaximum,
+      cushionTicks: fallback ? MAKER_MISS_TAKER_CUSHION_TICKS : 0, ranges: quote.ranges,
+    });
+    if (!terms) return refuse('pre_submit_quote_moved', 'Exact quote could not produce a valid venue-ladder limit.');
+    const { limit, tickSize } = terms;
+    if (limit + 1e-9 < quote.ask) return refuse('pre_submit_quote_moved', `Refreshed ask ${(quote.ask * 100).toFixed(1)}c exceeds the approved ${(approvedMaximum * 100).toFixed(1)}c cap.`);
+    const refusal = authorize?.({ bid: quote.bid, ask: quote.ask, spread: quote.ask - quote.bid, limit, tickSize });
     if (refusal) return refuse('pre_submit_quote_moved', `Refreshed quote no longer authorizes taking: ${refusal}`);
 
     if (!quote.orderBook) {
@@ -1133,11 +1152,11 @@ async function managePaperTakerOrder(order: PaperOrder, ledger: Ledger, authoriz
       ledger.paperBudget.availableCents += reservedCents;
       return;
     }
-    const fill = immediateBuyFill(quote.orderBook, order.side, quote.ask, order.quantity);
+    const fill = immediateBuyFill(quote.orderBook, order.side, limit, order.quantity);
     order.entryExecutionObservations = [...(order.entryExecutionObservations ?? []), {
       at: new Date().toISOString(), event: fill.filledCount > 0 ? 'paper_fill' : 'paper_expired',
       selectedBid: quote.bid, selectedAsk: quote.ask, spread: quote.ask - quote.bid,
-      limitPrice: quote.ask, filledCount: fill.filledCount,
+      limitPrice: limit, filledCount: fill.filledCount,
       remainingCount: Number((order.quantity - fill.filledCount).toFixed(2)),
       displayedAtLimit: fill.displayedAtLimit,
     }];
@@ -1178,7 +1197,8 @@ async function managePaperEntryOrders(orders: PaperOrder[], ledger: Ledger, auth
   return true;
 }
 
-type PaperTakerAuthorizer = (quote: { bid: number; ask: number; spread: number }) => string | undefined;
+type TakerAuthorizationQuote = { bid: number; ask: number; spread: number; limit: number; tickSize: number };
+type PaperTakerAuthorizer = (quote: TakerAuthorizationQuote) => string | undefined;
 
 async function runPaper(dashboard: DashboardData, status: TradingControlData, ledger: Ledger, regimeGate: RegimeGateStatus, budgets: ProviderBudgetConfiguration, startedOrders: PaperOrder[] = [], authorizers?: Map<string, PaperTakerAuthorizer>): Promise<boolean> {
   if (ledger.paperBudget.availableCents <= 0) return false;
@@ -1190,7 +1210,11 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
   if (open.length >= maximumOpenPositions()) return false;
   if (!isFreshCalculationTimestamp(dashboard.generatedAt)) return false;
   const qualifiedPredictions = dashboard.predictions
-    .filter((item) => qualifiesAsBuyEdge(item) && item.market.live && assetAdmitted(item.symbol));
+    .filter((item) => item.market.live && assetAdmitted(item.symbol))
+    .filter((item) => qualifiesAsBuyEdge(item) || (() => {
+      const side = selectedSide(item);
+      return Boolean(side && paperAttempts(ledger, item, side).length > 0);
+    })());
   if (!qualifiedPredictions.length) return false;
   // Read once before intent construction. The generated execution identity and full provenance travel
   // together on the order, so an adoption between creation and management cannot blend cohorts. A bad
@@ -1214,14 +1238,14 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
       const attempts = paperAttempts(ledger, prediction, side);
       const episode = adaptiveEntryEpisodeDecision(attempts, paperExecutionPolicyVersion);
       if (!episode.allowed) return [];
-      const parent = episode.retryOfOrderId ? attempts.find((attempt) => attempt.id === episode.retryOfOrderId) : undefined;
-      const episodeState = ledger.signalPersistence[persistenceKey(prediction, side)];
-      const eligibility = evaluateEntryEpisodePersistence(episodeState, Date.now(), parent?.makerCompletedAt);
+      const eligibility: SignalEligibility = episode.takerFallback
+        ? { eligible: true, reason: 'Authoritative predecessor permits immediate fresh fallback checks.', cycleAgeMs: 0, remainingMs: 0, qualifyingSnapshots: 1, medianNetEdge: null, edgeSpike: null }
+        : evaluateEntryEpisodePersistence(ledger.signalPersistence[persistenceKey(prediction, side)], Date.now());
       if (!eligibility.eligible) return [];
       const candidate = buildOrder(prediction, side, {
         ...status, venues: status.venues.map((readiness) => ({ ...readiness, enabled: paperProviders.has(readiness.venue) })),
       }, ledger, dashboard.generatedAt, dashboard.modelVersion, 'paper', stakeLimit, 'kalshi', eligibility,
-      paperExecutionPolicyVersion);
+      paperExecutionPolicyVersion, episode.takerFallback ? 0 : MIN_NET_EDGE);
       if ('reason' in candidate) return [];
       candidate.order.paperFillCalibration = { ...paperCalibration };
       candidate.order.logicalOrderId = logicalId;
@@ -1232,7 +1256,7 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
       candidate.order.id = entryEpisodeId(logicalId, episode.attemptNumber);
       candidate.order.clientOrderId = candidate.order.id;
       candidate.order.executionMirrorPair = executionMirrorPairStamp(candidate.order);
-      return [{ prediction, order: candidate.order, portfolioKey: persistenceKey(prediction, side), eligibility }];
+      return [{ prediction, order: candidate.order, portfolioKey: persistenceKey(prediction, side), eligibility, episode, attempts }];
     })
     // Funding is a feasibility filter applied after candidates exist, so a pair without allocation
     // headroom drops out while another provider's candidate for the same window survives.
@@ -1259,22 +1283,24 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
     // the exact contract before choosing its first limit; unlike the old `restAtBid` path it does not
     // buy extra paper quantity merely because the passive limit is cheaper than the issuance ask.
     // SPEC 12.2: the mirror runs "the same versioned episode boundary and route decision". Paper used to
-    // hardcode maker here, so the high-edge IOC route lived only in live and the cohort the v4/v5
-    // execution change was about had no mirror at all. This is the same call `runLive` makes, on the
-    // same inputs; the rule layer is untouched and still takes no execution mode.
-    const baselineRoute = entryExecutionDecision(built.prediction, built.order.side, built.order, ledger, { eligibility: built.eligibility });
-    const route = applyBoundedTakerExperiment(built.prediction, built.order, baselineRoute, ledger);
+    // Route through the same decision function as live. The rule layer remains mode-free; paper owns
+    // independent fill evidence and capital but not a different maker-to-taker sequence.
+    const baselineRoute = entryExecutionDecision(built.prediction, built.order.side, built.order, ledger, {
+      eligibility: built.eligibility, takerFallback: built.episode.takerFallback,
+      requalifiedAfterOrderId: built.episode.retryOfOrderId,
+    });
+    const route = baselineRoute;
     const resting: PaperOrder = {
       ...built.order, status: 'pending_reservation',
       liquidityRole: route.executedStyle, entryExecutionDecision: route, paperEntryRoute: route.executedStyle,
     };
     if (route.executedStyle === 'taker') {
-      // Experimental treatment is additionally hard-capped at 30c; incumbent high-edge takers retain
-      // their approved sizing. Both reserve at the worst permitted one-cent movement price.
-      const stakeLimit = route.route === 'bounded-taker-experiment'
-        ? boundedTakerAuthorizationCap(resting)
-        : resting.entrySizingDecision?.stakeLimitCents ?? resting.stakeCents;
-      const reserveFailure = applyTakerQuoteMovementReserve(resting, stakeLimit);
+      // Fallback quantity is reserved conservatively at its structural ceiling; the exact public quote
+      // chooses only the lower two-tick IOC limit and returns unused paper reserve.
+      const stakeLimit = resting.entrySizingDecision?.stakeLimitCents ?? resting.stakeCents;
+      const reserveFailure = route.route === 'maker-miss-taker-fallback'
+        ? applyMakerMissTakerReserve(resting, stakeLimit, built.attempts[0]!)
+        : applyTakerQuoteMovementReserve(resting, stakeLimit);
       if (reserveFailure) continue;
     }
     const funding = marketFundingFor(budgets, 'paper', orderProviderId(resting), orderMarketId(resting), ledger,
@@ -1284,8 +1310,18 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
     ledger.orders.push(resting);
     startedOrders.push(resting);
     authorizers?.set(resting.id, (quote) => {
-      if (route.route === 'bounded-taker-experiment') {
-        return boundedTakerFreshQuoteRefusal(built.prediction, built.order.side, quote);
+      if (route.route === 'maker-miss-taker-fallback') {
+        const probability = entrySideProbability(built.prediction.modelProbabilityUp, built.order.side);
+        const refusal = makerMissTakerQuoteRefusal({
+          probability, quantity: resting.quantity,
+          referenceMidpoint: terminalEntryMidpoint(built.attempts.at(-1)!), quote,
+        });
+        if (!refusal) {
+          resting.signedTakerLimit = quote.limit;
+          resting.signedTakerNetEdge = makerMissTakerNetEdge({ probability, quantity: resting.quantity, limit: quote.limit });
+          resting.signedTakerQuoteAt = new Date().toISOString();
+        }
+        return refusal;
       }
       const refreshed = entryExecutionDecision(built.prediction, built.order.side, resting, ledger, { eligibility: built.eligibility }, quote);
       return refreshed.executedStyle === 'taker' ? undefined : refreshed.reason;
@@ -1327,7 +1363,7 @@ export function attachMatchedLiveFillShadow(orders: PaperOrder[], liveOrder: Pap
 
 async function executePreparedLiveBuy(
   order: PaperOrder, status: TradingControlData, ledger: Ledger,
-  authorizeTakerQuote?: (quote: { bid: number; ask: number; spread: number }) => string | undefined,
+  authorizeTakerQuote?: (quote: TakerAuthorizationQuote) => string | undefined,
   choiceSet?: PortfolioChoiceSetRecord,
 ): Promise<void> {
   const executionStyle = order.entryExecutionDecision?.executedStyle ?? 'maker';
@@ -1376,6 +1412,7 @@ async function executePreparedLiveBuy(
         ? await placeKalshiTakerBuy({
           ticker: order.contractId, positionSide: order.side, maximumPriceCents: approvedMaximumPrice * 100,
           count: order.quantity, clientOrderId: order.clientOrderId ?? order.id, onAccepted, onObservation,
+          cushionTicks: order.entryExecutionDecision?.route === 'maker-miss-taker-fallback' ? MAKER_MISS_TAKER_CUSHION_TICKS : 0,
           authorizeQuote: authorizeTakerQuote,
         })
         : await placeKalshiBuy({
@@ -2086,6 +2123,7 @@ function buildPortfolioChoiceSetRecord(input: {
 async function runLive(
   dashboard: DashboardData, status: TradingControlData, ledger: Ledger, regimeGate: RegimeGateStatus,
   budgets: ProviderBudgetConfiguration, portfolioAudit: PortfolioSelectionAudit,
+  targetLogicalOrderId?: string, refreshDashboard?: () => Promise<DashboardData>,
 ): Promise<boolean> {
   // SPEC 12.8 step 2. `lastLiveSkip` remains the single-slot status the dashboard renders; the journal
   // beside it is the durable per-window record that makes `paper - live` decomposable instead of
@@ -2127,11 +2165,12 @@ async function runLive(
   // A strongly superior opposite side of the same asset is a replacement, never an additive hedge.
   // Evaluate that protected reduce-only reversal even when portfolio capacity remains; both the
   // probability-advantage and net-future-wealth gates must persist before any incumbent is sold.
-  if (open.length > 0 && open.length < maximumPositions && filledOrdersLastHour <= maxLiveOrdersPerHour() - 2) {
+  if (!targetLogicalOrderId && open.length > 0 && open.length < maximumPositions && filledOrdersLastHour <= maxLiveOrdersPerHour() - 2) {
     const reversal = bestSwitch(dashboard, status, ledger, open, { oppositeSameAssetOnly: true });
     if (reversal) return executeSwitch(reversal, status, ledger);
   }
   if (open.length >= maximumPositions) {
+    if (targetLogicalOrderId) return skip('portfolio', 'Fresh fallback checks found the maximum live-position ceiling occupied.');
     // A complete switch consumes two accepted venue orders: reduce-only exit, then replacement entry.
     // Never close a position if the hourly ceiling would then prevent its replacement.
     if (filledOrdersLastHour > maxLiveOrdersPerHour() - 2) return skip('rate_limit', `Switch needs two potential fill slots; ${filledOrdersLastHour}/${maxLiveOrdersPerHour()} filled orders in the last hour.`);
@@ -2144,7 +2183,13 @@ async function runLive(
       : skip('portfolio', `Holding the constrained portfolio; no replacement clears liquidation costs plus ${(settings.minimumGainCents + settings.uncertaintyMarginCents).toFixed(2)}c required gain.`);
   }
   const allQualified = [...dashboard.predictions]
-    .filter((item) => qualifiesAsBuyEdge(item) && item.market.live && Boolean(selectedSide(item)))
+    .filter((item) => {
+      const side = selectedSide(item);
+      if (!side || !item.market.live) return false;
+      const fallback = liveAttemptState(item, side, ledger).takerFallback;
+      return qualifiesAsBuyEdge(item) || fallback;
+    })
+    .filter((item) => !targetLogicalOrderId || orderId(item, 'live', selectedSide(item)!, ledger) === targetLogicalOrderId)
     .sort((a, b) => edgeStrength(b) - edgeStrength(a));
   // Applied to the candidate list rather than the chosen order, so an unclassified top candidate steps
   // aside for the next one instead of skipping the cycle entirely.
@@ -2162,6 +2207,7 @@ async function runLive(
     return liveAttemptState(item, side, ledger).retry.allowed;
   });
   const selected = qualified.filter((item) => {
+    if (targetLogicalOrderId) return true;
     const side = selectedSide(item)!;
     return ledger.portfolioDecisions[persistenceKey(item, side)]?.state === 'portfolio-selected';
   }).sort((a, b) => {
@@ -2233,7 +2279,8 @@ async function runLive(
       if (!placed) return skip('persistence', `${candidate.symbol}: ${reason}`, { symbol: candidate.symbol, side });
       continue;
     }
-    const built = buildOrder(candidate, side, status, ledger, dashboard.generatedAt, dashboard.modelVersion, 'live', liveStakeCeiling, 'kalshi', attempt.eligibility);
+    const built = buildOrder(candidate, side, status, ledger, dashboard.generatedAt, dashboard.modelVersion, 'live', liveStakeCeiling, 'kalshi', attempt.eligibility,
+      PAPER_MANAGED_MAKER_EXECUTION_VERSION, attempt.takerFallback ? 0 : MIN_NET_EDGE);
     if ('reason' in built) {
       priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason: built.reason });
       if (!placed) return skip('budget', `${candidate.symbol} ${side}: ${built.reason}`, { symbol: candidate.symbol, side });
@@ -2266,12 +2313,13 @@ async function runLive(
       return skip('reconciliation', reason, { symbol: candidate.symbol, side });
     }
     const baselineRoute = entryExecutionDecision(candidate, side, built.order, ledger, attempt);
-    built.order.entryExecutionDecision = applyBoundedTakerExperiment(candidate, built.order, baselineRoute, ledger);
-    if (built.order.entryExecutionDecision.executedStyle === 'taker') {
-      const stakeLimit = built.order.entryExecutionDecision.route === 'bounded-taker-experiment'
-        ? boundedTakerAuthorizationCap(built.order)
-        : built.order.entrySizingDecision?.stakeLimitCents ?? liveStakeCeiling;
-      const reserveFailure = applyTakerQuoteMovementReserve(built.order, stakeLimit);
+    const routeDecision = baselineRoute;
+    built.order.entryExecutionDecision = routeDecision;
+    if (routeDecision.executedStyle === 'taker') {
+      const stakeLimit = built.order.entrySizingDecision?.stakeLimitCents ?? liveStakeCeiling;
+      const reserveFailure = routeDecision.route === 'maker-miss-taker-fallback'
+        ? applyMakerMissTakerReserve(built.order, stakeLimit, attempt.attempts[0]!)
+        : applyTakerQuoteMovementReserve(built.order, stakeLimit);
       if (reserveFailure) {
         priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason: reserveFailure });
         if (!placed) return skip('budget', `${candidate.symbol}: ${reserveFailure}`, { symbol: candidate.symbol, side });
@@ -2290,11 +2338,21 @@ async function runLive(
     built.order.reservedStakeCents = built.order.stakeCents;
     built.order.shadowTakerAllInCents = built.order.stakeCents;
     built.order.shadowTakerQuantity = built.order.quantity;
-    const authorizeTakerQuote = built.order.entryExecutionDecision.executedStyle === 'taker'
-      ? (quote: { bid: number; ask: number; spread: number }): string | undefined => {
+    const authorizeTakerQuote = routeDecision.executedStyle === 'taker'
+      ? (quote: TakerAuthorizationQuote): string | undefined => {
         if (MAX_ENTRY_PRICE + 1e-9 < quote.ask) return `Refreshed ask ${(quote.ask * 100).toFixed(1)}c exceeds the ${MAX_ENTRY_PRICE * 100}c entry ceiling.`;
-        if (built.order.entryExecutionDecision?.route === 'bounded-taker-experiment') {
-          return boundedTakerFreshQuoteRefusal(candidate, side, quote);
+        if (routeDecision.route === 'maker-miss-taker-fallback') {
+          const probability = entrySideProbability(candidate.modelProbabilityUp, side);
+          const refusal = makerMissTakerQuoteRefusal({
+            probability, quantity: built.order.quantity,
+            referenceMidpoint: terminalEntryMidpoint(attempt.attempts.at(-1)!), quote,
+          });
+          if (!refusal) {
+            built.order.signedTakerLimit = quote.limit;
+            built.order.signedTakerNetEdge = makerMissTakerNetEdge({ probability, quantity: built.order.quantity, limit: quote.limit });
+            built.order.signedTakerQuoteAt = new Date().toISOString();
+          }
+          return refusal;
         }
         const refreshed = entryExecutionDecision(candidate, side, built.order, ledger, attempt, quote);
         return refreshed.executedStyle === 'taker' ? undefined : refreshed.reason;
@@ -2315,13 +2373,41 @@ async function runLive(
     }
     ledger.lastLiveSkip = undefined;
     await executePreparedLiveBuy(built.order, status, ledger, authorizeTakerQuote, choiceSet);
+    // Persist the terminal fill/no-fill result before optional fallback refresh work. A failed forecast
+    // rebuild must never leave the durable row looking pending after the venue order is terminal.
+    await writeLedger(ledger);
     priorDrainActions.push({ candidateId: choiceId, action: 'issued', reason: `Issued as drain sequence ${placed + 1}.` });
     placed += 1;
+    // Do not wait for the collector cadence after an authoritative zero-spend result. A forced live-only
+    // dashboard rebuild supplies a fresh model/venue snapshot; runLive then re-reads every account and
+    // operational gate before creating the next distinct durable intent.
+    const next = adaptiveEntryEpisodeDecision(liveAttempts(ledger, candidate, side), ENTRY_EXECUTION_POLICY_VERSION);
+    if (entryExecutionSettings().mode === 'adaptive' && next.allowed && next.takerFallback && refreshDashboard) {
+      try {
+        const freshDashboard = await refreshDashboard();
+        const freshStatus = await getTradingControl();
+        const freshBudgets = await getProviderBudgets({ revision: freshStatus.control.revision });
+        const freshPortfolio = updatePortfolioDecisions(freshDashboard, freshStatus, ledger);
+        const freshRegimeGate = await getRegimeGateStatus();
+        const continued = await runLive(freshDashboard, freshStatus, ledger, freshRegimeGate, freshBudgets, freshPortfolio.audit, logicalId, refreshDashboard);
+        if (!continued) {
+          built.order.fallbackSequenceEndedAt = new Date().toISOString();
+          built.order.fallbackSequenceEndReason = 'Fresh fallback checks produced no authorized intent; the detailed blocker is retained in the live-skip journal.';
+          await writeLedger(ledger);
+        }
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : 'Fresh fallback snapshot failed.';
+        ledger.lastLiveSkip = { at: new Date().toISOString(), reason: `Taker fallback withheld because its fresh snapshot failed: ${reason}` };
+        built.order.fallbackSequenceEndedAt = new Date().toISOString();
+        built.order.fallbackSequenceEndReason = ledger.lastLiveSkip.reason;
+        await writeLedger(ledger);
+      }
+    }
   }
   return placed > 0;
 }
 
-async function processCycle(dashboard: DashboardData): Promise<void> {
+async function processCycle(dashboard: DashboardData, refreshDashboard?: () => Promise<DashboardData>): Promise<void> {
   const ledger = await mutableLedger();
   let changed = updateSignalPersistence(dashboard, ledger);
   changed = await settleDueOrders(ledger) || changed;
@@ -2384,14 +2470,14 @@ async function processCycle(dashboard: DashboardData): Promise<void> {
       .catch((error) => console.error('Paper maker restriction sentinel decision write failed:', error));
   }
   const paperManagement = managePaperEntryOrders(startedPaperOrders, ledger, paperTakerAuthorizers);
-  const liveManagement = runLive(dashboard, status, ledger, regimeGate, budgets, portfolioUpdate.audit);
+  const liveManagement = runLive(dashboard, status, ledger, regimeGate, budgets, portfolioUpdate.audit, undefined, refreshDashboard);
   const [paperChanged, liveChanged] = await Promise.all([paperManagement, liveManagement]);
   changed = paperChanged || liveChanged || changed;
   if (changed || ledger.lastLiveSkip?.reason !== previousSkip) await writeLedger(ledger);
 }
 
-export function processPaperTradingCycle(dashboard: DashboardData): Promise<void> {
-  const operation = serializeLedgerMutation(() => processCycle(dashboard));
+export function processPaperTradingCycle(dashboard: DashboardData, refreshDashboard?: () => Promise<DashboardData>): Promise<void> {
+  const operation = serializeLedgerMutation(() => processCycle(dashboard, refreshDashboard));
   return operation.then(() => {
     if (!automaticReconciliationRequested) return;
     automaticReconciliationRequested = false;
@@ -2894,15 +2980,12 @@ function deriveExecutionSummaries(ledger: Ledger, control: ExecutionSummaryContr
           ? adaptiveEntryEpisodeDecision(attempts, ENTRY_EXECUTION_POLICY_VERSION)
           : makerRetryDecision(attempts, now, state.closesAt, maximumLiveMakerAttempts());
         const portfolio = ledger.portfolioDecisions[`${state.symbol}:${state.side}:${state.closesAt}`];
-        const requalificationOpen = adaptive && retry.allowed && retry.attemptNumber > 1 && Boolean(liveOrder?.makerCompletedAt);
-        if (requalificationOpen) {
-          result = evaluateEntryEpisodePersistence(state, now, liveOrder!.makerCompletedAt);
+        const fallbackOpen = adaptive && retry.allowed && Boolean(retry.takerFallback) && Boolean(liveOrder?.makerCompletedAt);
+        if (fallbackOpen) {
+          result = { eligible: true, reason: retry.reason, cycleAgeMs: 0, remainingMs: 0, qualifyingSnapshots: 1, medianNetEdge: null, edgeSpike: null };
         }
         const requalificationState = liveOrder?.status === 'unfilled'
-          ? requalificationOpen
-            ? !result.eligible ? 'collecting' as const
-              : portfolio?.state === 'portfolio-selected' ? 'ready' as const : 'checks_pending' as const
-            : 'ended' as const
+          ? fallbackOpen ? 'checks_pending' as const : 'ended' as const
           : undefined;
         return {
           symbol: state.symbol, side: state.side, closesAt: state.closesAt, eligible: result.eligible,
@@ -2915,10 +2998,10 @@ function deriveExecutionSummaries(ledger: Ledger, control: ExecutionSummaryContr
             quantity: liveOrder.quantity, reason: liveOrder.reason, noFillReason: inferredNoFillReason(liveOrder),
             attemptNumber: liveOrder.entryEpisode ?? liveOrder.attemptNumber ?? attempts.length,
             maximumAttempts: adaptive ? MAX_ENTRY_EPISODES_PER_WINDOW : maximumLiveMakerAttempts(),
-            retryEligible: requalificationState === 'ready', executedStyle: liveOrder.entryExecutionDecision?.executedStyle,
+            retryEligible: fallbackOpen, executedStyle: liveOrder.entryExecutionDecision?.executedStyle,
             requalificationState,
-            requalifyingSnapshots: requalificationOpen ? result.qualifyingSnapshots : undefined,
-            requalifyingRequiredSnapshots: requalificationOpen ? persistenceRequirements.requiredSnapshots : undefined,
+            requalifyingSnapshots: undefined,
+            requalifyingRequiredSnapshots: undefined,
           } : undefined,
         };
       }),

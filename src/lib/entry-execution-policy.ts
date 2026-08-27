@@ -2,8 +2,10 @@ import { makerExecutionStyle } from './execution-order-evidence';
 import { DEFAULT_STRATEGY_ID, normalizeStrategyId } from './strategy-registry';
 import type { PaperOrder, PositionSide, StrategyId } from './types';
 
-export const ENTRY_EXECUTION_POLICY_VERSION = 'maker-high30-requalify3-fresh1c-bounded-taker-pilot-v7';
+export const ENTRY_EXECUTION_POLICY_VERSION = 'maker-then-positive-edge-taker2-fresh2tick-v8';
+/** Historical manifest/reporting threshold; v8 no longer grants an immediate high-edge taker route. */
 export const HIGH_EDGE_TAKER_THRESHOLD = 0.30;
+/** One maker intent plus at most two bounded IOC intents. */
 export const MAX_ENTRY_EPISODES_PER_WINDOW = 3;
 export type EntryExecutionMode = 'maker' | 'adaptive' | 'taker';
 export type EntryExecutionStyle = 'maker' | 'taker';
@@ -26,7 +28,7 @@ export interface EntryExecutionPolicyInput {
   minimumMedianNetEdge: number;
   minimumConfidence: number;
   maximumSpread: number;
-  /** Historical compatibility only. V7 never grants taker fallback authority. */
+  /** An authoritative zero-spend predecessor permits this bounded fallback evaluation. */
   makerMissFallback?: boolean;
   fallbackFromOrderId?: string;
 }
@@ -36,7 +38,7 @@ export interface EntryExecutionDecision {
   configuredMode: EntryExecutionMode;
   executedStyle: EntryExecutionStyle;
   recommendedStyle: EntryExecutionStyle;
-  route: 'ordinary-maker' | 'high-edge-taker' | 'bounded-taker-experiment';
+  route: 'ordinary-maker' | 'high-edge-taker' | 'maker-miss-taker-fallback' | 'bounded-taker-experiment';
   reason: string;
   takerNetEdge: number;
   medianNetEdge: number;
@@ -66,26 +68,27 @@ export function makerCohortEvidence(orders: PaperOrder[], price: number, spread:
 }
 
 /**
- * Baseline v7 routing preserves v6: it spends the spread only on a 30pp edge that survives the exact signed-path refresh. Lower-edge
- * decisions remain maker and receive one attempt per qualified episode. The old fill-rate comparison is retained for audit but
- * cannot gate execution because it treats outcome-selected maker fills as random capture.
+ * Attempt one is always the managed maker. Only an authoritative predecessor selected by the lifecycle
+ * policy may request a taker fallback. The signed quote authorizer separately evaluates positive edge at
+ * the actual two-tick limit; this issuance decision preserves quality and spread gates without requiring
+ * post-miss persistence or the ordinary 5pp admission margin again.
  */
 export function evaluateEntryExecutionPolicy(input: EntryExecutionPolicyInput): EntryExecutionDecision {
   const fillRate = input.makerEvidence.fillRate;
   const makerExpectedCapturedEdge = fillRate === null ? null : Math.max(0, input.makerNetEdge) * fillRate;
   const takerAdvantage = makerExpectedCapturedEdge === null ? null : input.currentNetEdge - makerExpectedCapturedEdge;
   const failures: string[] = [];
-  if (input.currentNetEdge + 1e-12 < HIGH_EDGE_TAKER_THRESHOLD) failures.push(`fresh taker edge ${(input.currentNetEdge * 100).toFixed(1)}pp < ${HIGH_EDGE_TAKER_THRESHOLD * 100}pp`);
-  if (input.medianNetEdge + 1e-12 < input.minimumMedianNetEdge) failures.push(`median edge ${(input.medianNetEdge * 100).toFixed(1)}pp < ${(input.minimumMedianNetEdge * 100).toFixed(1)}pp`);
-  if (input.confidence + 1e-12 < input.minimumConfidence) failures.push(`quality ${(input.confidence * 100).toFixed(1)}% < ${(input.minimumConfidence * 100).toFixed(1)}%`);
-  if (input.spread > input.maximumSpread + 1e-12) failures.push(`spread ${(input.spread * 100).toFixed(1)}c > ${(input.maximumSpread * 100).toFixed(1)}c`);
-  if (input.makerMissFallback) failures.push('v7 does not permit taker fallback authority');
-  const recommendedStyle: EntryExecutionStyle = failures.length ? 'maker' : 'taker';
+  if (input.makerMissFallback) {
+    if (!(input.currentNetEdge > 1e-12)) failures.push(`fresh taker edge ${(input.currentNetEdge * 100).toFixed(1)}pp is not positive`);
+    if (input.confidence + 1e-12 < input.minimumConfidence) failures.push(`quality ${(input.confidence * 100).toFixed(1)}% < ${(input.minimumConfidence * 100).toFixed(1)}%`);
+    if (input.spread > input.maximumSpread + 1e-12) failures.push(`spread ${(input.spread * 100).toFixed(1)}c > ${(input.maximumSpread * 100).toFixed(1)}c`);
+  }
+  const recommendedStyle: EntryExecutionStyle = input.makerMissFallback && !failures.length ? 'taker' : 'maker';
   const executedStyle: EntryExecutionStyle = input.mode === 'maker' ? 'maker' : recommendedStyle;
-  const route = recommendedStyle === 'taker' ? 'high-edge-taker' : 'ordinary-maker';
+  const route = recommendedStyle === 'taker' ? 'maker-miss-taker-fallback' : 'ordinary-maker';
   const reason = recommendedStyle === 'taker'
-    ? `Fresh edge clears ${HIGH_EDGE_TAKER_THRESHOLD * 100}pp with persistent edge, quality, and spread gates; submit one capped IOC.${input.mode === 'maker' ? ' Shadow only; live remains maker.' : ''}`
-    : `One ordinary maker attempt retained: ${failures.join('; ')}.`;
+    ? `Authoritative zero-spend predecessor permits one bounded fresh-quote IOC.${input.mode === 'maker' ? ' Shadow only; live remains maker.' : ''}`
+    : input.makerMissFallback ? `Taker fallback withheld: ${failures.join('; ')}.` : 'First intent uses the managed maker route.';
   return {
     policyVersion: ENTRY_EXECUTION_POLICY_VERSION, configuredMode: input.mode,
     executedStyle, recommendedStyle, route, reason,

@@ -1259,10 +1259,18 @@
       "summary": "Separate local disk reclamation into rebuildable-cache cleanup, verified off-machine restore, and owner-aware immutable tiering. S3-compatible object storage never replaces POSIX h…"
     },
     {
-      "id": "DEC-20260827-01",
+      "id": "DEC-20260827-02",
       "date": "2026-08-27",
       "source": "spec/decision-log.md",
       "rowOrdinal": 1,
+      "rowSha256": "23bfd04cc8ec0cf244baba84aa6ad127067dde848aaa8b7a7e0576e30da1162f",
+      "summary": "Replace repeated maker episodes with one managed maker and at most two fresh, bounded, positive-edge taker IOCs."
+    },
+    {
+      "id": "DEC-20260827-01",
+      "date": "2026-08-27",
+      "source": "spec/decision-log.md",
+      "rowOrdinal": 2,
       "rowSha256": "3175f119726e001f1e85b8c8ce1b7da4f3e9037ced3d96a0f64c33d0cd9016c3",
       "summary": "Repair neutral paper execution with the exact event-time horizon, exclude five contaminated F2 rows deterministically, carry forward exact-equivalent clean evidence by generation strata, and reserve the first future calibration adoption for v8."
     },
@@ -1270,7 +1278,7 @@
       "id": "DEC-20260826-08",
       "date": "2026-08-26",
       "source": "spec/decision-log.md",
-      "rowOrdinal": 2,
+      "rowOrdinal": 3,
       "rowSha256": "d9ae070470411a0415931d0d92e55c4a51be2e98b8da386719a0a6430de4b082",
       "summary": "Stage the Kalshi hourly threshold market through read-only H1, detached observation H2, and isolated paper H3 while preserving independent exact-contract identity and keeping live withheld."
     },
@@ -1278,7 +1286,7 @@
       "id": "DEC-20260826-07",
       "date": "2026-08-26",
       "source": "spec/decision-log.md",
-      "rowOrdinal": 3,
+      "rowOrdinal": 4,
       "rowSha256": "92900aacf19664e78dc148300809c82e693d8fac3edc7f45decf48671897d80a",
       "summary": "Add deterministic agent preflight, critical requirement traceability, lifecycle-aware design checks, and status source provenance without changing runtime authority."
     },
@@ -1286,7 +1294,7 @@
       "id": "DEC-20260826-06",
       "date": "2026-08-26",
       "source": "spec/decision-log.md",
-      "rowOrdinal": 4,
+      "rowOrdinal": 5,
       "rowSha256": "341735fd8f7992b4a365caedb9cbdead07faf98c5b7973cb82f3491f28e2dc49",
       "summary": "Keep canonical modules normative, add stable requirement and ordinary-decision identifiers, route designs by domain/workstream as well as lifecycle, strengthen mechanically provabl…"
     },
@@ -1294,7 +1302,7 @@
       "id": "DEC-20260826-02",
       "date": "2026-08-26",
       "source": "spec/decision-log.md",
-      "rowOrdinal": 5,
+      "rowOrdinal": 6,
       "rowSha256": "47a3a3c8f1edca7f5305a3edd08e2d77d60c5a7b7dc0f67841638fadc3aff793",
       "summary": "Verify the always-loaded agent guidance and require module-qualified citation. npm run verify:agents governs AGENTS.md, README.md, and reports/README.md in CI: cited paths must res…"
     },
@@ -1302,7 +1310,7 @@
       "id": "DEC-20260826-03",
       "date": "2026-08-26",
       "source": "spec/decision-log.md",
-      "rowOrdinal": 6,
+      "rowOrdinal": 7,
       "rowSha256": "c53baec8e831176c24ab3388807da67f7635e2e5fded54eb91c3a0e6f3b79087",
       "summary": "Use one read-only order-attribution vocabulary across signed open-order, decision-history, and performance surfaces: track, provider, provider variant, market, forecast model, buy…"
     },
@@ -1310,7 +1318,7 @@
       "id": "DEC-20260826-04",
       "date": "2026-08-26",
       "source": "spec/decision-log.md",
-      "rowOrdinal": 7,
+      "rowOrdinal": 8,
       "rowSha256": "baa9139636e81ae61bdb581059341ea6da84ff7a0f5079092c722e4a8d77ad24",
       "summary": "Keep AGENTS.md as one compact always-loaded operating guide rather than another module tree. Preserve the generated Next.js block, stable §§0–10 and §5 item numbering used by histo…"
     },
@@ -1318,7 +1326,7 @@
       "id": "DEC-20260826-05",
       "date": "2026-08-26",
       "source": "spec/decision-log.md",
-      "rowOrdinal": 8,
+      "rowOrdinal": 9,
       "rowSha256": "419dd8a8fa06d331d5aeeb57ab435d8e97c58c37666c170a51f0ae38deeab4d0",
       "summary": "Separate current implementation status, planning, and history. Keep STATUS.md as a compact dated projection; move non-normative sequencing to status/roadmap.md; index reading and m…"
     },
@@ -1326,7 +1334,7 @@
       "id": "DEC-20260825-11",
       "date": "2026-08-25",
       "source": "spec/decision-log.md",
-      "rowOrdinal": 9,
+      "rowOrdinal": 10,
       "rowSha256": "225eef0698998b903e59e4e3d6193499901814a8bf6af69a3901ff0518b13b55",
       "summary": "Establish a controlled lifecycle and complete discovery index for all top-level design documents. docs/README.md indexes every design, evaluation plan, reference, and exploration e…"
     },
@@ -1334,7 +1342,7 @@
       "id": "DEC-20260825-12",
       "date": "2026-08-25",
       "source": "spec/decision-log.md",
-      "rowOrdinal": 10,
+      "rowOrdinal": 11,
       "rowSha256": "8353040ecdcc8f0d80fc1e99c42ef427d6f562e49d7cc8b9075c4b4e43a3d6e6",
       "summary": "Modularize the living product specification using a hub-and-spoke structure. Keep SPEC.md as the stable entry point for the product statement, global principles, authority, routing…"
     }

@@ -21,7 +21,7 @@ async function collect(): Promise<void> {
         console.error('Forecast tracking failed:', error);
         return dashboard.performance;
       });
-    await processPaperTradingCycle(dashboard);
+    await processPaperTradingCycle(dashboard, () => getDashboard(true, true));
     // Settlement of already-closed windows is deliberately not awaited by the calculation above: it is
     // bookkeeping about the past, and letting it block the present is what made every cycle late.
     void resolveDueForecasts()

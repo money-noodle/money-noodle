@@ -3,14 +3,14 @@ import { kalshiConfigured, kalshiEnvironment, kalshiRequest } from './kalshi-api
 import { observeKalshiOrderBook } from './kalshi-depth';
 import { kalshiMakerCreateClientOrderId } from './live-order-identity';
 import {
-  MAKER_MANAGEMENT_CHECKS, MAKER_MANAGEMENT_POLL_MS, floorToValidKalshiPrice,
+  MAKER_MANAGEMENT_CHECKS, MAKER_MANAGEMENT_POLL_MS, boundedTakerLimit,
   initialManagedMakerPrice, nextManagedMakerPrice,
   selectedManagedMakerQuote,
 } from './managed-maker';
 import { selectedSideDepth } from './order-book-depth';
 import { beginTaskCadenceRun } from './task-cadence-runtime';
 
-export { backOffValidKalshiPrice, floorToValidKalshiPrice } from './managed-maker';
+export { advanceValidKalshiPrice, backOffValidKalshiPrice, boundedTakerLimit, floorToValidKalshiPrice } from './managed-maker';
 import type { BinaryOrderBook, EntryExecutionObservation, PositionSide } from './types';
 
 /**
@@ -463,7 +463,8 @@ export async function placeKalshiTakerBuy(input: {
   ticker: string; positionSide?: PositionSide; maximumPriceCents: number; count: number;
   clientOrderId: string; onAccepted?: (venueOrderId: string, exchangeIndex: number) => Promise<void>;
   onObservation?: (observation: EntryExecutionObservation) => Promise<void>;
-  authorizeQuote?: (quote: { bid: number; ask: number; spread: number }) => string | undefined;
+  cushionTicks?: number;
+  authorizeQuote?: (quote: { bid: number; ask: number; spread: number; limit: number; tickSize: number }) => string | undefined;
 }): Promise<LiveFill> {
   if (!liveTradingEnabled()) throw new Error('Live trading is disabled.');
   const positionSide = input.positionSide ?? 'UP';
@@ -479,9 +480,13 @@ export async function placeKalshiTakerBuy(input: {
   };
   const quote = selectedQuote(await preSubmitQuote(input.ticker), positionSide);
   const maximumDollars = input.maximumPriceCents / 100;
-  const limit = floorToValidKalshiPrice(Math.min(maximumDollars, quote.ask + 1e-8), quote.ranges);
+  const cushionTicks = input.cushionTicks ?? 0;
+  if (!Number.isSafeInteger(cushionTicks) || cushionTicks < 0 || cushionTicks > 2) throw new Error('Taker cushion must be zero, one, or two venue ticks.');
+  const terms = boundedTakerLimit({ ask: quote.ask, maximumPrice: maximumDollars, cushionTicks, ranges: quote.ranges });
+  if (!terms) throw new Error('Taker not submitted: exact quote could not produce a valid venue-ladder limit.');
+  const { limit, tickSize } = terms;
   if (limit + 1e-9 < quote.ask) throw new Error(`Taker not submitted: current ${positionSide} ask ${(quote.ask * 100).toFixed(1)}c exceeds approved ${(maximumDollars * 100).toFixed(1)}c cap.`);
-  const refusal = input.authorizeQuote?.({ bid: quote.bid, ask: quote.ask, spread: quote.ask - quote.bid });
+  const refusal = input.authorizeQuote?.({ bid: quote.bid, ask: quote.ask, spread: quote.ask - quote.bid, limit, tickSize });
   if (refusal) throw new Error(`Taker not submitted: refreshed quote no longer clears execution policy. ${refusal}`);
   await emit({
     at: new Date().toISOString(), event: 'create_quote', selectedBid: quote.bid, selectedAsk: quote.ask,

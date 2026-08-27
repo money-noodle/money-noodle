@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  backOffValidKalshiPrice, confirmKalshiCancellation, floorToValidKalshiPrice,
+  advanceValidKalshiPrice, backOffValidKalshiPrice, boundedTakerLimit, confirmKalshiCancellation, floorToValidKalshiPrice,
   kalshiExitOrderBody, kalshiMakerAmendOrderBody, kalshiMakerEntryOrderBody,
   kalshiOrderBookSide, kalshiTakerEntryOrderBody, selectedSidePriceFromYes,
   stableKalshiExchangeIndex, validateKalshiExchangeIndex, validateKalshiMarketWireIdentity,
@@ -30,6 +30,19 @@ describe('Kalshi tapered price quantization', () => {
 
   it('returns to 0.1c ticks above 90c', () => {
     expect(floorToValidKalshiPrice(0.9099, tapered)).toBeCloseTo(0.909);
+  });
+
+  it('advances exact ticks for bounded taker cushions across tapered boundaries', () => {
+    expect(advanceValidKalshiPrice(0.22, 2, tapered)).toBeCloseTo(0.24);
+    expect(advanceValidKalshiPrice(0.099, 2, tapered)).toBeCloseTo(0.11);
+    expect(advanceValidKalshiPrice(0.899, 2, tapered)).toBeCloseTo(0.901);
+  });
+
+  it('uses the fresh ask plus two ticks without targeting the structural ceiling', () => {
+    expect(boundedTakerLimit({ ask: 0.45, maximumPrice: 0.50, cushionTicks: 2, ranges: tapered })).toEqual({ limit: 0.47, tickSize: 0.01 });
+    expect(boundedTakerLimit({ ask: 0.49, maximumPrice: 0.50, cushionTicks: 2, ranges: tapered })).toEqual({ limit: 0.50, tickSize: 0.01 });
+    expect(boundedTakerLimit({ ask: 0.51, maximumPrice: 0.50, cushionTicks: 2, ranges: tapered })?.limit).toBe(0.50);
+    expect(boundedTakerLimit({ ask: 0.455, maximumPrice: 0.50, cushionTicks: 2, ranges: tapered })).toBeNull();
   });
 
   it('backs off exact ticks after post-only acknowledgement races', () => {

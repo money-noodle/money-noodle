@@ -26,6 +26,39 @@ export function floorToValidKalshiPrice(priceDollars: number, ranges?: KalshiPri
   return Number(best.toFixed(6));
 }
 
+/** Moves up by exact venue ticks, including across tapered 10c/90c boundaries. */
+export function advanceValidKalshiPrice(priceDollars: number, ticks: number, ranges?: KalshiPriceRange[]): number {
+  let result = floorToValidKalshiPrice(priceDollars, ranges);
+  const ladder = ranges ?? [{ start: '0', end: '1', step: '0.01' }];
+  for (let index = 0; index < ticks; index += 1) {
+    let next = Number.POSITIVE_INFINITY;
+    for (const item of ladder) {
+      const start = Number(item.start), end = Number(item.end), step = Number(item.step);
+      if (![start, end, step].every(Number.isFinite) || step <= 0 || result >= end - 1e-10) continue;
+      const stepIndex = Math.max(0, Math.floor((result - start + 1e-10) / step) + 1);
+      const candidate = start + stepIndex * step;
+      if (candidate > result + 1e-10 && candidate <= end + 1e-9) next = Math.min(next, candidate);
+    }
+    if (!Number.isFinite(next)) break;
+    result = next;
+  }
+  return Number(result.toFixed(6));
+}
+
+export function boundedTakerLimit(input: {
+  ask: number; maximumPrice: number; cushionTicks: number; ranges?: KalshiPriceRange[];
+}): { limit: number; tickSize: number } | null {
+  if (![input.ask, input.maximumPrice].every(Number.isFinite) || input.ask <= 0 || input.maximumPrice <= 0
+    || !Number.isSafeInteger(input.cushionTicks) || input.cushionTicks < 0 || input.cushionTicks > 2) return null;
+  const current = floorToValidKalshiPrice(input.ask, input.ranges);
+  if (Math.abs(current - input.ask) > 1e-9) return null;
+  const firstHigher = advanceValidKalshiPrice(input.ask, 1, input.ranges);
+  const tickSize = Number((firstHigher - current).toFixed(6));
+  const cushioned = advanceValidKalshiPrice(input.ask, input.cushionTicks, input.ranges);
+  const limit = floorToValidKalshiPrice(Math.min(input.maximumPrice, cushioned), input.ranges);
+  return tickSize > 0 && limit > 0 ? { limit, tickSize } : null;
+}
+
 /** Moves down by exact venue ticks, including across tapered 10c/90c boundaries. */
 export function backOffValidKalshiPrice(priceDollars: number, ticks: number, ranges?: KalshiPriceRange[]): number {
   let result = floorToValidKalshiPrice(priceDollars, ranges);

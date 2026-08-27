@@ -1,7 +1,7 @@
 # Money Noodle — Current Implementation Status
 
 > **Projection date:** 2026-08-27 · **Status:** Current implementation projection
-> **Projection-critical source fingerprint:** `sha256:c615779bae75645794ac8480e05c1c08b5432f129a2fe102830167e6f2ee8d34`
+> **Projection-critical source fingerprint:** `sha256:ac3edd0544f06af727050a205b5b896767a2ca9385f0d1704b41663eff0358cf`
 > **Requirements:** [`SPEC.md`](SPEC.md) · **Design lifecycle:** [`docs/README.md`](docs/README.md)
 > **Status index and archives:** [`status/README.md`](status/README.md) · **Roadmap:** [`status/roadmap.md`](status/roadmap.md)
 >
@@ -34,7 +34,7 @@ indexed by [`status/README.md`](status/README.md).
 | --- | --- |
 | Product surfaces | Local dashboard, signed Automation/Budget/Performance controls, public sanitized paper summary, factor and policy drill-downs, selected-side order-book ladder, stable signal transitions, explicit stale/degraded states, and read-only track/provider/variant/market/forecast/buy/execution attribution scopes are implemented. Current-card scope is presentation-only; signed open orders, history, and trading performance share one pure order-identity vocabulary and keep live/paper totals separate. A separate stateless-safe Kalshi one-hour threshold section shows exact-duration ABOVE/YES and BELOW/YES research contracts without policy, paper, or live authority. |
 | Forecasting | Venue-independent Blend 0.4 production probability, immutable forecast history, exact provenance, outcome resolution, calibration/performance reports, pure forecast boundary, and prospective candidate-family collection are implemented. Evaluator v2 is offline monitoring only and cannot promote. |
-| Entry and portfolio | Shared buy policy v22, mode-free rule evaluation, post-qualification execution style, persistence, up to three requalified episodes, sizing, global position/window/correlation ceilings, and prospective choice-set evidence are implemented. |
+| Entry and portfolio | Shared buy policy v22, mode-free initial admission, one-maker/two-taker bounded continuation, persistence, sizing, global position/window/correlation ceilings, and prospective choice-set evidence are implemented. |
 | Paper execution | Independent managed-maker/IOC simulation, displayed-depth queue proxy, public trade evidence, reduce-only depth exits, exact mirror-pair IDs, separate paper bankroll, and neutral versioned calibration are implemented. Paper is diagnostic rather than live-equivalent. |
 | Live execution | The currently implemented live adapter supports signed buy/sell order lifecycle, managed post-only makers, bounded IOC entry evaluation, collision-resistant IDs, exact exchange identity, cancellation confirmation, fill/fee reconciliation, and side-aware reduce-only exits and switches. Additional providers fail closed. |
 | Funded safety | Explicit arming, typed environment confirmation, kill switch, quiescent Pause/drain, per-trade and rate caps, loss/drawdown stops, durable reservations, operator-intent separation, startup/manual/full and periodic incremental reconciliation, and guarded system-only auto-resume are implemented. |
@@ -49,7 +49,7 @@ indexed by [`status/README.md`](status/README.md).
 | --- | --- |
 | Production forecast | Blend 0.4; prospective candidates cannot affect it |
 | Shared entry policy | `buy-binary-edge-net5-nocap-quality50-owned55-price10to75-late30-persist2of15-v22`: +5pp minimum net edge and 10–75¢ entry band |
-| Live execution | `maker-high30-requalify3-fresh1c-bounded-taker-pilot-v7`; the bounded pilot is closed and subsequent eligible intents retain incumbent maker execution |
+| Live execution | `maker-then-positive-edge-taker2-fresh2tick-v8`; one managed maker, then after authoritative zero-fill at most two freshly rechecked IOC intents bounded by two ticks, 125% of final maker limit, 75¢, and positive charged-fee edge; bounded pilot remains closed |
 | Paper execution | `paper-managed-execution-route-ioc-requalify3-calibrated-v7`, neutral `queueClearFraction = 0`, exact inclusive maker event-time horizon |
 | Entry sizing | `entry-sizing-reduce30-below-edge30-v1`; no multiplier above one |
 | Ordinary exit | `strict-value-v1`; side-aware reduce-only IOC behavior |

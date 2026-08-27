@@ -17,6 +17,8 @@ export interface MakerRetryDecision {
   allowed: boolean;
   attemptNumber: number;
   retryOfOrderId?: string;
+  /** True only for the two terminal IOC opportunities following the first authoritative maker miss. */
+  takerFallback?: boolean;
   reason: string;
   retryAt?: string;
 }
@@ -47,38 +49,52 @@ const orderExecutionPolicyVersion = (order: PaperOrder): string | undefined => o
   : order.entryExecutionDecision?.policyVersion ?? order.entryDecision?.executionPolicyVersion;
 
 /**
- * V5 re-arms only after an authoritative current-policy maker zero-fill. Persistence is evaluated by the
- * caller strictly after `makerCompletedAt`; this function owns terminal state, generation, and the cap.
+ * The adaptive generation is one managed maker followed by at most two terminal IOC opportunities.
+ * Every opportunity is a new durable intent. A partial fill, ambiguity, rejection, or old generation ends
+ * the sequence; only authoritative maker/IOC zero-fill may advance it. A signed-path policy refusal is terminal.
  */
 export function adaptiveEntryEpisodeDecision(
   attempts: PaperOrder[], currentPolicyVersion: string, maximumEpisodes = MAX_ENTRY_EPISODES_PER_WINDOW,
 ): MakerRetryDecision {
   const ordered = [...attempts].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-  if (!ordered.length) return { allowed: true, attemptNumber: 1, reason: 'First entry episode for this contract window.' };
+  if (!ordered.length) return { allowed: true, attemptNumber: 1, takerFallback: false, reason: 'First managed-maker intent for this contract window.' };
+  const nextAttempt = ordered.length + 1;
   if (ordered.some((order) => order.status === 'open' || order.status === 'pending_reservation'
     || order.status === 'uncertain' || (order.filledCount ?? 0) > 0)) {
-    return { allowed: false, attemptNumber: ordered.length + 1, reason: 'A filled, open, working, or uncertain entry already exists for this contract window.' };
+    return { allowed: false, attemptNumber: nextAttempt, reason: 'A filled, open, working, or uncertain entry already exists for this contract window.' };
   }
   if (ordered.some((order) => orderExecutionPolicyVersion(order) !== currentPolicyVersion)) return {
-    allowed: false, attemptNumber: ordered.length + 1,
-    reason: 'A prior execution-policy generation cannot authorize a current entry episode.',
+    allowed: false, attemptNumber: nextAttempt, reason: 'A prior execution-policy generation cannot authorize a current fallback.',
   };
   const effectiveMaximum = Math.max(1, Math.min(MAX_ENTRY_EPISODES_PER_WINDOW, Math.floor(maximumEpisodes)));
   if (ordered.length >= effectiveMaximum) return {
-    allowed: false, attemptNumber: ordered.length + 1,
-    reason: `Maximum ${effectiveMaximum} entry episodes reached for this asset/side/window.`,
+    allowed: false, attemptNumber: nextAttempt,
+    reason: `Maximum ${effectiveMaximum} entry intents reached for this asset/side/window.`,
   };
   const latest = ordered.at(-1)!;
-  if (latest.status !== 'unfilled' || latest.entryExecutionDecision?.executedStyle === 'taker'
-    || latest.liquidityRole !== 'maker' || !Number.isFinite(Date.parse(latest.makerCompletedAt ?? ''))) {
-    return {
-      allowed: false, attemptNumber: ordered.length + 1,
-      reason: 'A new episode requires an authoritative completed maker zero-fill.',
+  if (latest.fallbackSequenceEndedAt) return {
+    allowed: false, attemptNumber: nextAttempt,
+    reason: latest.fallbackSequenceEndReason ?? 'The bounded fallback sequence ended without another venue intent.',
+  };
+  if (latest.status !== 'unfilled' || !Number.isFinite(Date.parse(latest.makerCompletedAt ?? ''))) return {
+    allowed: false, attemptNumber: nextAttempt,
+    reason: 'A fallback requires a definitive terminal zero-spend result.',
+  };
+  if (ordered.length === 1) {
+    if (latest.entryExecutionDecision?.executedStyle !== 'maker' || latest.liquidityRole !== 'maker'
+      || latest.noFillReason !== 'rested_no_fill') return {
+      allowed: false, attemptNumber: nextAttempt,
+      reason: 'The first taker requires an authoritative managed-maker zero-fill.',
+    };
+  } else if (ordered.length === 2) {
+    if (latest.entryExecutionDecision?.executedStyle !== 'taker' || latest.noFillReason !== 'ioc_no_fill') return {
+      allowed: false, attemptNumber: nextAttempt,
+      reason: 'The final taker requires an authoritative accepted IOC zero-fill.',
     };
   }
   return {
-    allowed: true, attemptNumber: ordered.length + 1, retryOfOrderId: latest.id,
-    reason: `Fresh post-completion persistence may authorize entry episode ${ordered.length + 1}/${effectiveMaximum}.`,
+    allowed: true, attemptNumber: nextAttempt, retryOfOrderId: latest.id, takerFallback: true,
+    reason: `Fresh checks may authorize taker fallback ${nextAttempt - 1}/2.`,
   };
 }
 

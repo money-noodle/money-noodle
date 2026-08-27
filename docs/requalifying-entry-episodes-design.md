@@ -1,13 +1,17 @@
 # Requalifying maker entry episodes
 
 > **Document type:** Execution design
-> **Design status:** Accepted
+> **Design status:** Superseded
 > **Implementation:** Complete
+> **Current use:** Historical only — current sequencing uses [`maker-miss-two-taker-fallback-design.md`](maker-miss-two-taker-fallback-design.md).
 > **Created:** 2026-08-19
 > **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
 > **Decision record:** [`DEC-20260819-01`](../spec/decisions/decision-id-map.json)
 > **Design index:** [`docs/README.md`](README.md)
 
+> **Superseded on 2026-08-27 by** [`maker-miss-two-taker-fallback-design.md`](maker-miss-two-taker-fallback-design.md).
+> Historical v5-v7 orders retain these episode semantics.
+>
 > Approved by the maintainer on 2026-08-19 as a restrictive amendment to
 > [`high-edge-execution-reduced-sizing-design.md`](high-edge-execution-reduced-sizing-design.md).
 > This changes execution sequencing, not the shared buy rule or sizing policy.

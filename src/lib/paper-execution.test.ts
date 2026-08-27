@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { MAX_FILLABLE_ASK, applyTakerQuoteMovementReserve, boundedTakerFreshQuoteRefusal, estimatePaperFill, evaluateEntryEpisodePersistence, groupedRecentOrders, venueFeeCents } from './paper-execution';
+import { MAX_FILLABLE_ASK, applyMakerMissTakerReserve, applyTakerQuoteMovementReserve, boundedTakerFreshQuoteRefusal, estimatePaperFill, evaluateEntryEpisodePersistence, groupedRecentOrders, venueFeeCents } from './paper-execution';
 import type { PaperOrder, Prediction } from './types';
 import type { SignalPersistenceState } from './signal-persistence';
 import { MAX_ENTRY_PRICE, MIN_ENTRY_PRICE, MIN_NET_EDGE, bestEntry, venueFeeRate, ENTRY_ADMISSION_FEE_ROLE } from './prediction-policy';
@@ -96,6 +96,21 @@ describe('paper execution fills', () => {
     expect(taker).toMatchObject({
       quantity: worstCase.quantity, requestedQuantity: worstCase.quantity, stakeCents: worstCase.stakeCents,
       feeCents: worstCase.feeCents, potentialPayoutCents: worstCase.potentialPayoutCents,
+    });
+    expect(taker.stakeCents).toBeLessThanOrEqual(100);
+  });
+
+  it('reserves fallback quantity at the 25% ceiling without targeting that ceiling on wire', () => {
+    const maker = liveAttempt({
+      initialSubmittedPrice: 0.39,
+      entryExecutionObservations: [{ at: '2026-01-01T00:00:12Z', event: 'cancel_confirmed', limitPrice: 0.40 }],
+    });
+    const taker = liveAttempt({ id: 'live:XRP:close:episode:2', attemptNumber: 2 });
+    expect(applyMakerMissTakerReserve(taker, 100, maker)).toBeUndefined();
+    const worstCase = estimatePaperFill(100, 0.50, 'kalshi')!;
+    expect(taker.approvedMaximumPrice).toBeCloseTo(0.50);
+    expect(taker).toMatchObject({
+      quantity: worstCase.quantity, stakeCents: worstCase.stakeCents, feeCents: worstCase.feeCents,
     });
     expect(taker.stakeCents).toBeLessThanOrEqual(100);
   });

@@ -1856,11 +1856,18 @@ export interface PaperOrder {
     makerSamples: number;
     makerFillRate: number | null;
     /** v4+ route identity; absent on historical execution decisions. */
-    route?: 'ordinary-maker' | 'high-edge-taker' | 'bounded-taker-experiment';
-    /** Historical v3 fallback metadata; v4+ never opens taker fallback authority. */
+    route?: 'ordinary-maker' | 'high-edge-taker' | 'maker-miss-taker-fallback' | 'bounded-taker-experiment';
+    /** True for current v8 fallback decisions and retained historical v3 metadata. */
     makerMissFallback?: boolean;
     fallbackFromOrderId?: string;
   };
+  /** Exact signed-path fallback economics, persisted before/with accepted venue identity when submitted. */
+  signedTakerLimit?: number;
+  signedTakerNetEdge?: number;
+  signedTakerQuoteAt?: string;
+  /** Durable terminal refusal for an authorized fallback opportunity that produced no new venue intent. */
+  fallbackSequenceEndedAt?: string;
+  fallbackSequenceEndReason?: string;
   shadowTakerAllInCents?: number;
   shadowTakerQuantity?: number;
   /**

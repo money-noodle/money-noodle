@@ -1,30 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_TAKER_QUOTE_MOVEMENT, refreshedAskFitsTakerCap, takerQuoteCap } from './taker-quote-policy';
-import { MAX_ENTRY_PRICE } from './prediction-policy';
+import { makerMissTakerHardCeiling, makerMissTakerQuoteRefusal } from './taker-quote-policy';
 
-describe('taker quote movement cap', () => {
-  it('allows at most one cent above the issuance ask', () => {
-    const cap = takerQuoteCap(0.28)!;
-    expect(cap.maximumPrice).toBeCloseTo(0.29, 12);
-    expect(cap.movementLimit).toBeCloseTo(MAX_TAKER_QUOTE_MOVEMENT, 12);
-    expect(refreshedAskFitsTakerCap(0.29, cap)).toBe(true);
-    expect(refreshedAskFitsTakerCap(0.290_000_002, cap)).toBe(false);
+const quote = { bid: 0.44, ask: 0.45, spread: 0.01, limit: 0.47, tickSize: 0.01 };
+const quantity = 1;
+
+describe('maker-miss taker quote policy', () => {
+  it('caps the sequence from the final maker limit and the 75c absolute ceiling', () => {
+    expect(makerMissTakerHardCeiling(0.40)).toBeCloseTo(0.50);
+    expect(makerMissTakerHardCeiling(0.70)).toBeCloseTo(0.75);
+    expect(makerMissTakerHardCeiling(Number.NaN)).toBeNull();
   });
 
-  it('never relaxes beyond the entry policy price ceiling', () => {
-    // Written against MAX_ENTRY_PRICE rather than a literal band. The claim is that the one-cent
-    // tolerance tracks the policy ceiling wherever it sits; a fixture pinned to one band silently
-    // stops testing that the moment the band moves, which is what happened at v22.
-    const halfCentBelowCeiling = MAX_ENTRY_PRICE - 0.005;
-    const cap = takerQuoteCap(halfCentBelowCeiling)!;
-    expect(cap.maximumPrice).toBe(MAX_ENTRY_PRICE);
-    expect(cap.movementLimit).toBeCloseTo(0.005, 12);
-    expect(refreshedAskFitsTakerCap(MAX_ENTRY_PRICE + 0.001, cap)).toBe(false);
+  it('requires strictly positive fee-adjusted edge at the submitted limit', () => {
+    expect(makerMissTakerQuoteRefusal({ quantity, probability: 0.60, referenceMidpoint: 0.445, quote })).toBeUndefined();
+    expect(makerMissTakerQuoteRefusal({ quantity, probability: 0.48, referenceMidpoint: 0.445, quote })).toContain('not positive');
+    expect(makerMissTakerQuoteRefusal({ quantity: 0.01, probability: 0.99, referenceMidpoint: 0.445, quote })).toContain('not positive');
   });
 
-  it('fails closed on malformed or out-of-policy issuance prices', () => {
-    expect(takerQuoteCap(Number.NaN)).toBeNull();
-    expect(takerQuoteCap(0)).toBeNull();
-    expect(takerQuoteCap(MAX_ENTRY_PRICE + 0.01)).toBeNull();
+  it('allows a rising quote but refuses a midpoint decline beyond one venue tick', () => {
+    expect(makerMissTakerQuoteRefusal({ quantity, probability: 0.70, referenceMidpoint: 0.40, quote })).toBeUndefined();
+    expect(makerMissTakerQuoteRefusal({ quantity, probability: 0.70, referenceMidpoint: 0.455, quote })).toBeUndefined();
+    expect(makerMissTakerQuoteRefusal({ quantity, probability: 0.70, referenceMidpoint: 0.455 + 2e-9, quote })).toContain('declined');
   });
 });
