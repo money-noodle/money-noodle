@@ -55,7 +55,7 @@ indexed by [`status/README.md`](status/README.md).
 | Ordinary exit | `strict-value-v1`; side-aware reduce-only IOC behavior |
 | Profit reversal | `profit-reversal-75-v1` remains withheld from execution by default while prospective observations continue |
 | Long-shot strategy | Retired registry identity only; no execution, collection, allocation, API, or UI authority |
-| Hourly threshold research | `kalshi-hourly-threshold-read-v1` with `strike-threshold-zero-drift-v1`; detached `hourly-threshold-observation-v1` implemented but not activated; paper/live false |
+| Hourly threshold research | `kalshi-hourly-threshold-read-v1` with `strike-threshold-zero-drift-v1`; detached `hourly-threshold-observation-v1` active since 2026-08-27T07:04:37.842Z; paper/live false |
 
 Read the exact constants and capability intersections from their owning source and registries; this table is a dated
 projection, not a substitute for code.
@@ -92,8 +92,9 @@ claim or decision.
   relaxation remain unsupported or blocked.
 - Provider/policy attribution visibility is implemented without a ledger rewrite or public-payload expansion.
   Durable unified policy lineage and parameter diffs remain a separate structural design.
-- Hourly threshold H1 public market data and H2 detached durable observation are implemented; H2's prospective
-  clock has not started pending worker activation. H3 isolated paper remains
+- Hourly threshold H1 public market data and H2 detached durable observation are active. H2's prospective clock
+  started at 2026-08-27T07:04:37.842Z with ten explicit asset observations in its first scheduled close window;
+  that single unavailable snapshot is wiring evidence only. H3 isolated paper remains
   unactivated. Proposed engine separation and multitenancy have no implementation authority. Noodle Land remains
   exploratory and outside application/runtime authority.
 

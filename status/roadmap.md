@@ -62,8 +62,9 @@ No layer may gain order, budget, reconciliation, or automatic-promotion authorit
 
 ## Accepted work not yet scheduled
 
-- Activate the implemented H2 detached hourly observation/outcome owner, then run its 10-close wiring
-  smoke and 60-close first review. Only afterward freeze the complete H3 policy, persistence, paper accounting,
+- Continue the active H2 detached hourly observation/outcome owner from its prospective start at
+  2026-08-27T07:04:37.842Z, then run its 10-close wiring smoke and 60-close first review. Only afterward freeze
+  the complete H3 policy, persistence, paper accounting,
   settlement, budget, and target-integrity gates before enabling paper. Live capability remains a separate
   promotion. See [`second-market-hourly-crypto-design.md`](../docs/second-market-hourly-crypto-design.md).
 - Verify the first organic live switch end to end without forcing one: reduce-only action, venue fills and fees,

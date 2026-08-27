@@ -10,8 +10,8 @@
 
 > **Approved 2026-08-21** · Decisions locked: T-only, 8pp edge floor, 3/2/1 caps, 60s cadence,
 > cross-market exposure ignored, threshold-pair selection, all ten assets. · Status: H1 public market-data
-> capability and Vercel UI implemented; H2 detached durable observation is implemented but not activated;
-> H3 paper remains pending. Product/architecture truth lives in `spec/trading-risk-and-budget.md` §3.6 (markets & keying), `market-registry.ts`,
+> capability and Vercel UI implemented; H2 detached durable observation activated prospectively at
+> 2026-08-27T07:04:37.842Z; H3 paper remains pending. Product/architecture truth lives in `spec/trading-risk-and-budget.md` §3.6 (markets & keying), `market-registry.ts`,
 > `strategy-registry.ts`, `policy-manifest.ts`, and `basis-model.ts`. This document is the pre-code
 > agreement for adding a second market: what the market is, how the contracts differ, and every
 > registry/policy/store seam that must grow a case.
