@@ -2,8 +2,9 @@
 /**
  * Prospective hourly threshold availability and model review.
  *
- * Measure: one 60-second asset observation, clustered by exact hourly close; deciding corrections are exact
- * ticker/rules identity and provider outcome. Missing assets/contracts stay unavailable. This script is read-only,
+ * Measure: one 60-second asset observation, clustered by scheduled UTC research close; milestone counts include
+ * only elapsed closes. Deciding corrections are exact ticker/rules identity and provider outcome. Missing
+ * assets/contracts stay unavailable. This script is read-only,
  * never qualifies an entry, and cannot enable paper/live capability. Main caveat: Kraken is a model reference while
  * Kalshi resolves on CF Benchmarks, so probability scoring does not establish target-integrity equivalence.
  */
@@ -28,8 +29,10 @@ for (const line of raw.split('\n')) {
     outcomes.set(event.value.ticker, event.value);
   }
 }
+const generatedAtMs = Date.now();
 const rows = [...observations.values()];
-const windows = new Set(rows.map((row) => row.observationWindowClosesAt).filter(Boolean));
+const observedWindows = new Set(rows.map((row) => row.observationWindowClosesAt).filter(Boolean));
+const completedWindows = new Set([...observedWindows].filter((close) => Date.parse(close) <= generatedAtMs));
 const candidates = rows.flatMap((row) => row.candidates ?? []);
 const exactContracts = new Map();
 for (const candidate of candidates) {
@@ -37,7 +40,7 @@ for (const candidate of candidates) {
   if (prior && prior.rulesFingerprint !== candidate.rulesFingerprint) throw new Error(`Rules changed for ${candidate.ticker}`);
   exactContracts.set(candidate.ticker, candidate);
 }
-const closed = [...exactContracts.values()].filter((candidate) => Date.parse(candidate.closesAt) <= Date.now());
+const closed = [...exactContracts.values()].filter((candidate) => Date.parse(candidate.closesAt) <= generatedAtMs);
 const scored = candidates.filter((candidate) => {
   const outcome = outcomes.get(candidate.ticker);
   return outcome && outcome.result !== 'INVALID' && Number.isFinite(candidate.modelProbabilityYes);
@@ -59,7 +62,8 @@ const byAsset = Object.values(rows.reduce((groups, row) => {
 console.log(JSON.stringify({
   generatedAt: new Date().toISOString(), version: 'hourly-threshold-observation-v1',
   cohort: {
-    observations: rows.length, independentCloseWindows: windows.size,
+    observations: rows.length, observedCloseWindows: observedWindows.size,
+    independentCloseWindows: completedWindows.size,
     startedAt: rows.map((row) => row.observedAt).sort()[0] ?? null,
     latestAt: rows.map((row) => row.observedAt).sort().at(-1) ?? null,
   },
@@ -74,8 +78,8 @@ console.log(JSON.stringify({
   },
   model: { scoredObservations: scored.length, brier },
   milestones: {
-    smoke10Ready: windows.size >= 10,
-    firstReview60Ready: windows.size >= 60,
+    smoke10Ready: completedWindows.size >= 10,
+    firstReview60Ready: completedWindows.size >= 60,
   },
   authority: 'observation only; no qualification, paper, live, budget, settlement-write, or promotion authority',
 }, null, 2));

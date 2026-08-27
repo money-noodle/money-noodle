@@ -1,6 +1,8 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
@@ -16,6 +18,7 @@ import {
 } from './hourly-threshold-observer';
 import type { HourlyThresholdMarketsResponse } from './types';
 
+const execFileAsync = promisify(execFile);
 const at = '2026-08-27T03:00:00.000Z';
 const response = (): HourlyThresholdMarketsResponse => ({
   generatedAt: at, expiresAt: '2026-08-27T03:01:00.000Z', marketId: 'crypto-1h', providerId: 'kalshi',
@@ -92,6 +95,27 @@ describe('hourly threshold H2 observation store', () => {
       ticker: 'KXBTC-TEST-T120', result: 'YES', rulesFingerprint: 'a'.repeat(64),
     })]);
     expect((await getHourlyThresholdObservationStore()).observations).toHaveLength(1);
+  });
+
+  it('counts only elapsed research closes toward review milestones', async () => {
+    const now = Date.now();
+    const event = (id: string, closeMs: number) => JSON.stringify({
+      op: 'observation',
+      value: {
+        id, observedAt: new Date(now - 60_000).toISOString(),
+        observationWindowClosesAt: new Date(closeMs).toISOString(), symbol: 'BTC',
+        marketDataAvailable: false, candidates: [],
+      },
+    });
+    await writeFile(path.join(directory, 'hourly-threshold-observations.journal.jsonl'),
+      `${event('past', now - 1_000)}\n${event('future', now + 3_600_000)}\n`);
+    const { stdout } = await execFileAsync(process.execPath,
+      [path.join(process.cwd(), 'scripts/analyze-hourly-threshold-observations.mjs')], {
+        cwd: process.cwd(), env: { ...process.env, MONEY_NOODLE_HOURLY_OBSERVATION_PATH: directory },
+      });
+    expect(JSON.parse(stdout).cohort).toMatchObject({
+      observedCloseWindows: 2, independentCloseWindows: 1,
+    });
   });
 
   it('refuses writer startup on a stateless host', () => {
