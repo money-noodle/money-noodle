@@ -1,7 +1,7 @@
 # Money Noodle — Current Implementation Status
 
 > **Projection date:** 2026-08-27 · **Status:** Current implementation projection
-> **Projection-critical source fingerprint:** `sha256:ac3edd0544f06af727050a205b5b896767a2ca9385f0d1704b41663eff0358cf`
+> **Projection-critical source fingerprint:** `sha256:e5e376dcab334cb2f6021c89c9b11889031c71df276f5517dfcb83072eb7354c`
 > **Requirements:** [`SPEC.md`](SPEC.md) · **Design lifecycle:** [`docs/README.md`](docs/README.md)
 > **Status index and archives:** [`status/README.md`](status/README.md) · **Roadmap:** [`status/roadmap.md`](status/roadmap.md)
 >
@@ -20,7 +20,8 @@ switching, global exposure controls, durable budget epochs, and account-wide rec
 The repeated-episode identity defect was repaired under collision-resistant live IDs and its known ledger damage was
 corrected on 2026-08-21. Exact dynamic exchange identity and external-position ownership were repaired on
 2026-08-25. The former long-shot strategy was retired and removed from runtime/product authority on 2026-08-26;
-its historical identity and evidence remain durable.
+its historical identity and evidence remain durable. On 2026-08-27 the desk was paused after v8 submitted eight
+refused continuations as makers; v9 corrects that implementation without changing the canonical taker-only route.
 
 The 2026-08-26 documentation migrations changed no product, policy, capital, execution, reconciliation, or funded
 behavior. Canonical modules now separate durable requirements from dated progress/evidence, stable requirement and
@@ -34,9 +35,9 @@ indexed by [`status/README.md`](status/README.md).
 | --- | --- |
 | Product surfaces | Local dashboard, signed Automation/Budget/Performance controls, public sanitized paper summary, factor and policy drill-downs, selected-side order-book ladder, stable signal transitions, explicit stale/degraded states, and read-only track/provider/variant/market/forecast/buy/execution attribution scopes are implemented. Current-card scope is presentation-only; signed open orders, history, and trading performance share one pure order-identity vocabulary and keep live/paper totals separate. A separate stateless-safe Kalshi one-hour threshold section shows exact-duration ABOVE/YES and BELOW/YES research contracts without policy, paper, or live authority. |
 | Forecasting | Venue-independent Blend 0.4 production probability, immutable forecast history, exact provenance, outcome resolution, calibration/performance reports, pure forecast boundary, and prospective candidate-family collection are implemented. Evaluator v2 is offline monitoring only and cannot promote. |
-| Entry and portfolio | Shared buy policy v22, mode-free initial admission, one-maker/two-taker bounded continuation, persistence, sizing, global position/window/correlation ceilings, and prospective choice-set evidence are implemented. |
-| Paper execution | Independent managed-maker/IOC simulation, displayed-depth queue proxy, public trade evidence, reduce-only depth exits, exact mirror-pair IDs, separate paper bankroll, and neutral versioned calibration are implemented. Paper is diagnostic rather than live-equivalent. |
-| Live execution | The currently implemented live adapter supports signed buy/sell order lifecycle, managed post-only makers, bounded IOC entry evaluation, collision-resistant IDs, exact exchange identity, cancellation confirmation, fill/fee reconciliation, and side-aware reduce-only exits and switches. Additional providers fail closed. |
+| Entry and portfolio | Shared buy policy v22, mode-free initial admission, one-maker/two-taker bounded continuation, terminal continuation refusal, persistence, sizing, global position/window/correlation ceilings, and prospective choice-set evidence are implemented. |
+| Paper execution | Independent managed-maker/IOC simulation, fail-closed taker-only continuation routing, displayed-depth queue proxy, public trade evidence, reduce-only depth exits, exact mirror-pair IDs, separate paper bankroll, and neutral versioned calibration are implemented. Paper is diagnostic rather than live-equivalent. |
+| Live execution | The currently implemented live adapter supports signed buy/sell order lifecycle, managed post-only makers, bounded IOC entry evaluation, fail-closed taker-only continuation routing, collision-resistant IDs, exact exchange identity, cancellation confirmation, fill/fee reconciliation, and side-aware reduce-only exits and switches. Additional providers fail closed. |
 | Funded safety | Explicit arming, typed environment confirmation, kill switch, quiescent Pause/drain, per-trade and rate caps, loss/drawdown stops, durable reservations, operator-intent separation, startup/manual/full and periodic incremental reconciliation, and guarded system-only auto-resume are implemented. |
 | Storage | Forecast storage v3 uses one owning writer, immutable content-addressed shards/rollups, checksums, journal replay, and publish-last generations. Execution ledger v9 keeps money/control rows hot and hydrates immutable terminal evidence from verified batches. Hourly H2 adds a detached persistent-worker-only asset/minute and exact-outcome JSONL writer. Atomic stores and append-only journals retain owner boundaries. |
 | Archive and restore | Local-only object archival, full read-back checksum verification, manifests, independent restore, disk-capacity checks, and rebuildable Next-cache cleanup are implemented. Remote-primary deletion is not authorized. |
@@ -49,7 +50,7 @@ indexed by [`status/README.md`](status/README.md).
 | --- | --- |
 | Production forecast | Blend 0.4; prospective candidates cannot affect it |
 | Shared entry policy | `buy-binary-edge-net5-nocap-quality50-owned55-price10to75-late30-persist2of15-v22`: +5pp minimum net edge and 10–75¢ entry band |
-| Live execution | `maker-then-positive-edge-taker2-fresh2tick-v8`; one managed maker, then after authoritative zero-fill at most two freshly rechecked IOC intents bounded by two ticks, 125% of final maker limit, 75¢, and positive charged-fee edge; bounded pilot remains closed |
+| Live execution | `maker-then-positive-edge-taker2-terminal-refusal-v9`; one managed maker, then after authoritative zero-fill at most two freshly rechecked IOC intents bounded by two ticks, 125% of final maker limit, 75¢, and positive charged-fee edge; a failed continuation gate terminalizes before reservation or submission and never becomes another maker |
 | Paper execution | `paper-managed-execution-route-ioc-requalify3-calibrated-v7`, neutral `queueClearFraction = 0`, exact inclusive maker event-time horizon |
 | Entry sizing | `entry-sizing-reduce30-below-edge30-v1`; no multiplier above one |
 | Ordinary exit | `strict-value-v1`; side-aware reduce-only IOC behavior |
@@ -64,6 +65,7 @@ projection, not a substitute for code.
 
 | Question | Dated result | Material caveat and consequence |
 | --- | --- | --- |
+| V8 maker-miss fallback incident | The fixed 2026-08-27 review covered 45 live rows, 37 logical sequences, and 18 settlement windows. Eight refused continuations were submitted as makers, two filled, and zero live IOC fallbacks executed. The seven fills across five windows recorded +60¢ whole-cent and +63.1561¢ exact P&L. | Positive return cannot authorize a refused route, and five filled windows cannot support an economic conclusion. The desk was paused and fully reconciled; v9 corrects orchestration and v8 remains immutable incident evidence. See [`reports/maker-miss-fallback-v8-incident-2026-08-27.md`](reports/maker-miss-fallback-v8-incident-2026-08-27.md). |
 | Exact paper/live mirror | The 2026-08-26 review contained 170 terminal exact pairs across 93 close windows. Among 122 accepted same-route/same-quantity makers across 77 windows, paper captured 24/66 live fills (36.4%); paper-minus-live fill rate was −35.93pp ±5.72pp clustered SE. | FIFO position and cancellations ahead are private, and different fill cells deploy different capital. Paper remains materially conservative; no calibration or funded route changed. See [`reports/paper-live-exact-v7-mirror-review-2026-08-26.md`](reports/paper-live-exact-v7-mirror-review-2026-08-26.md). |
 | Paper timing F2 | The fixed 2026-08-27T02:16:57.962Z review had 308 records. The approved invariant filter excluded five post-horizon rows and retained 303 records, 159 exact maker pairs across 115 windows, 98.38% row coverage, and 14 live create races. | The corrected 100-window count/coverage milestone passed. Neutral paper v7 enforces the horizon prospectively; retained v6 timing evidence carries only under exact-equivalence and generation-stratification rules. The 300-window/30-race gates remain closed and F3 stays off. See [`reports/paper-execution-timing-100-window-review-2026-08-27.md`](reports/paper-execution-timing-100-window-review-2026-08-27.md). |
 | Forecast candidate Phase 2 | At the fixed 2026-08-26T05:27:33Z review, 11,303 closed rows across 104 closed windows had 95.34% funded-provider outcome coverage, complete six-arm families, 100% candidate availability, and zero replay error. The 100-window coverage gate passed. | All 527 unscoreable rows lacked funded-provider contract provenance at issuance; no row with provenance lacked its eventual outcome. This was coverage-only: production remained Blend 0.4, no arm was ranked, and Phase 3 was not authorized. See [`reports/forecast-candidate-phase2-100-window-coverage-review-2026-08-26.md`](reports/forecast-candidate-phase2-100-window-coverage-review-2026-08-26.md). |
@@ -103,11 +105,12 @@ for unresolved normative questions.
 
 ## Latest recorded operational snapshot
 
-At the published snapshot on 2026-08-27, the local production worker activated the paper-only v7 horizon repair
-after existing funded positions became terminal and reservations reached zero. Startup full reconciliation
-completed READY at `2026-08-27T02:44:52.760Z` with zero local/venue managed positions, resting orders,
-reservations, or blockers. Revision 7,797 retained explicit active operator intent in `live` mode with 1,666¢
-available and zero reserved; funded execution was not paused or implicitly re-armed by the restart.
+At the published snapshot on 2026-08-27, the local production worker was explicitly paused after the v8
+continuation-routing incident. Pause withdrew operator intent at `2026-08-27T15:19:22.325Z`; the serialized drain
+was quiescent and restart-safe, and manual full reconciliation completed READY with zero local/venue managed
+positions, resting managed orders, reservations, recovered fills, or blockers. Revision 7,970 had 1,721¢ available
+and zero reserved. Corrected v9 source had not yet been activated by that snapshot, and nothing may auto-resume the
+manual pause.
 
 That state may have changed immediately after publication. Do not infer present permission, exposure, cash,
 readiness, or restart safety from it.

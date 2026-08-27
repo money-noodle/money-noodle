@@ -55,7 +55,7 @@ import {
   fetchKalshiReconciliationSnapshot,
   type KalshiReconciliationSnapshot,
 } from './kalshi-reconciliation';
-import { adaptiveEntryEpisodeDecision, entryAttemptsForLogicalOrder, entryEpisodeId, makerAttemptId, makerRetryDecision, maximumLiveMakerAttempts, type MakerRetryDecision } from './maker-retry-policy';
+import { adaptiveEntryEpisodeDecision, entryAttemptsForLogicalOrder, entryEpisodeId, makerAttemptId, makerRetryDecision, maximumLiveMakerAttempts, terminalizeAdaptiveContinuation, terminalizeRefusedAdaptiveContinuation, type MakerRetryDecision } from './maker-retry-policy';
 import { liveBlockers, liveTradingEnabled, maxLiveOrdersPerHour, maxLiveStakeCents, placeKalshiBuy, placeKalshiSell, placeKalshiTakerBuy } from './live-orders';
 import { assertUniqueLiveEntryClientOrderId, liveEntryClientOrderId } from './live-order-identity';
 import { countFilledLiveVenueOrders } from './order-rate-limit';
@@ -1229,6 +1229,7 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
   const paperExecutionPolicyVersion = paperCalibration.appliedToPaperExecution;
   const equity = ledger.paperBudget.availableCents;
   const stakeLimit = Math.min(status.control.perTradeCents, maximumPaperStakeCents(), equity);
+  let terminalizedFallback = false;
   const candidates = qualifiedPredictions
     .flatMap((prediction) => {
       const side = selectedSide(prediction);
@@ -1246,7 +1247,13 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
         ...status, venues: status.venues.map((readiness) => ({ ...readiness, enabled: paperProviders.has(readiness.venue) })),
       }, ledger, dashboard.generatedAt, dashboard.modelVersion, 'paper', stakeLimit, 'kalshi', eligibility,
       paperExecutionPolicyVersion, episode.takerFallback ? 0 : MIN_NET_EDGE);
-      if ('reason' in candidate) return [];
+      if ('reason' in candidate) {
+        if (episode.takerFallback) {
+          terminalizeAdaptiveContinuation(attempts, candidate.reason);
+          terminalizedFallback = true;
+        }
+        return [];
+      }
       candidate.order.paperFillCalibration = { ...paperCalibration };
       candidate.order.logicalOrderId = logicalId;
       candidate.order.attemptNumber = episode.attemptNumber;
@@ -1260,8 +1267,16 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
     })
     // Funding is a feasibility filter applied after candidates exist, so a pair without allocation
     // headroom drops out while another provider's candidate for the same window survives.
-    .filter(({ order }) => order.stakeCents <= marketFundingFor(budgets, 'paper', orderProviderId(order),
-      orderMarketId(order), ledger, equity, ledger.paperBudget.availableCents).spendableCents);
+    .filter(({ order, episode, attempts }) => {
+      const funding = marketFundingFor(budgets, 'paper', orderProviderId(order),
+        orderMarketId(order), ledger, equity, ledger.paperBudget.availableCents);
+      if (order.stakeCents <= funding.spendableCents) return true;
+      if (episode.takerFallback) {
+        terminalizeAdaptiveContinuation(attempts, funding.reason);
+        terminalizedFallback = true;
+      }
+      return false;
+    });
 
   // Keep the same classified-path admission rule used by live candidate selection, while recording the
   // label on the simulated order so later cohorts can still be audited.
@@ -1290,6 +1305,13 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
       requalifiedAfterOrderId: built.episode.retryOfOrderId,
     });
     const route = baselineRoute;
+    const continuationRefusal = terminalizeRefusedAdaptiveContinuation(
+      built.attempts, built.episode.attemptNumber > 1 || Boolean(built.episode.takerFallback), route,
+    );
+    if (continuationRefusal) {
+      terminalizedFallback = true;
+      continue;
+    }
     const resting: PaperOrder = {
       ...built.order, status: 'pending_reservation',
       liquidityRole: route.executedStyle, entryExecutionDecision: route, paperEntryRoute: route.executedStyle,
@@ -1301,11 +1323,23 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
       const reserveFailure = route.route === 'maker-miss-taker-fallback'
         ? applyMakerMissTakerReserve(resting, stakeLimit, built.attempts[0]!)
         : applyTakerQuoteMovementReserve(resting, stakeLimit);
-      if (reserveFailure) continue;
+      if (reserveFailure) {
+        if (built.episode.takerFallback) {
+          terminalizeAdaptiveContinuation(built.attempts, reserveFailure);
+          terminalizedFallback = true;
+        }
+        continue;
+      }
     }
     const funding = marketFundingFor(budgets, 'paper', orderProviderId(resting), orderMarketId(resting), ledger,
       ledger.paperBudget.availableCents, ledger.paperBudget.availableCents);
-    if (resting.stakeCents > funding.spendableCents) continue;
+    if (resting.stakeCents > funding.spendableCents) {
+      if (built.episode.takerFallback) {
+        terminalizeAdaptiveContinuation(built.attempts, funding.reason);
+        terminalizedFallback = true;
+      }
+      continue;
+    }
     ledger.paperBudget.availableCents -= resting.stakeCents;
     ledger.orders.push(resting);
     startedOrders.push(resting);
@@ -1328,7 +1362,8 @@ async function runPaper(dashboard: DashboardData, status: TradingControlData, le
     });
     placed += 1;
   }
-  return placed > 0;
+  if (terminalizedFallback) await writeLedger(ledger);
+  return placed > 0 || terminalizedFallback;
 }
 
 /**
@@ -2132,10 +2167,21 @@ async function runLive(
   // by what it actually does. Journal writes are fire-and-forget — a trading cycle must never fail or
   // stall because an observation could not be persisted.
   const openWindows = [...new Set(dashboard.predictions.map((item) => item.market.closesAt).filter(Boolean))];
-  const skip = (classification: LiveSkipClass, reason: string, scope?: { symbol?: string; side?: PositionSide }) => {
+  const targetedAttempts = targetLogicalOrderId
+    ? entryAttemptsForLogicalOrder(ledger.orders, targetLogicalOrderId)
+    : [];
+  const targetedContinuation = targetLogicalOrderId
+    ? adaptiveEntryEpisodeDecision(targetedAttempts, ENTRY_EXECUTION_POLICY_VERSION)
+    : undefined;
+  const skip = async (classification: LiveSkipClass, reason: string, scope?: { symbol?: string; side?: PositionSide }) => {
     ledger.lastLiveSkip = { reason, at: new Date().toISOString() };
     void recordLiveSkip({ classification, reason, windows: openWindows, ...scope })
       .catch((error) => console.error('Live skip journal write failed:', error));
+    if (targetedContinuation?.allowed && targetedContinuation.takerFallback) {
+      terminalizeAdaptiveContinuation(targetedAttempts, reason);
+      // A fallback refusal must be durable before control returns to the outer managed-order lifecycle.
+      await writeLedger(ledger);
+    }
     return false;
   };
   if (!liveTradingEnabled()) return skip('environment', 'Live trading is off in the environment.');
@@ -2282,6 +2328,10 @@ async function runLive(
     const built = buildOrder(candidate, side, status, ledger, dashboard.generatedAt, dashboard.modelVersion, 'live', liveStakeCeiling, 'kalshi', attempt.eligibility,
       PAPER_MANAGED_MAKER_EXECUTION_VERSION, attempt.takerFallback ? 0 : MIN_NET_EDGE);
     if ('reason' in built) {
+      if (attempt.takerFallback) {
+        terminalizeAdaptiveContinuation(attempt.attempts, built.reason);
+        await writeLedger(ledger);
+      }
       priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason: built.reason });
       if (!placed) return skip('budget', `${candidate.symbol} ${side}: ${built.reason}`, { symbol: candidate.symbol, side });
       continue;
@@ -2289,6 +2339,10 @@ async function runLive(
     // Defence in depth: sizing already respected the ceiling, so a stake above it means a rounding or
     // fee-reserve path put real money outside the operator's allocation.
     if (built.order.stakeCents > liveFunding.spendableCents) {
+      if (attempt.takerFallback) {
+        terminalizeAdaptiveContinuation(attempt.attempts, liveFunding.reason);
+        await writeLedger(ledger);
+      }
       priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason: liveFunding.reason });
       if (!placed) return skip('funding', liveFunding.reason, { symbol: candidate.symbol, side });
       continue;
@@ -2309,23 +2363,47 @@ async function runLive(
       assertUniqueLiveEntryClientOrderId(ledger.orders, built.order);
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'Live client order identity is ambiguous.';
+      if (attempt.takerFallback) {
+        terminalizeAdaptiveContinuation(attempt.attempts, reason);
+        await writeLedger(ledger);
+      }
       await suspendTrading(`Live client order identity blocked: ${reason}`);
       return skip('reconciliation', reason, { symbol: candidate.symbol, side });
     }
     const baselineRoute = entryExecutionDecision(candidate, side, built.order, ledger, attempt);
     const routeDecision = baselineRoute;
     built.order.entryExecutionDecision = routeDecision;
+    const continuationRefusal = terminalizeRefusedAdaptiveContinuation(
+      attempt.attempts,
+      attempt.takerFallback || (routeDecision.configuredMode === 'adaptive' && retry.attemptNumber > 1),
+      routeDecision,
+    );
+    if (continuationRefusal) {
+      // No child intent, reservation, or venue call exists. Persist the exact refusal on its predecessor.
+      await writeLedger(ledger);
+      priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason: continuationRefusal });
+      if (!placed) return skip('persistence', `${candidate.symbol}: ${continuationRefusal}`, { symbol: candidate.symbol, side });
+      continue;
+    }
     if (routeDecision.executedStyle === 'taker') {
       const stakeLimit = built.order.entrySizingDecision?.stakeLimitCents ?? liveStakeCeiling;
       const reserveFailure = routeDecision.route === 'maker-miss-taker-fallback'
         ? applyMakerMissTakerReserve(built.order, stakeLimit, attempt.attempts[0]!)
         : applyTakerQuoteMovementReserve(built.order, stakeLimit);
       if (reserveFailure) {
+        if (attempt.takerFallback) {
+          terminalizeAdaptiveContinuation(attempt.attempts, reserveFailure);
+          await writeLedger(ledger);
+        }
         priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason: reserveFailure });
         if (!placed) return skip('budget', `${candidate.symbol}: ${reserveFailure}`, { symbol: candidate.symbol, side });
         continue;
       }
       if (built.order.stakeCents > liveFunding.spendableCents) {
+        if (attempt.takerFallback) {
+          terminalizeAdaptiveContinuation(attempt.attempts, liveFunding.reason);
+          await writeLedger(ledger);
+        }
         priorDrainActions.push({ candidateId: choiceId, action: 'skipped', reason: liveFunding.reason });
         if (!placed) return skip('funding', liveFunding.reason, { symbol: candidate.symbol, side });
         continue;
@@ -2390,7 +2468,7 @@ async function runLive(
         const freshPortfolio = updatePortfolioDecisions(freshDashboard, freshStatus, ledger);
         const freshRegimeGate = await getRegimeGateStatus();
         const continued = await runLive(freshDashboard, freshStatus, ledger, freshRegimeGate, freshBudgets, freshPortfolio.audit, logicalId, refreshDashboard);
-        if (!continued) {
+        if (!continued && !built.order.fallbackSequenceEndedAt) {
           built.order.fallbackSequenceEndedAt = new Date().toISOString();
           built.order.fallbackSequenceEndReason = 'Fresh fallback checks produced no authorized intent; the detailed blocker is retained in the live-skip journal.';
           await writeLedger(ledger);

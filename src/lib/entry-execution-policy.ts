@@ -2,8 +2,8 @@ import { makerExecutionStyle } from './execution-order-evidence';
 import { DEFAULT_STRATEGY_ID, normalizeStrategyId } from './strategy-registry';
 import type { PaperOrder, PositionSide, StrategyId } from './types';
 
-export const ENTRY_EXECUTION_POLICY_VERSION = 'maker-then-positive-edge-taker2-fresh2tick-v8';
-/** Historical manifest/reporting threshold; v8 no longer grants an immediate high-edge taker route. */
+export const ENTRY_EXECUTION_POLICY_VERSION = 'maker-then-positive-edge-taker2-terminal-refusal-v9';
+/** Historical manifest/reporting threshold; the current generation grants no immediate high-edge taker route. */
 export const HIGH_EDGE_TAKER_THRESHOLD = 0.30;
 /** One maker intent plus at most two bounded IOC intents. */
 export const MAX_ENTRY_EPISODES_PER_WINDOW = 3;
@@ -50,6 +50,21 @@ export interface EntryExecutionDecision {
   makerFillRate: number | null;
   makerMissFallback: boolean;
   fallbackFromOrderId?: string;
+}
+
+/**
+ * A continuation is taker-only authority. The policy decision deliberately falls back to maker style when a
+ * taker gate refuses; orchestration must interpret that as terminal refusal, never as authority for another maker.
+ */
+export function adaptiveContinuationRefusal(
+  requiresTaker: boolean,
+  decision: Pick<EntryExecutionDecision, 'configuredMode' | 'executedStyle' | 'route' | 'reason'>,
+): string | undefined {
+  if (!requiresTaker) return undefined;
+  if (decision.configuredMode === 'adaptive'
+    && decision.executedStyle === 'taker'
+    && decision.route === 'maker-miss-taker-fallback') return undefined;
+  return decision.reason || 'Adaptive continuation did not authorize the required taker IOC.';
 }
 
 const priceBand = (price: number): string => price < 0.10 ? '<10c' : price < 0.25 ? '10-25c' : price < 0.50 ? '25-50c' : '50c+';

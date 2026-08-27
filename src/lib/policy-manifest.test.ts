@@ -96,6 +96,8 @@ describe('published policy manifest', () => {
     expect(detail('execution', 'Live entry intents per side/window')).toBe('3');
     expect(detail('execution', 'Maker miss rearming')).toContain('Immediate after authoritative cancellation');
     expect(detail('execution', 'Fallback price')).toContain('125%');
+    expect(detail('execution', 'Terminal refusal')).toContain('never becomes another maker');
+    expect(detail('execution', 'Prior generation')).toContain('v8 retired');
     expect(detail('execution', 'Sizing')).toBe('0.3× below 30pp; 1× at or above; no upsizing');
     expect(manifest().components.find((item) => item.kind === 'regime')?.status).toBe('observation');
   });

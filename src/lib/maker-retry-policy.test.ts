@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { ENTRY_EXECUTION_POLICY_VERSION } from './entry-execution-policy';
-import { adaptiveEntryEpisodeDecision, entryAttemptsForLogicalOrder, entryEpisodeId, makerAttemptId, makerRetryDecision, maximumLiveMakerAttempts } from './maker-retry-policy';
+import { adaptiveEntryEpisodeDecision, entryAttemptsForLogicalOrder, entryEpisodeId, makerAttemptId, makerRetryDecision, maximumLiveMakerAttempts, terminalizeAdaptiveContinuation, terminalizeRefusedAdaptiveContinuation } from './maker-retry-policy';
 import { PAPER_MANAGED_MAKER_EXECUTION_VERSION } from './paper-maker-simulation';
 import type { PaperOrder } from './types';
 
@@ -55,7 +55,40 @@ describe('maker then two-taker adaptive sequence', () => {
     expect(adaptiveEntryEpisodeDecision([makerMiss({ status: 'open', filledCount: 0.1 })], ENTRY_EXECUTION_POLICY_VERSION).allowed).toBe(false);
     expect(adaptiveEntryEpisodeDecision([makerMiss({ status: 'uncertain' })], ENTRY_EXECUTION_POLICY_VERSION).allowed).toBe(false);
     expect(adaptiveEntryEpisodeDecision([makerMiss({ fallbackSequenceEndedAt: '2026-01-01T00:01:21Z', fallbackSequenceEndReason: 'edge refused' })], ENTRY_EXECUTION_POLICY_VERSION)).toMatchObject({ allowed: false, reason: 'edge refused' });
-    expect(adaptiveEntryEpisodeDecision([makerMiss({ entryExecutionDecision: { ...makerMiss().entryExecutionDecision!, policyVersion: 'retired-v1' } })], ENTRY_EXECUTION_POLICY_VERSION).allowed).toBe(false);
+    expect(adaptiveEntryEpisodeDecision([makerMiss({ entryExecutionDecision: {
+      ...makerMiss().entryExecutionDecision!, policyVersion: 'maker-then-positive-edge-taker2-fresh2tick-v8',
+    } })], ENTRY_EXECUTION_POLICY_VERSION)).toMatchObject({
+      allowed: false, reason: 'A prior execution-policy generation cannot authorize a current fallback.',
+    });
+  });
+
+  it('terminalizes a refused continuation on its predecessor and never overwrites the exact first reason', () => {
+    const predecessor = makerMiss();
+    const refusalDecision = {
+      configuredMode: 'adaptive' as const, executedStyle: 'maker' as const, route: 'ordinary-maker' as const,
+      reason: 'Taker fallback withheld: quality 64.8% < 65.0%; spread 3.0c > 2.0c.',
+    };
+    expect(terminalizeRefusedAdaptiveContinuation(
+      [predecessor], true, refusalDecision, '2026-01-01T00:01:21Z',
+    )).toBe(refusalDecision.reason);
+    expect(predecessor).toMatchObject({
+      fallbackSequenceEndedAt: '2026-01-01T00:01:21Z',
+      fallbackSequenceEndReason: refusalDecision.reason,
+    });
+    expect(adaptiveEntryEpisodeDecision([predecessor], ENTRY_EXECUTION_POLICY_VERSION)).toMatchObject({
+      allowed: false, reason: refusalDecision.reason,
+    });
+    expect(terminalizeAdaptiveContinuation([predecessor], 'generic outer reason', '2026-01-01T00:01:22Z'))
+      .toBe(refusalDecision.reason);
+    expect(predecessor.fallbackSequenceEndReason).toBe(refusalDecision.reason);
+  });
+
+  it('accepts only a taker fallback as an executable adaptive continuation', () => {
+    const predecessor = makerMiss();
+    expect(terminalizeRefusedAdaptiveContinuation([predecessor], true, {
+      configuredMode: 'adaptive', executedStyle: 'taker', route: 'maker-miss-taker-fallback', reason: 'authorized',
+    }, '2026-01-01T00:01:21Z')).toBeUndefined();
+    expect(predecessor.fallbackSequenceEndedAt).toBeUndefined();
   });
 
   it('uses the paper simulator generation for paper lifecycle authority', () => {

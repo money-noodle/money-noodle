@@ -77,6 +77,13 @@ describe('paper execution fills', () => {
     expect(source).toContain('built.order.entrySizingDecision?.stakeLimitCents ?? liveStakeCeiling');
   });
 
+  it('routes every live and paper adaptive continuation through the terminal-refusal guard', () => {
+    const source = readFileSync(new URL('./paper-execution.ts', import.meta.url), 'utf8');
+    // Import plus one paper call and one live call. A missing lane reintroduces maker execution after refusal.
+    expect(source.match(/terminalizeRefusedAdaptiveContinuation/g)).toHaveLength(3);
+    expect(source).toContain('if (!continued && !built.order.fallbackSequenceEndedAt)');
+  });
+
   it('re-runs the production venue rule for a bounded treatment without inheriting the strict 2c route gate', () => {
     const prediction = {
       modelProbabilityUp: 0.70, confidence: 0.70, enabledTradingVenues: ['kalshi'],

@@ -43,7 +43,8 @@ mechanism. A queued or proposed row still grants no implementation authority.
 | Future platform shape | Website/engine split, tenants, identity, and connections | [`Engine separation`](execution-engine-separation-design.md), [`multitenancy`](multitenancy-design.md), [`multitenant UI`](multitenant-web-ui-design.md) — all Proposed |
 
 The strict evaluation sequence is forecast → confirmed signal → venue candidacy → portfolio selection → live
-authorization → attempt/outcome. Current collection state and scheduling remain in
+authorization → attempt/outcome. The maker-to-taker design's complete implementation is the v9 terminal-refusal
+correction; v8 remains historical incident evidence only. Current collection state and scheduling remain in
 [`status/roadmap.md`](../status/roadmap.md), not this index.
 
 ### Load-bearing supersession chains

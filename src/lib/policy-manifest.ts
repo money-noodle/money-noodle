@@ -383,6 +383,8 @@ export function activePolicyManifest(providers: TradingProviderDescriptor[], mod
         { label: 'Production mode', value: executionMode === 'maker' ? 'Managed post-only maker' : 'Maker then bounded taker fallback' },
         { label: 'Initial route', value: 'One managed post-only maker; no immediate high-edge taker route' },
         { label: 'Fallback route', value: 'At most two IOC intents; each refreshes model and exact venue quote and requires positive charged-fee edge at its submitted limit' },
+        { label: 'Terminal refusal', value: 'A failed continuation gate ends the sequence before reservation or venue submission; it never becomes another maker' },
+        { label: 'Prior generation', value: 'v8 retired after live evidence showed refused continuations could be submitted as makers' },
         { label: 'Bounded taker pilot', value: boundedTakerPilot
           ? `Armed · 25% deterministic treatment · ≤${BOUNDED_TAKER_PER_ORDER_CAP_CENTS}¢ each · ≤${BOUNDED_TAKER_TOTAL_CAP_CENTS}¢/${BOUNDED_TAKER_MAX_AUTHORIZATIONS} authorizations/${BOUNDED_TAKER_MAX_ASSIGNMENTS} assignments`
           : 'Retired; the historical confirmation grants no current authority' },

@@ -1,4 +1,4 @@
-import { MAX_ENTRY_EPISODES_PER_WINDOW } from './entry-execution-policy';
+import { MAX_ENTRY_EPISODES_PER_WINDOW, adaptiveContinuationRefusal, type EntryExecutionDecision } from './entry-execution-policy';
 import type { ExecutionMode, PaperOrder } from './types';
 
 export const MAX_MAKER_ATTEMPTS_PER_CONTRACT = 2;
@@ -96,6 +96,29 @@ export function adaptiveEntryEpisodeDecision(
     allowed: true, attemptNumber: nextAttempt, retryOfOrderId: latest.id, takerFallback: true,
     reason: `Fresh checks may authorize taker fallback ${nextAttempt - 1}/2.`,
   };
+}
+
+/** The predecessor owns pre-intent refusal evidence because no child intent exists. First writer wins. */
+export function terminalizeAdaptiveContinuation(
+  attempts: PaperOrder[], reason: string, at = new Date().toISOString(),
+): string {
+  const predecessor = [...attempts].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt)).at(-1);
+  if (!predecessor) return 'Adaptive continuation has no durable predecessor to terminalize.';
+  if (!predecessor.fallbackSequenceEndedAt) {
+    predecessor.fallbackSequenceEndedAt = at;
+    predecessor.fallbackSequenceEndReason = reason;
+  }
+  return predecessor.fallbackSequenceEndReason ?? reason;
+}
+
+/** Records a route-policy refusal before a new durable intent, reservation, or venue request exists. */
+export function terminalizeRefusedAdaptiveContinuation(
+  attempts: PaperOrder[], requiresTaker: boolean,
+  decision: Pick<EntryExecutionDecision, 'configuredMode' | 'executedStyle' | 'route' | 'reason'>,
+  at = new Date().toISOString(),
+): string | undefined {
+  const reason = adaptiveContinuationRefusal(requiresTaker, decision);
+  return reason ? terminalizeAdaptiveContinuation(attempts, reason, at) : undefined;
 }
 
 /** A bounded maker retry is a new fully validated intent, never a continuation of stale authority. */

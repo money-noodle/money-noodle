@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ENTRY_EXECUTION_POLICY_VERSION, MAX_ENTRY_EPISODES_PER_WINDOW,
+  ENTRY_EXECUTION_POLICY_VERSION, MAX_ENTRY_EPISODES_PER_WINDOW, adaptiveContinuationRefusal,
   evaluateEntryExecutionPolicy, makerCohortEvidence, parseEntryExecutionMode,
 } from './entry-execution-policy';
 import type { PaperOrder } from './types';
@@ -12,9 +12,9 @@ const base = {
   minimumMedianNetEdge: 0.10, minimumConfidence: 0.65, maximumSpread: 0.02,
 };
 
-describe('maker then positive-edge taker fallback policy v8', () => {
+describe('maker then positive-edge taker fallback policy v9', () => {
   it('records the policy identity and three-intent ceiling', () => {
-    expect(ENTRY_EXECUTION_POLICY_VERSION).toBe('maker-then-positive-edge-taker2-fresh2tick-v8');
+    expect(ENTRY_EXECUTION_POLICY_VERSION).toBe('maker-then-positive-edge-taker2-terminal-refusal-v9');
     expect(MAX_ENTRY_EPISODES_PER_WINDOW).toBe(3);
   });
 
@@ -33,15 +33,25 @@ describe('maker then positive-edge taker fallback policy v8', () => {
     expect(evaluateEntryExecutionPolicy({ ...base, makerMissFallback: true, currentNetEdge: 2e-12 }).executedStyle).toBe('taker');
   });
 
-  it('retains quality and spread gates on a fallback', () => {
-    expect(evaluateEntryExecutionPolicy({ ...base, makerMissFallback: true, confidence: 0.64 }).executedStyle).toBe('maker');
-    expect(evaluateEntryExecutionPolicy({ ...base, makerMissFallback: true, spread: 0.020_000_000_002 }).executedStyle).toBe('maker');
+  it('retains quality and spread gates on a fallback and exposes them as terminal continuation refusals', () => {
+    for (const decision of [
+      evaluateEntryExecutionPolicy({ ...base, makerMissFallback: true, confidence: 0.64 }),
+      evaluateEntryExecutionPolicy({ ...base, makerMissFallback: true, spread: 0.020_000_000_002 }),
+      evaluateEntryExecutionPolicy({ ...base, makerMissFallback: true, currentNetEdge: 0 }),
+    ]) {
+      expect(decision.executedStyle).toBe('maker');
+      expect(adaptiveContinuationRefusal(true, decision)).toBe(decision.reason);
+    }
+    const authorized = evaluateEntryExecutionPolicy({ ...base, makerMissFallback: true });
+    expect(adaptiveContinuationRefusal(true, authorized)).toBeUndefined();
+    expect(adaptiveContinuationRefusal(false, evaluateEntryExecutionPolicy(base))).toBeUndefined();
   });
 
-  it('keeps maker mode incapable of acting on a taker recommendation', () => {
+  it('keeps maker mode incapable of acting on a taker recommendation or turning it into another maker', () => {
     const decision = evaluateEntryExecutionPolicy({ ...base, mode: 'maker', makerMissFallback: true });
     expect(decision).toMatchObject({ recommendedStyle: 'taker', executedStyle: 'maker' });
     expect(decision.reason).toContain('Shadow only');
+    expect(adaptiveContinuationRefusal(true, decision)).toBe(decision.reason);
   });
 
   it('defaults invalid configuration to maker mode', () => {

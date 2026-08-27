@@ -4,6 +4,7 @@
 > **Design status:** Accepted
 > **Implementation:** Complete
 > **Created:** 2026-08-27
+> **Corrected:** 2026-08-27 · v9 terminal-refusal repair after the fixed v8 production incident
 > **Canonical requirements:** [`spec/trading-risk-and-budget.md`](../spec/trading-risk-and-budget.md), [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
 > **Decision record:** [`DEC-20260827-02`](../spec/decisions/decision-id-map.json)
 > **Design index:** [`docs/README.md`](README.md)
@@ -76,9 +77,23 @@ it adds no pilot allocation or loss counter.
 
 ## 5. Audit and tests
 
-Orders stamp `maker-then-positive-edge-taker2-fresh2tick-v8`, intent number, logical identity, predecessor, route,
-model/policy versions, quote observations, approved maximum, reserved stake, charged fees, fill terms, and terminal
-classification. Tests pin lifecycle authority, two-attempt terminality, exact tick movement across tapered ladders,
-25%/75¢ ceilings, positive charged-fee arithmetic including the fee floor, midpoint decline tolerance, durable
-terminal writes before refresh, route mirroring, identity uniqueness, uncertainty, budget, strategy isolation, and
-reconciliation invariants.
+Corrected orders stamp `maker-then-positive-edge-taker2-terminal-refusal-v9`, intent number, logical identity,
+predecessor, route, model/policy versions, quote observations, approved maximum, reserved stake, charged fees, fill
+terms, and terminal classification. Historical v8 rows remain immutable and cannot authorize a v9 continuation.
+Tests pin lifecycle authority, two-attempt terminality, exact tick movement across tapered ladders, 25%/75¢ ceilings,
+positive charged-fee arithmetic including the fee floor, midpoint decline tolerance, durable terminal writes before
+refresh, route mirroring, identity uniqueness, uncertainty, budget, strategy isolation, and reconciliation invariants.
+
+## 6. V8 incident and terminal-refusal correction
+
+The fixed production review in
+[`reports/maker-miss-fallback-v8-incident-2026-08-27.md`](../reports/maker-miss-fallback-v8-incident-2026-08-27.md)
+found eight v8 continuation rows that correctly withheld the taker for quality and/or spread but were then submitted
+as another maker. Two filled; no live IOC executed. Return does not restore refused authority.
+
+V9 adds one shared fail-closed continuation guard to live and paper orchestration. Any adaptive episode after the
+first must be both route `maker-miss-taker-fallback` and execution style `taker`; otherwise the predecessor receives
+an exact, first-writer terminal reason before reservation or venue submission. Outer refresh handling cannot replace
+that reason with generic text. A refusal after a distinct taker intent already exists remains classified on that
+child as a pre-submit refusal. No admission threshold, price bound, sizing, capital, exit, or reconciliation rule
+changed.
