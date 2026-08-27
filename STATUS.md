@@ -1,6 +1,6 @@
 # Money Noodle — Current Implementation Status
 
-> **Projection date:** 2026-08-26 · **Status:** Current implementation projection
+> **Projection date:** 2026-08-27 · **Status:** Current implementation projection
 > **Projection-critical source fingerprint:** `sha256:d5549743842910f4e50b2107e4abc2068b733a242b607d7491bc85de7e72f022`
 > **Requirements:** [`SPEC.md`](SPEC.md) · **Design lifecycle:** [`docs/README.md`](docs/README.md)
 > **Status index and archives:** [`status/README.md`](status/README.md) · **Roadmap:** [`status/roadmap.md`](status/roadmap.md)
@@ -65,7 +65,7 @@ projection, not a substitute for code.
 | Question | Dated result | Material caveat and consequence |
 | --- | --- | --- |
 | Exact paper/live mirror | The 2026-08-26 review contained 170 terminal exact pairs across 93 close windows. Among 122 accepted same-route/same-quantity makers across 77 windows, paper captured 24/66 live fills (36.4%); paper-minus-live fill rate was −35.93pp ±5.72pp clustered SE. | FIFO position and cancellations ahead are private, and different fill cells deploy different capital. Paper remains materially conservative; no calibration or funded route changed. See [`reports/paper-live-exact-v7-mirror-review-2026-08-26.md`](reports/paper-live-exact-v7-mirror-review-2026-08-26.md). |
-| Paper timing F2 | At the 2026-08-26 status read, 121/121 records were complete across 53 windows, with 69 known live pairs and one observed create race. | The 100-window and 300-window/30-race gates remained closed. F3 was not activated and no timing candidate changed paper fills. |
+| Paper timing F2 | The fixed 2026-08-27T02:16:57.962Z review had 308/308 complete records, 163 exact maker pairs across 117 windows, 100% timing coverage, and 14 live create races. | Count and coverage passed, but five control rows consumed post-horizon evidence and two became fills, violating the fixed 12-second horizon. The milestone failed; a versioned control repair and fresh generation are required. F3 remains off. See [`reports/paper-execution-timing-100-window-review-2026-08-27.md`](reports/paper-execution-timing-100-window-review-2026-08-27.md). |
 | Forecast candidate Phase 2 | At the fixed 2026-08-26T05:27:33Z review, 11,303 closed rows across 104 closed windows had 95.34% funded-provider outcome coverage, complete six-arm families, 100% candidate availability, and zero replay error. The 100-window coverage gate passed. | All 527 unscoreable rows lacked funded-provider contract provenance at issuance; no row with provenance lacked its eventual outcome. This was coverage-only: production remained Blend 0.4, no arm was ranked, and Phase 3 was not authorized. See [`reports/forecast-candidate-phase2-100-window-coverage-review-2026-08-26.md`](reports/forecast-candidate-phase2-100-window-coverage-review-2026-08-26.md). |
 | Maker restrictions | The fixed 2026-08-26T07:13:14Z review covered 181 live attempts across 102 windows and 707 paper attempts across 288 windows, all scoreable. The spread arm reached 20 live divergent windows and improved exact cash by 157.7076¢ live and 252.0520¢ paper, but its clustered differences were only +3.95pp ±2.58pp and +1.71pp ±1.20pp. | Neither track survived the two-arm Holm correction; the spike arm also had only 14 live divergent windows and lost 337.9820¢ incremental paper cash. Both joint review locks remained false, so maker execution and every policy/capital generation stayed unchanged. See [`reports/maker-restriction-v1-fixed-review-2026-08-26.md`](reports/maker-restriction-v1-fixed-review-2026-08-26.md). |
 | Exit sentinel v2 | The 2026-08-26 diagnosis covered 9,240 events across 150 sentinels; close-bounded coverage was 71/78 live and 62/72 paper. Every position made incomplete by cycle coverage was a loss. | V2 conflates a fresh zero bid with missing evidence, creating outcome selection. Its candidate economics are not promotion-grade; v3 remains deferred. See [`reports/exit-sentinel-preclose-availability-diagnosis-2026-08-26.md`](reports/exit-sentinel-preclose-availability-diagnosis-2026-08-26.md). |
@@ -79,7 +79,9 @@ claim or decision.
 
 ## Work in progress and held boundaries
 
-- Forecast candidate Phase 2 and paper timing F2 continue under their frozen prospective generations.
+- Forecast candidate Phase 2 continues under its frozen prospective generation. Paper timing F2 reached its
+  100-window count/coverage gate but failed the 12-second control invariant; the v6 cohort cannot mature a repaired
+  control, and F3 remains blocked pending a separately reviewed versioned repair and fresh timing cohort.
 - Maker-restriction sentinels continue without tuning. Exit v3 remains explicitly deferred.
 - The strict serial evaluation sequence remains base forecast → confirmed signal → venue candidacy → portfolio
   selection → live authorization → attempt/outcome. Downstream collection does not start early.

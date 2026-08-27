@@ -63,6 +63,7 @@ Reports marked **cited by current status** are the evidence [`STATUS.md`](../STA
 | Report | Question it answers |
 | --- | --- |
 | [`paper-live-exact-v7-mirror-review-2026-08-26`](paper-live-exact-v7-mirror-review-2026-08-26.md) | How far paper fills undercapture live fills on exact mirror pairs — **cited by current status** |
+| [`paper-execution-timing-100-window-review-2026-08-27`](paper-execution-timing-100-window-review-2026-08-27.md) | Whether paper timing F2 cleared 100 exact-maker windows without violating its fixed execution horizon — **cited by current status** |
 | [`paper-execution-timing-10-window-review-2026-08-25`](paper-execution-timing-10-window-review-2026-08-25.md) | Whether paper execution timing Phase F2 is collecting completely at 10 windows |
 | [`paper-execution-timing-smoke-2026-08-25`](paper-execution-timing-smoke-2026-08-25.md) | Whether the paper execution timing shadow path runs without interfering |
 | [`paper-settlement-health-2026-08-25`](paper-settlement-health-2026-08-25.md) | Whether paper positions settle and resolve correctly |

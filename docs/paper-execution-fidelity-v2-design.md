@@ -11,8 +11,10 @@
 > **Status:** approved in prose by the maintainer on 2026-08-25. Phase F1 engineering parity is complete. Phase
 > F2's detached implementation is complete and loaded by the persistent worker after READY startup reconciliation
 > on 2026-08-25. Its prospective clock began with the first durable decision at 2026-08-25T06:47:41.724Z. The
-> written 10-window review passed on 2026-08-25 with 45/45 complete records across 20 independent windows, 25 exact
-> live pairs, 100% timing coverage, and zero final-grace replay differences. The 100-pair coverage and 300-pair /
+> written 10-window review passed on 2026-08-25. At the 2026-08-27 100-window review, count and coverage reached
+> 163 exact maker pairs across 117 windows with complete timing evidence, but the milestone failed its fixed
+> 12-second execution invariant: five control rows consumed post-horizon evidence and two became paper fills. A
+> prospective versioned control repair is required before F2 can resume a clean cohort. The 300-pair /
 > 30-create-race phase-exit gates remain closed. Phases F3–F4 remain unactivated and require the full preceding
 > phase review. This program changes no funded execution,
 > buy rule, portfolio rule, live authority, settlement

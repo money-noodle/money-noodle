@@ -100,6 +100,11 @@ for (const row of knownAcceptance) {
     liveNonAcceptanceReasons[reason] = (liveNonAcceptanceReasons[reason] ?? 0) + 1;
   }
 }
+const exactMakerPairs = knownAcceptance.filter(({ record, live }) => route(live) === 'maker'
+  && Number.isFinite(live.requestedQuantity ?? live.quantity)
+  && Math.abs(record.decision.requestedCount - (live.requestedQuantity ?? live.quantity)) <= 1e-8);
+const exactMakerPairWindows = new Set(exactMakerPairs.map(({ record }) => record.decision.closesAt));
+const observedLiveCreateRaces = knownAcceptance.filter(({ live }) => nonAcceptanceReason(live) === 'post_only_race');
 const acceptanceAvailable = rows.filter((record) => record.acceptance
   && record.acceptance.status !== 'unavailable');
 const graceAvailable = rows.filter((record) => record.grace?.status === 'available');
@@ -128,6 +133,29 @@ const timingSummary = (values) => ({
   median: percentile(values, 0.5), p95: percentile(values, 0.95), maximum: percentile(values, 1),
 });
 const windows = new Set(rows.map((record) => record.decision.closesAt));
+const postHorizonProductionEvidence = rows.flatMap((record) => {
+  const restingUntil = Date.parse(record.grace?.restingUntil ?? '');
+  const order = ledgerById.get(record.decision.orderId);
+  if (!Number.isFinite(restingUntil) || !order) return [];
+  const observations = (order.entryExecutionObservations ?? []).filter((observation) =>
+    (observation.consumingTradeCount ?? 0) > 0
+    && Date.parse(observation.lastConsumingTradeAt ?? '') - 1e-6 > restingUntil);
+  if (!observations.length) return [];
+  return [{
+    orderId: order.id, closesAt: record.decision.closesAt, restingUntil: record.grace.restingUntil,
+    status: order.status, filledCount: order.filledCount ?? 0, pnlCents: order.pnlCents,
+    observations: observations.map((observation) => ({
+      firstConsumingTradeAt: observation.firstConsumingTradeAt,
+      lastConsumingTradeAt: observation.lastConsumingTradeAt,
+      consumingTradeCount: observation.consumingTradeCount,
+      consumingTradeQuantity: observation.consumingTradeQuantity,
+      fillAdded: observation.fillAdded ?? 0,
+    })),
+  }];
+});
+const postHorizonFillRows = postHorizonProductionEvidence.filter((row) => row.filledCount > 1e-8);
+const controlCoverageReady = expectedCount > 0 && rows.length / expectedCount >= 0.95
+  && acceptanceAvailable.length / expectedCount >= 0.95 && graceAvailable.length / expectedCount >= 0.95;
 
 console.log(JSON.stringify({
   generatedAt: new Date().toISOString(),
@@ -139,7 +167,13 @@ console.log(JSON.stringify({
     startedAt: rows.map((record) => record.decision.recordedAt).sort()[0] ?? null,
     latestAt: rows.map((record) => record.decision.recordedAt).sort().at(-1) ?? null,
   },
-  identity: { knownAcceptancePairs: knownAcceptance.length, missingLivePair, pendingLivePair, ambiguousLivePair },
+  identity: {
+    knownAcceptancePairs: knownAcceptance.length,
+    exactMakerPairs: exactMakerPairs.length,
+    exactMakerPairWindows: exactMakerPairWindows.size,
+    routeOrQuantityExclusions: knownAcceptance.length - exactMakerPairs.length,
+    missingLivePair, pendingLivePair, ambiguousLivePair,
+  },
   acceptance: {
     available: acceptanceAvailable.length,
     unavailable: rows.filter((record) => record.acceptance?.status === 'unavailable').length,
@@ -147,6 +181,7 @@ console.log(JSON.stringify({
     coverage: expectedCount ? acceptanceAvailable.length / expectedCount : null,
     matrix,
     liveNonAcceptanceReasons,
+    observedLiveCreateRaces: observedLiveCreateRaces.length,
     acceptedRecall: matrix.acceptedAccepted + matrix.raceAccepted
       ? matrix.acceptedAccepted / (matrix.acceptedAccepted + matrix.raceAccepted) : null,
     raceRecall: matrix.acceptedNotAccepted + matrix.raceNotAccepted
@@ -168,12 +203,25 @@ console.log(JSON.stringify({
       && record.grace.eventTimeReplay.filledCount <= 1e-8).length,
     scheduleDelayMs: timingSummary(graceScheduleDelay),
   },
+  executionInvariant: {
+    postHorizonProductionEvidenceRows: postHorizonProductionEvidence.length,
+    postHorizonProductionFillRows: postHorizonFillRows.length,
+    affectedWholeCentPnlCents: postHorizonFillRows.reduce((sum, row) => sum + (row.pnlCents ?? 0), 0),
+    rows: postHorizonProductionEvidence,
+  },
   milestones: {
     tenWindowWiringReady: windows.size >= 10,
-    hundredWindowCoverageReady: windows.size >= 100 && expectedCount > 0
-      && rows.length / expectedCount >= 0.95 && acceptanceAvailable.length / expectedCount >= 0.95
-      && graceAvailable.length / expectedCount >= 0.95,
-    phaseExitCountReady: windows.size >= 300,
+    hundredExactMakerWindowCountReady: exactMakerPairWindows.size >= 100,
+    hundredWindowCoverageReady: exactMakerPairWindows.size >= 100 && controlCoverageReady,
+    hundredWindowInvariantClear: exactMakerPairWindows.size >= 100 && controlCoverageReady
+      && postHorizonProductionEvidence.length === 0,
+    phaseExitCountReady: exactMakerPairWindows.size >= 300,
+    phaseExitRaceReady: observedLiveCreateRaces.length >= 30,
+    phaseExitCoverageReady: controlCoverageReady,
+    phaseExitAutomatedCriteriaReady: exactMakerPairWindows.size >= 300
+      && observedLiveCreateRaces.length >= 30 && controlCoverageReady
+      && postHorizonProductionEvidence.length === 0,
+    nonInterferenceReviewStillRequired: true,
   },
   authority: 'diagnostic only; no paper fill, bankroll, live order, or promotion authority',
 }, null, 2));
