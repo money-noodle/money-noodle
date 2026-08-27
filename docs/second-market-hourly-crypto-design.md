@@ -10,7 +10,8 @@
 
 > **Approved 2026-08-21** · Decisions locked: T-only, 8pp edge floor, 3/2/1 caps, 60s cadence,
 > cross-market exposure ignored, threshold-pair selection, all ten assets. · Status: H1 public market-data
-> capability and Vercel UI implemented; H2 durable observation and H3 paper remain pending. Product/architecture truth lives in `spec/trading-risk-and-budget.md` §3.6 (markets & keying), `market-registry.ts`,
+> capability and Vercel UI implemented; H2 detached durable observation is implemented but not activated;
+> H3 paper remains pending. Product/architecture truth lives in `spec/trading-risk-and-budget.md` §3.6 (markets & keying), `market-registry.ts`,
 > `strategy-registry.ts`, `policy-manifest.ts`, and `basis-model.ts`. This document is the pre-code
 > agreement for adding a second market: what the market is, how the contracts differ, and every
 > registry/policy/store seam that must grow a case.
@@ -264,6 +265,35 @@ design if measurement shows the correlation is material.
 - Live promotion is a separate manual act on committed sentinel evidence
   (`spec/policy-and-track-separation.md` §12.5), out of scope for this design.
 
+### 5.2 H2 observation contract
+
+H2 is `hourly-threshold-observation-v1`. The persistent worker owns one detached 60-second timer and one serialized
+append-only writer for `data/hourly-threshold-observations.journal.jsonl`. Each asset/minute observation retains the
+provider, market/data/model versions, UTC bucket, scheduled UTC research-window close, asset, availability reason,
+exact venue open/close when present, spot/volatility
+inputs, and each independent candidate's direction, ticker, strike/relation, four public quotes, model probability,
+model-minus-ask diagnostic, rules fingerprint, and market URL. Duplicate asset/minute IDs are idempotent.
+
+Exact public outcomes append separately by ticker and rules fingerprint after close. `YES`, `NO`, and explicit
+venue invalidation are distinct; missing or delayed venue results stay unresolved. A contradictory result or rules
+fingerprint fails the observer rather than relabeling history. Resolution uses only the exact Kalshi contract API;
+Kraken never substitutes for the CF Benchmarks outcome.
+
+The worker fetches one fresh H1 response per minute and at most ten due exact outcomes. Its timer is not awaited by
+the 15-second collector, paper/live orchestration, settlement, or reconciliation. Errors drop/degrade observation
+health and never delay or change another lane. Stateless hosts cannot start the writer. The journal is included by
+the existing JSONL archive allowlist; compaction, retention, and deletion remain separate unapproved work.
+
+`npm run analyze:hourly-thresholds` is read-only. It reports availability, exact identities, outcome coverage, and
+model diagnostics clustered by scheduled UTC research close. That research-window key counts explicit listing
+absence but is never substituted for an exact venue contract close or outcome identity. The first gates are:
+
+- 10 independent closes: wiring, writer, identity, availability, outcome, archive, and non-interference smoke only;
+- 60 independent closes: first availability/model review, with the CF-vs-Kraken target-integrity caveat explicit.
+
+No backfill counts as prospective H2 evidence. Neither gate specifies persistence, warm-up, cutoff, qualification,
+paper execution, sizing, bankroll, or live promotion; those remain a pre-outcome H3 design decision.
+
 ## 6. Index and oracle handling
 
 - **Settlement index:** hourly crypto settles on the CF Benchmarks index (BRTI/ERTI/…) 60-second
@@ -377,6 +407,9 @@ availability cohort; they require a pre-outcome design amendment and cannot be s
 - 2026-08-26 · Revalidated all ten planned public series across 1,335 open rows. Defined exact 3,600-second
   selection, two independent YES candidate identities, explicit unavailable handling, and staged H1 market-data →
   H2 observation → H3 paper capability. This is pre-code prose and changes no current registry or runtime behavior.
+- 2026-08-27 · Maintainer approved H2 detached durable collection: one asset/minute append-only observation,
+  exact ticker/rules outcome ownership, persistent-worker-only writer, archive inclusion, 10-window smoke, and
+  60-window first review. H2 grants no qualification, paper, live, budget, or reconciliation authority.
 - 2026-08-26 · Maintainer approved the H0 contract and H1 implementation boundary under
   [`DEC-20260826-08`](../spec/decisions/decision-id-map.json). H1 added exact-duration public normalization, a
   zero-drift strike model, process-memory-only reads, market-specific asset membership, and a stateless-safe Vercel

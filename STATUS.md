@@ -38,7 +38,7 @@ indexed by [`status/README.md`](status/README.md).
 | Paper execution | Independent managed-maker/IOC simulation, displayed-depth queue proxy, public trade evidence, reduce-only depth exits, exact mirror-pair IDs, separate paper bankroll, and neutral versioned calibration are implemented. Paper is diagnostic rather than live-equivalent. |
 | Live execution | The currently implemented live adapter supports signed buy/sell order lifecycle, managed post-only makers, bounded IOC entry evaluation, collision-resistant IDs, exact exchange identity, cancellation confirmation, fill/fee reconciliation, and side-aware reduce-only exits and switches. Additional providers fail closed. |
 | Funded safety | Explicit arming, typed environment confirmation, kill switch, quiescent Pause/drain, per-trade and rate caps, loss/drawdown stops, durable reservations, operator-intent separation, startup/manual/full and periodic incremental reconciliation, and guarded system-only auto-resume are implemented. |
-| Storage | Forecast storage v3 uses one owning writer, immutable content-addressed shards/rollups, checksums, journal replay, and publish-last generations. Execution ledger v9 keeps money/control rows hot and hydrates immutable terminal evidence from verified batches. Atomic stores and append-only journals retain owner boundaries. |
+| Storage | Forecast storage v3 uses one owning writer, immutable content-addressed shards/rollups, checksums, journal replay, and publish-last generations. Execution ledger v9 keeps money/control rows hot and hydrates immutable terminal evidence from verified batches. Hourly H2 adds a detached persistent-worker-only asset/minute and exact-outcome JSONL writer. Atomic stores and append-only journals retain owner boundaries. |
 | Archive and restore | Local-only object archival, full read-back checksum verification, manifests, independent restore, disk-capacity checks, and rebuildable Next-cache cleanup are implemented. Remote-primary deletion is not authorized. |
 | Hosted runtime | Hosted deployment is stateless, reads bounded sanitized paper projections, and may fetch bounded public research feeds such as the H1 hourly threshold surface. It has no credentials, durable collection, reconciliation, ledger-write, control, paper, or funded order authority. |
 | Governance | Versioned registries, policy manifest, immutable model-promotion ledger, canonical modular specification, controlled design/status lifecycles, stable requirement/decision IDs, deterministic task preflight, critical requirement-to-source/test navigation, workstream design routing, and CI documentation/application gates are implemented. `AGENTS.md` remains one bounded always-loaded guide; the verifiers check its citations, routed context, current-design source pointers, canonical authority restatement, and the projection-critical source fingerprint above. |
@@ -55,7 +55,7 @@ indexed by [`status/README.md`](status/README.md).
 | Ordinary exit | `strict-value-v1`; side-aware reduce-only IOC behavior |
 | Profit reversal | `profit-reversal-75-v1` remains withheld from execution by default while prospective observations continue |
 | Long-shot strategy | Retired registry identity only; no execution, collection, allocation, API, or UI authority |
-| Hourly threshold research | `kalshi-hourly-threshold-read-v1` with `strike-threshold-zero-drift-v1`; market data only, paper/live false |
+| Hourly threshold research | `kalshi-hourly-threshold-read-v1` with `strike-threshold-zero-drift-v1`; detached `hourly-threshold-observation-v1` implemented but not activated; paper/live false |
 
 Read the exact constants and capability intersections from their owning source and registries; this table is a dated
 projection, not a substitute for code.
@@ -92,7 +92,8 @@ claim or decision.
   relaxation remain unsupported or blocked.
 - Provider/policy attribution visibility is implemented without a ledger rewrite or public-payload expansion.
   Durable unified policy lineage and parameter diffs remain a separate structural design.
-- Hourly threshold H1 public market data is implemented; H2 durable observation and H3 isolated paper remain
+- Hourly threshold H1 public market data and H2 detached durable observation are implemented; H2's prospective
+  clock has not started pending worker activation. H3 isolated paper remains
   unactivated. Proposed engine separation and multitenancy have no implementation authority. Noodle Land remains
   exploratory and outside application/runtime authority.
 

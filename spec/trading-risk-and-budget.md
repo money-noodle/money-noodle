@@ -48,9 +48,11 @@ noise cannot flip selection.
 The accepted hourly threshold market activates in capability stages. H1 is public research only:
 `marketData: true, paper: false, live: false`. Its ABOVE and BELOW rows are independent YES contracts with distinct
 strikes, tickers, probabilities, quotes, and outcomes; neither may be inferred from the other's NO side. Assign
-`crypto-1h` only when exact venue timestamps establish a 3,600-second open-to-close duration. H2 durable observation
-and H3 paper capability require their own accepted ownership, outcome, policy, accounting, and isolation gates;
-live remains withheld until a separate promotion. Exact implementation semantics live in
+`crypto-1h` only when exact venue timestamps establish a 3,600-second open-to-close duration. H2 adds only detached
+asset/minute observations and exact Kalshi ticker/rules outcomes under a persistent-worker-only append writer. Its
+10-close smoke and 60-close first review grant no qualification or execution authority, and no backfill counts as
+prospective evidence. H3 paper capability still requires accepted policy, persistence, accounting, settlement,
+and isolation gates; live remains withheld until a separate promotion. Exact implementation semantics live in
 [`docs/second-market-hourly-crypto-design.md`](../docs/second-market-hourly-crypto-design.md).
 
 <a id="req-trading-budget-model"></a>

@@ -10,6 +10,7 @@ export type TaskCadenceId =
   | 'edge-observation'
   | 'exact-pre-submit-quote'
   | 'managed-maker'
+  | 'hourly-threshold-observation'
   | 'reconciliation';
 
 export type TaskCadenceHealth = 'healthy' | 'running' | 'degraded' | 'idle' | 'unavailable';
@@ -87,6 +88,14 @@ export const TASK_CADENCE: readonly TaskCadenceDefinition[] = [
     purpose: 'Walks a passive order toward its approved ceiling, then cancels and confirms every remainder.',
     requestCost: 'Bounded exact-contract quote, depth, trade, and fill reads; never broad candidate polling.',
     workerOnly: true,
+  },
+  {
+    id: 'hourly-threshold-observation', task: 'Hourly threshold observation', cadenceKind: 'interval',
+    cadenceMs: 60_000, cadenceLabel: 'Every 1 minute',
+    activation: 'Continuous only on the persistent worker after startup readiness.',
+    purpose: 'Persists detached exact-contract availability, quotes, model values, and eventual public outcomes.',
+    requestCost: 'Ten bounded public series reads plus reference-data refreshes; at most ten due exact outcomes.',
+    workerOnly: true, staleAfterMs: 3 * 60_000,
   },
   {
     id: 'reconciliation', task: 'Authoritative reconciliation', cadenceKind: 'periodic-and-event',

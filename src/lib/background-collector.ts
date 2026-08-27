@@ -4,6 +4,7 @@ import { getDashboard, MODEL_VERSION } from './dashboard';
 import { recordCollectorCalculations, resolveDueForecasts } from './forecast-tracker';
 import { processPaperTradingCycle } from './paper-execution';
 import { replicatePublicPaperPerformance } from './public-paper-performance';
+import { startHourlyThresholdObserver } from './hourly-threshold-observer';
 
 async function collect(): Promise<void> {
   const state = collectorRuntime();
@@ -44,6 +45,9 @@ export function startBackgroundCollector(): void {
   if (!state.enabled || state.running) return;
   state.running = true;
   state.startedAt = new Date().toISOString();
+  // H2 owns an independent 60-second public-data timer. It never delays the 15-second forecast,
+  // paper/live orchestration, settlement, or reconciliation cycle.
+  startHourlyThresholdObserver();
   state.timer = setInterval(() => void collect(), state.intervalMs);
   state.timer.unref?.();
   void collect();

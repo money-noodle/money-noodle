@@ -29,6 +29,7 @@
     "analyze:paper-fill-calibration": "node scripts/analyze-paper-fill-calibration.mjs",
     "analyze:paper-settlement": "node scripts/analyze-paper-settlement-health.mjs",
     "analyze:paper-execution-timing": "node scripts/analyze-paper-execution-timing.mjs",
+    "analyze:hourly-thresholds": "node scripts/analyze-hourly-threshold-observations.mjs",
     "verify:forecast-storage": "jiti scripts/verify-forecast-storage.ts",
     "repair:forecast-storage": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/src/lib/server-only-stub.ts\\\"}\" jiti scripts/repair-forecast-storage.ts",
     "compact:forecast-storage": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/src/lib/server-only-stub.ts\\\"}\" jiti scripts/compact-forecast-storage.ts",

@@ -33,6 +33,11 @@ field-by-field semantic verifier passes. See
 [`docs/forecast-storage-design.md`](../docs/forecast-storage-design.md) and
 [`docs/forecast-storage-generation-repair-design.md`](../docs/forecast-storage-generation-repair-design.md).
 
+The hourly threshold H2 lane uses one persistent-worker-only serialized append writer for
+`data/hourly-threshold-observations.journal.jsonl`. Asset/minute observations and exact-provider outcome events are
+immutable and idempotent by versioned identity; stateless hosts have no writer. The journal is archive-eligible but
+has no compaction, retention, deletion, policy, paper, live, budget, settlement-write, or reconciliation authority.
+
 Retention is a separate decision from storage affordability. Sharding or compaction does not authorize deletion.
 
 An optional S3-compatible off-machine archive runs only on the persistent worker. A detached low-priority process

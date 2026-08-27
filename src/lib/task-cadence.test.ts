@@ -8,7 +8,7 @@ describe('task cadence registry', () => {
   it('registers each independent runtime task once', () => {
     expect(TASK_CADENCE.map((task) => task.id)).toEqual([
       'dashboard-calculation', 'edge-observation', 'exact-pre-submit-quote', 'managed-maker',
-      'reconciliation',
+      'hourly-threshold-observation', 'reconciliation',
     ]);
     expect(new Set(TASK_CADENCE.map((task) => task.id)).size).toBe(TASK_CADENCE.length);
     for (const task of TASK_CADENCE) {

@@ -41,14 +41,14 @@
       "id": "req-storage-local",
       "module": "spec/storage-and-architecture.md",
       "coverage": "full",
-      "sources": ["src/lib/cache.ts", "src/lib/forecast-storage.ts", "src/lib/execution-ledger-storage.ts"],
-      "tests": ["src/lib/forecast-storage.test.ts", "src/lib/execution-ledger-store.test.ts", "src/lib/forecast-writer-authority.test.ts"]
+      "sources": ["src/lib/cache.ts", "src/lib/forecast-storage.ts", "src/lib/execution-ledger-storage.ts", "src/lib/hourly-threshold-observation-store.ts"],
+      "tests": ["src/lib/forecast-storage.test.ts", "src/lib/execution-ledger-store.test.ts", "src/lib/forecast-writer-authority.test.ts", "src/lib/hourly-threshold-observation.test.ts", "src/lib/hourly-threshold-h2-isolation.test.ts"]
     },
     {
       "id": "req-storage-architecture",
       "module": "spec/storage-and-architecture.md",
       "coverage": "full",
-      "sources": ["src/lib/dashboard.ts", "src/lib/task-cadence.ts", "src/lib/task-cadence-runtime.ts", "src/lib/runtime-environment.ts"],
+      "sources": ["src/lib/dashboard.ts", "src/lib/task-cadence.ts", "src/lib/task-cadence-runtime.ts", "src/lib/runtime-environment.ts", "src/lib/hourly-threshold-observer.ts"],
       "tests": ["src/lib/task-cadence-runtime.test.ts", "src/lib/reconciliation-scheduling-boundary.test.ts"]
     },
     {
