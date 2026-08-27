@@ -13,9 +13,12 @@ import 'server-only';
 export const PAPER_FILL_CALIBRATION_VERSION = 'paper-fill-calibration-v1' as const;
 
 const PAPER_EXECUTION_VERSION_PREFIX = 'paper-managed-execution-route-ioc-requalify3-calibrated-v';
-export const PAPER_NEUTRAL_EXECUTION_VERSION = `${PAPER_EXECUTION_VERSION_PREFIX}6` as const;
+export const PAPER_LEGACY_NEUTRAL_EXECUTION_VERSION = `${PAPER_EXECUTION_VERSION_PREFIX}6` as const;
+/** Neutral queue calibration plus the exact inclusive 12-second venue-event cutoff. */
+export const PAPER_NEUTRAL_EXECUTION_VERSION = `${PAPER_EXECUTION_VERSION_PREFIX}7` as const;
+export const PAPER_FIRST_ADOPTED_CALIBRATION_GENERATION = 8;
 
-/** Every adopted calibration receives a new execution generation; v6 is reserved for neutral/no-adoption. */
+/** Every adopted calibration receives a new execution generation; v6/v7 are neutral control generations. */
 export function paperExecutionVersion(generation: number): string {
   if (!Number.isSafeInteger(generation) || generation < 6) throw new Error('Paper execution generation must be an integer at or above 6.');
   return `${PAPER_EXECUTION_VERSION_PREFIX}${generation}`;
@@ -58,9 +61,10 @@ export function isPaperFillCalibration(input: unknown): input is PaperFillCalibr
     || typeof candidate.reason !== 'string'
     || candidate.reason.trim().length === 0) return false;
 
-  // V6 is the never-adopted neutral baseline. Every adopted generation requires complete held-out
-  // provenance, including a rollback to zero, so it cannot pool with that baseline.
-  if (generation === 6) {
+  // V6 and v7 are never-adopted neutral controls. V7 differs only by enforcing the already-required
+  // event-time horizon. Every adopted generation requires complete held-out provenance, including a
+  // rollback to zero, so it cannot pool with either neutral identity.
+  if (generation === 6 || generation === 7) {
     return candidate.queueClearFraction === 0
       && candidate.heldOutWindows === 0
       && candidate.adoptedAt === '';

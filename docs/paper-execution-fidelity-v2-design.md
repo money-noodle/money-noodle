@@ -13,8 +13,11 @@
 > on 2026-08-25. Its prospective clock began with the first durable decision at 2026-08-25T06:47:41.724Z. The
 > written 10-window review passed on 2026-08-25. At the 2026-08-27 100-window review, count and coverage reached
 > 163 exact maker pairs across 117 windows with complete timing evidence, but the milestone failed its fixed
-> 12-second execution invariant: five control rows consumed post-horizon evidence and two became paper fills. A
-> prospective versioned control repair is required before F2 can resume a clean cohort. The 300-pair /
+> 12-second execution invariant: five control rows consumed post-horizon evidence and two became paper fills. The
+> maintainer approved a deterministic five-row exclusion, retained 303/308 rows and 159 exact pairs across 115
+> windows at the fixed review cutoff, and approved neutral v7 to enforce the horizon prospectively without
+> rewriting v6. Neutral v7 activated after READY startup reconciliation at `2026-08-27T02:44:52.760Z` with
+> zero positions and reservations; the active calibration read back as neutral v7. The 300-pair /
 > 30-create-race phase-exit gates remain closed. Phases F3–F4 remain unactivated and require the full preceding
 > phase review. This program changes no funded execution,
 > buy rule, portfolio rule, live authority, settlement
@@ -184,6 +187,29 @@ The acceptance confusion matrix reports accepted recall, false acceptance, and f
 how many in-horizon prints were first observed after the horizon, their observation lag, and resulting candidate
 fill/quantity differences. Return is diagnostic and cannot select timing.
 
+### 4.4 Approved v7 horizon repair and evidence continuity
+
+Neutral v7 differs from neutral v6 only by filtering public trade prints on the exact inclusive venue-event interval
+`[submittedAt, restingUntil]` before queue depletion or fill arithmetic. It keeps six two-second checks, the same
+prices, queue calibration, quantity, fees, and accounting. The first future calibration adoption is v8.
+
+Historical v6 rows remain immutable. For F2 timing evidence only, mark a row unavailable as
+`control_post_horizon_evidence` when an ordinary-control observation with consuming volume has
+`lastConsumingTradeAt > restingUntil`. This exclusion is fixed by the pre-existing horizon, applies whether the row
+filled, won, or lost, and cannot be loosened after seeing outcomes. A retained v6 row is exactly equivalent to v7
+for this repair when every consuming batch ends on or before `restingUntil`: v7 removes no state-changing input from
+that row. Retained evidence may therefore carry forward, provided every review:
+
+- reports v6 and v7 counts/windows separately before any combined total;
+- keeps the exclusion in the expected-coverage denominator and maintains at least 95% coverage;
+- proves the pure inclusive boundary and neutral queue arithmetic in tests;
+- never rewrites the five affected rows, their fills, bankroll entries, or P&L; and
+- does not transfer this narrow equivalence to queue calibrations, economics, or any later execution generation.
+
+At the fixed 100-window cutoff this retained 303/308 rows, 159 exact maker pairs, and 115 independent exact-maker
+windows. The count/coverage milestone passes under the corrected availability rule. F2 remains collecting because
+300 exact-maker windows, 30 create races, and the non-interference review remain outstanding; F3 stays off.
+
 ## 5. Phase F3 — prospective queue family
 
 F3 begins only after F2 freezes retained acceptance and evidence-completion mechanics. It evaluates one immutable
@@ -225,7 +251,7 @@ Require at least:
 
 A successful review permits only a separate manual adoption request. Adoption starts a fresh paper execution
 identity, never rewrites v6, and requires build/restart/deployment procedures appropriate to a running worker. It
-does not change funded execution. A null review leaves neutral v6 active and is recorded with equal care.
+does not change funded execution. A null review leaves the active neutral generation unchanged and is recorded with equal care.
 
 ## 7. Files and phase ownership
 

@@ -29,7 +29,7 @@ import { readExecutionLedger } from './lib/read-execution-ledger.mjs';
 
 const DATA = path.resolve(process.cwd(), 'data');
 const EDGE = 'edge-binary-buy';
-const PAPER_VERSION = 'paper-managed-execution-route-ioc-requalify3-calibrated-v6';
+const PAPER_VERSION = 'paper-managed-execution-route-ioc-requalify3-calibrated-v7';
 const LIVE_VERSION = 'maker-high30-requalify3-fresh1c-bounded-taker-pilot-v7';
 const NONTERMINAL = new Set(['open', 'pending_reservation', 'uncertain']);
 

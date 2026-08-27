@@ -9,7 +9,7 @@ import {
 import {
   recordPaperAcceptanceTimingResult, recordPaperExecutionGraceResult, recordPaperExecutionTimingDecision,
 } from './paper-execution-timing-shadow-store';
-import type { PaperMakerSimulationResult } from './paper-maker-simulation';
+import { paperMakerEventTimeMicros, type PaperMakerSimulationResult } from './paper-maker-simulation';
 import type { KalshiTradePrint } from './kalshi-market-data';
 import type { PaperOrder } from './types';
 
@@ -153,13 +153,14 @@ export function startPaperExecutionTimingObservers(
 }
 
 function relevantPrints(order: PaperOrder, result: PaperMakerSimulationResult, prints: KalshiTradePrint[]): KalshiTradePrint[] {
-  const acceptedAtMs = Date.parse(result.submittedAt), restingUntilMs = Date.parse(result.restingUntil);
+  const acceptedAtMicros = Date.parse(result.submittedAt) * 1_000;
+  const restingUntilMicros = Date.parse(result.restingUntil) * 1_000;
   const consumingTakerSide = order.side === 'UP' ? 'no' : 'yes';
   const maximumPrice = order.approvedMaximumPrice ?? order.askPrice;
   return prints.filter((print) => {
-    const at = Date.parse(print.at);
+    const atMicros = paperMakerEventTimeMicros(print.at);
     const selectedPrice = order.side === 'UP' ? print.yesPrice : print.noPrice;
-    return Number.isFinite(at) && at + 1e-6 >= acceptedAtMs && at - 1e-6 <= restingUntilMs
+    return atMicros !== undefined && atMicros >= acceptedAtMicros && atMicros <= restingUntilMicros
       && print.takerSide === consumingTakerSide && selectedPrice <= maximumPrice + 1e-9;
   });
 }

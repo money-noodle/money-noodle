@@ -76,8 +76,8 @@
       "id": "req-trading-paper-engine",
       "module": "spec/trading-risk-and-budget.md",
       "coverage": "full",
-      "sources": ["src/lib/paper-execution.ts", "src/lib/venue-fill.ts"],
-      "tests": ["src/lib/paper-execution.test.ts", "src/lib/venue-fill.test.ts", "src/lib/mirror-invariant.test.ts"]
+      "sources": ["src/lib/paper-execution.ts", "src/lib/paper-maker-simulation.ts", "src/lib/venue-fill.ts"],
+      "tests": ["src/lib/paper-execution.test.ts", "src/lib/paper-maker-fill.test.ts", "src/lib/venue-fill.test.ts", "src/lib/mirror-invariant.test.ts"]
     },
     {
       "id": "req-trading-entry-route",

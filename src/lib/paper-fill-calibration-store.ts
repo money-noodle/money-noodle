@@ -2,7 +2,8 @@ import 'server-only';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
-  PAPER_FILL_CALIBRATION_VERSION, PAPER_FILL_QUEUE_CLEAR_MAX, PAPER_NEUTRAL_EXECUTION_VERSION,
+  PAPER_FILL_CALIBRATION_VERSION, PAPER_FILL_QUEUE_CLEAR_MAX, PAPER_FIRST_ADOPTED_CALIBRATION_GENERATION,
+  PAPER_LEGACY_NEUTRAL_EXECUTION_VERSION, PAPER_NEUTRAL_EXECUTION_VERSION,
   isPaperFillCalibration, paperExecutionGeneration, paperExecutionVersion, type PaperFillCalibration,
 } from './paper-fill-calibration';
 
@@ -16,7 +17,7 @@ let storeQueue: Promise<void> = Promise.resolve();
 export interface PaperFillCalibrationStore {
   version: 1;
   active: PaperFillCalibration;
-  /** Complete append-only adoption records. The neutral v6 baseline is implicit and never an adoption. */
+  /** Complete append-only adoption records. Neutral v6/v7 controls are implicit and never adoptions. */
   history: PaperFillCalibration[];
   updatedAt: string;
 }
@@ -53,11 +54,13 @@ function isCalibrationStore(input: unknown): input is PaperFillCalibrationStore 
     || typeof candidate.updatedAt !== 'string' || !Number.isFinite(Date.parse(candidate.updatedAt))) return false;
 
   if (candidate.history.length === 0) {
-    return candidate.active.appliedToPaperExecution === PAPER_NEUTRAL_EXECUTION_VERSION
+    return (candidate.active.appliedToPaperExecution === PAPER_NEUTRAL_EXECUTION_VERSION
+      || candidate.active.appliedToPaperExecution === PAPER_LEGACY_NEUTRAL_EXECUTION_VERSION)
       && candidate.active.queueClearFraction === 0;
   }
   for (let index = 0; index < candidate.history.length; index += 1) {
-    if (paperExecutionGeneration(candidate.history[index].appliedToPaperExecution) !== index + 7) return false;
+    if (paperExecutionGeneration(candidate.history[index].appliedToPaperExecution)
+      !== index + PAPER_FIRST_ADOPTED_CALIBRATION_GENERATION) return false;
   }
   return sameCalibration(candidate.active, candidate.history.at(-1)!);
 }
@@ -66,7 +69,12 @@ async function readStore(): Promise<PaperFillCalibrationStore> {
   try {
     const raw = JSON.parse(await readFile(storeFile(), 'utf8')) as unknown;
     if (!isCalibrationStore(raw)) throw new Error('Paper fill calibration store is malformed or has discontinuous cohort history.');
-    return raw;
+    // A legacy neutral v6 file has no adopted parameters. Project it to the approved v7 control in
+    // memory; do not rewrite durable history merely to activate the event-time invariant repair.
+    return raw.history.length === 0
+      && raw.active.appliedToPaperExecution === PAPER_LEGACY_NEUTRAL_EXECUTION_VERSION
+      ? { ...raw, active: neutralCalibration() }
+      : raw;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyStore();
     throw error;
@@ -113,7 +121,7 @@ export function adoptPaperFillCalibration(input: {
     if (!reason) throw new Error('A non-empty adoption reason is required.');
 
     const store = await readStore();
-    const generation = 7 + store.history.length;
+    const generation = PAPER_FIRST_ADOPTED_CALIBRATION_GENERATION + store.history.length;
     const adoptedAt = new Date().toISOString();
     const adopted: PaperFillCalibration = {
       version: PAPER_FILL_CALIBRATION_VERSION,

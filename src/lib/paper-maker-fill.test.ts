@@ -5,7 +5,10 @@ vi.mock('server-only', () => ({}));
 import { applyPaperMakerSimulation, attachMatchedLiveFillShadow, resolveRestingPaperOrders } from './paper-execution';
 import { executionMirrorPairStamp } from './execution-mirror-pair';
 import { initialManagedMakerPrice, nextManagedMakerPrice, selectedManagedMakerQuote } from './managed-maker';
-import { applyTradePrintsToPaperQueue, simulateManagedPaperMaker, type PaperMakerQueueState } from './paper-maker-simulation';
+import {
+  applyTradePrintsToPaperQueue, paperMakerEventTimeMicros, paperMakerEventWithinHorizon, simulateManagedPaperMaker,
+  type PaperMakerQueueState,
+} from './paper-maker-simulation';
 import {
   PAPER_FILL_CALIBRATION_VERSION, PAPER_FILL_QUEUE_CLEAR_MAX, PAPER_NEUTRAL_EXECUTION_VERSION,
   effectiveQueueAhead, isPaperFillCalibration, paperExecutionGeneration, paperExecutionVersion,
@@ -69,7 +72,7 @@ describe('trade-print queue model', () => {
       side: 'UP', requestedCount: 4, currentLimit: 0.42, queueAhead: 10,
       filledCount: 0, purchaseCents: 0, observedTradeIds: new Set(),
     };
-    const first = applyTradePrintsToPaperQueue(state, [trade({ id: 'first', count: 9 })], 0);
+    const first = applyTradePrintsToPaperQueue(state, [trade({ id: 'first', count: 9 })], 0, 12_000);
     expect(state.filledCount).toBe(0);
     expect(state.queueAhead).toBe(1);
     expect(first).toMatchObject({
@@ -77,7 +80,7 @@ describe('trade-print queue model', () => {
       fillAdded: 0,
     });
     const second = applyTradePrintsToPaperQueue(
-      state, [trade({ id: 'first', count: 9 }), trade({ id: 'second', count: 5 })], 0,
+      state, [trade({ id: 'first', count: 9 }), trade({ id: 'second', count: 5 })], 0, 12_000,
     );
     expect(state.filledCount).toBe(4);
     expect(state.purchaseCents).toBeCloseTo(168);
@@ -92,7 +95,9 @@ describe('trade-print queue model', () => {
       side: 'DOWN', requestedCount: 2, currentLimit: 0.58, queueAhead: 0,
       filledCount: 0, purchaseCents: 0, observedTradeIds: new Set(),
     };
-    applyTradePrintsToPaperQueue(state, [trade({ takerSide: 'yes', count: 2, yesPrice: 0.42, noPrice: 0.58 })], 0);
+    applyTradePrintsToPaperQueue(
+      state, [trade({ takerSide: 'yes', count: 2, yesPrice: 0.42, noPrice: 0.58 })], 0, 12_000,
+    );
     expect(state.filledCount).toBe(2);
     expect(state.purchaseCents).toBeCloseTo(116);
   });
@@ -102,8 +107,38 @@ describe('trade-print queue model', () => {
       side: 'UP', requestedCount: 4, currentLimit: 0.42, queueAhead: 0,
       filledCount: 0, purchaseCents: 0, observedTradeIds: new Set(),
     };
-    applyTradePrintsToPaperQueue(state, [trade({ takerSide: 'yes', count: 100 })], 0);
+    applyTradePrintsToPaperQueue(state, [trade({ takerSide: 'yes', count: 100 })], 0, 12_000);
     expect(state.filledCount).toBe(0);
+  });
+
+  it('makes a retained pre-horizon replay exactly equal when later prints are present', () => {
+    const run = (prints: KalshiTradePrint[]) => {
+      const state: PaperMakerQueueState = {
+        side: 'UP', requestedCount: 2, currentLimit: 0.42, queueAhead: 0,
+        filledCount: 0, purchaseCents: 0, observedTradeIds: new Set(),
+      };
+      const evidence = applyTradePrintsToPaperQueue(state, prints, 0, 12_000);
+      return { state: { ...state, observedTradeIds: [...state.observedTradeIds] }, evidence };
+    };
+    const inside = trade({ id: 'inside', at: new Date(12_000).toISOString(), count: 1 });
+    const after = trade({ id: 'after', at: new Date(12_001).toISOString(), count: 100 });
+    expect(run([inside, after])).toEqual(run([inside]));
+  });
+
+  it('admits both exact boundaries and rejects malformed or post-horizon event times', () => {
+    expect(paperMakerEventWithinHorizon(1_000, 1_000, 13_000)).toBe(true);
+    expect(paperMakerEventWithinHorizon(13_000, 1_000, 13_000)).toBe(true);
+    expect(paperMakerEventWithinHorizon(13_001, 1_000, 13_000)).toBe(false);
+    expect(paperMakerEventWithinHorizon(999, 1_000, 13_000)).toBe(false);
+    expect(paperMakerEventWithinHorizon(Number.NaN, 1_000, 13_000)).toBe(false);
+    expect(paperMakerEventWithinHorizon(1_000, 13_000, 1_000)).toBe(false);
+    const boundary = paperMakerEventTimeMicros('2026-08-27T00:00:12.000000Z');
+    const justAfter = paperMakerEventTimeMicros('2026-08-27T00:00:12.000001Z');
+    expect(boundary).toBeDefined();
+    expect(justAfter).toBeDefined();
+    expect(paperMakerEventWithinHorizon(boundary!, boundary! - 12_000_000, boundary!)).toBe(true);
+    expect(paperMakerEventWithinHorizon(justAfter!, boundary! - 12_000_000, boundary!)).toBe(false);
+    expect(paperMakerEventTimeMicros('2026-08-27T00:00:12.0000001Z')).toBeUndefined();
   });
 });
 
@@ -133,6 +168,29 @@ describe('independent paper maker manager', () => {
       queueAheadBefore: 0, queueAheadAfter: 0, fillAdded: 4,
     });
     expect(result.observations.at(-1)).toMatchObject({ event: 'paper_fill', filledCount: 4 });
+  });
+
+  it('never consumes a public print after the exact executable horizon', async () => {
+    const run = async (printAtMs: number) => {
+      let now = 0;
+      return simulateManagedPaperMaker({
+        side: 'UP', requestedCount: 1, maximumPrice: 0.41, requestedStart: 0.41,
+      }, {
+        checks: 1, pollMs: 2_000, now: () => now,
+        wait: async (milliseconds) => { now += milliseconds; },
+        quote: async () => ({ bid: 0.40, ask: 0.42, ranges, orderBook: book([[0.41, 0]]) }),
+        tradesSince: async () => [trade({
+          id: `boundary-${printAtMs}`, at: new Date(printAtMs).toISOString(), count: 1,
+          yesPrice: 0.41, takerSide: 'no',
+        })],
+      });
+    };
+    expect((await run(2_000)).filledCount).toBe(1);
+    const after = await run(2_001);
+    expect(after.filledCount).toBe(0);
+    expect(after.observations.find((item) => item.event === 'paper_trade_evidence')).toMatchObject({
+      consumingTradeCount: 0, fillAdded: 0,
+    });
   });
 
   it('does not fill an orphaned order merely because a dashboard ask touched its limit', () => {
@@ -236,7 +294,7 @@ describe('paper fill calibration', () => {
     expect(effectiveQueueAhead(100, PAPER_FILL_QUEUE_CLEAR_MAX)).toBe(100); // at cap key == 0
     expect(isPaperFillCalibration({
       version: PAPER_FILL_CALIBRATION_VERSION, queueClearFraction: 0.2,
-      appliedToPaperExecution: paperExecutionVersion(7), heldOutWindows: 30,
+      appliedToPaperExecution: paperExecutionVersion(8), heldOutWindows: 30,
       adoptedAt: '2026-08-21T00:00:00Z', reason: 'held-out fit',
     })).toBe(true);
     expect(isPaperFillCalibration({
@@ -247,7 +305,7 @@ describe('paper fill calibration', () => {
     expect(isPaperFillCalibration({
       version: PAPER_FILL_CALIBRATION_VERSION, queueClearFraction: 0.2,
       appliedToPaperExecution: PAPER_NEUTRAL_EXECUTION_VERSION, heldOutWindows: 30,
-      adoptedAt: '2026-08-21T00:00:00Z', reason: 'must not pool with v6',
+      adoptedAt: '2026-08-21T00:00:00Z', reason: 'must not pool with neutral v7',
     })).toBe(false);
     expect(isPaperFillCalibration({ version: PAPER_FILL_CALIBRATION_VERSION, queueClearFraction: 0.2 })).toBe(false);
     expect(isPaperFillCalibration({
@@ -303,7 +361,7 @@ describe('paper fill calibration', () => {
         })],
         calibration: {
           version: PAPER_FILL_CALIBRATION_VERSION, queueClearFraction,
-          appliedToPaperExecution: paperExecutionVersion(7), heldOutWindows: 30,
+          appliedToPaperExecution: paperExecutionVersion(8), heldOutWindows: 30,
           adoptedAt: '2026-08-21T00:00:00Z', reason: 'test',
         },
       });
@@ -334,7 +392,7 @@ describe('paper fill calibration', () => {
       })],
       calibration: {
         version: PAPER_FILL_CALIBRATION_VERSION, queueClearFraction: 0.3,
-        appliedToPaperExecution: paperExecutionVersion(7), heldOutWindows: 30,
+        appliedToPaperExecution: paperExecutionVersion(8), heldOutWindows: 30,
         adoptedAt: '2026-08-21T00:00:00Z', reason: 'test',
       },
     });
@@ -354,7 +412,7 @@ describe('paper fill calibration', () => {
       tradesSince: async () => now < 6_000 ? [] : [trade({ id: 'fill', at: new Date(5_000).toISOString(), count: 8, yesPrice: 0.41, takerSide: 'no' })],
       calibration: {
         version: PAPER_FILL_CALIBRATION_VERSION, queueClearFraction: 0.3,
-        appliedToPaperExecution: paperExecutionVersion(7), heldOutWindows: 30,
+        appliedToPaperExecution: paperExecutionVersion(8), heldOutWindows: 30,
         adoptedAt: '2026-08-21T00:00:00Z', reason: 'test',
       },
       onInitialQuoteSettled: () => undefined,

@@ -1,6 +1,6 @@
 import { initialManagedMakerPrice, type ManagedMakerQuote } from './managed-maker';
 import { effectiveQueueAhead } from './paper-fill-calibration';
-import type { PaperMakerSimulationResult } from './paper-maker-simulation';
+import { paperMakerEventTimeMicros, type PaperMakerSimulationResult } from './paper-maker-simulation';
 import type { KalshiTradePrint } from './kalshi-market-data';
 import type { MarketId, PositionSide, StrategyId, TradingProviderId } from './types';
 
@@ -160,9 +160,9 @@ export function replayPaperMakerAtEventTime(input: {
   for (const print of ordered) {
     if (seen.has(print.id)) continue;
     seen.add(print.id);
-    const at = Date.parse(print.at);
-    if (!Number.isFinite(at) || at + 1e-6 < acceptedAtMs || at - 1e-6 > restingUntilMs) continue;
-    while (rungIndex + 1 < rungs.length && rungs[rungIndex + 1].startsAtMs <= at + 1e-6) {
+    const atMicros = paperMakerEventTimeMicros(print.at);
+    if (atMicros === undefined || atMicros < acceptedAtMs * 1_000 || atMicros > restingUntilMs * 1_000) continue;
+    while (rungIndex + 1 < rungs.length && rungs[rungIndex + 1].startsAtMs * 1_000 <= atMicros) {
       rungIndex += 1;
       queueAhead = rungs[rungIndex].queueAhead;
     }

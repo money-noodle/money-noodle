@@ -1,10 +1,15 @@
 # Paper execution timing F2 100-window review — 2026-08-27
 
-> **Finding:** F2 crossed its predeclared count and coverage gates with 163 exact maker pairs across 117 independent
-> close windows and complete timing evidence, but the review **does not pass the milestone**. Five ordinary-control
-> rows consumed public trade batches whose last venue event time was after the fixed 12-second horizon; two of those
-> rows became paper fills. The execution invariant therefore failed even though coverage passed. F3 remains off,
-> no timing candidate is adopted, and no paper or funded rule changes from this report.
+> **Initial finding:** F2 crossed its predeclared count and coverage gates with 163 exact maker pairs across 117
+> independent close windows and complete timing evidence, but five ordinary-control rows consumed public trade
+> batches whose last venue event time was after the fixed 12-second horizon; two became paper fills.
+>
+> **Approved disposition:** The maintainer subsequently approved the pre-outcome horizon rule as a deterministic
+> availability filter. Excluding all five affected rows retained 303/308 records (98.38% coverage), 159 exact maker
+> pairs, and 115 independent exact-maker windows. The corrected 100-window milestone therefore passed. Neutral v7
+> repairs the runtime prospectively; v6 history is unchanged and retained evidence carries only under the exact-
+> equivalence and generation-stratification rules in the accepted design §4.4. F3 remains off, no timing candidate
+> is adopted, and no funded rule changes.
 
 ## Question and fixed method
 
@@ -113,8 +118,9 @@ invariant in the accepted paper-fidelity design §2 and §4.2.
 | Acknowledgement schedule lateness | 2ms | 108ms | 257ms |
 | Final-grace schedule lateness | 2ms | 152ms | 410ms |
 
-No acceptance or grace row was unavailable or incomplete. This review did not establish absence of production
-latency or rate-limit effects; that remains a manual 300-window phase-exit check. The observer remains detached from
+No acceptance or grace row was stored unavailable or incomplete; the corrected analysis separately makes the five
+post-horizon control rows unavailable without rewriting their stored events. This review did not establish absence
+of production latency or rate-limit effects; that remains a manual 300-window phase-exit check. The observer remains detached from
 paper status, bankroll, policy, live orders, and reconciliation.
 
 ## Gate disposition and next decision
@@ -123,16 +129,32 @@ paper status, bankroll, policy, live orders, and reconciliation.
 | --- | --- |
 | 100 exact-maker-window count | **passed**: 117 windows |
 | At least 95% control/timing coverage | **passed**: 100% |
-| Fixed 12-second execution invariant | **failed**: five evidence rows, including two fills |
+| Deterministic post-horizon availability filter | **passed**: five rows excluded regardless of outcome |
+| Retained 100-window count / 95% coverage | **passed**: 159 pairs, 115 windows, 98.38% row coverage |
 | At least 30 observed live create races | **closed**: 14 |
-| 300 exact-maker-window phase exit | **closed**: 117 |
+| 300 exact-maker-window phase exit | **closed**: 115 |
 | F3 activation | **blocked** |
 
-The 100-window milestone as a whole does not pass. The required correction is prospective and versioned: filter
-ordinary paper trade prints by the exact inclusive `restingUntil` event-time boundary, pin the boundary and
-floating-edge cases in pure tests, preserve v6 history, and start a new paper execution generation rather than
-silently changing v6 semantics. Timing evidence after that change must be split by execution generation; the v6
-cohort cannot mature a repaired control. That implementation requires a separate reviewed action. It changes no
-live order, forecast, entry policy, sizing, capital ceiling, or reconciliation rule.
+Under the subsequently approved availability correction, the 100-window milestone passes while the full phase
+remains closed. Neutral v7 prospectively filters ordinary paper prints by the exact inclusive `restingUntil`
+event-time boundary and pins the boundary in pure tests. V6 history remains immutable. A v6 timing row carries
+forward only when every state-changing consuming batch ends on or before the horizon, which proves this repair
+would remove no input from that row; reviews show v6 and v7 strata before combined totals. This narrow equivalence
+does not authorize pooling queue calibrations or execution economics. No live order, forecast, entry policy,
+sizing, capital ceiling, or reconciliation rule changes.
+
+## Implementation and activation
+
+The approved repair uses `paper-managed-execution-route-ioc-requalify3-calibrated-v7` with neutral
+`queueClearFraction = 0`. Venue timestamps are parsed to safe-integer microseconds so a print one microsecond after
+the millisecond-aligned boundary fails closed rather than being truncated onto it. Pure tests pin the opening and
+closing boundaries, one-microsecond overflow, malformed timestamps, exact retained-row equivalence, neutral queue
+arithmetic, and the detached grace replay. The first future calibration adoption is reserved for v8.
+
+The final build passed specification/design/status/agent verification, typecheck, lint with pre-existing warnings,
+1,023 tests, and the production build. Neutral v7 activated only after the funded lifecycle reached zero positions
+and reservations. Startup full reconciliation completed READY at **2026-08-27T02:44:52.760Z** with no blockers;
+a separate read returned neutral v7 as the active paper calibration. Historical v6 rows and the two affected P&L
+entries were not rewritten.
 
 Nothing in this report is financial advice.

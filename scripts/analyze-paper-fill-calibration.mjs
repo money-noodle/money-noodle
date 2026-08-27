@@ -25,7 +25,9 @@ import { readExecutionLedger } from './lib/read-execution-ledger.mjs';
 
 const DATA = path.resolve(process.cwd(), 'data');
 const EDGE = 'edge-binary-buy';
-const NEUTRAL_PAPER_EXECUTION = 'paper-managed-execution-route-ioc-requalify3-calibrated-v6';
+const LEGACY_NEUTRAL_PAPER_EXECUTION = 'paper-managed-execution-route-ioc-requalify3-calibrated-v6';
+const NEUTRAL_PAPER_EXECUTION = 'paper-managed-execution-route-ioc-requalify3-calibrated-v7';
+const FIRST_ADOPTED_GENERATION = 8;
 const calibrationDirectory = process.env.MONEY_NOODLE_PAPER_FILL_CALIBRATION_PATH?.trim() || DATA;
 
 const executionGeneration = (version) => {
@@ -42,7 +44,7 @@ const validCalibration = (calibration) => {
     || typeof calibration?.adoptedAt !== 'string'
     || typeof calibration?.reason !== 'string' || !calibration.reason.trim()
     || generation === null) return false;
-  return generation === 6
+  return generation === 6 || generation === 7
     ? calibration.queueClearFraction === 0 && calibration.heldOutWindows === 0 && calibration.adoptedAt === ''
     : calibration.heldOutWindows > 0 && Number.isFinite(Date.parse(calibration.adoptedAt));
 };
@@ -56,13 +58,15 @@ async function activePaperExecutionVersion() {
     const history = store?.history;
     if (store?.version !== 1 || !validCalibration(store.active) || !Array.isArray(history)
       || !history.every((item, index) => validCalibration(item)
-        && executionGeneration(item.appliedToPaperExecution) === index + 7)
+        && executionGeneration(item.appliedToPaperExecution) === index + FIRST_ADOPTED_GENERATION)
       || (history.length === 0
         ? store.active.appliedToPaperExecution !== NEUTRAL_PAPER_EXECUTION
+          && store.active.appliedToPaperExecution !== LEGACY_NEUTRAL_PAPER_EXECUTION
         : !sameCalibration(store.active, history.at(-1)))) {
       throw new Error('Paper fill calibration store is malformed or has discontinuous cohort history.');
     }
-    return store.active.appliedToPaperExecution;
+    return history.length === 0 && store.active.appliedToPaperExecution === LEGACY_NEUTRAL_PAPER_EXECUTION
+      ? NEUTRAL_PAPER_EXECUTION : store.active.appliedToPaperExecution;
   } catch (error) {
     if (error?.code === 'ENOENT') return NEUTRAL_PAPER_EXECUTION;
     throw error;

@@ -14,11 +14,11 @@ conflict in the canonical specification and decision record before coding.
    continue `forecast-candidate-registry-v1` to its precommitted 300-window phase-exit gate. Do not rank arms, start
    uncertainty work, or begin confirmed-signal collection early. The governing accepted design is
    [`forecast-model-and-evaluator-v3-design.md`](../docs/forecast-model-and-evaluator-v3-design.md).
-2. **Repair the paper timing F2 control before further maturity claims.** The 2026-08-27 review passed 100-window
-   count and coverage but found five rows consuming post-horizon evidence, including two manufactured fills. Review
-   a prospective paper execution generation that enforces the exact inclusive 12-second cutoff, preserves v6, and
-   restarts timing evidence without pooling generations. F3 remains off; the 300 exact-pair, 30-create-race,
-   coverage, and non-interference gates remain binding. See
+2. **Continue paper timing F2 under the approved horizon repair.** Neutral v7 enforces the exact inclusive
+   12-second event-time cutoff. Keep the five affected v6 rows unavailable; carry retained v6 evidence only under
+   the exact-equivalence rule and show v6/v7 strata before combined totals. The corrected 100-window milestone
+   passed with 159 exact pairs across 115 windows. F3 remains off; the 300 exact-pair, 30-create-race, coverage, and
+   non-interference gates remain binding. See
    [`paper-execution-fidelity-v2-design.md`](../docs/paper-execution-fidelity-v2-design.md).
 3. **Continue maker-restriction v1 without tuning.** The fixed 20-live-divergence review completed on 2026-08-26
    without unlocking either arm. The joint live/paper, divergence, cash, clustered-return, and multiple-comparison

@@ -15,7 +15,7 @@ import {
   recordPaperExecutionTimingDecision, resetPaperExecutionTimingShadowStoreForTests,
 } from './paper-execution-timing-shadow-store';
 import { observePaperAcceptanceTiming, observePaperFinalEvidenceGrace, resetPaperExecutionTimingObserverForTests } from './paper-execution-timing-observer';
-import type { PaperMakerSimulationResult } from './paper-maker-simulation';
+import { PAPER_MANAGED_MAKER_EXECUTION_VERSION, type PaperMakerSimulationResult } from './paper-maker-simulation';
 import type { KalshiTradePrint } from './kalshi-market-data';
 import type { PaperOrder } from './types';
 
@@ -45,10 +45,10 @@ const order = (over: Partial<PaperOrder> = {}): PaperOrder => ({
   approvedMaximumPrice: 0.45, quantity: 2, requestedQuantity: 2, stakeCents: 90, feeCents: 0,
   potentialPayoutCents: 200, liquidityRole: 'maker', paperEntryRoute: 'maker',
   executionMirrorPair: { version: 'entry-execution-mirror-pair-v1', id: 'pair:timing' },
-  entryDecision: { executionPolicyVersion: 'paper-managed-execution-route-ioc-requalify3-calibrated-v6' } as PaperOrder['entryDecision'],
+  entryDecision: { executionPolicyVersion: PAPER_MANAGED_MAKER_EXECUTION_VERSION } as PaperOrder['entryDecision'],
   paperFillCalibration: {
     version: 'paper-fill-calibration-v1', queueClearFraction: 0,
-    appliedToPaperExecution: 'paper-managed-execution-route-ioc-requalify3-calibrated-v6',
+    appliedToPaperExecution: PAPER_MANAGED_MAKER_EXECUTION_VERSION,
     heldOutWindows: 0, adoptedAt: '', reason: 'neutral',
   },
   ...over,
@@ -58,7 +58,7 @@ const decision = (): PaperExecutionTimingDecision => ({
   version: PAPER_EXECUTION_TIMING_SHADOW_VERSION, id: paperExecutionTimingShadowId('paper:timing'),
   recordedAt: at(0), orderId: 'paper:timing', mirrorPairId: 'pair:timing',
   strategyId: 'edge-binary-buy', marketId: 'crypto-15m', providerId: 'kalshi', providerVariantId: 'kalshi-us',
-  paperExecutionVersion: 'paper-managed-execution-route-ioc-requalify3-calibrated-v6',
+  paperExecutionVersion: PAPER_MANAGED_MAKER_EXECUTION_VERSION,
   contractId: 'KXBTC', symbol: 'BTC', side: 'UP', closesAt: at(900_000), calculationAt: at(0),
   requestedCount: 2, maximumPrice: 0.45, requestedStart: 0.40,
   createDelayMs: PAPER_CREATE_DELAY_MS, acknowledgementDelayMs: PAPER_ACKNOWLEDGEMENT_DELAY_MS,
@@ -83,6 +83,7 @@ describe('paper execution timing pure shadow', () => {
       prints: [
         trade({ id: 'early', at: at(3_000), count: 3, yesPrice: 0.40 }),
         trade({ id: 'late', at: at(5_000), count: 4, yesPrice: 0.42 }),
+        trade({ id: 'after-horizon-micro', at: '1970-01-01T00:00:12.000001Z', count: 100, yesPrice: 0.42 }),
         trade({ id: 'after-horizon', at: at(12_001), count: 100, yesPrice: 0.42 }),
       ],
     });
@@ -163,6 +164,7 @@ describe('paper timing observer', () => {
       wait: async (milliseconds) => { now += milliseconds; },
       tradesSince: async () => [
         trade({ id: 'inside', at: at(11_900), count: 4, yesPrice: 0.42 }),
+        trade({ id: 'outside-micro', at: '1970-01-01T00:00:12.000001Z', count: 100, yesPrice: 0.42 }),
         trade({ id: 'outside', at: at(12_100), count: 100, yesPrice: 0.42 }),
       ],
       recordGrace: async (_id, value) => { grace.push(value); },

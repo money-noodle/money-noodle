@@ -9,8 +9,11 @@
 > **Design index:** [`docs/README.md`](README.md)
 
 Status: approved in prose by the maintainer on 2026-08-21 and implemented. This design preceded
-implementation. Scope: ship the machinery (`queueClearFraction: 0` = exact current model, fresh v6
-cohort), provide the held-out re-evaluation, no funded-execution or rule change. The evaluator denominator was
+implementation. Scope: ship the machinery (`queueClearFraction: 0` = neutral queue model), provide the held-out
+re-evaluation, no funded-execution or rule change. Neutral v6 history remains immutable. On 2026-08-27 the
+maintainer approved neutral v7 as the exact-horizon repair after F2 found that v6 could consume prints after its
+12-second boundary; the first future calibration adoption therefore moves to v8 rather than reusing v7. The
+evaluator denominator was
 corrected on 2026-08-25 to require an accepted live order plus the same maker route and quantity; post-only create
 races and route/quantity differences occur before queue placement and are not queue-calibration evidence. Phase F1
 of [`paper-execution-fidelity-v2-design.md`](paper-execution-fidelity-v2-design.md) also repaired the implementation
@@ -102,10 +105,12 @@ Advance `PAPER_MANAGED_MAKER_EXECUTION_VERSION` from
 `paper-managed-execution-route-ioc-requalify3-v5` to
 `paper-managed-execution-route-ioc-requalify3-calibrated-v6`.
 
-- v6 is a **fresh, neutral cohort**. Existing v5 rows are immutable; no fill or P&L changes retroactively.
-- `queueClearFraction: 0` with no adoption is always stamped as v6.
+- v6 is the historical neutral calibration cohort. Existing v5/v6 rows are immutable; no fill or P&L changes
+  retroactively.
+- Neutral v7 keeps `queueClearFraction: 0` and additionally rejects venue events after the exact inclusive
+  `restingUntil` boundary. It is a correctness generation, not a calibration adoption.
 - **Every manual adoption starts another paper execution cohort.** The store owns a monotonic generation:
-  the first adoption stamps v7, the next v8, and so on, including a later rollback to zero. A changed fill
+  the first adoption stamps v8, the next v9, and so on, including a later rollback to zero. A changed fill
   assumption can therefore never share an execution-policy identity with an earlier assumption.
 - The calibration is read before paper intent creation and its complete immutable record is copied onto the
   order. Management consumes that issuance-time copy rather than rereading mutable active state.
@@ -121,7 +126,7 @@ execution identity and held-out evidence to `data/paper-fill-calibration.json`.
 ```ts
 interface PaperFillCalibrationStore {
   version: 1;
-  active: PaperFillCalibration;      // neutral v6 or the latest adopted generation
+  active: PaperFillCalibration;      // neutral v7 or the latest adopted generation
   history: PaperFillCalibration[];   // complete, append-only adoption records
 }
 ```
@@ -150,9 +155,9 @@ It reports instead:
 - the **structural upper bound** of any queue-shortening recovery: the live-only filled rows paper's
   model refused, summed realized P&L;
 - the evaluator selects exactly the active paper execution cohort before creating its held-out split and
-  reports the selected identity; it never pools v5, neutral v6, or an adopted v7+ generation;
+  reports the selected identity; it never silently pools neutral or adopted generations;
 - no candidate is promoted — `spec/policy-and-track-separation.md` §12.5 requires the adopting cohort to have retained per-read/print
-  evidence for an honest validation split, and adoption is a manual act into a new cohort (v7 first).
+  evidence for an honest validation split, and adoption is a manual act into a new cohort (v8 first).
 
 No grid is fit here, because a candidate `queueClearFraction` cannot be faithfully re-simulated from
 these per-read summaries; the two bullets above are the honest measurement available from the durable
@@ -162,7 +167,7 @@ ledger.
 
 Per `spec/policy-and-track-separation.md` §12.5 / `AGENTS.md` §5.5, no retrospective promotion: a candidate **will not auto-adopt**.
 The evaluator prints a candidate only when it clears the held-out band. **Adoption is a recorded
-manual act** that starts a new cohort (v6 → v7) and is written into `data/paper-fill-calibration.json`
+manual act** that starts a new adopted cohort (neutral v7 → adopted v8) and is written into `data/paper-fill-calibration.json`
 and the paper execution version history.
 
 ## 7. Deliverables and files
@@ -197,7 +202,7 @@ Always consumed by paper-only. Ask the maintainer to confirm:
 1. Ship the machinery with `queueClearFraction: 0` and a fresh v6 cohort;
 2. run the held-out evaluator; if no candidate clears the band, the report is a null result,
    and the v6 cohort keeps collecting;
-3. no auto-promotion; every future adoption receives the next paper execution generation (v7, v8, …)
+3. no auto-promotion; every future adoption receives the next paper execution generation (v8, v9, …)
    plus a complete recorded manual `adopt` entry.
 
 ## D. Explicit non-goals (unchanged)

@@ -9,11 +9,10 @@ import {
 /**
  * Durable identity stamped on paper edge-policy orders using this execution simulation.
  *
- * **v6 starts a fresh calibration cohort.** V5 added the requalify3 repair (restoring the approved
- * three-episode boundary) and recorded bounded print/queue evidence, but kept a fully-conservative
- * displayed-depth queue. v6 keeps every v5 fill arithmetic (queueClearFraction defaults to 0, which is
- * exact v5 behavior until a recorded manual adoption sets it) and adds a versioned, bounded paper fill
- * calibration. Existing v3/v4/v5 rows remain immutable evidence and are never pooled with v6 rows.
+ * **v7 enforces the exact maker horizon.** V6 added neutral bounded calibration while retaining the
+ * fully conservative displayed-depth queue. V7 keeps that queue arithmetic and excludes every public
+ * trade whose venue event time is after the inclusive 12-second `restingUntil` boundary. Existing
+ * generations remain immutable evidence; affected v6 timing rows are unavailable rather than rewritten.
  */
 export const PAPER_MANAGED_MAKER_EXECUTION_VERSION = PAPER_NEUTRAL_EXECUTION_VERSION;
 
@@ -67,8 +66,26 @@ export interface PaperMakerSimulationDependencies {
  * Applies aggressive public trade prints to our conservative queue proxy. A selected-side resting bid
  * is consumed by a taker buying the opposite outcome. Ask touch alone is deliberately not a fill.
  */
+export function paperMakerEventTimeMicros(value: string): number | undefined {
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?Z$/.exec(value);
+  if (!match) return undefined;
+  const secondMs = Date.parse(`${match[1]}Z`);
+  if (!Number.isFinite(secondMs)) return undefined;
+  const fractionalMicros = Number((match[2] ?? '').padEnd(6, '0'));
+  const result = secondMs * 1_000 + fractionalMicros;
+  return Number.isSafeInteger(result) ? result : undefined;
+}
+
+export function paperMakerEventWithinHorizon(
+  eventAtMicros: number, acceptedAtMicros: number, restingUntilMicros: number,
+): boolean {
+  return Number.isSafeInteger(eventAtMicros) && Number.isSafeInteger(acceptedAtMicros)
+    && Number.isSafeInteger(restingUntilMicros) && restingUntilMicros >= acceptedAtMicros
+    && eventAtMicros >= acceptedAtMicros && eventAtMicros <= restingUntilMicros;
+}
+
 export function applyTradePrintsToPaperQueue(
-  state: PaperMakerQueueState, trades: KalshiTradePrint[], acceptedAtMs: number,
+  state: PaperMakerQueueState, trades: KalshiTradePrint[], acceptedAtMs: number, restingUntilMs: number,
 ): PaperMakerTradeEvidence {
   const consumingTakerSide = state.side === 'UP' ? 'no' : 'yes';
   const queueAheadBefore = state.queueAhead;
@@ -77,8 +94,11 @@ export function applyTradePrintsToPaperQueue(
   let firstConsumingTradeAt: string | undefined, lastConsumingTradeAt: string | undefined;
   for (const trade of [...trades].sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.id.localeCompare(b.id))) {
     if (state.observedTradeIds.has(trade.id)) continue;
+    const eventAtMicros = paperMakerEventTimeMicros(trade.at);
+    if (eventAtMicros === undefined
+      || !paperMakerEventWithinHorizon(eventAtMicros, acceptedAtMs * 1_000, restingUntilMs * 1_000)) continue;
     state.observedTradeIds.add(trade.id);
-    if (Date.parse(trade.at) + 1e-6 < acceptedAtMs || trade.takerSide !== consumingTakerSide) continue;
+    if (trade.takerSide !== consumingTakerSide) continue;
     const selectedTradePrice = state.side === 'UP' ? trade.yesPrice : trade.noPrice;
     if (selectedTradePrice > state.currentLimit + 1e-9 || state.queueAhead === undefined) continue;
     consumingTradeCount += 1;
@@ -161,7 +181,7 @@ export async function simulateManagedPaperMaker(input: {
     const [tradeResult, quoteResult] = await Promise.allSettled([tradeRead, quoteRead]);
     finalTradeReadSucceeded = tradeResult.status === 'fulfilled';
     if (tradeResult.status === 'fulfilled') {
-      const evidence = applyTradePrintsToPaperQueue(state, tradeResult.value, acceptedAtMs);
+      const evidence = applyTradePrintsToPaperQueue(state, tradeResult.value, acceptedAtMs, acceptedAtMs + checks * pollMs);
       observations.push({
         at: new Date(now()).toISOString(), event: 'paper_trade_evidence', limitPrice: state.currentLimit,
         filledCount: Number(state.filledCount.toFixed(2)),

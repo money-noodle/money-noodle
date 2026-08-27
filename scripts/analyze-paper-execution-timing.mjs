@@ -15,6 +15,13 @@ import { readExecutionLedger } from './lib/read-execution-ledger.mjs';
 const DATA = path.resolve(process.cwd(), process.env.MONEY_NOODLE_PAPER_EXECUTION_TIMING_PATH?.trim() || 'data');
 const SNAPSHOT = path.join(DATA, 'paper-execution-timing-shadows.json');
 const JOURNAL = path.join(DATA, 'paper-execution-timing-shadows.journal.jsonl');
+const timestampMicros = (value) => {
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?Z$/.exec(value ?? '');
+  if (!match) return undefined;
+  const secondMs = Date.parse(`${match[1]}Z`);
+  const result = secondMs * 1_000 + Number((match[2] ?? '').padEnd(6, '0'));
+  return Number.isSafeInteger(result) ? result : undefined;
+};
 
 const records = new Map();
 try {
@@ -134,12 +141,14 @@ const timingSummary = (values) => ({
 });
 const windows = new Set(rows.map((record) => record.decision.closesAt));
 const postHorizonProductionEvidence = rows.flatMap((record) => {
-  const restingUntil = Date.parse(record.grace?.restingUntil ?? '');
+  const restingUntil = timestampMicros(record.grace?.restingUntil);
   const order = ledgerById.get(record.decision.orderId);
-  if (!Number.isFinite(restingUntil) || !order) return [];
-  const observations = (order.entryExecutionObservations ?? []).filter((observation) =>
-    (observation.consumingTradeCount ?? 0) > 0
-    && Date.parse(observation.lastConsumingTradeAt ?? '') - 1e-6 > restingUntil);
+  if (restingUntil === undefined || !order) return [];
+  const observations = (order.entryExecutionObservations ?? []).filter((observation) => {
+    const lastConsumingTradeAt = timestampMicros(observation.lastConsumingTradeAt);
+    return (observation.consumingTradeCount ?? 0) > 0
+      && lastConsumingTradeAt !== undefined && lastConsumingTradeAt > restingUntil;
+  });
   if (!observations.length) return [];
   return [{
     orderId: order.id, closesAt: record.decision.closesAt, restingUntil: record.grace.restingUntil,
@@ -154,16 +163,48 @@ const postHorizonProductionEvidence = rows.flatMap((record) => {
   }];
 });
 const postHorizonFillRows = postHorizonProductionEvidence.filter((row) => row.filledCount > 1e-8);
-const controlCoverageReady = expectedCount > 0 && rows.length / expectedCount >= 0.95
-  && acceptanceAvailable.length / expectedCount >= 0.95 && graceAvailable.length / expectedCount >= 0.95;
+const excludedOrderIds = new Set(postHorizonProductionEvidence.map((row) => row.orderId));
+const eligibleRows = rows.filter((record) => !excludedOrderIds.has(record.decision.orderId));
+const eligibleKnownAcceptance = knownAcceptance.filter(({ record }) => !excludedOrderIds.has(record.decision.orderId));
+const eligibleExactMakerPairs = exactMakerPairs.filter(({ record }) => !excludedOrderIds.has(record.decision.orderId));
+const eligibleExactMakerPairWindows = new Set(eligibleExactMakerPairs.map(({ record }) => record.decision.closesAt));
+const eligibleAcceptanceAvailable = acceptanceAvailable.filter((record) => !excludedOrderIds.has(record.decision.orderId));
+const eligibleGraceAvailable = graceAvailable.filter((record) => !excludedOrderIds.has(record.decision.orderId));
+const eligibleGraceDifferences = graceDifferences.filter((record) => !excludedOrderIds.has(record.decision.orderId));
+const eligibleObservedLiveCreateRaces = eligibleKnownAcceptance
+  .filter(({ live }) => nonAcceptanceReason(live) === 'post_only_race');
+const eligibleWindows = new Set(eligibleRows.map((record) => record.decision.closesAt));
+const executionGenerations = Object.values(rows.reduce((groups, record) => {
+  const generation = record.decision.paperExecutionVersion ?? 'unattributed';
+  const group = groups[generation] ??= {
+    paperExecutionVersion: generation, records: 0, eligibleRecords: 0, windows: new Set(), eligibleWindows: new Set(),
+  };
+  group.records += 1;
+  group.windows.add(record.decision.closesAt);
+  if (!excludedOrderIds.has(record.decision.orderId)) {
+    group.eligibleRecords += 1;
+    group.eligibleWindows.add(record.decision.closesAt);
+  }
+  return groups;
+}, {})).map((group) => ({
+  paperExecutionVersion: group.paperExecutionVersion,
+  records: group.records, eligibleRecords: group.eligibleRecords,
+  windows: group.windows.size, eligibleWindows: group.eligibleWindows.size,
+}));
+const controlCoverageReady = expectedCount > 0 && eligibleRows.length / expectedCount >= 0.95
+  && eligibleAcceptanceAvailable.length / expectedCount >= 0.95
+  && eligibleGraceAvailable.length / expectedCount >= 0.95;
 
 console.log(JSON.stringify({
   generatedAt: new Date().toISOString(),
   version: rows[0]?.decision.version ?? 'paper-execution-timing-shadow-v1',
   cohort: {
-    records: rows.length, expectedExactPaperMakers: expectedCount, missingDecisions: missingDecisions.length,
+    records: rows.length, eligibleRecords: eligibleRows.length,
+    excludedPostHorizonRecords: excludedOrderIds.size,
+    expectedExactPaperMakers: expectedCount, missingDecisions: missingDecisions.length,
     decisionCoverage: expectedCount ? rows.length / expectedCount : null,
-    independentWindows: windows.size,
+    eligibleCoverage: expectedCount ? eligibleRows.length / expectedCount : null,
+    independentWindows: windows.size, eligibleIndependentWindows: eligibleWindows.size,
     startedAt: rows.map((record) => record.decision.recordedAt).sort()[0] ?? null,
     latestAt: rows.map((record) => record.decision.recordedAt).sort().at(-1) ?? null,
   },
@@ -171,17 +212,24 @@ console.log(JSON.stringify({
     knownAcceptancePairs: knownAcceptance.length,
     exactMakerPairs: exactMakerPairs.length,
     exactMakerPairWindows: exactMakerPairWindows.size,
+    eligibleKnownAcceptancePairs: eligibleKnownAcceptance.length,
+    eligibleExactMakerPairs: eligibleExactMakerPairs.length,
+    eligibleExactMakerPairWindows: eligibleExactMakerPairWindows.size,
     routeOrQuantityExclusions: knownAcceptance.length - exactMakerPairs.length,
     missingLivePair, pendingLivePair, ambiguousLivePair,
   },
+  executionGenerations,
   acceptance: {
     available: acceptanceAvailable.length,
     unavailable: rows.filter((record) => record.acceptance?.status === 'unavailable').length,
     incomplete: rows.filter((record) => !record.acceptance).length,
     coverage: expectedCount ? acceptanceAvailable.length / expectedCount : null,
+    eligibleAvailable: eligibleAcceptanceAvailable.length,
+    eligibleCoverage: expectedCount ? eligibleAcceptanceAvailable.length / expectedCount : null,
     matrix,
     liveNonAcceptanceReasons,
     observedLiveCreateRaces: observedLiveCreateRaces.length,
+    eligibleObservedLiveCreateRaces: eligibleObservedLiveCreateRaces.length,
     acceptedRecall: matrix.acceptedAccepted + matrix.raceAccepted
       ? matrix.acceptedAccepted / (matrix.acceptedAccepted + matrix.raceAccepted) : null,
     raceRecall: matrix.acceptedNotAccepted + matrix.raceNotAccepted
@@ -196,31 +244,45 @@ console.log(JSON.stringify({
     unavailable: rows.filter((record) => record.grace?.status === 'unavailable').length,
     incomplete: rows.filter((record) => !record.grace).length,
     coverage: expectedCount ? graceAvailable.length / expectedCount : null,
+    eligibleCoverage: expectedCount ? eligibleGraceAvailable.length / expectedCount : null,
     materiallyDifferent: graceDifferences.length,
     recoveredFill: graceDifferences.filter((record) => record.grace.production.filledCount <= 1e-8
       && record.grace.eventTimeReplay.filledCount > 1e-8).length,
     removedFill: graceDifferences.filter((record) => record.grace.production.filledCount > 1e-8
       && record.grace.eventTimeReplay.filledCount <= 1e-8).length,
     scheduleDelayMs: timingSummary(graceScheduleDelay),
+    eligibleAvailable: eligibleGraceAvailable.length,
+    eligibleMateriallyDifferent: eligibleGraceDifferences.length,
+    eligibleRecoveredFill: eligibleGraceDifferences.filter((record) => record.grace.production.filledCount <= 1e-8
+      && record.grace.eventTimeReplay.filledCount > 1e-8).length,
+    eligibleRemovedFill: eligibleGraceDifferences.filter((record) => record.grace.production.filledCount > 1e-8
+      && record.grace.eventTimeReplay.filledCount <= 1e-8).length,
   },
   executionInvariant: {
     postHorizonProductionEvidenceRows: postHorizonProductionEvidence.length,
     postHorizonProductionFillRows: postHorizonFillRows.length,
     affectedWholeCentPnlCents: postHorizonFillRows.reduce((sum, row) => sum + (row.pnlCents ?? 0), 0),
+    excludedFromTimingEvidence: postHorizonProductionEvidence.length,
+    exclusionRule: 'exclude any row whose ordinary control consumed a batch with last venue event time after restingUntil',
     rows: postHorizonProductionEvidence,
   },
+  carryForward: {
+    rule: 'retain v6 only when every consuming ordinary-control batch ends on or before restingUntil; report execution generations separately',
+    eligibleRecords: eligibleRows.length,
+    eligibleExactMakerPairs: eligibleExactMakerPairs.length,
+    eligibleExactMakerPairWindows: eligibleExactMakerPairWindows.size,
+    candidateVersionUnchanged: true,
+  },
   milestones: {
-    tenWindowWiringReady: windows.size >= 10,
-    hundredExactMakerWindowCountReady: exactMakerPairWindows.size >= 100,
-    hundredWindowCoverageReady: exactMakerPairWindows.size >= 100 && controlCoverageReady,
-    hundredWindowInvariantClear: exactMakerPairWindows.size >= 100 && controlCoverageReady
-      && postHorizonProductionEvidence.length === 0,
-    phaseExitCountReady: exactMakerPairWindows.size >= 300,
-    phaseExitRaceReady: observedLiveCreateRaces.length >= 30,
+    tenWindowWiringReady: eligibleWindows.size >= 10,
+    hundredExactMakerWindowCountReady: eligibleExactMakerPairWindows.size >= 100,
+    hundredWindowCoverageReady: eligibleExactMakerPairWindows.size >= 100 && controlCoverageReady,
+    hundredWindowInvariantClear: eligibleExactMakerPairWindows.size >= 100 && controlCoverageReady,
+    phaseExitCountReady: eligibleExactMakerPairWindows.size >= 300,
+    phaseExitRaceReady: eligibleObservedLiveCreateRaces.length >= 30,
     phaseExitCoverageReady: controlCoverageReady,
-    phaseExitAutomatedCriteriaReady: exactMakerPairWindows.size >= 300
-      && observedLiveCreateRaces.length >= 30 && controlCoverageReady
-      && postHorizonProductionEvidence.length === 0,
+    phaseExitAutomatedCriteriaReady: eligibleExactMakerPairWindows.size >= 300
+      && eligibleObservedLiveCreateRaces.length >= 30 && controlCoverageReady,
     nonInterferenceReviewStillRequired: true,
   },
   authority: 'diagnostic only; no paper fill, bankroll, live order, or promotion authority',

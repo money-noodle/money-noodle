@@ -145,7 +145,11 @@ issuance-sized quantity, and polls every two seconds over the same six-check/12-
 public aggressor prints against displayed queue ahead. Ask touch alone is not a fill. Missing terminal evidence makes the attempt unavailable rather than a manufactured miss. A matched-live
 overlay may report contemporaneous authoritative fill terms but cannot alter independent paper status, bankroll,
 or P&L. Any calibration is versioned, manually adopted on held-out evidence, and cannot read the live result of the
-row being simulated.
+row being simulated. Public trade evidence is eligible only when its venue event time lies in the exact inclusive
+maker interval `[submittedAt, restingUntil]`; response time cannot extend that interval. A historical timing row
+that consumed later evidence is unavailable rather than rewritten. Unaffected evidence may cross a corrective
+execution generation only under a pre-outcome invariant filter, exact behavioral-equivalence proof, explicit
+generation strata, and the original expected-coverage denominator.
 
 The adaptive regime gate is a shared production-entry rule, not a cash/control state. It records at most one
 highest-edge exact-contract recommendation per correlated settlement window after ordinary gates, measures bounded
