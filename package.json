@@ -52,6 +52,7 @@
     "analyze:exit-counterfactuals": "node scripts/analyze-exit-counterfactuals.mjs",
     "analyze:strict-value-hold": "node scripts/analyze-strict-value-hold.mjs",
     "analyze:exit-sentinel-coverage": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/src/lib/server-only-stub.ts\\\"}\" jiti scripts/analyze-exit-sentinel-coverage.ts",
+    "analyze:early-taker": "JITI_ALIAS=\"{\\\"server-only\\\":\\\"$PWD/src/lib/server-only-stub.ts\\\"}\" jiti scripts/analyze-early-taker-cutover.ts",
     "analyze:loss-decomposition": "node --max-old-space-size=6144 scripts/analyze-loss-decomposition.mjs",
     "analyze:take-the-ask": "node --max-old-space-size=6144 scripts/analyze-take-the-ask.mjs",
     "analyze:entry-realization": "node --max-old-space-size=6144 scripts/analyze-entry-realization.mjs",
