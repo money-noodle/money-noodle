@@ -118,6 +118,32 @@ describe('hourly threshold H2 observation store', () => {
     });
   });
 
+  it('freezes the wiring review at the first ten elapsed closes and reports missing minute buckets', async () => {
+    const now = Date.now();
+    const firstClose = now - 12 * 3_600_000;
+    const events = Array.from({ length: 11 }, (_, index) => {
+      const closeMs = firstClose + index * 3_600_000;
+      return JSON.stringify({
+        op: 'observation',
+        value: {
+          id: String(index), observedAt: new Date(closeMs - 60_000).toISOString(),
+          bucketAt: new Date(closeMs - 60_000).toISOString(),
+          observationWindowClosesAt: new Date(closeMs).toISOString(), symbol: 'BTC',
+          marketDataAvailable: false, candidates: [],
+        },
+      });
+    });
+    await writeFile(path.join(directory, 'hourly-threshold-observations.journal.jsonl'), `${events.join('\n')}\n`);
+    const { stdout } = await execFileAsync(process.execPath,
+      [path.join(process.cwd(), 'scripts/analyze-hourly-threshold-observations.mjs')], {
+        cwd: process.cwd(), env: { ...process.env, MONEY_NOODLE_HOURLY_OBSERVATION_PATH: directory },
+      });
+    expect(JSON.parse(stdout).wiring10).toMatchObject({
+      windows: 10, expectedMinuteBuckets: 541, observedMinuteBuckets: 10,
+      missingMinuteBuckets: 531, expectedObservations: 541, observations: 10,
+    });
+  });
+
   it('refuses writer startup on a stateless host', () => {
     process.env.MONEY_NOODLE_STATELESS = 'true';
     expect(startHourlyThresholdObserver()).toBe(false);

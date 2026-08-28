@@ -14,14 +14,20 @@ import path from 'node:path';
 const directory = path.resolve(process.cwd(), process.env.MONEY_NOODLE_HOURLY_OBSERVATION_PATH?.trim() || 'data');
 const journal = path.join(directory, 'hourly-threshold-observations.journal.jsonl');
 const observations = new Map(), outcomes = new Map();
+let observationEvents = 0, duplicateObservationEvents = 0, outcomeEvents = 0;
 let raw = '';
 try { raw = await readFile(journal, 'utf8'); }
 catch (error) { if (error.code !== 'ENOENT') throw error; }
 for (const line of raw.split('\n')) {
   if (!line) continue;
   const event = JSON.parse(line);
-  if (event.op === 'observation') observations.set(event.value.id, event.value);
+  if (event.op === 'observation') {
+    observationEvents += 1;
+    if (observations.has(event.value.id)) duplicateObservationEvents += 1;
+    observations.set(event.value.id, event.value);
+  }
   if (event.op === 'outcome') {
+    outcomeEvents += 1;
     const prior = outcomes.get(event.value.ticker);
     if (prior && (prior.result !== event.value.result || prior.rulesFingerprint !== event.value.rulesFingerprint)) {
       throw new Error(`Contradictory outcome for ${event.value.ticker}`);
@@ -59,6 +65,44 @@ const byAsset = Object.values(rows.reduce((groups, row) => {
   symbol: group.symbol, observations: group.observations, available: group.available,
   availability: group.observations ? group.available / group.observations : null, windows: group.windows.size,
 })).sort((left, right) => left.symbol.localeCompare(right.symbol));
+
+const completedWindowValues = [...completedWindows].sort();
+let wiring10 = null;
+if (completedWindowValues.length >= 10) {
+  const windowValues = completedWindowValues.slice(0, 10);
+  const cutoff = windowValues.at(-1);
+  const wiringRows = rows.filter((row) => windowValues.includes(row.observationWindowClosesAt));
+  const observedBuckets = new Map();
+  for (const row of wiringRows) {
+    const bucket = observedBuckets.get(row.bucketAt) ?? [];
+    bucket.push(row);
+    observedBuckets.set(row.bucketAt, bucket);
+  }
+  const firstBucketMs = Math.min(...wiringRows.map((row) => Date.parse(row.bucketAt)));
+  const expectedMinuteBuckets = (Date.parse(cutoff) - firstBucketMs) / 60_000;
+  const incompleteMinuteBuckets = [...observedBuckets.values()].filter((bucket) =>
+    bucket.length !== byAsset.length || new Set(bucket.map((row) => row.symbol)).size !== byAsset.length).length;
+  const wiringCandidates = wiringRows.flatMap((row) => row.candidates ?? []);
+  const wiringContracts = new Map(wiringCandidates.map((candidate) => [candidate.ticker, candidate]));
+  const wiringClosed = [...wiringContracts.values()].filter((candidate) => Date.parse(candidate.closesAt) <= generatedAtMs);
+  const resolvedClosed = wiringClosed.filter((candidate) => outcomes.has(candidate.ticker));
+  wiring10 = {
+    cutoff, windows: windowValues.length,
+    expectedMinuteBuckets, observedMinuteBuckets: observedBuckets.size,
+    missingMinuteBuckets: expectedMinuteBuckets - observedBuckets.size,
+    minuteCaptureCoverage: expectedMinuteBuckets ? observedBuckets.size / expectedMinuteBuckets : null,
+    incompleteMinuteBuckets,
+    expectedObservations: expectedMinuteBuckets * byAsset.length,
+    observations: wiringRows.length,
+    availableObservations: wiringRows.filter((row) => row.marketDataAvailable).length,
+    availabilityAgainstExpected: expectedMinuteBuckets
+      ? wiringRows.filter((row) => row.marketDataAvailable).length / (expectedMinuteBuckets * byAsset.length) : null,
+    exactContracts: wiringContracts.size, closedContracts: wiringClosed.length,
+    resolvedClosedContracts: resolvedClosed.length,
+    closedOutcomeCoverage: wiringClosed.length ? resolvedClosed.length / wiringClosed.length : null,
+    invalidOutcomes: resolvedClosed.filter((candidate) => outcomes.get(candidate.ticker).result === 'INVALID').length,
+  };
+}
 console.log(JSON.stringify({
   generatedAt: new Date().toISOString(), version: 'hourly-threshold-observation-v1',
   cohort: {
@@ -77,6 +121,8 @@ console.log(JSON.stringify({
     invalid: [...outcomes.values()].filter((outcome) => outcome.result === 'INVALID').length,
   },
   model: { scoredObservations: scored.length, brier },
+  journal: { observationEvents, duplicateObservationEvents, outcomeEvents },
+  wiring10,
   milestones: {
     smoke10Ready: completedWindows.size >= 10,
     firstReview60Ready: completedWindows.size >= 60,

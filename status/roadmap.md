@@ -62,11 +62,12 @@ No layer may gain order, budget, reconciliation, or automatic-promotion authorit
 
 ## Accepted work not yet scheduled
 
-- Continue the active H2 detached hourly observation/outcome owner from its prospective start at
-  2026-08-27T07:04:37.842Z, then run its 10-close wiring smoke and 60-close first review. Only afterward freeze
-  the complete H3 policy, persistence, paper accounting,
-  settlement, budget, and target-integrity gates before enabling paper. Live capability remains a separate
-  promotion. See [`second-market-hourly-crypto-design.md`](../docs/second-market-hourly-crypto-design.md).
+- Continue H2 unchanged toward its 60-close review. The fixed ten-close wiring review found exact identity,
+  outcome, archive, and isolation healthy but retained only 524/596 expected minute buckets; missing minutes remain
+  unavailable and cannot be backfilled. Observe cadence after maintenance and heavy concurrent analysis ended.
+  Only after the 60-close review may the complete H3 policy, persistence, paper accounting, settlement, budget, and
+  target-integrity gates be frozen before enabling paper. Live capability remains a separate promotion. See
+  [`second-market-hourly-crypto-design.md`](../docs/second-market-hourly-crypto-design.md).
 - Verify the first organic live switch end to end without forcing one: reduce-only action, venue fills and fees,
   remaining quantity, reservation release, replacement withholding, and switch-versus-hold accounting.
 - Continue prospective strict-value/profit-reversal and maker queue/depth evidence without reinterpreting historical

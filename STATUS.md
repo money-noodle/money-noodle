@@ -1,6 +1,6 @@
 # Money Noodle — Current Implementation Status
 
-> **Projection date:** 2026-08-27 · **Status:** Current implementation projection
+> **Projection date:** 2026-08-28 · **Status:** Current implementation projection
 > **Projection-critical source fingerprint:** `sha256:e5e376dcab334cb2f6021c89c9b11889031c71df276f5517dfcb83072eb7354c`
 > **Requirements:** [`SPEC.md`](SPEC.md) · **Design lifecycle:** [`docs/README.md`](docs/README.md)
 > **Status index and archives:** [`status/README.md`](status/README.md) · **Roadmap:** [`status/roadmap.md`](status/roadmap.md)
@@ -73,7 +73,7 @@ projection, not a substitute for code.
 | Exit sentinel v2 | The 2026-08-26 diagnosis covered 9,240 events across 150 sentinels; close-bounded coverage was 71/78 live and 62/72 paper. Every position made incomplete by cycle coverage was a loss. | V2 conflates a fresh zero bid with missing evidence, creating outcome selection. Its candidate economics are not promotion-grade; v3 remains deferred. See [`reports/exit-sentinel-preclose-availability-diagnosis-2026-08-26.md`](reports/exit-sentinel-preclose-availability-diagnosis-2026-08-26.md). |
 | Long-shot final review | On 2026-08-26, 150 resolved attempts across 76 windows lost 1,410.93¢ exact on 4,979¢ staked. The paired 97¢ exit was −98.93¢ versus hold. | Hold uncertainty remained broad and the strategy came from retrospective screening. The result supported retirement, not a claim against every cheap-contract strategy. See [`reports/long-shot-v2-final-review-2026-08-26.md`](reports/long-shot-v2-final-review-2026-08-26.md). |
 | Fixed live/paper economic monitor | The 24 hours through 2026-08-26T07:15Z had 54 live fills across 42 windows and −221.4543¢ exact P&L, versus 49 paper fills across 41 windows and −388.2450¢. Every qualifying v22 decision remained +24.33% ±7.21pp ask-and-hold, while live fills were −23.81% ±15.82pp and paper fills −36.22% ±16.43pp. | One live taker fill gained 242.79¢ while 53 maker fills lost 464.2443¢; paper captured only 24.49% of accepted live maker fills in the fixed-day exact cohort. Execution selection and exits remain competing explanations, not a unique correction. No forecast, policy, route, exit, calibration, sizing, or capital change was authorized. See [`reports/live-paper-economic-monitor-2026-08-26.md`](reports/live-paper-economic-monitor-2026-08-26.md). |
-| Hourly threshold mechanics | The 2026-08-26 public revalidation covered ten planned series, 1,335 open rows, 36 threshold rows, twelve exact one-hour rows, and ten rows with the structured strike fields required by H1. | This was one listing snapshot; availability changes, and DOGE's two exact-hour rows omitted structured strikes. H1 leaves incomplete contracts unavailable and grants no policy, paper, or live authority. See [`reports/kalshi-hourly-threshold-contract-revalidation-2026-08-26.md`](reports/kalshi-hourly-threshold-contract-revalidation-2026-08-26.md). |
+| Hourly H2 wiring | The fixed first-ten-close review on 2026-08-28 retained 5,240 observations across 524 of 596 expected minute buckets, plus 80 exact contracts with 80 resolved outcomes and no identity contradiction. | Identity, outcome, archive, and isolation wiring passed, but 72 missing minute buckets left cadence coverage at 87.92%; the smoke remains incomplete, missing minutes stay unavailable, H2 continues unchanged, and H3 stays off. See [`reports/hourly-threshold-h2-10-close-wiring-review-2026-08-28.md`](reports/hourly-threshold-h2-10-close-wiring-review-2026-08-28.md). |
 | Archive/restore | The 2026-08-24 manifest covered 138 stable files and 1,436,922,799 source bytes; an independent restore reproduced every file and passed forecast-v3 and execution-v9 semantic verifiers. | The bucket lacked Object Lock and an independent replica. No durable local source deletion or remote-primary eviction was authorized. See [`reports/object-storage-restore-and-disk-reclamation-2026-08-24.md`](reports/object-storage-restore-and-disk-reclamation-2026-08-24.md). |
 
 These measurements are not live counters. Recalculate from durable inputs before making a current quantitative
@@ -94,10 +94,10 @@ claim or decision.
   relaxation remain unsupported or blocked.
 - Provider/policy attribution visibility is implemented without a ledger rewrite or public-payload expansion.
   Durable unified policy lineage and parameter diffs remain a separate structural design.
-- Hourly threshold H1 public market data and H2 detached durable observation are active. H2's prospective clock
-  started at 2026-08-27T07:04:37.842Z with ten explicit asset observations in its first scheduled close window;
-  that single unavailable snapshot is wiring evidence only. H3 isolated paper remains
-  unactivated. Proposed engine separation and multitenancy have no implementation authority. Noodle Land remains
+- Hourly threshold H1 and H2 are active. H2's ten-close count gate was reached, but the fixed wiring smoke remains
+  incomplete after capturing 524/596 expected minute buckets. Collection continues unchanged toward 60 closes with
+  missing minutes unavailable; H3 remains off. Proposed engine separation and multitenancy have no implementation
+  authority. Noodle Land remains
   exploratory and outside application/runtime authority.
 
 See [`status/roadmap.md`](status/roadmap.md) for sequencing and [`spec/open-decisions.md`](spec/open-decisions.md)
