@@ -31,6 +31,7 @@
  */
 import { estimatePaperFill, venueFeeCents } from '../src/lib/venue-fill';
 import { evaluateExitPolicy } from '../src/lib/exit-policy';
+import type { ExitObservationState } from '../src/lib/exit-policy';
 import { clusterByWindow } from '../src/lib/action-counterfactual';
 import { readExecutionLedger } from './lib/read-execution-ledger.mjs';
 // @ts-expect-error -- untyped sibling helper; it is the sanctioned forecast-history read path.
@@ -38,6 +39,11 @@ import { readForecastHistory } from './lib/forecast-history.mjs';
 import type { PaperOrder } from '../src/lib/types';
 
 const V9 = 'maker-then-positive-edge-taker2-terminal-refusal-v9';
+/**
+ * The fixed interval this review reports. The desk keeps trading, so an unbounded cohort silently grows
+ * and the published figures stop reproducing. Set MONEY_NOODLE_EARLY_TAKER_UNTIL to extend the window.
+ */
+const REVIEW_UNTIL = process.env.MONEY_NOODLE_EARLY_TAKER_UNTIL ?? '2026-08-28T01:48:47.193Z';
 const CUTOVER_SECONDS = 2;
 const TICK = 0.01;
 const CUSHION_TICKS = 2;
@@ -46,7 +52,18 @@ const CUSHION_TICKS = 2;
 // and the forecast-history reader replays sealed shards, the open shard, then the journal's upserts and
 // patches. Reading the shards alone shows recently settled windows as permanently pending.
 const ledger = await readExecutionLedger();
-const history = (await readForecastHistory('data')) as any[];
+/** The subset of a tracked forecast this analysis reads. The helper is untyped JavaScript. */
+interface HistoryRow {
+  symbol?: string;
+  closesAt?: string;
+  issuedAt?: string;
+  status?: string;
+  probabilityUp?: number;
+  confidence?: number;
+  actionableVenuePrices?: { venue?: string; side?: string; price?: number }[];
+  venueOutcomes?: { kalshi?: { contractId?: string; outcome?: string } };
+}
+const history = (await readForecastHistory('data')) as HistoryRow[];
 
 // ---- settlement outcomes, keyed by Kalshi contract id ----------------------------------------
 const outcomes = new Map<string, 'UP' | 'DOWN'>();
@@ -54,18 +71,22 @@ for (const row of history) {
   const k = row?.venueOutcomes?.kalshi;
   if (row.status === 'resolved' && k?.contractId && (k.outcome === 'UP' || k.outcome === 'DOWN')) outcomes.set(k.contractId, k.outcome);
 }
-console.log(`Kalshi settlements loaded: ${outcomes.size}\n`);
+console.log(`Kalshi settlements loaded: ${outcomes.size}`);
+console.log(`Fixed interval: v9 live entries created through ${REVIEW_UNTIL}\n`);
 
 // ---- post-entry observation series, for the exit replay ---------------------------------------
 interface Obs { at: string; probUp: number; confidence: number; askUp?: number; askDown?: number }
 const series = new Map<string, Obs[]>();
 for (const e of history) {
   if (!e?.symbol || !e?.closesAt || !e?.issuedAt) continue;
-  if (!Number.isFinite(e.probabilityUp) || !Number.isFinite(e.confidence)) continue;
-  const prices: any[] = e.actionableVenuePrices ?? [];
+  // typeof narrows the optional fields; Number.isFinite alone does not.
+  const { probabilityUp, confidence } = e;
+  if (typeof probabilityUp !== 'number' || !Number.isFinite(probabilityUp)) continue;
+  if (typeof confidence !== 'number' || !Number.isFinite(confidence)) continue;
+  const prices = e.actionableVenuePrices ?? [];
   const k = (side: string) => prices.find((p) => p.venue === 'kalshi' && p.side === side)?.price;
   const key = `${e.symbol}|${e.closesAt}`;
-  series.set(key, [...(series.get(key) ?? []), { at: e.issuedAt, probUp: e.probabilityUp, confidence: e.confidence, askUp: k('UP'), askDown: k('DOWN') }]);
+  series.set(key, [...(series.get(key) ?? []), { at: e.issuedAt, probUp: probabilityUp, confidence, askUp: k('UP'), askDown: k('DOWN') }]);
 }
 for (const list of series.values()) list.sort((a, b) => a.at.localeCompare(b.at));
 console.log(`observation series: ${series.size} symbol-windows, ${history.length} history rows\n`);
@@ -77,7 +98,8 @@ const evs = (o: PaperOrder) => o.entryExecutionObservations ?? [];
 const term = (o: PaperOrder) => [...evs(o)].reverse().find((e) => e.event === 'terminal_fill');
 const acc = (o: PaperOrder) => evs(o).find((e) => e.event === 'accepted');
 const live = ledger.orders.filter((o) =>
-  o.entryDecision?.executionPolicyVersion === V9 && o.executionMode === 'live' && o.attemptNumber === 1 && acc(o) && term(o));
+  o.entryDecision?.executionPolicyVersion === V9 && o.executionMode === 'live' && o.attemptNumber === 1
+  && o.createdAt <= REVIEW_UNTIL && acc(o) && term(o));
 
 interface Row {
   order: PaperOrder; closesAt: string; label: string; wouldHaveFilledAsMaker: boolean;
@@ -114,7 +136,7 @@ for (const o of live) {
   const entryAt = poll.at;
   const exactCost = quantity * ask2 * 100 + feeCents;
   const obs = (series.get(`${o.symbol}|${o.closesAt}`) ?? []).filter((x) => x.at > entryAt && x.at < o.closesAt);
-  let state: any = {};
+  let state: ExitObservationState = {};
   let exitAt: string | undefined, exitBid: number | undefined, exitPolicy: string | undefined;
   for (const x of obs) {
     const ownedAsk = o.side === 'UP' ? x.askUp : x.askDown;
@@ -190,7 +212,7 @@ report('COHORT B with exits', rows, true);
 // ---- what the live rule actually did on the same interval --------------------------------------
 const actual = ledger.orders.filter((o) =>
   o.entryDecision?.executionPolicyVersion === V9 && o.executionMode === 'live' &&
-  ['won', 'lost', 'sold'].includes(o.status));
+  o.createdAt <= REVIEW_UNTIL && ['won', 'lost', 'sold'].includes(o.status));
 const aGross = actual.reduce((s, o) => s + (o.pnlCents ?? 0), 0);
 const aStake = actual.reduce((s, o) => s + (o.stakeCents ?? 0), 0);
 const aCents = clusterByWindow(actual, (o) => o.closesAt, (o) => o.pnlCents ?? 0);

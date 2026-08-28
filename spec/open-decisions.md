@@ -14,9 +14,10 @@ Each question carries a stable `OD-<n>` identifier so it can be cited, tracked, 
 permanent: resolve a question by recording the decision in [`decision-log.md`](decision-log.md) and removing its
 entry here, and never reuse the number.
 
-All fifteen were carried forward from the pre-modularization specification on 2026-08-25 and none has an
-independently recorded opened date. Several state what evidence would settle them and several do not; supplying the
-missing settlement criteria is itself maintainer work, and this module does not invent them.
+OD-1 through OD-15 were carried forward from the pre-modularization specification on 2026-08-25 and none has an
+independently recorded opened date; entries opened after that date record their own. Several state what evidence
+would settle them and several do not; supplying the missing settlement criteria is itself maintainer work, and this
+module does not invent them.
 
 An open decision authorizes nothing. Until it is resolved and recorded, the safe behavior is whatever the canonical
 module already requires.
@@ -110,3 +111,11 @@ Whether a candidate should also emit sentinels for windows it *refuses* that pro
 > **Owning module:** [`policy-and-track-separation`](policy-and-track-separation.md)
 
 Whether the adaptive regime gate should keep scoping its evidence to the buy policy version once policies become values. Three version bumps on 2026-08-13 each reset the gate to warming, leaving it inert for most of the day it was most needed.
+
+### OD-16 — What the taker quality floor should be, and whether estimate quality is the right instrument
+
+> **Owning module:** [`trading-risk-and-budget`](trading-risk-and-budget.md) · **Opened:** 2026-08-28
+
+The taker routes refuse any entry whose estimate quality is below 65% (`MONEY_NOODLE_MIN_TAKER_QUALITY`, applied by `evaluateEntryExecutionPolicy`), while the shared buy policy admits a maker at 50% ([`trading-risk-and-budget.md`, entry qualification and maturity](trading-risk-and-budget.md#req-trading-entry-maturity)). No canonical module states the 65% figure, no decision record carries it, and the two designs that list it — [`adaptive-entry-fallback-design.md`](../docs/adaptive-entry-fallback-design.md) and [`high-edge-execution-reduced-sizing-design.md`](../docs/high-edge-execution-reduced-sizing-design.md) — both describe it as one of the *existing* taker gates and are both superseded, so neither authorizes present behavior. Its origin is a bulk 2026-08-11 commit that introduced the whole taker gate set as environment defaults with no accompanying design, decision, or report. The single measurement that touches it, [`live-run-review-2026-08-12`](../reports/live-run-review-2026-08-12.md), split a live *maker-fill* cohort at 65%, stated that timing and quality were confounded and that it did not identify which gate was causal, and asked for a paired shadow replay of a 300-second warm-up and a 65% quality floor before any promotion. That replay was never run and the paired warm-up was never adopted. The floor is therefore in force on the strength of a number nobody has defended, and it is one of the three checks in `evaluateEntryExecutionPolicy` that decide whether a maker-miss fallback reaches the venue at all.
+
+Loosening it is not the obvious repair. [`early-taker-cutover-review-2026-08-28`](../reports/early-taker-cutover-review-2026-08-28.md) measured that taking the offer on maker-miss rows needs a 63.7% hit rate to break even after the spread and the taker fee, against a median model forecast of 60.0% on the same rows, so admitting more of those rows would add trades to a route already short of break-even. That points at the real question: a quality floor is a proxy for distrusting the probability, and the economics gate (`makerMissTakerNetEdge`) already applies the correct test — forecast minus limit minus charged fee — but applies it to a forecast whose selected-side probability has come in above realised outcomes in both cohorts where it has been checked: 59.6% mean predicted against 43.2% of held positions winning across 32 settlement windows ([`live-run-review-2026-08-12`](../reports/live-run-review-2026-08-12.md)), and 60.0% median forecast against 57.9% realised across 23 windows ([`early-taker-cutover-review-2026-08-28`](../reports/early-taker-cutover-review-2026-08-28.md)). Those are different cohorts and different statistics, and two readings establish a direction to test rather than systematic miscalibration. Settling this needs a prospective calibration measurement of selected-side probability on maker-miss rows across a stated minimum of independent settlement windows, compared against the fee-and-spread-aware break-even at the refreshed ask, with sentinels written at decision time. Another retrospective split at a threshold already in the code would repeat the 2026-08-12 error and can promote nothing.
