@@ -4,6 +4,7 @@ import { isStatelessDeployment, STATELESS_WORKER_MESSAGE } from '@/lib/runtime-e
 import { getExecutionOrders } from '@/lib/paper-execution';
 import { getExitPolicySentinelReport } from '@/lib/exit-policy-sentinel-store';
 import { getMakerRestrictionSentinelReport } from '@/lib/maker-restriction-sentinel-store';
+import { getMakerLifecycleSentinelReport } from '@/lib/maker-lifecycle-sentinel-store';
 import { getEdgeSpikeSentinelReport } from '@/lib/edge-spike-sentinel-store';
 import { getHourlyThresholdObservationStore } from '@/lib/hourly-threshold-observation-store';
 import {
@@ -12,6 +13,7 @@ import {
 } from '@/lib/sentinel-registry';
 import type { ExitCandidateReport } from '@/lib/exit-policy-sentinel';
 import type { MakerRestrictionArmReport } from '@/lib/maker-restriction-sentinel';
+import type { MakerLifecycleArmReport } from '@/lib/maker-lifecycle-sentinel';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,7 +29,7 @@ const tStatistic = (mean: number | null, error: number | null): number | null =>
   mean === null || error === null || !(error > 1e-15) ? null : Number((mean / error).toFixed(2));
 
 /** Both arm reports already share the fields a projection needs; neither is reshaped to fit the other. */
-function armProjection(report: ExitCandidateReport | MakerRestrictionArmReport, bar: number | null): SentinelArmProjection {
+function armProjection(report: ExitCandidateReport | MakerRestrictionArmReport | MakerLifecycleArmReport, bar: number | null): SentinelArmProjection {
   const t = tStatistic(report.incrementalMeanReturn, report.incrementalStandardError);
   return {
     armId: report.candidateId,
@@ -51,9 +53,10 @@ export async function GET(request: NextRequest) {
   try {
     const orders = await getExecutionOrders({ includeArchivedEvidence: false });
     // One failing store must not blank the whole view: each projection is settled independently.
-    const [exit, maker, spike, hourly] = await Promise.allSettled([
+    const [exit, maker, lifecycle, spike, hourly] = await Promise.allSettled([
       getExitPolicySentinelReport(orders),
       getMakerRestrictionSentinelReport(orders),
+      getMakerLifecycleSentinelReport(orders),
       getEdgeSpikeSentinelReport(),
       getHourlyThresholdObservationStore(),
     ]);
@@ -97,6 +100,24 @@ export async function GET(request: NextRequest) {
         });
         const windows = Math.max(...tracks.map((track) => Math.max(0, ...track.arms.map((arm) => arm.windows))), 0);
         if (limits) thresholds = [countThreshold('Complete windows', windows, limits.windows)];
+      }
+
+      if (descriptor.id === 'maker-lifecycle-sentinel-v1' && lifecycle.status === 'fulfilled') {
+        openedAt = lifecycle.value.startedAt;
+        tracks = (['live', 'paper'] as const).map((mode) => {
+          const track = lifecycle.value.tracks[mode];
+          return {
+            mode, positions: track.records, completePositions: track.resolvedRecords, coverage: track.coverage,
+            arms: track.candidates.map((candidate) => armProjection(candidate, bar)),
+          };
+        });
+        const windows = Math.max(...tracks.map((track) => Math.max(0, ...track.arms.map((arm) => arm.windows))), 0);
+        const divergent = Math.max(...tracks.map((track) => Math.max(0, ...track.arms.map((arm) => arm.divergentWindows ?? 0))), 0);
+        if (limits) thresholds = [
+          countThreshold('Complete windows', windows, limits.windows),
+          countThreshold('Divergent windows', divergent, limits.divergentWindows),
+          { label: 'Observation coverage', current: Math.min(...tracks.map((track) => track.coverage ?? 0)), required: limits.coverage, met: false, unit: 'fraction' },
+        ];
       }
 
       if (descriptor.id === 'edge-spike-sentinel-v1' && spike.status === 'fulfilled') {

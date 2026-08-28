@@ -82,6 +82,7 @@ import { spikeAdmits } from './edge-spike-policy';
 import { EDGE_SPIKE_SENTINEL_VERSION, edgeSpikeSentinelId, type EdgeSpikeSentinel } from './edge-spike-sentinel';
 import { updateEdgeSpikeSentinels } from './edge-spike-sentinel-store';
 import { maintainMakerRestrictionSentinels, recordMakerRestrictionOrder } from './maker-restriction-sentinel-store';
+import { maintainMakerLifecycleSentinels, recordMakerLifecycleOrder } from './maker-lifecycle-sentinel-store';
 import {
   getExitPolicyContinuationOrderIds, maintainExitPolicySentinels, recordExitPolicySentinelObservation,
 } from './exit-policy-sentinel-store';
@@ -1024,6 +1025,10 @@ export function applyPaperMakerSimulation(order: PaperOrder, result: PaperMakerS
   order.restingUntil = result.restingUntil;
   order.makerCompletedAt = result.completedAt;
   order.entryExecutionObservations = result.observations;
+  // Detached prospective observation at the maker's terminal moment, before settlement is known. It cannot
+  // delay or influence execution, and production never reads its result.
+  void recordMakerLifecycleOrder(order, result.completedAt)
+    .catch((error) => console.error('Maker lifecycle sentinel decision write failed:', error));
   for (const observation of result.observations) {
     order.entryDirectionObservation = observeEntryDirection(
       order.entryDirectionObservation, order.issuanceAskPrice ?? order.askPrice, observation,
@@ -1465,6 +1470,10 @@ async function executePreparedLiveBuy(
     order.filledCount = fill.filledCount;
     order.liquidityRole = fill.liquidityRole;
     order.entryExecutionObservations = fill.executionObservations;
+    // Live counterpart of the paper hook: recorded once the maker's observation series is terminal and
+    // before settlement is known. Detached, and never read by execution.
+    if (order.liquidityRole === 'maker') void recordMakerLifecycleOrder(order)
+      .catch((error) => console.error('Maker lifecycle sentinel decision write failed:', error));
     const reservedCents = order.stakeCents;
     if (fill.filledCount > 0) {
       const actualPurchaseCents = fill.filledCount * fill.averagePriceCents;
@@ -2501,6 +2510,8 @@ async function processCycle(dashboard: DashboardData, refreshDashboard?: () => P
     .catch((error) => console.error('Calendar evaluation collection failed:', error));
   void updateEdgeSpikeSentinels(edgeSpikeSentinelCycle(dashboard, ledger))
     .catch((error) => console.error('Edge spike sentinel collection failed:', error));
+  void maintainMakerLifecycleSentinels(dashboard.generatedAt)
+    .catch((error) => console.error('Maker lifecycle sentinel maintenance failed:', error));
   void maintainMakerRestrictionSentinels(dashboard.generatedAt)
     .catch((error) => console.error('Maker restriction sentinel maintenance failed:', error));
   void maintainPortfolioChoiceSets(dashboard.generatedAt)

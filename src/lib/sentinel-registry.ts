@@ -12,6 +12,7 @@
  */
 import { EXIT_POLICY_MINIMUM_DIVERGENT_WINDOWS, EXIT_POLICY_REVIEW_WINDOWS, EXIT_POLICY_MINIMUM_COVERAGE, EXIT_CANDIDATE_IDS } from './exit-policy-sentinel';
 import { MAKER_RESTRICTION_MINIMUM_DIVERGENT_WINDOWS, MAKER_RESTRICTION_REVIEW_WINDOWS, MAKER_RESTRICTION_MINIMUM_COVERAGE } from './maker-restriction-sentinel';
+import { MAKER_LIFECYCLE_CANDIDATE_IDS, MAKER_LIFECYCLE_MINIMUM_COVERAGE, MAKER_LIFECYCLE_MINIMUM_DIVERGENT_WINDOWS, MAKER_LIFECYCLE_REVIEW_WINDOWS } from './maker-lifecycle-sentinel';
 
 export const SENTINEL_REGISTRY_VERSION = 'sentinel-registry-v1';
 
@@ -19,6 +20,7 @@ export type SentinelId =
   | 'exit-policy-sentinel-v2'
   | 'maker-restriction-sentinel-v1'
   | 'edge-spike-sentinel-v1'
+  | 'maker-lifecycle-sentinel-v1'
   | 'hourly-threshold-observation-v1';
 
 /**
@@ -65,6 +67,15 @@ export const SENTINELS: readonly SentinelDescriptor[] = [
     lifecycle: 'collecting',
     arms: ['maker-spread-max2c-v1', 'maker-spike-max2pp-v1'],
     store: 'maker-restriction-sentinels',
+  },
+  {
+    id: 'maker-lifecycle-sentinel-v1',
+    name: 'Maker lifecycle: short expiry and the taker',
+    question: 'Would abandoning the maker at two seconds pay, and is it the shorter life or the taker that does it?',
+    kind: 'candidate-arms',
+    lifecycle: 'collecting',
+    arms: MAKER_LIFECYCLE_CANDIDATE_IDS,
+    store: 'maker-lifecycle-sentinels',
   },
   {
     id: 'edge-spike-sentinel-v1',
@@ -141,6 +152,9 @@ export function sentinelThresholds(id: SentinelId): { windows: number; divergent
   }
   if (id === 'maker-restriction-sentinel-v1') {
     return { windows: MAKER_RESTRICTION_REVIEW_WINDOWS, divergentWindows: MAKER_RESTRICTION_MINIMUM_DIVERGENT_WINDOWS, coverage: MAKER_RESTRICTION_MINIMUM_COVERAGE };
+  }
+  if (id === 'maker-lifecycle-sentinel-v1') {
+    return { windows: MAKER_LIFECYCLE_REVIEW_WINDOWS, divergentWindows: MAKER_LIFECYCLE_MINIMUM_DIVERGENT_WINDOWS, coverage: MAKER_LIFECYCLE_MINIMUM_COVERAGE };
   }
   return null;
 }

@@ -1,15 +1,14 @@
 # Maker lifecycle sentinel: short expiry, and whether the taker is what pays
 
 > **Document type:** Evaluation design
-> **Design status:** Proposed
+> **Design status:** Accepted
 > **Implementation:** Not started
-> **Current use:** Review only — no implementation authority.
 > **Created:** 2026-08-28
-> **Canonical requirements:** None — proposal or exploration only
-> **Decision record:** None — no accepted product decision
+> **Canonical requirements:** [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
+> **Decision record:** [`DEC-20260828-02`](../spec/decisions/decision-id-map.json)
 > **Design index:** [`docs/README.md`](README.md)
 
-> **Status: proposed for maintainer review; not approved or implemented.** This adds an observation-only
+> Agreed in prose with the maintainer and accepted on 2026-08-28. This adds an observation-only
 > evaluation generation. It changes no entry rule, exit rule, threshold, sizing, capital, operator control,
 > venue order body, or production order. Production continues to run the managed maker and its fallback
 > exactly as accepted while this observes.

@@ -61,6 +61,7 @@ correction; v8 remains historical incident evidence only. Current collection sta
 
 | Document | Type | Implementation | Canonical requirements |
 | --- | --- | --- | --- |
+| [`Maker lifecycle sentinel: short expiry, and whether the taker is what pays`](maker-lifecycle-sentinel-design.md) | Evaluation design | Not started | [`policy-and-track-separation`](../spec/policy-and-track-separation.md) |
 | [`Exit sentinel v3: a frozen hold arm and an honest no-bid state`](exit-sentinel-v3-hold-candidate-design.md) | Evaluation design | Not started | [`policy-and-track-separation`](../spec/policy-and-track-separation.md) |
 | [`Attempt-and-outcome evaluation design`](attempt-outcome-evaluation-design.md) | Evaluation design | Not started | [`trading-risk-and-budget`](../spec/trading-risk-and-budget.md), [`policy-and-track-separation`](../spec/policy-and-track-separation.md) |
 | [`Confirmed-signal evaluation design`](confirmed-signal-evaluation-design.md) | Evaluation design | Not started | [`forecasting-and-evidence`](../spec/forecasting-and-evidence.md), [`policy-and-track-separation`](../spec/policy-and-track-separation.md) |
@@ -100,7 +101,6 @@ correction; v8 remains historical incident evidence only. Current collection sta
 
 | Document | Type | Implementation | Canonical requirements |
 | --- | --- | --- | --- |
-| [`Maker lifecycle sentinel: short expiry, and whether the taker is what pays`](maker-lifecycle-sentinel-design.md) | Evaluation design | Not started | — |
 | [`Website / extensible execution-engine separation`](execution-engine-separation-design.md) | Architecture design | Not started | — |
 | [`Multi-tenant identity, API, and execution-cell design`](multitenancy-design.md) | Architecture design | Not started | — |
 | [`Multi-tenant web identity, profile, and venue-connection UI`](multitenant-web-ui-design.md) | Product design | Not started | — |
