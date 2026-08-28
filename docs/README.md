@@ -100,6 +100,7 @@ correction; v8 remains historical incident evidence only. Current collection sta
 
 | Document | Type | Implementation | Canonical requirements |
 | --- | --- | --- | --- |
+| [`Maker lifecycle sentinel: short expiry, and whether the taker is what pays`](maker-lifecycle-sentinel-design.md) | Evaluation design | Not started | — |
 | [`Website / extensible execution-engine separation`](execution-engine-separation-design.md) | Architecture design | Not started | — |
 | [`Multi-tenant identity, API, and execution-cell design`](multitenancy-design.md) | Architecture design | Not started | — |
 | [`Multi-tenant web identity, profile, and venue-connection UI`](multitenant-web-ui-design.md) | Product design | Not started | — |
