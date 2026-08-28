@@ -717,6 +717,9 @@
   .grow {
     flex-grow: 1;
   }
+  .border-collapse {
+    border-collapse: collapse;
+  }
   .-translate-x-1\/2 {
     --tw-translate-x: calc(calc(1 / 2 * 100%) * -1);
     translate: var(--tw-translate-x) var(--tw-translate-y);
@@ -940,6 +943,9 @@
   .gap-x-3 {
     column-gap: calc(var(--spacing) * 3);
   }
+  .gap-x-4 {
+    column-gap: calc(var(--spacing) * 4);
+  }
   .gap-y-0\.5 {
     row-gap: calc(var(--spacing) * 0.5);
   }
@@ -1011,6 +1017,12 @@
   }
   .border-border {
     border-color: var(--border);
+  }
+  .border-border\/40 {
+    border-color: var(--border);
+    @supports (color: color-mix(in lab, red, red)) {
+      border-color: color-mix(in oklab, var(--border) 40%, transparent);
+    }
   }
   .border-brand-green\/30 {
     border-color: var(--brand-green);
@@ -1426,6 +1438,12 @@
       background-color: color-mix(in oklab, var(--muted-foreground) 40%, transparent);
     }
   }
+  .bg-muted\/20 {
+    background-color: var(--muted);
+    @supports (color: color-mix(in lab, red, red)) {
+      background-color: color-mix(in oklab, var(--muted) 20%, transparent);
+    }
+  }
   .bg-popover {
     background-color: var(--popover);
   }
@@ -1448,6 +1466,12 @@
     background-color: var(--primary);
     @supports (color: color-mix(in lab, red, red)) {
       background-color: color-mix(in oklab, var(--primary) 12%, transparent);
+    }
+  }
+  .bg-primary\/70 {
+    background-color: var(--primary);
+    @supports (color: color-mix(in lab, red, red)) {
+      background-color: color-mix(in oklab, var(--primary) 70%, transparent);
     }
   }
   .bg-primary\/\[\.02\] {
@@ -1624,6 +1648,9 @@
   .py-8 {
     padding-block: calc(var(--spacing) * 8);
   }
+  .py-px {
+    padding-block: 1px;
+  }
   .pt-0 {
     padding-top: 0px;
   }
@@ -1671,6 +1698,9 @@
   }
   .font-mono {
     font-family: var(--font-geist-mono);
+  }
+  .font-sans {
+    font-family: var(--font-geist-sans);
   }
   .text-3xl {
     font-size: var(--text-3xl);
@@ -1909,6 +1939,9 @@
   }
   .uppercase {
     text-transform: uppercase;
+  }
+  .italic {
+    font-style: italic;
   }
   .ordinal {
     --tw-ordinal: ordinal;
