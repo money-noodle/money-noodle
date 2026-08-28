@@ -52,6 +52,7 @@ Reports marked **cited by current status** are the evidence [`STATUS.md`](../STA
 
 | Report | Question it answers |
 | --- | --- |
+| [`strict-value-hold-review-2026-08-27`](strict-value-hold-review-2026-08-27.md) | What exact cash and clustered return change when profitable strict-value sales are held to settlement, and whether current prospective sentinels support disabling the exit |
 | [`exit-sentinel-preclose-availability-diagnosis-2026-08-26`](exit-sentinel-preclose-availability-diagnosis-2026-08-26.md) | Whether exit-sentinel v2 conflates a fresh zero bid with missing evidence — **cited by current status** |
 | [`exit-sentinel-v2-coverage-diagnosis-2026-08-25`](exit-sentinel-v2-coverage-diagnosis-2026-08-25.md) | Where exit-sentinel v2 coverage breaks down before close |
 | [`prospective-exit-sentinel-v1-review-and-v2-repair-2026-08-24`](prospective-exit-sentinel-v1-review-and-v2-repair-2026-08-24.md) | What prospective exit-sentinel v1 showed and what v2 changed about its evidence |
