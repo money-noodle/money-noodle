@@ -3089,8 +3089,6 @@ function deriveExecutionSummaries(ledger: Ledger, control: ExecutionSummaryContr
             maximumAttempts: adaptive ? MAX_ENTRY_EPISODES_PER_WINDOW : maximumLiveMakerAttempts(),
             retryEligible: fallbackOpen, executedStyle: liveOrder.entryExecutionDecision?.executedStyle,
             requalificationState,
-            requalifyingSnapshots: undefined,
-            requalifyingRequiredSnapshots: undefined,
           } : undefined,
         };
       }),

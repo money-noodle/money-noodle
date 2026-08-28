@@ -6,7 +6,13 @@ export interface ExecutionSignalDisplay {
   className: string;
 }
 
-/** Pure bounded read model: labels describe state, while attempt ceilings stay in audit detail. */
+/**
+ * Pure bounded read model: labels describe state, while attempt ceilings stay in audit detail.
+ *
+ * One managed maker is followed only by bounded taker intents (DEC-20260827-02), so a missed maker either
+ * still has a fallback authorized or the sequence is over. The retired episodes design also had the maker
+ * collecting fresh snapshots toward a further attempt; those labels are gone with the behavior.
+ */
 export function executionSignalDisplay(readiness: ExecutionSignalReadiness | undefined): ExecutionSignalDisplay {
   const attempt = readiness?.liveAttempt;
   if (attempt) {
@@ -15,21 +21,9 @@ export function executionSignalDisplay(readiness: ExecutionSignalReadiness | und
     if (attempt.status === 'uncertain') return { label: 'execution uncertain', detail: attempt.reason ?? 'Reservation retained until authoritative reconciliation completes.', className: 'border-warn/40 bg-warn/10 text-warn' };
     if (attempt.status === 'unfilled') {
       const baseDetail = attempt.reason ?? 'The entry completed without a fill; no money was spent.';
-      if (attempt.requalificationState === 'collecting') {
-        const observed = attempt.requalifyingSnapshots ?? 0;
-        const required = attempt.requalifyingRequiredSnapshots ?? readiness?.requiredSnapshots ?? 0;
-        return observed === 0
-          ? { label: 'maker missed · requalifying', detail: `${baseDetail} ${readiness?.reason ?? ''}`.trim(), className: 'border-warn/30 text-warn' }
-          : { label: `maker missed · requalifying · ${observed} of ${required}`, detail: `${baseDetail} ${readiness?.reason ?? ''}`.trim(), className: 'border-warn/30 text-warn' };
-      }
       if (attempt.requalificationState === 'checks_pending') return {
         label: 'maker missed · episode checks pending', detail: readiness?.portfolio?.reason ?? readiness?.reason ?? baseDetail,
         className: 'border-warn/30 text-warn',
-      };
-      if (attempt.requalificationState === 'ready') return {
-        label: 'maker missed · next episode ready',
-        detail: readiness?.portfolio?.reason ?? 'Fresh post-completion persistence clears; operational checks and current maker/taker routing still run at submission.',
-        className: 'border-data/30 text-data',
       };
       if (attempt.noFillReason === 'pre_submit_quote_moved') return { label: 'quote moved · sequence ended', detail: baseDetail, className: 'border-muted-foreground/30 text-muted-foreground' };
       if (attempt.noFillReason === 'ioc_no_fill' || attempt.executedStyle === 'taker') return { label: 'taker IOC no fill · sequence ended', detail: baseDetail, className: 'border-muted-foreground/30 text-muted-foreground' };

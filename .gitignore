@@ -29,3 +29,6 @@ data/*.superseded-*
 *.key
 *.p8
 id_rsa*
+
+# Local detached server log; never an artifact.
+.next-server.log

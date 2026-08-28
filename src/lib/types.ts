@@ -2021,9 +2021,12 @@ export interface ExecutionSignalReadiness {
     maximumAttempts?: number;
     retryEligible?: boolean;
     executedStyle?: 'maker' | 'taker';
-    requalificationState?: 'collecting' | 'checks_pending' | 'ready' | 'ended';
-    requalifyingSnapshots?: number;
-    requalifyingRequiredSnapshots?: number;
+    /**
+     * Post-miss lifecycle under the current execution generation. `checks_pending` means a bounded taker
+     * fallback is still authorized; `ended` means the logical sequence is terminal. Repeated requalifying
+     * maker episodes, and the snapshot counter they carried, retired with DEC-20260827-02.
+     */
+    requalificationState?: 'checks_pending' | 'ended';
   };
 }
 

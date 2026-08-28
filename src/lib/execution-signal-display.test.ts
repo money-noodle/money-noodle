@@ -16,18 +16,22 @@ describe('execution signal display', () => {
     expect(executionSignalDisplay(readiness({ qualifyingSnapshots: 0 })).label).toBe('new edge signal · awaiting confirmation');
   });
 
-  it('describes episode requalification instead of presenting the ceiling as progress', () => {
+  // One managed maker then bounded takers (DEC-20260827-02): a missed maker either still has a fallback
+  // authorized or its sequence is terminal. There is no third state, and no snapshot counter toward one.
+  it('distinguishes a miss with a fallback still open from a terminal sequence', () => {
     const liveAttempt: NonNullable<ExecutionSignalReadiness['liveAttempt']> = {
       status: 'unfilled', createdAt: '2026-01-01T00:01:00Z', quantity: 1,
       attemptNumber: 1, maximumAttempts: 3, executedStyle: 'maker', noFillReason: 'rested_no_fill',
-      requalificationState: 'collecting', requalifyingSnapshots: 1, requalifyingRequiredSnapshots: 2,
+      requalificationState: 'checks_pending',
       reason: 'Managed maker received no fill.',
     };
-    const collecting = executionSignalDisplay(readiness({ liveAttempt }));
-    expect(collecting.label).toBe('maker missed · requalifying · 1 of 2');
-    expect(collecting.label).not.toContain('1/3');
-    expect(executionSignalDisplay(readiness({ liveAttempt: { ...liveAttempt, requalificationState: 'ready' } })).label)
-      .toBe('maker missed · next episode ready');
+    expect(executionSignalDisplay(readiness({ liveAttempt })).label).toBe('maker missed · episode checks pending');
+    expect(executionSignalDisplay(readiness({ liveAttempt: { ...liveAttempt, requalificationState: 'ended' } })).label)
+      .toBe('maker missed · sequence ended');
+    // A miss with no recorded lifecycle state is terminal, never presented as progress toward a retry.
+    expect(executionSignalDisplay(readiness({ liveAttempt: { ...liveAttempt, requalificationState: undefined } })).label)
+      .toBe('maker missed · sequence ended');
+    expect(executionSignalDisplay(readiness({ liveAttempt })).label).not.toContain('1/3');
   });
 
   it('makes terminal no-fill outcomes explicit', () => {
