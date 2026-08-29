@@ -18,6 +18,11 @@ output "latest_ready_revision" {
   value       = google_cloud_run_v2_service.service.latest_ready_revision
 }
 
+output "configured_revision_suffix" {
+  description = "Revision suffix in desired state, preserved during traffic-only rollback."
+  value       = var.revision_suffix
+}
+
 output "deployed_image" {
   description = "Fully qualified image reference, by digest, that this service is running."
   value       = local.image
@@ -26,6 +31,11 @@ output "deployed_image" {
 output "deployed_digest" {
   description = "Digest of the running artifact, so `what is running` is answerable without reading the service."
   value       = var.image_digest
+}
+
+output "artifact_version" {
+  description = "Attributable version of the configured artifact."
+  value       = var.artifact_version
 }
 
 output "source_commit" {

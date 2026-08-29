@@ -109,6 +109,8 @@ test('applying requires explicit recorded authorization', () => {
     "github.event.inputs.confirmation == 'APPLY-TO-PRODUCTION'",
     "needs.authorization.outputs.apply_authorized == 'true'",
     "needs.authorization.outputs.federation_configured == 'true'",
+    "needs.authorization.outputs.provider_configured == 'true'",
+    "needs.authorization.outputs.environment_reviewers_verified == 'true'",
   ]) {
     assert.ok(
       condition.includes(requirement),
@@ -128,14 +130,102 @@ test('rollback mutates production and carries the same authorization requirement
   assert.ok(rollback, 'expected a rollback job');
 
   const condition = rollback.body.match(/if: >-\n([\s\S]*?)\n {4}runs-on:/)?.[1];
-  assert.ok(
-    condition.includes("needs.authorization.outputs.apply_authorized == 'true'"),
-    'rollback changes what production serves and must be authorized like an apply',
-  );
+  for (const requirement of [
+    "needs.authorization.outputs.apply_authorized == 'true'",
+    "needs.authorization.outputs.provider_configured == 'true'",
+    "needs.authorization.outputs.environment_reviewers_verified == 'true'",
+  ]) {
+    assert.ok(
+      condition.includes(requirement),
+      `rollback changes what production serves and must require \`${requirement}\``,
+    );
+  }
   assert.match(
     rollback.body,
     /environment: production/,
     'rollback must use the protected environment',
+  );
+});
+
+test('every provider operation receives the complete stack input contract', () => {
+  const authorization = deliveryJobs().find(({ name }) => name === 'authorization');
+  assert.ok(authorization, 'expected an authorization job');
+
+  for (const name of [
+    'GCP_PROJECT_ID',
+    'GCP_PROJECT_NUMBER',
+    'GCP_STATE_BUCKET_PREFIX',
+    'GCP_BILLING_ACCOUNT_ID',
+    'GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON',
+  ]) {
+    assert.ok(
+      authorization.body.includes(`vars.${name}`),
+      `authorization must refuse provider operations until ${name} is configured`,
+    );
+  }
+
+  for (const jobName of ['plan', 'drift', 'apply']) {
+    const job = deliveryJobs().find(({ name }) => name === jobName);
+    for (const variable of [
+      'TF_VAR_bootstrap_state_bucket',
+      'TF_VAR_platform_state_bucket',
+      'TF_VAR_api_state_bucket',
+      'TF_VAR_project_number',
+      'TF_VAR_billing_account_id',
+      'TF_VAR_budget_alert_email_addresses',
+    ]) {
+      assert.ok(job.body.includes(variable), `${jobName} does not supply ${variable}`);
+    }
+  }
+});
+
+test('service plans are explicit and bind the digest to its attested source commit', () => {
+  const plan = deliveryJobs().find(({ name }) => name === 'plan');
+  assert.match(
+    plan.body,
+    /github\.event\.inputs\.stack/,
+    'manual plan must operate only on the selected stack',
+  );
+  assert.match(
+    plan.body,
+    /\^sha256:\[0-9a-f\]\{64\}\$/,
+    'service plan must reject a mutable or malformed digest',
+  );
+  assert.match(plan.body, /\^\[0-9a-f\]\{40\}\$/, 'service plan must require a full source commit');
+  assert.match(
+    plan.body,
+    /--source-digest "\$SOURCE_COMMIT"/,
+    'service plan must cryptographically bind digest provenance to source commit',
+  );
+  assert.match(
+    plan.body,
+    /--signer-workflow/,
+    'service plan must constrain the workflow that signed provenance',
+  );
+});
+
+test('rollback reloads all dynamic template inputs from state and applies a saved plan', () => {
+  const rollback = deliveryJobs().find(({ name }) => name === 'rollback');
+  for (const output of [
+    'deployed_digest',
+    'artifact_version',
+    'source_commit',
+    'configured_revision_suffix',
+  ]) {
+    assert.ok(
+      rollback.body.includes(`tofu output -raw ${output}`),
+      `rollback must preserve ${output} from the currently configured template`,
+    );
+  }
+  assert.match(
+    rollback.body,
+    /tofu plan[^\n]*-out=rollback\.tfplan/,
+    'rollback must save the reviewed traffic-only plan',
+  );
+  assert.match(
+    rollback.body,
+    /tofu apply[^\n]*rollback\.tfplan/,
+    'rollback must apply exactly its saved plan',
   );
 });
 

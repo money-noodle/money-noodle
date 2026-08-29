@@ -40,6 +40,7 @@ locals {
     "iamcredentials.googleapis.com",
     "sts.googleapis.com",
     "storage.googleapis.com",
+    "cloudbilling.googleapis.com",
     "cloudresourcemanager.googleapis.com",
     "serviceusage.googleapis.com",
   ]
@@ -104,9 +105,10 @@ module "federation" {
 # for convenience: it would make the CI principal the most powerful identity in
 # the platform, reachable from any workflow change.
 #
-# Notably absent: `roles/owner`, `roles/editor`, `roles/secretmanager.admin`,
-# and any secretAccessor role. The deployer creates secret containers but cannot
-# read the values runtime workloads consume.
+# Notably absent: `roles/owner`, `roles/editor`, every Secret Manager
+# administrative/access role, and IAM-administration roles. The first slice has
+# no secret, so secret-policy authority is deferred rather than granting CI a
+# role that could let it give itself secretAccessor.
 resource "google_project_iam_member" "deployer" {
   for_each = toset(var.deployer_roles)
 
@@ -115,4 +117,13 @@ resource "google_project_iam_member" "deployer" {
   member  = "serviceAccount:${google_service_account.deployer.email}"
 
   depends_on = [google_project_service.bootstrap]
+}
+
+# Project IAM cannot authorize a billing-account budget. This separate binding
+# is the narrow billing scope the platform stack needs for the accepted USD 30
+# guardrail; it grants no billing-account administration or payment authority.
+resource "google_billing_account_iam_member" "deployer_budget_manager" {
+  billing_account_id = var.billing_account_id
+  role               = "roles/billing.costsManager"
+  member             = "serviceAccount:${google_service_account.deployer.email}"
 }

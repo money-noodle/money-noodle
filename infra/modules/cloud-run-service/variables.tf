@@ -83,6 +83,11 @@ variable "rollback_revision" {
   EOT
   type        = string
   default     = null
+
+  validation {
+    condition     = var.rollback_revision == null || can(regex("^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$", var.rollback_revision))
+    error_message = "rollback_revision must be a valid existing Cloud Run revision name."
+  }
 }
 
 variable "container_port" {

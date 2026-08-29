@@ -25,7 +25,7 @@ passed as OpenTofu variables and, afterwards, as GitHub **repository variables**
 | --- | --- | --- |
 | `project_id` | The Google Cloud project the maintainer creates | Every resource |
 | `project_number` | Same project, numeric form | Budget filter, Cloud Run service agent identity |
-| `billing_account_id` | The billing account linked to that project | The USD 30 budget |
+| `billing_account_id` | The billing account linked to that project | Narrow budget-management grant plus the USD 30 budget |
 | `state_bucket_prefix` | A name the maintainer chooses; bucket names are globally unique | The four state buckets |
 | `repository_id` | `gh api repos/phairow/money-noodle --jq .id` | Trust conjunction |
 | `repository_owner_id` | `gh api repos/phairow/money-noodle --jq .owner.id` | Trust conjunction |
@@ -71,10 +71,11 @@ cd infra/stacks/bootstrap
 tofu init -backend=false
 
 cat > bootstrap.tfvars <<'EOF'
-project_id          = "..."
-state_bucket_prefix = "..."
-repository_id       = "..."
-repository_owner_id = "..."
+project_id            = "..."
+billing_account_id    = "..."
+state_bucket_prefix   = "..."
+repository_id         = "..."
+repository_owner_id   = "..."
 EOF
 
 tofu plan  -var-file=bootstrap.tfvars -out=bootstrap.tfplan
@@ -87,7 +88,10 @@ tofu apply bootstrap.tfplan
 
 This creates: the four state buckets (versioned, private, non-force-destroyable),
 the deployer service account, the workload identity pool and its GitHub provider,
-and the impersonation binding. Nothing else.
+the impersonation binding, and a billing-account `roles/billing.costsManager`
+binding for that deployer. The maintainer running bootstrap therefore needs
+permission to set billing-account IAM. The grant manages cost visibility and
+budgets; it does not administer the billing account or payment instruments.
 
 ## Step 3 — migrate bootstrap's own state into the bucket it created
 
@@ -125,9 +129,14 @@ Set as GitHub **repository variables**, never secrets:
 | `GCP_WORKLOAD_IDENTITY_PROVIDER` | from the output above |
 | `GCP_DEPLOYER_SERVICE_ACCOUNT` | from the output above |
 | `GCP_PROJECT_ID` | the project id |
+| `GCP_PROJECT_NUMBER` | the numeric project number |
 | `GCP_STATE_BUCKET_PREFIX` | the prefix chosen in step 2 |
 | `GCP_REGISTRY_HOST` | `us-west1-docker.pkg.dev` |
 | `GCP_REGISTRY_REPOSITORY` | `platform` |
+| `GCP_BILLING_ACCOUNT_ID` | the billing account id |
+| `GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON` | JSON array of budget notification addresses |
+| `INFRA_APPLY_AUTHORIZED` | `false` until both authorization gates below pass |
+| `PRODUCTION_ENVIRONMENT_REVIEWERS_VERIFIED` | `false` until required-reviewer protection is observed |
 
 None of these is a credential. The workload identity provider name is an
 identifier; holding it grants nothing without a token that satisfies the trust
@@ -144,7 +153,23 @@ proving the pipeline *can* deploy proves nothing about who else can.
 3. A different workflow in this repository fails to obtain credentials.
 4. `gh api /repos/phairow/money-noodle/actions/secrets` lists no provider key.
 
-Only after these pass should `INFRA_APPLY_AUTHORIZED` be set to `true`.
+Then verify the `production` GitHub environment actually has a required-reviewer
+rule; naming an environment in YAML does not create that rule:
+
+```sh
+gh api repos/phairow/money-noodle/environments/production \
+  --jq '.protection_rules'
+```
+
+Record the dated API evidence in the authorized apply issue. Set
+`PRODUCTION_ENVIRONMENT_REVIEWERS_VERIFIED=true` only when the response contains
+the intended required reviewer and self-review policy. If the current private
+repository plan does not offer that protection, leave the variable false: apply
+and rollback remain mechanically blocked until the maintainer changes the plan
+or explicitly revises the accepted gate.
+
+Only after the negative federation tests and environment check pass should
+`INFRA_APPLY_AUTHORIZED` be set to `true`.
 
 ## Step 6 — apply the remaining stacks through the pipeline
 
@@ -152,9 +177,12 @@ In order: `platform`, then `api`, then `web`. The API deploys before the web
 because the web reads the API's published origin, and a compatible API must exist
 first.
 
-Each is a `workflow_dispatch` run of the delivery workflow with `action: apply`,
-the stack named, and the confirmation phrase typed. The web and API additionally
-require an `image_digest` and `artifact_version` from a completed publish run.
+Each is first a `workflow_dispatch` plan and then an apply with the stack named
+and, for apply, the confirmation phrase typed. The web and API additionally
+require an `image_digest` and full `source_commit` from the same completed
+publish run. Delivery verifies the digest's signed provenance against that exact
+source commit and signer workflow; the commit is also the artifact version
+reported by this first slice.
 
 ## Step 7 — prove state is recoverable
 

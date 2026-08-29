@@ -41,9 +41,11 @@ variable "deployer_roles" {
     "roles/run.developer",           # deploy revisions and reassign traffic; not run.admin
     "roles/artifactregistry.writer", # push images
     "roles/iam.serviceAccountUser",  # act as the runtime identities it deploys
-    "roles/secretmanager.admin",     # create and manage secret containers
-    "roles/logging.admin",           # configure log buckets, sinks, and retention
-    "roles/monitoring.editor",       # notification channels and dashboards
+    # No Secret Manager administrative role: it could grant the deployer
+    # secretAccessor and collapse the custody boundary. Revisit with the first
+    # real secret and a separate policy-administration design.
+    "roles/logging.admin",     # configure log buckets, sinks, and retention
+    "roles/monitoring.editor", # notification channels and dashboards
     "roles/serviceusage.serviceUsageAdmin",
   ]
 
@@ -51,13 +53,14 @@ variable "deployer_roles" {
     condition = length([
       for role in var.deployer_roles : role
       if contains([
-        "roles/run.developer",
+        "roles/owner",
         "roles/editor",
         "roles/iam.securityAdmin",
         "roles/resourcemanager.projectIamAdmin",
+        "roles/secretmanager.admin",
       ], role)
     ]) == 0
-    error_message = "The deployer must not hold owner, editor, or IAM-administration roles. ADR-0005 rejects broad administrative rights for convenience."
+    error_message = "The deployer must not hold owner, editor, Secret Manager admin, or IAM-administration roles. ADR-0005 rejects broad or self-escalating administrative rights for convenience."
   }
 
   validation {
@@ -69,6 +72,17 @@ variable "deployer_roles" {
       ], role)
     ]) == 0
     error_message = "The deployer must not be able to read secret values that runtime workloads consume (ADR-0005). It manages containers, not contents."
+  }
+}
+
+variable "billing_account_id" {
+  description = "Billing account on which bootstrap grants the deployer only budget-management authority. Supplied by the maintainer; never committed."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = can(regex("^[0-9A-F]{6}-[0-9A-F]{6}-[0-9A-F]{6}$", var.billing_account_id))
+    error_message = "billing_account_id must use the documented Google Cloud billing account format."
   }
 }
 

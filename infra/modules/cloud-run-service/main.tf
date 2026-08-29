@@ -194,11 +194,6 @@ resource "google_cloud_run_v2_service" "service" {
       condition     = startswith(var.image_digest, "sha256:")
       error_message = "Cloud Run services deploy by digest. A mutable tag breaks attribution and makes rollback ambiguous (ADR-0005)."
     }
-
-    precondition {
-      condition     = !(var.rollback_revision != null && var.revision_suffix != null)
-      error_message = "A rollback reassigns traffic to an existing revision. Naming a new revision at the same time would rebuild rather than roll back."
-    }
   }
 }
 

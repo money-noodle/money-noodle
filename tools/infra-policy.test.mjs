@@ -324,16 +324,48 @@ test('runtime identities are distinct per service and hold no registry access', 
 test('the deployer cannot read secret values or hold administrative roles', () => {
   const bootstrap = read(join(infraRoot, 'stacks', 'bootstrap', 'variables.tf'));
 
-  for (const role of ['roles/owner', 'roles/editor', 'roles/secretmanager.secretAccessor']) {
+  for (const role of [
+    'roles/owner',
+    'roles/editor',
+    'roles/secretmanager.admin',
+    'roles/secretmanager.secretAccessor',
+  ]) {
     assert.ok(
       !new RegExp(`default\\s*=\\s*\\[[^\\]]*"${role.replace('.', '\\.')}"`, 's').test(bootstrap),
       `the deployer must not hold ${role} (ADR-0005)`,
     );
   }
 
-  assert.ok(
-    bootstrap.includes('roles/secretmanager.secretAccessor'),
-    'the deployer role validation must explicitly reject secretAccessor rather than merely omitting it',
+  for (const rejected of [
+    'roles/owner',
+    'roles/secretmanager.admin',
+    'roles/secretmanager.secretAccessor',
+  ]) {
+    assert.ok(
+      bootstrap.includes(rejected),
+      `the deployer role validation must explicitly reject ${rejected} rather than merely omitting it`,
+    );
+  }
+});
+
+test('budget management has an explicit billing-account authority boundary', () => {
+  const bootstrapMain = read(join(infraRoot, 'stacks', 'bootstrap', 'main.tf'));
+  const bootstrapVariables = read(join(infraRoot, 'stacks', 'bootstrap', 'variables.tf'));
+
+  assert.match(
+    bootstrapMain,
+    /resource\s+"google_billing_account_iam_member"\s+"deployer_budget_manager"/,
+    'a project IAM role cannot authorize budget creation on a billing account',
+  );
+  assert.match(
+    bootstrapMain,
+    /role\s*=\s*"roles\/billing\.costsManager"/,
+    'the deployer billing grant must be limited to cost and budget management',
+  );
+  assert.match(
+    bootstrapVariables,
+    /variable\s+"billing_account_id"/,
+    'bootstrap must receive the billing account whose narrow budget grant it owns',
   );
 });
 

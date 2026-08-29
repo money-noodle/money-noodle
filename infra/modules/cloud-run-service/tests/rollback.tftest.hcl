@@ -4,7 +4,9 @@
 # requiring no rebuild and no change to the other service. These tests pin that
 # the planned configuration actually does that, rather than quietly creating a
 # new revision from an older digest — which would look like a rollback in a
-# changelog and behave like a deployment in production.
+# changelog and behave like a deployment in production. The workflow reloads
+# the currently configured artifact and revision suffix from state so the
+# template stays byte-for-byte desired while only traffic changes.
 
 mock_provider "google" {}
 
@@ -48,6 +50,7 @@ run "a_rollback_reassigns_traffic_without_creating_a_revision" {
 
   variables {
     rollback_revision = "example-service-build-41"
+    revision_suffix   = "build-42"
   }
 
   assert {
@@ -72,9 +75,19 @@ run "a_rollback_reassigns_traffic_without_creating_a_revision" {
   }
 
   assert {
-    condition     = google_cloud_run_v2_service.service.template[0].revision == null
-    error_message = "A rollback must not name a new revision; naming one would rebuild rather than reassign."
+    condition     = google_cloud_run_v2_service.service.template[0].revision == "example-service-build-42"
+    error_message = "A rollback must preserve the currently configured template revision while traffic moves to the prior revision."
   }
+}
+
+run "an_invalid_rollback_revision_is_rejected" {
+  command = plan
+
+  variables {
+    rollback_revision = "not/a/revision"
+  }
+
+  expect_failures = [var.rollback_revision]
 }
 
 run "the_running_image_is_referenced_by_digest" {

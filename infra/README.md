@@ -85,9 +85,9 @@ Every check here is static. `init` runs with `-backend=false`, and every
 
 ## Testing
 
-47 OpenTofu test assertions run offline across the trust policy, service
-contract, rollback behaviour, state durability, budget, and federation modules.
-30 static guards run in the repository gate. Nearly all are **negative** tests: a
+46 OpenTofu test runs execute offline across the trust policy, service contract,
+rollback behaviour, bootstrap defaults, state durability, budget, and federation
+modules. 34 static guards run in the repository gate. Nearly all are **negative** tests: a
 test proving the pipeline can deploy proves nothing about who else can.
 
 The trust policy is the piece worth understanding. `modules/delivery-trust`
@@ -107,9 +107,26 @@ accidental reason is a denial that disappears with the next edit.
   v1 product. Interim validation targets `*.run.app`. A guard fails the build if
   a DNS, domain-mapping, load-balancer, or serverless-NEG resource appears.
 - **Any long-lived cloud credential.** Federation only.
-- **Any secret value.** The store is declared empty.
+- **Any secret value.** The store is declared empty. The deployer has no Secret
+  Manager administrative role because that role could grant itself value access;
+  policy administration is revisited with the first real secret.
 - **Any destroy path in automation.** Removing a resource is a reviewed code
   change.
+
+## Delivery input and rollback contract
+
+Provider operations remain skipped until the authorization job validates every
+account-specific stack input documented in `bootstrap.md`. Service plans and
+applies take an image digest plus the full source commit from one publish run;
+`gh attestation verify --source-digest` binds them before OpenTofu runs. A traffic
+rollback reloads digest, artifact version, source commit, and configured revision
+suffix from remote state, verifies that artifact again, and applies a saved plan.
+This preserves the current revision template while moving traffic to a named
+prior revision.
+
+The bootstrap gives the deployer `roles/billing.costsManager` on exactly the
+selected billing account because project IAM cannot create a billing-account
+budget. It grants no billing administration or payment authority.
 
 ## Outstanding before an apply can be trusted
 
