@@ -46,6 +46,15 @@ function countThreshold(label: string, current: number, required: number): Senti
   return { label, current, required, met: current >= required, unit: 'count' };
 }
 
+/** A coverage row is met on its own ratio; hardcoding false reported 100% coverage as unmet. */
+function coverageThreshold(label: string, current: number, required: number): SentinelThresholdProgress {
+  return { label, current, required, met: current + 1e-12 >= required, unit: 'fraction' };
+}
+
+/** Any arm clearing its own counts opens a review for the instrument; the report owns that judgement. */
+const anyArmUnlocked = (tracks: { candidates: { reviewUnlocked: boolean }[] }[]): boolean =>
+  tracks.some((track) => track.candidates.some((candidate) => candidate.reviewUnlocked));
+
 export async function GET(request: NextRequest) {
   if (!isAuthenticatedRequest(request)) return NextResponse.json({ error: 'Authentication required.' }, { status: 401 });
   if (isStatelessDeployment()) return NextResponse.json({ error: STATELESS_WORKER_MESSAGE }, { status: 503 });
@@ -84,8 +93,9 @@ export async function GET(request: NextRequest) {
         if (limits) thresholds = [
           countThreshold('Complete windows', windows, limits.windows),
           countThreshold('Divergent windows', divergent, limits.divergentWindows),
-          { label: 'Cycle coverage', current: Math.min(...tracks.map((track) => track.coverage ?? 0)), required: limits.coverage, met: false, unit: 'fraction' },
+          coverageThreshold('Cycle coverage', Math.min(...tracks.map((track) => track.coverage ?? 0)), limits.coverage),
         ];
+        reviewUnlocked = anyArmUnlocked([exit.value.tracks.live, exit.value.tracks.paper]);
       }
 
       if (descriptor.id === 'maker-restriction-sentinel-v1' && maker.status === 'fulfilled') {
@@ -100,6 +110,7 @@ export async function GET(request: NextRequest) {
         });
         const windows = Math.max(...tracks.map((track) => Math.max(0, ...track.arms.map((arm) => arm.windows))), 0);
         if (limits) thresholds = [countThreshold('Complete windows', windows, limits.windows)];
+        reviewUnlocked = anyArmUnlocked([maker.value.tracks.live, maker.value.tracks.paper]);
       }
 
       if (descriptor.id === 'maker-lifecycle-sentinel-v1' && lifecycle.status === 'fulfilled') {
@@ -116,8 +127,9 @@ export async function GET(request: NextRequest) {
         if (limits) thresholds = [
           countThreshold('Complete windows', windows, limits.windows),
           countThreshold('Divergent windows', divergent, limits.divergentWindows),
-          { label: 'Observation coverage', current: Math.min(...tracks.map((track) => track.coverage ?? 0)), required: limits.coverage, met: false, unit: 'fraction' },
+          coverageThreshold('Observation coverage', Math.min(...tracks.map((track) => track.coverage ?? 0)), limits.coverage),
         ];
+        reviewUnlocked = anyArmUnlocked([lifecycle.value.tracks.live, lifecycle.value.tracks.paper]);
       }
 
       if (descriptor.id === 'edge-spike-sentinel-v1' && spike.status === 'fulfilled') {
@@ -151,6 +163,9 @@ export async function GET(request: NextRequest) {
 
       return {
         ...descriptor,
+        // A collecting instrument whose arms have cleared their counts is awaiting a maintainer, not still
+        // collecting. The registry constant cannot know that; the projection can.
+        lifecycle: descriptor.lifecycle === 'collecting' && reviewUnlocked ? 'locked-for-review' : descriptor.lifecycle,
         openedAt,
         reviewUnlocked,
         thresholds,

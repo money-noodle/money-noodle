@@ -10,7 +10,8 @@
 import { clusterByWindow } from './action-counterfactual';
 import { MAX_ENTRY_PRICE } from './prediction-policy';
 import { estimatePaperFill, venueFeeCents } from './venue-fill';
-import type { ExecutionMode, PaperOrder, PositionSide } from './types';
+import { EDGE_BINARY_BUY } from './strategy-registry';
+import type { ExecutionMode, PaperOrder, PositionSide, StrategyId } from './types';
 
 export const MAKER_LIFECYCLE_SENTINEL_VERSION = 'maker-lifecycle-sentinel-v1';
 export const MAKER_LIFECYCLE_CUTOVER_SECONDS = 2;
@@ -67,6 +68,8 @@ export interface MakerLifecycleSentinel {
     selectedBid: number;
     selectedAsk: number;
     bestAskDepth?: number;
+    /** Queue position ahead of us at the touch. Named as decision-time evidence by DEC-20260828-02. */
+    displayedAhead?: number;
   };
   productionFilled: boolean;
   productionQuantity: number;
@@ -77,12 +80,17 @@ export interface MakerLifecycleSentinel {
 
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 
-/** Floors onto the venue ladder, then applies the absolute production ceiling. Never rounds a price up past it. */
+/**
+ * Reaches the cushion tick by index rather than by repeated addition or `toFixed` rounding (AGENTS.md §1):
+ * `toFixed` rounds half-up, which turned an off-ladder ask into three ticks of cushion instead of two.
+ * Floors onto the ladder, then applies the absolute production ceiling; never rounds a price up past it.
+ */
 export function makerLifecycleTakerLimit(ask: number): number | null {
   if (!finite(ask) || ask <= 0) return null;
   if (ask > MAX_ENTRY_PRICE + 1e-9) return null;
-  const advanced = ask + MAKER_LIFECYCLE_CUSHION_TICKS * MAKER_LIFECYCLE_TICK;
-  return Math.min(MAX_ENTRY_PRICE, Number(advanced.toFixed(2)));
+  const ticksFromZero = Math.floor(ask / MAKER_LIFECYCLE_TICK + 1e-9) + MAKER_LIFECYCLE_CUSHION_TICKS;
+  const advanced = ticksFromZero * MAKER_LIFECYCLE_TICK;
+  return Math.min(MAX_ENTRY_PRICE, advanced);
 }
 
 /**
@@ -124,6 +132,7 @@ export function makerLifecycleSentinelFromOrder(order: PaperOrder, recordedAt: s
     selectedBid: poll.selectedBid!,
     selectedAsk: poll.selectedAsk!,
     bestAskDepth: finite(poll.bestAskDepth) ? poll.bestAskDepth : undefined,
+    displayedAhead: finite(poll.displayedAhead) ? poll.displayedAhead : undefined,
   };
 
   const arms: MakerLifecycleArmDecision[] = MAKER_LIFECYCLE_CANDIDATE_IDS.map((candidateId) => {
@@ -136,7 +145,8 @@ export function makerLifecycleSentinelFromOrder(order: PaperOrder, recordedAt: s
       ? estimatePaperFill(stakeLimitCents, limitPrice, 'kalshi') : null;
     if (!size) return { candidateId, acquired: false, noTradeReason: 'cannot-size' };
     // A replayed fill never exceeds the depth actually displayed at the touch.
-    if (cutover.bestAskDepth !== undefined && cutover.bestAskDepth + 1e-9 < size.quantity) {
+    // Book levels carry the 1e-6 tolerance, not the 1e-9 used for prices and cents (AGENTS.md §1).
+    if (cutover.bestAskDepth !== undefined && cutover.bestAskDepth + 1e-6 < size.quantity) {
       return { candidateId, acquired: false, noTradeReason: 'insufficient-depth' };
     }
     return {
@@ -178,13 +188,28 @@ export interface MakerLifecycleSentinelReport {
 }
 
 /** Production's realised result on the same row, in the same whole-cent budget view the arms use. */
-function productionResult(sentinel: MakerLifecycleSentinel, order: PaperOrder | undefined): { stake: number; pnl: number } {
-  if (!sentinel.productionFilled || !order) return { stake: 0, pnl: 0 };
+function productionResult(sentinel: MakerLifecycleSentinel, order: PaperOrder | undefined): { stake: number; pnl: number } | null {
+  // No order means no baseline. Treating it as "production did not trade" would invert the comparison.
+  if (!order) return null;
+  if (!sentinel.productionFilled) return { stake: 0, pnl: 0 };
   return { stake: order.stakeCents ?? 0, pnl: order.pnlCents ?? 0 };
 }
 
-function armResult(sentinel: MakerLifecycleSentinel, decision: MakerLifecycleArmDecision): { stake: number; pnl: number } {
-  if (!decision.acquired || !sentinel.outcome || decision.quantity === undefined) return { stake: 0, pnl: 0 };
+/**
+ * Null means the row leaves the scored cohort rather than counting as a decision not to trade.
+ *
+ * Two cases must not be scored as abstention. A maker that filled before the cutover was never reached by
+ * the rule, so the arm inherits production's fill and is identical to it — scoring it as no-trade made both
+ * candidates look like "never trade" on exactly the fast fills that pay. And an absent quote is unavailable
+ * evidence, already counted against coverage; scoring it too would penalize an arm for a data gap.
+ */
+function armResult(
+  sentinel: MakerLifecycleSentinel, decision: MakerLifecycleArmDecision, production: { stake: number; pnl: number },
+): { stake: number; pnl: number } | null {
+  if (!sentinel.outcome) return null;
+  if (decision.noTradeReason === 'no-quote-at-cutover') return null;
+  if (decision.noTradeReason === 'filled-before-cutover') return production;
+  if (!decision.acquired || decision.quantity === undefined) return { stake: 0, pnl: 0 };
   const cost = decision.costCents ?? 0;
   const fee = decision.feeCents ?? 0;
   const payout = sentinel.outcome === sentinel.side ? Math.floor(decision.quantity * 100 + 1e-9) : 0;
@@ -192,30 +217,38 @@ function armResult(sentinel: MakerLifecycleSentinel, decision: MakerLifecycleArm
 }
 
 export function buildMakerLifecycleSentinelReport(input: {
-  startedAt: string; sentinels: MakerLifecycleSentinel[]; orders: PaperOrder[];
+  startedAt: string; sentinels: MakerLifecycleSentinel[]; orders: PaperOrder[]; strategyId?: StrategyId;
 }): MakerLifecycleSentinelReport {
   const byOrderId = new Map(input.orders.map((order) => [order.id, order]));
+  const strategyId = input.strategyId ?? EDGE_BINARY_BUY;
   const track = (mode: ExecutionMode): MakerLifecycleTrackReport => {
-    const rows = input.sentinels.filter((sentinel) => sentinel.executionMode === mode);
+    // Money aggregations are re-narrowed by strategy (AGENTS.md §4); pooling tracks would not be separable.
+    const rows = input.sentinels.filter((sentinel) => sentinel.executionMode === mode && sentinel.strategyId === strategyId);
     const resolved = rows.filter((sentinel) => sentinel.outcome);
     const unavailable = rows.filter((sentinel) => !sentinel.cutover);
-    const production = resolved.map((sentinel) => ({ sentinel, ...productionResult(sentinel, byOrderId.get(sentinel.orderId)) }));
 
     const arm = (candidateId: MakerLifecycleCandidateId | 'production'): MakerLifecycleArmReport => {
-      const scored = resolved.map((sentinel) => {
-        const own = candidateId === 'production'
-          ? productionResult(sentinel, byOrderId.get(sentinel.orderId))
-          : armResult(sentinel, sentinel.arms.find((item) => item.candidateId === candidateId)
-            ?? { candidateId: candidateId as MakerLifecycleCandidateId, acquired: false });
-        const base = production.find((item) => item.sentinel.id === sentinel.id) ?? { stake: 0, pnl: 0 };
-        return { sentinel, own, divergent: own.pnl !== base.pnl || own.stake !== base.stake, incremental: own.pnl - base.pnl };
+      const scored = resolved.flatMap((sentinel) => {
+        const base = productionResult(sentinel, byOrderId.get(sentinel.orderId));
+        if (!base) return [];
+        if (candidateId === 'production') {
+          return [{ sentinel, own: base, base, divergent: false, incremental: 0 }];
+        }
+        const decision = sentinel.arms.find((item) => item.candidateId === candidateId);
+        if (!decision) return [];
+        const own = armResult(sentinel, decision, base);
+        // Null leaves the cohort: unavailable evidence is never scored as a decision.
+        if (!own) return [];
+        return [{ sentinel, own, divergent: own.pnl !== base.pnl || own.stake !== base.stake, incremental: own.pnl - base.pnl, base }];
       });
       const divergent = scored.filter((item) => item.divergent);
       const cents = clusterByWindow(divergent, (item) => item.sentinel.closesAt, (item) => item.incremental);
+      // Normalized against the PRODUCTION stake, matching the sibling instruments: an abstention row has no
+      // stake of its own, so dividing by it turned raw cents into a fraction and inflated the mean.
       const returns = clusterByWindow(
-        divergent.filter((item) => item.own.stake > 0 || item.incremental !== 0),
+        divergent.filter((item) => item.base.stake > 0),
         (item) => item.sentinel.closesAt,
-        (item) => item.incremental / Math.max(1, item.own.stake),
+        (item) => item.incremental / item.base.stake,
       );
       const windows = new Set(scored.map((item) => item.sentinel.closesAt)).size;
       return {
@@ -228,7 +261,7 @@ export function buildMakerLifecycleSentinelReport(input: {
         pnlCents: scored.reduce((sum, item) => sum + item.own.pnl, 0),
         incrementalMeanReturn: candidateId === 'production' ? null : returns.mean,
         incrementalStandardError: candidateId === 'production' ? null : returns.standardError,
-        // Counts alone never unlock a review; coverage and the family-wise correction are applied at review.
+        // Counts alone never unlock a review; the family-wise correction is applied at review.
         reviewUnlocked: candidateId !== 'production'
           && windows >= MAKER_LIFECYCLE_REVIEW_WINDOWS
           && cents.windows >= MAKER_LIFECYCLE_MINIMUM_DIVERGENT_WINDOWS
@@ -245,5 +278,6 @@ export function buildMakerLifecycleSentinelReport(input: {
       candidates: MAKER_LIFECYCLE_CANDIDATE_IDS.map(arm),
     };
   };
+
   return { sentinelVersion: MAKER_LIFECYCLE_SENTINEL_VERSION, startedAt: input.startedAt, tracks: { live: track('live'), paper: track('paper') } };
 }

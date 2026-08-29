@@ -2,7 +2,7 @@
 
 > **Document type:** Evaluation design
 > **Design status:** Accepted
-> **Implementation:** Not started
+> **Implementation:** Complete
 > **Created:** 2026-08-28
 > **Canonical requirements:** [`spec/policy-and-track-separation.md`](../spec/policy-and-track-separation.md)
 > **Decision record:** [`DEC-20260828-02`](../spec/decisions/decision-id-map.json)

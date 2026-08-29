@@ -113,11 +113,86 @@ describe('maker lifecycle sentinel', () => {
     expect(makerLifecycleSentinelFromOrder(order(series(0.5), { strategyId: undefined }), AT)).toBeNull();
   });
 
+  // Regression: the incremental return divided by the ARM's own stake, floored at 1 cent, so an abstention
+  // row reported a raw cent difference as a fraction -- one 30c row came out as -3000% per window.
+  it('normalizes the incremental return against the production stake, not the arm stake', () => {
+    const base = makerLifecycleSentinelFromOrder(order(series(0.5)), AT)!;
+    const report = buildMakerLifecycleSentinelReport({
+      startedAt: AT,
+      orders: [{ id: base.orderId, stakeCents: 30, pnlCents: 30 } as unknown as PaperOrder],
+      sentinels: [{ ...base, productionFilled: true, outcome: 'UP', resolvedAt: AT }],
+    });
+    const abandon = report.tracks.live.candidates.find((arm) => arm.candidateId === 'maker-expire2s-abandon-v1')!;
+    // Abstaining against a production winner forfeits exactly one stake: -1.0, never -30.
+    expect(abandon.incrementalMeanReturn).toBeCloseTo(-1, 6);
+  });
+
+  // Regression: a maker that filled before the cutover was never reached by the rule, so the arm inherits
+  // production's fill. Scoring it as an abstention made both arms look like "never trade" on fast fills.
+  it('gives an arm production\'s own result when the maker filled before the cutover', () => {
+    const early = makerLifecycleSentinelFromOrder(order(series(0.5, 0.6)), AT)!;
+    const report = buildMakerLifecycleSentinelReport({
+      startedAt: AT,
+      orders: [{ id: early.orderId, stakeCents: 30, pnlCents: 30 } as unknown as PaperOrder],
+      sentinels: [{ ...early, outcome: 'UP', resolvedAt: AT }],
+    });
+    for (const armReport of report.tracks.live.candidates) {
+      expect(armReport.pnlCents, armReport.candidateId).toBe(30);
+      expect(armReport.divergentWindows, armReport.candidateId).toBe(0);
+    }
+  });
+
+  // Regression: an absent quote is unavailable evidence, already counted against coverage. Scoring it as a
+  // decision not to trade penalized an arm for a data gap.
+  it('leaves an unavailable cycle out of the scored cohort entirely', () => {
+    const base = makerLifecycleSentinelFromOrder(order(series(0.5)), AT)!;
+    const blind = { ...base, id: 'blind', cutover: undefined, outcome: 'UP' as const, resolvedAt: AT, productionFilled: true,
+      arms: MAKER_LIFECYCLE_CANDIDATE_IDS.map((candidateId) => ({ candidateId, acquired: false, noTradeReason: 'no-quote-at-cutover' as const })) };
+    const report = buildMakerLifecycleSentinelReport({
+      startedAt: AT,
+      orders: [{ id: base.orderId, stakeCents: 30, pnlCents: 30 } as unknown as PaperOrder],
+      sentinels: [blind],
+    });
+    const abandon = report.tracks.live.candidates.find((arm) => arm.candidateId === 'maker-expire2s-abandon-v1')!;
+    expect(abandon.records).toBe(0);
+    expect(abandon.divergentWindows).toBe(0);
+    expect(report.tracks.live.unavailableRecords).toBe(1);   // still counted against coverage
+  });
+
+  it('drops a row whose order is missing rather than inverting the baseline', () => {
+    const base = makerLifecycleSentinelFromOrder(order(series(0.5)), AT)!;
+    const report = buildMakerLifecycleSentinelReport({
+      startedAt: AT, orders: [],
+      sentinels: [{ ...base, productionFilled: true, outcome: 'UP', resolvedAt: AT }],
+    });
+    for (const armReport of report.tracks.live.candidates) expect(armReport.records).toBe(0);
+  });
+
+  it('records the queue position named as decision-time evidence', () => {
+    const withQueue = [
+      { at: AT, event: 'accepted', limitPrice: 0.5, filledCount: 0, remainingCount: 0.6 },
+      { at: plus(2.1), event: 'management_quote', selectedBid: 0.49, selectedAsk: 0.5, filledCount: 0, remainingCount: 0.6, bestAskDepth: 200, displayedAhead: 17 },
+      { at: plus(13.7), event: 'terminal_fill', filledCount: 0, remainingCount: 0.6, restingDurationMs: 13_700 },
+    ] as unknown as PaperOrder['entryExecutionObservations'];
+    expect(makerLifecycleSentinelFromOrder(order(withQueue), AT)!.cutover?.displayedAhead).toBe(17);
+  });
+
+  it('reaches the cushion tick by index rather than by rounding', () => {
+    // toFixed rounds half-up: 0.615 + 0.02 became 0.64, three ticks of cushion instead of two.
+    expect(makerLifecycleTakerLimit(0.615)).toBeCloseTo(0.63, 10);
+    expect(makerLifecycleTakerLimit(0.5)).toBeCloseTo(0.52, 10);
+  });
+
   it('counts an unavailable cycle against coverage and scores settlement per arm', () => {
     const won = makerLifecycleSentinelFromOrder(order(series(0.5)), AT)!;
     const report = buildMakerLifecycleSentinelReport({
-      startedAt: AT, orders: [],
-      sentinels: [{ ...won, outcome: 'UP', resolvedAt: AT }, { ...won, id: 'x', cutover: undefined, arms: MAKER_LIFECYCLE_CANDIDATE_IDS.map((candidateId) => ({ candidateId, acquired: false })) }],
+      startedAt: AT,
+      // A baseline order is required: without one the row now drops out rather than inverting the comparison.
+      orders: [{ id: won.orderId, stakeCents: 0, pnlCents: 0 } as unknown as PaperOrder],
+      sentinels: [
+        { ...won, outcome: 'UP', resolvedAt: AT },
+        { ...won, id: 'x', cutover: undefined, arms: MAKER_LIFECYCLE_CANDIDATE_IDS.map((candidateId) => ({ candidateId, acquired: false, noTradeReason: 'no-quote-at-cutover' as const })) },
+      ],
     });
     expect(report.tracks.live.records).toBe(2);
     expect(report.tracks.live.unavailableRecords).toBe(1);
