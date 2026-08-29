@@ -1,19 +1,20 @@
 # First remote deployment composition
 
-> **Status:** Proposed
+> **Status:** Accepted decision basis and dated evidence
 > **Prepared:** 2026-08-29 by `cc-deployment-composition` (harness `claude-code`)
+> **Accepted:** 2026-08-29 by the maintainer
 > **Scope:** The first standing remote composition that runs the accepted `apps/web` and `services/platform-api` OCI artifacts in production
-> **Related plan:** GitHub issue #2, child work item #7
+> **Related plan:** GitHub issue #2, child work items #7 and #12
 > **Depends on:** [`../architecture/overview.md`](../architecture/overview.md), [`ADR-0003`](../architecture/decisions/ADR-0003-first-slice-runtime-and-deployment.md)
-> **Proposes:** [`ADR-0004`](../architecture/decisions/ADR-0004-first-remote-hosting-composition.md), [`ADR-0005`](../architecture/decisions/ADR-0005-delivery-trust-and-secret-custody.md), [`ADR-0006`](../architecture/decisions/ADR-0006-infrastructure-as-code-and-remote-state.md), [`ADR-0007`](../architecture/decisions/ADR-0007-first-telemetry-backend.md)
+> **Accepted decisions:** [`ADR-0004`](../architecture/decisions/ADR-0004-first-remote-hosting-composition.md), [`ADR-0005`](../architecture/decisions/ADR-0005-delivery-trust-and-secret-custody.md), [`ADR-0006`](../architecture/decisions/ADR-0006-infrastructure-as-code-and-remote-state.md), [`ADR-0007`](../architecture/decisions/ADR-0007-first-telemetry-backend.md)
 
-**Nothing here is accepted, and no provider account, project, resource, credential, domain, or billing relationship was created, inspected, or modified while preparing it.** This is a paper comparison built from published vendor documentation. Every quantitative claim is an **estimate** computed from **dated published list prices** against **assumed** workload parameters; none of it is measured, and no remote baseline exists yet.
+The maintainer accepted Composition A and the recorded M1-M9 choices on 2026-08-29. **No provider account, project, resource, credential, domain, billing relationship, or DNS record was created, inspected privately, or modified while preparing or accepting this document.** Public DNS inspection showed `noodle.money` delegated to Vercel nameservers; it remains untouched. This comparison is built from published vendor documentation. Every quantitative claim is an **estimate** computed from **dated published list prices** against **assumed** workload parameters; none is measured, and no remote baseline exists yet.
 
-## What must be decided
+## Accepted composition elements
 
-[`ADR-0003`](../architecture/decisions/ADR-0003-first-slice-runtime-and-deployment.md) accepted two independently deployable OCI images and deliberately left the provider composition open. The first slice therefore cannot be deployed until the following are chosen together, because they constrain one another:
+[`ADR-0003`](../architecture/decisions/ADR-0003-first-slice-runtime-and-deployment.md) accepted two independently deployable OCI images and deliberately left the provider composition open. The maintainer has now selected the following elements together because they constrain one another:
 
-| Element | Why it cannot be deferred |
+| Element | Why it was selected before implementation |
 | --- | --- |
 | Hosting runtime | Determines whether idle cost exists, how rollback works, and what the artifact contract must satisfy |
 | Container registry | Must be readable by the runtime's workload identity and writable by CI without a long-lived key |
@@ -231,21 +232,21 @@ Composition B has **two** compute figures because one billing semantic could not
 | **Scale ceilings** | Not binding at first-slice scale; substantially higher than B. | Max scale `50` instances and concurrency `80` per instance per container. Not binding for a status page, but it is a real ceiling to revisit. |
 | **Exit cost** | Composition-level only. Both run the same OCI images; the coupling lives in `infra/` and in CI, per R13. | Same. Cockpit's Grafana-stack lineage arguably makes telemetry the *easiest* element to move. |
 
-## Proposal
+## Accepted selection
 
-**Adopt Composition A (Google Cloud, Cloud Run), conditional on the maintainer's residency and domain decisions**, on the strength of one criterion above all others: it is the only candidate examined that lets the delivery pipeline authenticate **without a long-lived cloud credential at rest**. `delivery.md` states that preference directly, and a platform whose stated trajectory includes funded trading authority should not establish a standing long-lived key in a CI system as its founding delivery pattern. Revision-based per-service rollback is the secondary reason.
+**Composition A (Google Cloud, Cloud Run) is accepted in `us-west1`, with interim `*.run.app` validation and a later reviewed `noodle.money`/`api.noodle.money` load-balancer cutover**, on the strength of one criterion above all others: it is the only candidate examined that lets the delivery pipeline authenticate **without a long-lived cloud credential at rest**. `delivery.md` states that preference directly, and a platform whose stated trajectory includes funded trading authority should not establish a standing long-lived key in a CI system as its founding delivery pattern. Revision-based per-service rollback is the secondary reason.
 
 Accept the ALB's ≈`$18.25`/month as the cost of a production-grade public entry point, and treat it as the deliberate price of not shipping on a Preview-stage feature.
 
-### The strongest counterargument to this proposal
+### The strongest counterargument to this decision
 
 **It splits the platform across two providers on day one, and it charges roughly $18 a month for something the other candidate gives away, in exchange for a credential property that could be substantially mitigated on Scaleway anyway.**
 
-Concretely: `data-identity-observability.md` already accepts Scaleway object storage. Composition A therefore establishes a second provider account, a second IAM model, a second bill, and a second audit scope before the platform has a single user — permanently, since the object-storage decision is accepted. Meanwhile, the R4 gap in Composition B is real but not absolute: a narrowly scoped Scaleway IAM application key, restricted to a single project, rotated on a schedule, and read from GitHub's encrypted secret store, is a weaker posture than OIDC federation but is not an unmanaged secret. A maintainer who weights consolidation and EU residency above credential posture should choose Composition B, and that would be a defensible decision rather than a mistake. The proposal above is a judgement about which risk compounds faster, not a demonstration that Composition B fails a requirement.
+Concretely: `data-identity-observability.md` already accepts Scaleway object storage. Composition A therefore establishes a second provider account, a second IAM model, a second bill, and a second audit scope before the platform has a single user — permanently, since the object-storage decision is accepted. Meanwhile, the R4 gap in Composition B is real but not absolute: a narrowly scoped Scaleway IAM application key, restricted to a single project, rotated on a schedule, and read from GitHub's encrypted secret store, is a weaker posture than OIDC federation but is not an unmanaged secret. A maintainer who weights consolidation and EU residency above credential posture should choose Composition B, and that would be a defensible decision rather than a mistake. The accepted selection is a judgement about which risk compounds faster, not a demonstration that Composition B fails a requirement.
 
 A second, smaller counterargument: Composition B's compute could genuinely cost **€0** at this scale. If the warm-window billing question resolves in Scaleway's favour, Composition B is both cheaper and simpler, and the comparison shifts materially.
 
-### What would change the proposal
+### What would trigger reconsideration
 
 | Finding | Effect |
 | --- | --- |
@@ -255,32 +256,32 @@ A second, smaller counterargument: Composition B's compute could genuinely cost 
 | Measured evidence that the Scaleway warm window is billed | Confirms a ≈€44/month floor for B and widens A's lead |
 | Measured evidence that it is not billed | Makes B roughly €13/month cheaper than A at first-slice scale |
 
-## Proposed deployment topology
+## Accepted deployment topology
 
-All elements below are **proposed**, not accepted. They refine — and do not replace — the provider-neutral accepted deployment view in [`../architecture/overview.md`](../architecture/overview.md), which remains the authority for boundaries.
+The boundaries below are accepted. Their implementation and remote validation remain unproven until the infrastructure and delivery pipeline pass the ADR validation criteria.
 
 ```mermaid
 flowchart TB
-    subgraph github["GitHub — proposed"]
-        commit["Reviewed commit on main"]
+    subgraph github["GitHub"]
+        commit["Authorized commit<br/>v2 during rebuild; main after cutover"]
         actions["GitHub Actions workflow<br/>affected targets, SBOM, scans, attestation"]
         oidc["GitHub OIDC token<br/>short-lived, per job"]
     end
 
-    subgraph provider["Selected provider project — proposed"]
-        wif["Workload identity federation<br/>token exchange, no stored key"]
-        registry["Container registry<br/>immutable digests"]
-        iacstate["Remote IaC state<br/>encrypted, versioned, lock-protected"]
-        secrets["Managed secret store<br/>declared, empty in the first slice"]
+    subgraph provider["Maintainer-owned Google Cloud project"]
+        wif["Google Workload Identity Federation<br/>token exchange, no stored key"]
+        registry["Artifact Registry — us-west1<br/>immutable digests"]
+        iacstate["Separate GCS IaC state<br/>encrypted, versioned, lock-protected"]
+        secrets["Secret Manager<br/>declared, empty in the first slice"]
 
         subgraph entry["Public entry point"]
-            dnszone["Managed DNS zone"]
-            tls["Managed TLS certificate<br/>automatic renewal"]
+            dnszone["Cloud DNS zone<br/>deferred until domain cutover"]
+            tls["Global external load balancer<br/>managed TLS, deferred until cutover"]
         end
 
-        webSvc["Web service revision<br/>own identity, scale to zero"]
-        apiSvc["API service revision<br/>own identity, scale to zero"]
-        otel["Telemetry backend<br/>OTLP ingest"]
+        webSvc["Cloud Run web revision<br/>own identity, scale to zero"]
+        apiSvc["Cloud Run API revision<br/>own identity, scale to zero"]
+        otel["Google Cloud telemetry<br/>OTLP ingest"]
     end
 
     browser["Browser<br/>untrusted"]
@@ -304,7 +305,7 @@ flowchart TB
     apiSvc -. "OTLP" .-> otel
 ```
 
-## Proposed delivery trust boundaries
+## Accepted delivery trust boundaries
 
 ```mermaid
 flowchart LR
@@ -312,12 +313,12 @@ flowchart LR
         browser["Browser and user input"]
     end
 
-    subgraph ci["CI trust boundary — proposed"]
+    subgraph ci["CI trust boundary"]
         runner["GitHub-hosted runner<br/>ephemeral, per job"]
         token["OIDC token<br/>job-scoped, short-lived"]
     end
 
-    subgraph deploy["Deployment authority — proposed"]
+    subgraph deploy["Deployment authority"]
         exchange["Workload identity exchange<br/>subject and repository constrained"]
         deployer["Deployer principal<br/>may push images and apply IaC<br/>may not read tenant data"]
     end
@@ -327,7 +328,7 @@ flowchart LR
         apiId["API workload identity<br/>authorization boundary"]
     end
 
-    subgraph state["Operations state — proposed"]
+    subgraph state["Operations state"]
         iac["Remote IaC state<br/>encrypted, versioned, locked"]
         vault["Managed secret store"]
         tel["Redacted telemetry"]
@@ -348,11 +349,11 @@ flowchart LR
 
 The deployer principal is deliberately separate from both runtime identities. It may publish artifacts and change infrastructure; it may not serve requests. Neither runtime identity may write the registry or the IaC state. No identity in this diagram holds funded authority, because none exists in v2.
 
-## Proposed deployment and rollback sequence
+## Accepted deployment and rollback sequence
 
 ```mermaid
 sequenceDiagram
-    participant Merge as Reviewed merge to main
+    participant Merge as Authorized v2 commit / later main merge
     participant CI as GitHub Actions
     participant IdP as Workload identity exchange
     participant Reg as Artifact registry
@@ -431,21 +432,21 @@ Under R13 the application code carries **no** provider coupling in either compos
 
 Backup and restore for the first slice is narrow, because the slice is stateless: the only durable artefacts are the IaC state object, the image digests, and telemetry. All three must be versioned with tested restore, and the state backend's versioning must be enabled from the first apply, not retrofitted.
 
-## Maintainer decisions required
+## Maintainer decisions recorded
 
-None of the following can be resolved by an agent, and **no account, project, resource, domain, credential, or billing relationship was created or inspected** in preparing this document.
+These choices were recorded on 2026-08-29. Acceptance authorizes implementation through reviewed repository and pipeline changes; it is not authorization to copy credentials into the repository or perform an unreviewed manual deployment.
 
-| # | Decision | Why only the maintainer can make it | Blocks |
-| --- | --- | --- | --- |
-| M1 | **Which composition**, A or B — or a request to price Azure Container Apps as a third | It is a risk-weighting judgement between credential posture and provider consolidation, and consolidation interacts with the already-accepted Scaleway object-storage decision | Everything below |
-| M2 | **Provider account and organisation** ownership, and who holds the root/owner credential | Requires a legal and billing identity, and establishes the platform's ultimate recovery path | All resource creation |
-| M3 | **Billing account, payment method, and a monthly budget ceiling** with an alert threshold | Financial commitment; R14 requires a stated ceiling before spend can begin | First apply |
-| M4 | **Region**, and whether EU data residency is a requirement or a preference | Policy and legal question; it also narrows or eliminates Composition A's region set and is effectively pre-decided by Composition B | Region-scoped resources; also determines whether Cloud Storage Always Free applies, since it covers only `US-WEST1`, `US-CENTRAL1`, `US-EAST1` |
-| M5 | **Domain name ownership** and where the registrar lives | The domain must already be owned; DNS delegation cannot be arranged on the maintainer's behalf | DNS zone, TLS, public entry point |
-| M6 | **Public DNS layout** — the hostnames for web and API, and whether the API is publicly reachable at all in the first slice | Product and security decision; the accepted architecture permits a server-side-only API but does not require it | ALB or custom-domain configuration, CORS posture, generated client base URL |
-| M7 | **Interim entry point**, if the domain is not ready: ship on default provider URLs, or delay the first remote validation | Trades ≈`$18.25`/month and a production-grade URL against schedule | Whether the ALB is created in the first apply |
-| M8 | **GitHub plan**, given that `phairow/money-noodle` is private and Actions minutes are therefore charged against the plan allowance | Financial and account decision | CI budget |
-| M9 | Whether to accept **Pre-GA OTLP metric ingestion** in Composition A, or route metrics through a GA path | Risk acceptance on a Pre-GA offering | Telemetry configuration |
+| # | Accepted choice | Remaining implementation input |
+| --- | --- | --- |
+| M1 | Composition A: Google Cloud Run, Artifact Registry, GCS state, Secret Manager, and Google Cloud telemetry | Exact provider project identifiers are created or supplied during reviewed bootstrap |
+| M2 | The maintainer owns the provider account/organization and root recovery authority | Record the named recovery path outside Git; CI receives no owner credential |
+| M3 | USD 30 monthly ceiling with alerts at USD 15, USD 24, and USD 30 | Billing account ID and payment method stay outside Git |
+| M4 | `us-west1` (Oregon); EU residency is not required for this financially inert first slice | Revisit residency before tenant, personal, financial, or funded data |
+| M5 | The maintainer owns `noodle.money`; public DNS is currently delegated to Vercel and remains unchanged during interim validation | Confirm DNS control and registrar recovery before reviewed domain cutover |
+| M6 | Target web `noodle.money`; public API `api.noodle.money` | Final ALB records and CORS policy are implemented at cutover |
+| M7 | First remote validation uses default `*.run.app` URLs; ALB/domain cutover follows later | Record interim service URLs as non-secret typed configuration |
+| M8 | Keep the repository private on its current plan during the rebuild | GitHub Pro or a separately intentional public/open-source decision is required before protected `main` cutover; public visibility is not selected merely as a tooling workaround |
+| M9 | Accept Pre-GA OTLP metric ingestion for the first slice under ADR-0007's bounded-metadata and replaceability controls | Reassess launch stage and data classification before consequential signals |
 
 ## Unresolved constraints and validity threats
 
@@ -458,7 +459,7 @@ None of the following can be resolved by an agent, and **no account, project, re
 | U5 | Azure Container Apps per-second rates | **Not obtainable** — the primary pricing page rendered all rates as `$-` on 2026-08-29 | A credible third option was eliminated partly on unverifiable data |
 | U6 | Scaleway warm-standby rate for *containers* (the published `€0.000017`/GB-s figure is for *Functions*) | **Not located** for containers | Affects any future decision to keep instances warm on Composition B |
 | U7 | Actual request durations, memory footprints, and cold-start times for both images | **No image exists yet.** Every compute figure rests on assumed durations and allocations | This is the largest validity threat in the whole document: a 4× error in web request duration or memory allocation changes the compute lines by 4×. At first-slice scale both compositions stay inside their free tiers even under a 10× error, so the *ranking* is robust even though the *numbers* are not |
-| U8 | Whether the first slice's API is public | Depends on M6 | Changes the entry-point design and possibly the ALB rule count |
+| U8 | Whether the first slice's API is public | **Resolved:** the first status API is public at the interim Cloud Run URL and target `api.noodle.money` | Requires an explicit public ingress and future route-by-route default-deny controls |
 
 ### Honest labelling of this document
 

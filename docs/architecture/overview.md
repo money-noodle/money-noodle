@@ -17,23 +17,26 @@ It is intentionally not a complete platform decomposition. New domains, stores, 
 
 ### Current facts
 
-- The repository has selected pnpm workspaces and Nx, but no workspace manifests or project scaffolding exist.
+- The repository implements pnpm workspaces and Nx projects for the Next.js web, Fastify API, and generated OpenAPI client, with exact runtime/tool versions and a frozen lockfile.
+- CI remotely validates formatting, lint, types, tests/coverage, contracts, builds, dependencies, secrets, attested OCI images, SBOMs, and HIGH/CRITICAL image vulnerabilities.
 - TypeScript is the default, REST/OpenAPI is required, the API must remain interface-neutral, and deployable projects must build and deploy independently.
 - The web is a presentation client. It cannot become a worker, provider adapter, scheduler, data authority, or direct database client.
 - Production has no real-money authority. Simulation and funded concepts remain structurally separate when they are introduced.
 - The first standing remote environment is production; CI may create ephemeral resources, and there is no required persistent staging environment.
-- As of 2026-08-29, the current npm stable lines include Next.js 16.3 and React 19.2. Exact patches and integrity hashes must be rechecked and pinned during scaffolding.
+- The implemented foundation pins Node.js 22.22.0, pnpm 11.24.0, Nx 23.1.2, TypeScript 6.0.3, Next.js 16.3.3, React 19.2.8, and Fastify 5.12.1.
 
 ### Accepted direction
 
-- Node.js 22, at a release satisfying the selected pnpm/Nx requirements, is the first web/API runtime. The scaffold task pins one exact runtime across local, CI, and production builds.
+- Node.js 22.22.0 is the first web/API runtime across local checks, CI, and the digest-pinned production base image.
 - Next.js 16 App Router is the web framework line; React Server Components are an adapter/presentation mechanism, not a service boundary.
 - A Node.js TypeScript HTTP service using Fastify 5 is the separately deployable API adapter. Domain and application code do not depend on Fastify.
 - Both request-serving projects are packaged as provider-portable OCI images. A provider may run an image as a container or compatible serverless container without changing application boundaries.
 
-### Open decisions
+### Selected deployment composition and remaining open decisions
 
-The hosting provider, image registry, secret store, infrastructure-as-code tool, telemetry backend, public DNS layout, production rollback mechanism, and quantitative service objectives remain to be selected or measured. A dated comparison and a proposed composition for all of these except the quantitative objectives is in [`../operations/deployment-composition.md`](../operations/deployment-composition.md) with proposed records [`ADR-0004`](decisions/ADR-0004-first-remote-hosting-composition.md) through [`ADR-0007`](decisions/ADR-0007-first-telemetry-backend.md); none is accepted, so these decisions remain open. Identity, PostgreSQL provider, tenant schema ownership, and provider integrations are deliberately deferred because the first slice does not need them.
+The accepted first composition is Cloud Run and Artifact Registry in `us-west1`, GitHub OIDC workload-identity federation, OpenTofu with separate lock-protected GCS state, Secret Manager, and Google Cloud OpenTelemetry ingestion. First remote validation uses public `*.run.app` URLs; the target domain cutover is `noodle.money` plus public `api.noodle.money` through a managed load balancer. Existing Vercel DNS remains untouched until that separately reviewed cutover. See [`../operations/deployment-composition.md`](../operations/deployment-composition.md) and accepted [`ADR-0004`](decisions/ADR-0004-first-remote-hosting-composition.md) through [`ADR-0007`](decisions/ADR-0007-first-telemetry-backend.md).
+
+Quantitative service objectives remain open until dated remote evidence exists. Exact provider project, billing, and federation identifiers are bootstrap inputs, not architecture choices. Identity, PostgreSQL provider, tenant schema ownership, and provider integrations are deliberately deferred because the first slice does not need them.
 
 ## Accepted boundary
 
@@ -105,7 +108,7 @@ flowchart LR
     web["Money Noodle Web<br/>Next.js presentation"]
     api["Platform API<br/>interface-neutral authority"]
     mobile["Mobile / desktop / game<br/>future API clients"]
-    otel["OpenTelemetry collector/backend<br/>external, provider unselected"]
+    otel["Google Cloud telemetry backend<br/>OTLP, accepted external adapter"]
 
     person --> browser
     browser -->|HTTPS| web
@@ -151,29 +154,43 @@ Dependencies point inward: adapters depend on application/domain contracts. The 
 ```mermaid
 flowchart TB
     git["Reviewed repository commit"]
-    ci["GitHub Actions CI<br/>checks, SBOM, scans, artifact attestations"]
-    registry["Immutable artifact registry<br/>provider unselected"]
-    webImage["Web OCI image"]
-    apiImage["API OCI image"]
-    webService["Web service<br/>independent deployment and rollback"]
-    apiService["API service<br/>independent deployment and rollback"]
+    ci["GitHub Actions<br/>checks, scans, SBOM, provenance"]
+    oidc["GitHub OIDC token<br/>repository, workflow, ref constrained"]
+
+    subgraph gcp["Maintainer-owned Google Cloud project — us-west1"]
+        wif["Workload Identity Federation"]
+        registry["Artifact Registry<br/>immutable image digests"]
+        state["Separate versioned GCS state<br/>locking and restore"]
+        secrets["Secret Manager<br/>empty for first slice"]
+        webService["Cloud Run web<br/>own identity and revisions"]
+        apiService["Cloud Run API<br/>own identity and revisions"]
+        telemetry["Google Cloud telemetry<br/>OTLP ingestion"]
+    end
+
     browser["Browser"]
-    telemetry["OTel destination<br/>provider unselected"]
+    interim["Interim public *.run.app URLs"]
+    target["Later managed TLS/load balancer<br/>noodle.money + api.noodle.money"]
 
     git --> ci
-    ci --> webImage
-    ci --> apiImage
-    webImage --> registry
-    apiImage --> registry
+    ci --> oidc --> wif
+    wif --> registry
+    wif --> state
+    ci -->|push/deploy by digest| registry
     registry --> webService
     registry --> apiService
-    browser -->|HTTPS| webService
+    browser -->|HTTPS| interim
+    browser -. "reviewed domain cutover" .-> target
+    interim --> webService
+    interim --> apiService
+    target -.-> webService
+    target -.-> apiService
     webService -->|HTTPS + trace context| apiService
+    secrets -. "reachable, unused" .-> apiService
     webService -.-> telemetry
     apiService -.-> telemetry
 ```
 
-The pipeline deploys only affected projects. A contract change deploys in compatibility order: backward-compatible API first, then web; removal occurs only after all consumers no longer require the old field or operation.
+The pipeline deploys only affected projects. A contract change deploys in compatibility order: backward-compatible API first, then web; removal occurs only after all consumers no longer require the old field or operation. Existing Vercel DNS is outside this first validation and is unchanged.
 
 ### Trust boundaries
 
@@ -254,7 +271,7 @@ flowchart LR
 
 ## Source and deployment map
 
-These paths are accepted for scaffolding; only the documentation paths exist today.
+The workspace, projects, contracts, generated client, and container definitions below exist. Presentation/API adapters named for the vertical slice and `infra/` are created only in their owning implementation tasks.
 
 | Path | Project/deployment | Boundary and ownership |
 | --- | --- | --- |
@@ -269,7 +286,7 @@ These paths are accepted for scaffolding; only the documentation paths exist tod
 | `services/platform-api/src/adapters/http/` | API inbound adapter | Fastify composition, runtime validation, RFC 9457 problem mapping |
 | `services/platform-api/src/adapters/deployment/` | API outbound adapter | Safe attributable deployment metadata; no provider secrets |
 | `packages/platform-api-client/` | shared generated package | Generated TypeScript transport client consumed by interfaces |
-| `infra/` | future provider composition | Created only after provider/IaC decisions; web and API are separate modules/stacks |
+| `infra/` | accepted Google Cloud/OpenTofu composition, not yet created | Separate platform, web, and API stacks with independent state per ADR-0006 |
 | `docs/architecture/` | governed documentation | Current diagrams, decision records, and source/deployment map |
 
 Every created project receives a README declaring purpose, contracts, targets, dependencies, runtime, deployment unit, configuration, health checks, and owned data. Nx tags and lint rules enforce at least:
@@ -317,7 +334,7 @@ The detailed decision is in [`ADR-0002`](decisions/ADR-0002-openapi-and-generate
 
 ### Pipeline
 
-The scaffolding task should establish consistent Nx targets such as `format:check`, `lint`, `typecheck`, `test`, `contract`, `build`, and `container`; exact commands become authoritative only when implemented and documented. Pull requests run affected targets plus repository documentation/diagram checks. Contract changes additionally run generation-drift, API conformance, consumer compile, and backward-compatibility checks.
+The foundation implements root and Nx targets for format checks, lint, type checks, tests/coverage, contracts, builds, and containers; [`../engineering/standards.md`](../engineering/standards.md) owns the exact command contract. CI runs affected targets plus repository documentation/coordination, dependency, secret, provenance/SBOM, and image-vulnerability gates. Contract changes additionally run generation-drift, semantic lint, consumer compile, and backward-compatibility checks.
 
 Remote validation follows this order:
 
@@ -331,7 +348,7 @@ Remote validation follows this order:
 8. report deployment, artifact, config, health, smoke, and telemetry verification to the commit;
 9. roll back automatically when safe, otherwise halt with the declared recovery path.
 
-Provider-specific command names, quantitative latency thresholds, and rollback mechanics cannot be finalized until the hosting/IaC decision is accepted. Local checks alone cannot satisfy remote acceptance.
+Provider-specific command names become authoritative with the OpenTofu and delivery implementation. Quantitative latency thresholds remain unset until remote evidence exists. Cloud Run revision traffic assignment is the accepted rollback mechanism, but local checks alone cannot satisfy remote acceptance.
 
 ## Failure and evolution rules
 
@@ -351,7 +368,7 @@ Provider-specific command names, quantitative latency thresholds, and rollback m
 | Option | Benefits | Costs/risks | Decision |
 | --- | --- | --- | --- |
 | Next.js contains pages and canonical Route Handler API | One deployment and simple local calls | Violates independent deployment and interface-neutral API boundaries; web lifecycle and serverless limits leak into platform authority | Reject |
-| Separate Next.js web and one modular platform API | Small first graph, clear contract, independent rollout, future clients share one authority | Adds network/protocol failure and requires compatibility discipline | **Recommend** |
+| Separate Next.js web and one modular platform API | Small first graph, clear contract, independent rollout, future clients share one authority | Adds network/protocol failure and requires compatibility discipline | **Accept** |
 | Next.js web, BFF, API gateway, and multiple domain services immediately | Maximum physical separation | Premature deployments, contracts, latency, and operational burden before domain/data ownership exists | Defer until a boundary has evidence |
 | Browser calls the API directly for the first status read | Removes one server hop | Adds CORS/browser coupling and duplicates session/error handling before it is needed | Defer; use server-side generated client first |
 | GraphQL as the central client contract | Flexible client queries | Conflicts with accepted REST/OpenAPI direction and increases authorization/query-cost complexity | Reject |
@@ -365,17 +382,22 @@ On 2026-08-29 the maintainer accepted:
 2. Next.js 16 App Router, React 19, Node.js 22, and Fastify 5 as the first framework lines, with exact versions reverified and pinned during scaffolding;
 3. API-owned OpenAPI source, a generated TypeScript client package, and compatibility-first rollout;
 4. the public platform availability card as the first vertical slice, with no identity, database, or tenant behavior;
-5. portable OCI images as both deployment artifacts, including on a compatible serverless container platform;
-6. a bounded provider/IaC comparison before remote deployment because no provider stack was selected in this decision;
-7. exclusion of identity, PostgreSQL/schema work, jobs, simulation, and funded authority from the first slice;
-8. setting quantitative response-time, availability, and rollback acceptance only after dated remote baseline evidence exists.
+5. portable OCI images as both deployment artifacts;
+6. Google Cloud Run and Artifact Registry in `us-west1`, federated GitHub Actions trust, OpenTofu with GCS state, Secret Manager, and Google Cloud telemetry;
+7. a maintainer-owned provider account, USD 30 monthly ceiling with 50/80/100 percent alerts, and no EU-residency requirement for this first slice;
+8. interim public `*.run.app` validation, followed by a separately reviewed `noodle.money` and public `api.noodle.money` cutover that preserves existing Vercel DNS until authorized;
+9. keeping the repository private during the rebuild, with GitHub Pro or an intentional open-source decision required before protected-`main` cutover;
+10. accepting Pre-GA OTLP metric ingestion only under the financially inert first-slice controls in ADR-0007;
+11. exclusion of identity, PostgreSQL/schema work, jobs, simulation, and funded authority from the first slice; and
+12. setting quantitative response-time, availability, and rollback acceptance only after dated remote baseline evidence exists.
 
 ## Next decomposition
 
 Proceed through bounded dependent work:
 
-1. scaffold the pnpm/Nx command contract, project boundaries, canonical OpenAPI workflow, generated client, CI gates, and OCI builds without vertical-slice behavior;
-2. in a non-overlapping architecture/operations task, compare and select the initial hosting, registry, DNS, IaC, secret-store, telemetry, and rollback composition;
-3. after the scaffold and deployment composition are accepted, implement and remotely validate the platform availability slice.
+1. implement the status contract, generated client operation, API use case/adapters, web presentation adapter/card, failure behavior, health probes, and trace propagation;
+2. implement the accepted OpenTofu stacks and federated delivery workflow without touching existing Vercel DNS;
+3. deploy compatible API first and web second to interim `*.run.app` URLs, then validate health, normal and forced-failure smoke paths, trace correlation, budget alerting, and independent rollback;
+4. decide and execute the `noodle.money` cutover separately after interim evidence and protected-`main` prerequisites are satisfied.
 
-Shared plan #2 owns the work graph and integration order. No architecture acceptance by itself proves implementation or deployment.
+Shared plan #2 owns the work graph and integration order. Architecture acceptance does not itself prove implementation or deployment.
