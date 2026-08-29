@@ -1,15 +1,15 @@
 # First web/API architecture
 
-> **Status:** Proposed
+> **Status:** Accepted
+> **Accepted:** 2026-08-29 by the maintainer
 > **Scope:** First independently deployable Next.js web and interface-neutral API slice
-> **Decision authority:** Maintainer review is required before scaffolding or production implementation
 > **Related plan:** GitHub issue #2, child work item #4
 > **Reference evidence:** [`reference-assessment.md`](reference-assessment.md)
-> **Proposed decisions:** [`decisions/README.md`](decisions/README.md)
+> **Decisions:** [`decisions/README.md`](decisions/README.md)
 
 ## Purpose
 
-This proposal establishes the smallest current architecture that can prove Money Noodle's web/API, contract, trust, deployment, and observability boundaries without introducing identity, tenant data, a database, provider credentials, background work, simulation, or funded authority.
+This architecture establishes the smallest current boundary that can prove Money Noodle's web/API, contract, trust, deployment, and observability requirements without introducing identity, tenant data, a database, provider credentials, background work, simulation, or funded authority.
 
 It is intentionally not a complete platform decomposition. New domains, stores, jobs, and providers require their own accepted boundaries and diagrams before implementation.
 
@@ -24,22 +24,22 @@ It is intentionally not a complete platform decomposition. New domains, stores, 
 - The first standing remote environment is production; CI may create ephemeral resources, and there is no required persistent staging environment.
 - As of 2026-08-29, the current npm stable lines include Next.js 16.3 and React 19.2. Exact patches and integrity hashes must be rechecked and pinned during scaffolding.
 
-### Proposal assumptions
+### Accepted direction
 
 - Node.js 22, at a release satisfying the selected pnpm/Nx requirements, is the first web/API runtime. The scaffold task pins one exact runtime across local, CI, and production builds.
 - Next.js 16 App Router is the web framework line; React Server Components are an adapter/presentation mechanism, not a service boundary.
-- A Node.js TypeScript HTTP service, initially using Fastify 5, is the separately deployable API adapter. Domain and application code do not depend on Fastify.
+- A Node.js TypeScript HTTP service using Fastify 5 is the separately deployable API adapter. Domain and application code do not depend on Fastify.
 - Both request-serving projects are packaged as provider-portable OCI images. A provider may run an image as a container or compatible serverless container without changing application boundaries.
 
 ### Open decisions
 
-The maintainer still must accept or replace the proposed framework lines, first endpoint, hosting provider, image registry, secret store, infrastructure-as-code tool, telemetry backend, public DNS layout, and production rollback mechanism. Identity, PostgreSQL provider, tenant schema ownership, and provider integrations are deliberately deferred because the first slice does not need them.
+The hosting provider, image registry, secret store, infrastructure-as-code tool, telemetry backend, public DNS layout, production rollback mechanism, and quantitative service objectives remain to be selected or measured. Identity, PostgreSQL provider, tenant schema ownership, and provider integrations are deliberately deferred because the first slice does not need them.
 
-## Recommended boundary
+## Accepted boundary
 
 Create two deployable projects and one generated client package:
 
-| Project | Proposed path | Owns | Must not own |
+| Project | Path | Owns | Must not own |
 | --- | --- | --- | --- |
 | Web | `apps/web` | Next.js routes, rendering, accessibility, browser state, presentation mapping, web telemetry, server-only API-client composition | Canonical API behavior, database access, platform jobs, provider SDKs/secrets, funded or simulation authority |
 | Platform API | `services/platform-api` | HTTP authentication/authorization adapters when introduced, runtime validation, application use-case composition, public/private DTOs, API telemetry, its future explicitly owned schema | UI rendering, long-running work, provider automation, another service's tables, frontend-specific workflow state |
@@ -51,7 +51,7 @@ Next.js Route Handlers may support web-only session callbacks or a narrow same-o
 
 ## First vertical slice
 
-The proposed first user-visible capability is a public **platform availability card**:
+The accepted first user-visible capability is a public **platform availability card**:
 
 1. `services/platform-api` serves `GET /v1/platform/status` from a bounded application query.
 2. The canonical OpenAPI document defines the response and standard error envelope.
@@ -61,9 +61,9 @@ The proposed first user-visible capability is a public **platform availability c
 
 The endpoint is intentionally read-only, identity-free, tenant-free, database-free, and financially inert. It proves the cross-deployment contract, generated-client ownership, runtime validation, safe failure presentation, traces, independent artifacts, and remote smoke path before riskier capabilities exist.
 
-### Proposed public contract
+### Public contract boundary
 
-The exact schema is accepted with the OpenAPI change, but its semantic minimum is:
+The exact wire schema is finalized with the OpenAPI implementation, but its accepted semantic minimum is:
 
 - `state`: `available`, `degraded`, or `maintenance`;
 - `asOf`: UTC RFC 3339 source time;
@@ -81,7 +81,7 @@ Operational probes are separate from the public contract:
 
 ## Quality attributes for this slice
 
-| Attribute | Proposed acceptance |
+| Attribute | Acceptance |
 | --- | --- |
 | Independent delivery | Web and API build into separate immutable artifacts and can deploy or roll back without rebuilding the other when the OpenAPI compatibility range is unchanged. |
 | Contract compatibility | The API validates responses at runtime; generated output is reproducible; CI rejects ungenerated drift and incompatible changes to the accepted v1 contract. |
@@ -94,7 +94,7 @@ Operational probes are separate from the public contract:
 
 ## Visual architecture
 
-All elements below are **proposed** unless labeled external or future.
+All first-slice elements below are **accepted architecture** unless labeled external or future.
 
 ### System context
 
@@ -254,7 +254,7 @@ flowchart LR
 
 ## Source and deployment map
 
-These paths are proposed; only the documentation paths exist before scaffolding.
+These paths are accepted for scaffolding; only the documentation paths exist today.
 
 | Path | Project/deployment | Boundary and ownership |
 | --- | --- | --- |
@@ -282,7 +282,7 @@ Every created project receives a README declaring purpose, contracts, targets, d
 
 ## API and generated-client policy
 
-The detailed proposal is in [`ADR-0002`](decisions/ADR-0002-openapi-and-generated-client.md). In summary:
+The detailed decision is in [`ADR-0002`](decisions/ADR-0002-openapi-and-generated-client.md). In summary:
 
 - the API service owns one editable OpenAPI 3.1 document for v1;
 - public operations use the `/v1` URI prefix;
@@ -346,7 +346,7 @@ Provider-specific command names, quantitative latency thresholds, and rollback m
 | Future command requires external effect | API durably accepts intent and an isolated job/service performs it idempotently; no platform work is added to the web or synchronous API handler. |
 | Future tenant data is introduced | Default-deny authorization, explicit tenant context, composite tenant/resource ownership, storage isolation, and cross-tenant negative tests are required before release. |
 
-## Alternatives and recommendation
+## Alternatives and decision
 
 | Option | Benefits | Costs/risks | Decision |
 | --- | --- | --- | --- |
@@ -357,24 +357,25 @@ Provider-specific command names, quantitative latency thresholds, and rollback m
 | GraphQL as the central client contract | Flexible client queries | Conflicts with accepted REST/OpenAPI direction and increases authorization/query-cost complexity | Reject |
 | Provider-native functions without a portable service artifact | Potentially low idle cost | Couples framework and deployment before provider selection and can obscure local/CI parity | Reject as the architecture; a provider may run the OCI contract compatibly |
 
-## Maintainer decisions requested
+## Maintainer decisions recorded
 
-1. Accept separate `apps/web`, `services/platform-api`, and `packages/platform-api-client` boundaries?
-2. Accept Next.js 16 App Router, React 19, Node.js 22, and Fastify 5 as the first framework lines, with exact versions reverified and pinned during scaffolding?
-3. Accept API-owned OpenAPI source plus a generated TypeScript client package and compatibility-first rollout?
-4. Accept the public platform availability card as the first vertical slice, with no identity/database/tenant behavior?
-5. Accept portable OCI images as the build artifact for both deployments even if the selected provider runs them in a serverless container model?
-6. Select the initial hosting provider, registry, DNS layout, IaC tool, secret store, and telemetry backend, or authorize a bounded comparison task for them.
-7. Confirm that identity, PostgreSQL provider/schema, jobs, simulation, and funded authority remain excluded from the first slice.
-8. Set initial remote response-time, availability, and rollback acceptance after a baseline is measured; no unsupported number is proposed here.
+On 2026-08-29 the maintainer accepted:
 
-## Acceptance and next decomposition
+1. separate `apps/web`, `services/platform-api`, and `packages/platform-api-client` boundaries;
+2. Next.js 16 App Router, React 19, Node.js 22, and Fastify 5 as the first framework lines, with exact versions reverified and pinned during scaffolding;
+3. API-owned OpenAPI source, a generated TypeScript client package, and compatibility-first rollout;
+4. the public platform availability card as the first vertical slice, with no identity, database, or tenant behavior;
+5. portable OCI images as both deployment artifacts, including on a compatible serverless container platform;
+6. a bounded provider/IaC comparison before remote deployment because no provider stack was selected in this decision;
+7. exclusion of identity, PostgreSQL/schema work, jobs, simulation, and funded authority from the first slice;
+8. setting quantitative response-time, availability, and rollback acceptance only after dated remote baseline evidence exists.
 
-This architecture work is ready for maintainer review when:
+## Next decomposition
 
-- the overview, diagrams, source/deployment map, reference assessment, and ADR proposals are internally consistent;
-- documentation link and coordination tests pass;
-- unknowns above are visible and no proposal is mislabeled accepted;
-- shared plan #2 records the maintainer's accepted/rejected decisions and creates the next bounded work items.
+Proceed through bounded dependent work:
 
-After acceptance, the next serialized task should scaffold the pnpm/Nx command contract, project boundaries, canonical OpenAPI workflow, generated client, CI gates, and container builds without adding the vertical-slice behavior. Implementation and remote validation of the status slice follows only after that foundation passes.
+1. scaffold the pnpm/Nx command contract, project boundaries, canonical OpenAPI workflow, generated client, CI gates, and OCI builds without vertical-slice behavior;
+2. in a non-overlapping architecture/operations task, compare and select the initial hosting, registry, DNS, IaC, secret-store, telemetry, and rollback composition;
+3. after the scaffold and deployment composition are accepted, implement and remotely validate the platform availability slice.
+
+Shared plan #2 owns the work graph and integration order. No architecture acceptance by itself proves implementation or deployment.

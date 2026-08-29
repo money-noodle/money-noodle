@@ -1,7 +1,7 @@
 # ADR-0002: API-owned OpenAPI contract and generated client
 
-> **Status:** Proposed
-> **Date proposed:** 2026-08-29
+> **Status:** Accepted
+> **Date accepted:** 2026-08-29
 > **Owners:** Platform API owns the contract; interface projects own presentation mapping
 > **Related architecture:** [`../overview.md`](../overview.md)
 
@@ -11,7 +11,7 @@ Money Noodle requires versioned REST/OpenAPI contracts, runtime wire validation,
 
 Contract ownership must also support independent deployment: an API and consumer need a provable compatibility range and ordered rollout without rebuilding every project for an unchanged contract.
 
-## Proposed decision
+## Decision
 
 The platform API owns editable canonical OpenAPI 3.1 source at:
 

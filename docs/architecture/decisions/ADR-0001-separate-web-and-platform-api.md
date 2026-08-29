@@ -1,7 +1,7 @@
 # ADR-0001: Separate web and platform API deployments
 
-> **Status:** Proposed
-> **Date proposed:** 2026-08-29
+> **Status:** Accepted
+> **Date accepted:** 2026-08-29
 > **Owners:** Maintainer / platform foundation
 > **Related architecture:** [`../overview.md`](../overview.md)
 
@@ -11,7 +11,7 @@ Web is the first interface, but Money Noodle must also support mobile, desktop, 
 
 A Next.js application can host Route Handlers, but making those handlers the canonical platform API would tie every client and authority boundary to the web framework, web deployment lifecycle, and web scaling profile. Starting with many domain services would avoid that coupling but would invent data ownership and distributed failure before the first domain slice exists.
 
-## Proposed decision
+## Decision
 
 Use:
 

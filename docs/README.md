@@ -9,23 +9,21 @@
 | Product experience and capability boundaries | [`product/experience.md`](product/experience.md) |
 | Product vocabulary mappings | [`product/glossary.md`](product/glossary.md) |
 | Architecture and runtime standards | [`architecture/principles.md`](architecture/principles.md) |
+| First web/API architecture, diagrams, and source/deployment map | [`architecture/overview.md`](architecture/overview.md) |
+| Architecture decision index | [`architecture/decisions/README.md`](architecture/decisions/README.md) |
 | Data, telemetry, audit, identity, and authorization | [`architecture/data-identity-observability.md`](architecture/data-identity-observability.md) |
 | Engineering and testing | [`engineering/standards.md`](engineering/standards.md) |
 | Delivery and operations | [`operations/delivery.md`](operations/delivery.md) |
 | Version control and cutover | [`development/version-control.md`](development/version-control.md) |
 | Parallel planning, work claims, stale detection, and handoff | [`development/parallel-work.md`](development/parallel-work.md) |
 
-## Proposals and evidence under review
-
-These records are not current authority until the maintainer accepts their decisions:
+## Dated evidence
 
 | Record | Role |
 | --- | --- |
-| [`architecture/overview.md`](architecture/overview.md) | Proposed first independently deployable Next.js web/API architecture, diagrams, and source/deployment map |
-| [`architecture/decisions/README.md`](architecture/decisions/README.md) | Proposed architecture decision index |
 | [`architecture/reference-assessment.md`](architecture/reference-assessment.md) | Dated v1 and Portfolio Copilot reference evidence and independent reuse rationale |
 
-Add accepted specifications, current status, experiment index, and validation index here as they are created. When the first-slice proposal is accepted, move its overview and ADR index into the current authority map rather than leaving duplicate entries.
+Add accepted specifications, current status, experiment index, and validation index here as they are created.
 
 ## Document roles
 

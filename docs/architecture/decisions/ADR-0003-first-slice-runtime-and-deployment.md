@@ -1,7 +1,7 @@
 # ADR-0003: First slice runtime and deployment shape
 
-> **Status:** Proposed
-> **Date proposed:** 2026-08-29
+> **Status:** Accepted
+> **Date accepted:** 2026-08-29
 > **Owners:** Platform foundation
 > **Related architecture:** [`../overview.md`](../overview.md)
 
@@ -11,7 +11,7 @@ The first slice must validate a real web/API boundary without introducing unreso
 
 As of 2026-08-29, npm reports stable Next.js 16.3, React 19.2, Nx 23.1, and pnpm 11.24 lines. Nx and pnpm require a sufficiently recent Node.js 22 release. Version evidence from Money Noodle v1 is historical and is not reused as authority.
 
-## Proposed decision
+## Decision
 
 ### Framework/runtime lines
 
@@ -86,7 +86,7 @@ Rejected as the architecture contract. It may reduce platform work for one provi
 
 ### Keep API framework selection open through implementation
 
-Rejected. The scaffold needs a concrete adapter and build target. Fastify is proposed for a narrow Node HTTP adapter; replacing it before acceptance is inexpensive because inner layers are framework-free.
+Rejected. The scaffold needs a concrete adapter and build target. Fastify is accepted as a narrow Node HTTP adapter; replacing it later remains bounded because inner layers are framework-free.
 
 ### Use a long-running local development server as integrated validation
 
