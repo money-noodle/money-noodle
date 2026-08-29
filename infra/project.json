@@ -1,0 +1,33 @@
+{
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "name": "infra",
+  "projectType": "application",
+  "sourceRoot": "infra",
+  "tags": ["type:infrastructure", "scope:platform"],
+  "targets": {
+    "infra-fmt": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": ["default"],
+      "options": {
+        "command": "node tools/infra-check.mjs fmt"
+      }
+    },
+    "infra-validate": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": ["default"],
+      "options": {
+        "command": "node tools/infra-check.mjs validate"
+      }
+    },
+    "infra-test": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": ["default"],
+      "options": {
+        "command": "node tools/infra-check.mjs test"
+      }
+    }
+  }
+}

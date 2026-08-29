@@ -192,6 +192,81 @@ flowchart TB
 
 The pipeline deploys only affected projects. A contract change deploys in compatibility order: backward-compatible API first, then web; removal occurs only after all consumers no longer require the old field or operation. Existing Vercel DNS is outside this first validation and is unchanged.
 
+### Infrastructure stacks, state, and cross-stack contracts
+
+Implemented in `infra/` and **not applied**. Each stack owns its own state, so
+applying one cannot lock, mutate, or break another. Values cross a stack boundary
+only by reading a `contract_`-prefixed published output; a guard in
+`tools/infra-policy.test.mjs` fails the build if a stack reads anything else.
+
+```mermaid
+flowchart LR
+    subgraph bootstrapStack["stacks/bootstrap — applied once, by hand"]
+        deployer["Deployer service account"]
+        wif["Workload identity pool<br/>and GitHub provider"]
+        buckets["Four state buckets<br/>versioned, private"]
+    end
+
+    subgraph platformStack["stacks/platform"]
+        registry["Artifact Registry"]
+        budget["USD 30 budget<br/>50 / 80 / 100% alerts"]
+        secrets["Secret Manager boundary<br/>declared, empty"]
+        retention["Log retention"]
+    end
+
+    subgraph apiStack["stacks/api"]
+        apiSvc["Cloud Run API<br/>own runtime identity"]
+    end
+
+    subgraph webStack["stacks/web"]
+        webSvc["Cloud Run web<br/>own runtime identity"]
+    end
+
+    bootstrapStack -->|contract_project_id<br/>contract_region<br/>contract_deployer_*| platformStack
+    platformStack -->|contract_registry_url<br/>contract_telemetry_endpoint| apiStack
+    platformStack -->|contract_registry_url<br/>contract_telemetry_endpoint| webStack
+    apiStack -->|contract_service_uri| webStack
+
+    buckets -. "separate state per stack" .-> platformStack
+    buckets -. .-> apiStack
+    buckets -. .-> webStack
+```
+
+The web reads the API's origin, never the reverse. That one-directional
+dependency is what lets the API be applied while the web is running.
+
+### Delivery gates
+
+Provider authority is reached through two independent gates, then three further
+authorization gates before anything is applied.
+
+```mermaid
+flowchart TB
+    job["GitHub Actions job<br/>presents per-job OIDC token"]
+    cond{"Gate 1 — attribute condition<br/>repository + immutable ids +<br/>branch ref + event + exact workflow"}
+    pset{"Gate 2 — principal set<br/>attribute.repository/OWNER/NAME"}
+    token["Short-lived access token<br/>no key at rest"]
+
+    refused["Refused before any credential exists"]
+
+    varGate{"Gate 3 — repository variables set?"}
+    envGate{"Gate 4 — protected environment<br/>required reviewer"}
+    typed{"Gate 5 — typed APPLY-TO-PRODUCTION<br/>plus INFRA_APPLY_AUTHORIZED"}
+    apply["tofu apply, serialized, lock-timeout"]
+
+    job --> cond
+    cond -->|fork, pull request, tag,<br/>other branch, other workflow,<br/>other repository| refused
+    cond -->|satisfied| pset
+    pset --> token
+    token --> varGate
+    varGate -->|unset today| refused
+    varGate -->|set| envGate --> typed --> apply
+```
+
+As committed, gate 3 is unset, so no path reaches a provider at all. Drift
+detection reads on a schedule and never corrects; destroy is available to no
+workflow.
+
 ### Trust boundaries
 
 ```mermaid
@@ -271,7 +346,7 @@ flowchart LR
 
 ## Source and deployment map
 
-The workspace, projects, status contract, generated client, web presentation/API adapter, API inner layers/HTTP/deployment adapters, health routes, and container definitions below exist. `infra/` remains unimplemented until its owning task.
+The workspace, projects, status contract, generated client, web presentation/API adapter, API inner layers/HTTP/deployment adapters, health routes, and container definitions below exist. `infra/` now exists as reviewable, statically validated configuration; **no provider resource has been applied**, and the outstanding items before an apply can be trusted are listed in [`../../infra/README.md`](../../infra/README.md).
 
 | Path | Project/deployment | Boundary and ownership |
 | --- | --- | --- |
@@ -286,7 +361,12 @@ The workspace, projects, status contract, generated client, web presentation/API
 | `services/platform-api/src/adapters/http/` | API inbound adapter | Fastify composition, runtime validation, RFC 9457 problem mapping |
 | `services/platform-api/src/adapters/deployment/` | API outbound adapter | Safe attributable deployment metadata; no provider secrets |
 | `packages/platform-api-client/` | shared generated package | Generated TypeScript transport client consumed by interfaces |
-| `infra/` | accepted Google Cloud/OpenTofu composition, not yet created | Separate platform, web, and API stacks with independent state per ADR-0006 |
+| `infra/` | Google Cloud/OpenTofu composition, implemented and unapplied | All provider coupling. See [`../../infra/README.md`](../../infra/README.md) |
+| `infra/modules/` | provider-neutral building blocks | No environment values; `delivery-trust` is provider-free and tested offline |
+| `infra/stacks/bootstrap/` | one-time bootstrap | State buckets, deployer principal, workload identity federation |
+| `infra/stacks/platform/` | shared platform stack | Artifact Registry, budget, telemetry retention, secret boundary |
+| `infra/stacks/api/`, `infra/stacks/web/` | per-service stacks | Own Cloud Run service, runtime identity, and separate state per ADR-0006 |
+| `.github/workflows/delivery.yml` | delivery pipeline | Infrastructure checks, digest publication, gated apply, drift, rollback |
 | `docs/architecture/` | governed documentation | Current diagrams, decision records, and source/deployment map |
 
 Every created project receives a README declaring purpose, contracts, targets, dependencies, runtime, deployment unit, configuration, health checks, and owned data. Nx tags and lint rules enforce at least:
@@ -348,7 +428,9 @@ Remote validation follows this order:
 8. report deployment, artifact, config, health, smoke, and telemetry verification to the commit;
 9. roll back automatically when safe, otherwise halt with the declared recovery path.
 
-Provider-specific command names become authoritative with the OpenTofu and delivery implementation. Quantitative latency thresholds remain unset until remote evidence exists. Cloud Run revision traffic assignment is the accepted rollback mechanism, but local checks alone cannot satisfy remote acceptance.
+Infrastructure commands are `node tools/infra-check.mjs {fmt,validate,test,all}`, also exposed as the Nx targets `infra:infra-fmt`, `infra:infra-validate`, and `infra:infra-test`. They are deliberately outside the `lint`/`typecheck`/`test`/`contract`/`build` set so `pnpm check` stays runnable without OpenTofu installed; the static guards that need no provider tooling run inside `pnpm check` through `tools/infra-policy.test.mjs` and `tools/infra-delivery-policy.test.mjs`. `.github/workflows/delivery.yml` owns publication, the gated apply, drift detection, and rollback, and is separate from `ci.yml`.
+
+Quantitative latency thresholds remain unset until remote evidence exists. Cloud Run revision traffic assignment is the accepted rollback mechanism, but local checks alone cannot satisfy remote acceptance: the infrastructure is currently implemented and **unapplied**, and [`../../infra/README.md`](../../infra/README.md) lists what remains before an apply can be trusted.
 
 ## Failure and evolution rules
 
