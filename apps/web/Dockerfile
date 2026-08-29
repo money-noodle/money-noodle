@@ -22,7 +22,22 @@ ENV NODE_ENV=production
 ENV PORT=3000
 WORKDIR /app
 
-RUN addgroup --system --gid 1001 nodejs \
+RUN apk add --no-cache --upgrade \
+    'libcrypto3=3.5.8-r0' \
+    'libssl3=3.5.8-r0' \
+    'musl=1.2.5-r12' \
+    'musl-utils=1.2.5-r12' \
+    'zlib=1.3.2-r0' \
+  && rm -rf /usr/local/lib/node_modules /opt/yarn-v1.22.22 \
+  && rm -f \
+    /usr/local/bin/corepack \
+    /usr/local/bin/npm \
+    /usr/local/bin/npx \
+    /usr/local/bin/pnpm \
+    /usr/local/bin/pnpx \
+    /usr/local/bin/yarn \
+    /usr/local/bin/yarnpkg \
+  && addgroup --system --gid 1001 nodejs \
   && adduser --system --uid 1001 nextjs
 
 COPY --from=build --chown=nextjs:nodejs /workspace/apps/web/.next/standalone ./
