@@ -38,7 +38,7 @@ Authority descends from the maintainer's current instruction, to accepted curren
 | Branches, tags, and v2 cutover | [`docs/development/version-control.md`](docs/development/version-control.md) |
 | Parallel planning, claims, worktrees, stale sessions, and handoff | [`docs/development/parallel-work.md`](docs/development/parallel-work.md) |
 
-As architecture becomes concrete, add a source/deployment map here or link its index. Do not make agents infer current boundaries from directory names alone.
+The proposed first web/API architecture, diagrams, and source/deployment map are under maintainer review in [`docs/architecture/overview.md`](docs/architecture/overview.md). They do not authorize scaffolding until accepted. Do not make agents infer current boundaries from directory names alone.
 
 ## Working method
 
@@ -71,7 +71,7 @@ This is a living standard and safety envelope, not an exhaustive specification o
 
 Development currently targets `v2`; work occurs on short-lived typed branches such as the current `arch/v2-foundation`. `main` remains the v1 production line until the controlled cutover. The immutable v1 archive and maintenance refs are documented in [`docs/development/version-control.md`](docs/development/version-control.md).
 
-The v2 foundation has selected pnpm workspaces and Nx, but their manifests and command contract are not implemented or validated yet. Foundation CI currently validates documentation and coordination tooling only; full project type, lint, test, build, and deployment gates remain missing until workspace scaffolding. Read current manifests before naming commands; report missing gates instead of claiming completion. Update this section as soon as foundation tooling exists.
+The v2 foundation has selected pnpm workspaces and Nx, but their manifests and command contract are not implemented or validated yet. A Next.js 16 web, Fastify 5 platform API, API-owned OpenAPI contract, generated TypeScript client, and OCI deployment shape are proposed—not accepted or implemented—in [`docs/architecture/overview.md`](docs/architecture/overview.md). Foundation CI currently validates documentation and coordination tooling only; full project type, lint, test, contract, build, container, and deployment gates remain missing until workspace scaffolding. Read current manifests before naming commands; report missing gates instead of claiming completion. Update this section as soon as architecture is accepted or foundation tooling exists.
 
 ## Safety and handoff
 

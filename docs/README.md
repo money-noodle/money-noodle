@@ -15,7 +15,17 @@
 | Version control and cutover | [`development/version-control.md`](development/version-control.md) |
 | Parallel planning, work claims, stale detection, and handoff | [`development/parallel-work.md`](development/parallel-work.md) |
 
-Add the accepted architecture overview, ADR index, specifications, current status, experiment index, and validation index here as they are created.
+## Proposals and evidence under review
+
+These records are not current authority until the maintainer accepts their decisions:
+
+| Record | Role |
+| --- | --- |
+| [`architecture/overview.md`](architecture/overview.md) | Proposed first independently deployable Next.js web/API architecture, diagrams, and source/deployment map |
+| [`architecture/decisions/README.md`](architecture/decisions/README.md) | Proposed architecture decision index |
+| [`architecture/reference-assessment.md`](architecture/reference-assessment.md) | Dated v1 and Portfolio Copilot reference evidence and independent reuse rationale |
+
+Add accepted specifications, current status, experiment index, and validation index here as they are created. When the first-slice proposal is accepted, move its overview and ADR index into the current authority map rather than leaving duplicate entries.
 
 ## Document roles
 
