@@ -204,7 +204,12 @@ export function recordMakerLifecycleOrder(order: PaperOrder, recordedAt = new Da
   // Build the small immutable record synchronously; do not clone the growing execution ledger row.
   const sentinel = makerLifecycleSentinelFromOrder(order, recordedAt);
   return serialized(async () => {
-    if (!sentinel) return;
+    // A terminal maker that yields no record is an engine fault, not an absence of evidence. Both callers
+    // only pass makers, so silence here would hide a whole track the way it hid paper on first release.
+    if (!sentinel) {
+      console.error(`Maker lifecycle sentinel could not build a record for ${order.id}; its observation vocabulary is unrecognized.`);
+      return;
+    }
     const store = await ensureStore(sentinel.recordedAt);
     if (Date.parse(sentinel.recordedAt) + 1e-9 < Date.parse(store.startedAt)) return;
     if (store.sentinels.some((item) => item.id === sentinel.id)) return;

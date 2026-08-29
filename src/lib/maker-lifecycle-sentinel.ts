@@ -20,6 +20,14 @@ export const MAKER_LIFECYCLE_REVIEW_WINDOWS = 60;
 export const MAKER_LIFECYCLE_MINIMUM_DIVERGENT_WINDOWS = 20;
 export const MAKER_LIFECYCLE_MINIMUM_COVERAGE = 0.9;
 
+/**
+ * The two tracks append different event vocabularies for the same lifecycle moments: live records a venue
+ * acknowledgement and a terminal state read, paper records its simulated submission and terminal. Matching
+ * only live's names silently produced no paper record at all, so both are named explicitly here.
+ */
+const RESTING_EVENTS = ['accepted', 'paper_submitted'] as const;
+const TERMINAL_EVENTS = ['terminal_fill', 'paper_fill', 'paper_expired'] as const;
+
 export type MakerLifecycleCandidateId = 'maker-expire2s-taker-v1' | 'maker-expire2s-abandon-v1';
 export const MAKER_LIFECYCLE_CANDIDATE_IDS: MakerLifecycleCandidateId[] = ['maker-expire2s-taker-v1', 'maker-expire2s-abandon-v1'];
 
@@ -83,8 +91,8 @@ export function makerLifecycleTakerLimit(ask: number): number | null {
  */
 export function makerLifecycleSentinelFromOrder(order: PaperOrder, recordedAt: string): MakerLifecycleSentinel | null {
   const observations = order.entryExecutionObservations ?? [];
-  const accepted = observations.find((observation) => observation.event === 'accepted');
-  const terminal = [...observations].reverse().find((observation) => observation.event === 'terminal_fill');
+  const accepted = observations.find((observation) => (RESTING_EVENTS as readonly string[]).includes(observation.event));
+  const terminal = [...observations].reverse().find((observation) => (TERMINAL_EVENTS as readonly string[]).includes(observation.event));
   // Fail closed on a row that cannot be narrowed by strategy: money aggregations must stay separable.
   if (!accepted || !terminal || !order.contractId || !order.strategyId) return null;
 

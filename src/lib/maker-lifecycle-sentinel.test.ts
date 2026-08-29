@@ -83,6 +83,32 @@ describe('maker lifecycle sentinel', () => {
     expect(makerLifecycleSentinelFromOrder(order(early), AT)!.cutover).toBeUndefined();
   });
 
+  // Regression: matching only live's event names produced zero paper records for 108 completed makers,
+  // which would have kept the two-track review lock permanently closed without ever reporting a fault.
+  it('builds the same record from the paper track vocabulary', () => {
+    const paper = [
+      { at: AT, event: 'paper_submitted', selectedBid: 0.49, selectedAsk: 0.5, limitPrice: 0.49, remainingCount: 0.6, bestAskDepth: 200 },
+      { at: plus(2.1), event: 'management_quote', selectedBid: 0.49, selectedAsk: 0.5, filledCount: 0, remainingCount: 0.6, bestAskDepth: 200 },
+      { at: plus(12.4), event: 'paper_expired', limitPrice: 0.49, filledCount: 0, remainingCount: 0 },
+    ] as unknown as PaperOrder['entryExecutionObservations'];
+    const sentinel = makerLifecycleSentinelFromOrder(order(paper, { executionMode: 'paper', id: 'paper:BTC:UP:2026-08-28T00:15:00Z' }), AT)!;
+    expect(sentinel).not.toBeNull();
+    expect(sentinel.executionMode).toBe('paper');
+    expect(sentinel.cutover?.selectedAsk).toBe(0.5);
+    expect(sentinel.arms.find((arm) => arm.candidateId === 'maker-expire2s-taker-v1')!.acquired).toBe(true);
+  });
+
+  it('reads a paper fill as terminal and as production having filled', () => {
+    const filled = [
+      { at: AT, event: 'paper_submitted', selectedBid: 0.49, selectedAsk: 0.5, limitPrice: 0.49, remainingCount: 0.6 },
+      { at: plus(2.1), event: 'management_quote', selectedBid: 0.49, selectedAsk: 0.5, filledCount: 0.6, remainingCount: 0 },
+      { at: plus(2.2), event: 'paper_fill', filledCount: 0.6, remainingCount: 0, restingDurationMs: 2200 },
+    ] as unknown as PaperOrder['entryExecutionObservations'];
+    const sentinel = makerLifecycleSentinelFromOrder(order(filled, { executionMode: 'paper' }), AT)!;
+    expect(sentinel.productionFilled).toBe(true);
+    for (const arm of sentinel.arms) expect(arm.noTradeReason).toBe('filled-before-cutover');
+  });
+
   it('fails closed on a row it cannot narrow by strategy', () => {
     expect(makerLifecycleSentinelFromOrder(order(series(0.5), { strategyId: undefined }), AT)).toBeNull();
   });
