@@ -1,0 +1,13 @@
+{
+  "name": "@money-noodle/platform-api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "22.22.0"
+  },
+  "main": "dist/main.js",
+  "dependencies": {
+    "fastify": "5.12.1"
+  }
+}

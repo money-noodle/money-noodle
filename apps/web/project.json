@@ -1,0 +1,68 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "web",
+  "projectType": "application",
+  "sourceRoot": "apps/web/src",
+  "tags": ["type:app", "scope:web"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/.next"],
+      "options": {
+        "command": "pnpm --dir apps/web exec next build",
+        "env": {
+          "NEXT_TELEMETRY_DISABLED": "1"
+        }
+      }
+    },
+    "container": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "docker buildx build --load --provenance=true --attest=type=sbom,generator=docker.io/docker/buildkit-syft-scanner@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9 --file apps/web/Dockerfile --tag money-noodle/web:local ."
+      }
+    },
+    "dev": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "pnpm --dir apps/web exec next dev"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "eslint apps/web --max-warnings=0"
+      }
+    },
+    "start": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "dependsOn": ["build"],
+      "options": {
+        "command": "pnpm --dir apps/web exec next start"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "outputs": ["{workspaceRoot}/coverage/apps/web"],
+      "options": {
+        "command": "vitest run --config apps/web/vitest.config.ts --coverage"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["^build", "typegen"],
+      "options": {
+        "command": "tsc --project apps/web/tsconfig.json --noEmit"
+      }
+    },
+    "typegen": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/.next/types"],
+      "options": {
+        "command": "pnpm --dir apps/web exec next typegen"
+      }
+    }
+  }
+}

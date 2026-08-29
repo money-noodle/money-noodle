@@ -1,0 +1,68 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "platform-api",
+  "projectType": "application",
+  "sourceRoot": "services/platform-api/src",
+  "tags": ["type:service", "scope:platform"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "outputs": ["{workspaceRoot}/dist/services/platform-api"],
+      "options": {
+        "command": "tsc --project services/platform-api/tsconfig.build.json"
+      }
+    },
+    "container": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "docker buildx build --load --provenance=true --attest=type=sbom,generator=docker.io/docker/buildkit-syft-scanner@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9 --file services/platform-api/Dockerfile --tag money-noodle/platform-api:local ."
+      }
+    },
+    "contract": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "redocly lint services/platform-api/openapi/platform-api.v1.yaml",
+          "node tools/verify-generated-client.mjs",
+          "node tools/check-openapi-compatibility.mjs"
+        ],
+        "parallel": false
+      }
+    },
+    "dev": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "tsx watch services/platform-api/src/main.ts"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "eslint services/platform-api --max-warnings=0"
+      }
+    },
+    "start": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "dependsOn": ["build"],
+      "options": {
+        "command": "node dist/services/platform-api/main.js"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "outputs": ["{workspaceRoot}/coverage/services/platform-api"],
+      "options": {
+        "command": "vitest run --config services/platform-api/vitest.config.ts --coverage"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc --project services/platform-api/tsconfig.json --noEmit"
+      }
+    }
+  }
+}

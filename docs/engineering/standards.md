@@ -44,6 +44,42 @@ Coverage is an enforced regression floor, not a substitute for meaningful assert
 
 Do not lower thresholds merely to pass. A justified reduction needs an accepted decision, explicit exclusions, and compensating validation. Review generated-code and exclusion boundaries.
 
-## Current tooling gap
+## Current foundation toolchain
 
-The v2 foundation has selected pnpm and Nx but has not yet created or validated the workspace/build/test manifests. Do not assume v1 commands. Foundation implementation must pin tool versions, define project targets and dependency rules, establish the OpenAPI workflow, publish the command contract here, and summarize operational commands in `AGENTS.md`.
+The first web/API foundation pins one reproducible toolchain. Reverify security and compatibility before an intentional upgrade; never replace exact ranges or the lockfile opportunistically.
+
+| Concern | Current exact version or boundary |
+| --- | --- |
+| Runtime/package manager | Node.js 22.22.0 and pnpm 11.24.0 |
+| Workspace orchestration | Nx 23.1.2 |
+| TypeScript | 6.0.3 |
+| Web | Next.js 16.3.3, React/React DOM 19.2.8 |
+| API HTTP adapter | Fastify 5.12.1 |
+| Lint/format | ESLint 10.9.1, Prettier 3.9.6, current Next/React-hooks/accessibility plugins |
+| Test/coverage | Vitest 4.1.11 with V8 coverage |
+| OpenAPI | Redocly CLI 2.49.0, Hey API OpenAPI TypeScript 0.99.0, OpenAPI Changes 0.2.11 |
+
+The lockfile overrides the generator's exact vulnerable `js-yaml@4.2.0` transitive dependency to compatible patched `4.3.2`; `pnpm audit --audit-level high` must remain clean. Approved install scripts are allowlisted in `pnpm-workspace.yaml`. Adding a build script requires review rather than interactive approval residue.
+
+The generated client package disables `exactOptionalPropertyTypes` only because generator 0.99 emits explicit `undefined` in optional Fetch fields. Domain, API, and web source retain the strict repository default. Revisit and remove this exception when the generator supports it.
+
+### Command contract
+
+Run commands from the repository root:
+
+| Command | Contract |
+| --- | --- |
+| `pnpm install --frozen-lockfile` | Reproduce the committed dependency graph without changing resolution |
+| `pnpm check` | Verify runtime, formatting, documentation/coordination, forbidden dependency probes, and every project lint/type/test/contract/build target |
+| `pnpm lint` / `pnpm typecheck` / `pnpm test` / `pnpm build` | Run the named target across all applicable projects |
+| `pnpm contract` | Lint OpenAPI, compare deterministic generated output, and reject breaking v1 changes against the configured base |
+| `pnpm container` | Build separate web and API OCI images with provenance and SBOM; requires Docker Buildx |
+| `pnpm graph` | Inspect the Nx project/dependency graph |
+| `pnpm nx affected -t lint,typecheck,test,contract,build --base=<ref> --head=HEAD` | Run affected project gates as CI does |
+| `pnpm nx run <project>:<target>` | Run one declared project target; see that project's README |
+
+`pnpm check` does not build containers or prove remote deployment. Container scans run in CI, and deployed validation remains blocked on the accepted provider/IaC composition.
+
+### OpenAPI workflow
+
+The platform API owns `services/platform-api/openapi/platform-api.v1.yaml`. Run `pnpm nx run platform-api-client:generate` only after an intentional contract edit, then review every generated change. `platform-api:contract` regenerates into a temporary directory and compares file names and bytes; hand edits and nondeterminism fail. Compatibility uses OpenAPI 3.1-aware semantic comparison and fails on breaking changes once a baseline exists. Runtime request/response conformance for actual operations begins with the first vertical slice rather than inventing an endpoint in the scaffold.

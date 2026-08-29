@@ -1,0 +1,22 @@
+# dependencies and task caches
+node_modules/
+.nx/
+
+# project outputs
+.next/
+coverage/
+dist/
+
+# local configuration
+.env
+.env.*
+!.env.example
+
+# editor and OS files
+.DS_Store
+*.swp
+
+# test and package-manager residue
+*.log
+*.tsbuildinfo
+.pnpm-debug.log*

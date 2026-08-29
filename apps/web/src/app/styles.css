@@ -1,0 +1,31 @@
+:root {
+  color-scheme: light dark;
+  font-family: ui-rounded, 'Nunito Sans', system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  display: grid;
+  min-height: 100vh;
+  margin: 0;
+  place-items: center;
+}
+
+main {
+  max-width: 42rem;
+  padding: 2rem;
+  text-align: center;
+}
+
+h1 {
+  margin-block: 0 0.75rem;
+  font-size: clamp(2.5rem, 8vw, 5rem);
+}
+
+p {
+  margin: 0;
+  font-size: 1.125rem;
+}
