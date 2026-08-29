@@ -28,7 +28,15 @@ Shared-Hotspots: none
 
 ## Portable claim
 
-<!-- Preserve these exact field names for cross-harness status tooling. Use "unclaimed" until active. -->
+<!--
+Preserve these exact field names for cross-harness status tooling. Use "unclaimed" until active.
+Before replacing them, do the full pre-claim double-check from docs/development/parallel-work.md:
+re-fetch this body and its ownership/checkpoint comments, then inspect `git worktree list --porcelain`
+and branches immediately before mutation. Status output or an unclaimed body alone is insufficient.
+Stop and escalate any disagreement; never overwrite earlier or ambiguous claim evidence.
+After updating, add a claim checkpoint comment, re-fetch both records, and verify they agree before
+creating the branch/worktree.
+-->
 
 Claim-State: proposed
 Claim-Harness: unclaimed

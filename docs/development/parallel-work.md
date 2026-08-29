@@ -14,7 +14,7 @@ Every agent session begins by reading `AGENTS.md` and running:
 node tools/coordination-status.mjs
 ```
 
-The command reports active/blocked/review claims, suspected stale work, open PRs, and local worktrees without modifying anything. If the command or GitHub is unavailable, inspect Git/worktrees manually and ask the maintainer before entering potentially overlapping scope. Never interpret an unreachable registry as an empty registry.
+The command reports active/blocked/review claims, suspected stale work, open PRs, and local worktrees without modifying anything. It reads structured issue bodies, not issue comments, so it is a triage aid rather than a claim lock or sufficient permission to claim. If the command or GitHub is unavailable, inspect Git/worktrees manually and ask the maintainer before entering potentially overlapping scope. Never interpret an unreachable registry as an empty registry.
 
 ## Plan for parallelism
 
@@ -46,18 +46,20 @@ Use labels `work:proposed`, `work:ready`, `work:active`, `work:blocked`, `work:r
 
 Harness/run identifiers are diagnostic, not identity or authority. Do not publish local session-file paths, credentials, full prompts, transcripts, customer data, or secrets. Use the issue template at `.github/ISSUE_TEMPLATE/parallel-work.md`; preserve its machine-readable field names so status tooling remains portable.
 
-Use issue comments as an append-only checkpoint trail. Update the structured claim fields when ownership, branch, state, or deadline changes. A session existing inside a harness does not prove its claim is alive; the registry checkpoint does.
+Use issue comments as an append-only checkpoint trail. Update the structured claim fields when ownership, branch, state, or deadline changes. Body edits, labels, comments, branch creation, and worktree creation are not one atomic operation: a newer ownership/checkpoint comment or locked worktree can prove claim intent while structured body fields still say `ready` or `unclaimed`. Either form of conflicting evidence requires investigation; never overwrite one merely because the other lags. A session existing inside a harness does not prove its claim is alive; the registry checkpoint does.
 
 ## Claim and isolation protocol
 
 Before editing, every agent:
 
 1. Fetches refs and runs the coordination status command.
-2. Inspects Git status/worktrees, open PRs, and every active/blocked claim touching the intended scope.
-3. Reads the parent plan/dependencies and chooses an unblocked `work:ready` item.
-4. Claims it by recording harness, run ID if available, agent/session name, branch, worktree, exact scope, and realistic check-in deadline; then applies `work:active`.
-5. Creates a dedicated typed branch and Git worktree. One active claim owns one mutable worktree; agents never share one.
-6. Rechecks the registry before expanding scope or changing a shared contract.
+2. Inspects Git status, `git worktree list --porcelain` (including lock reasons), local/remote branches, open PRs, and every active/blocked claim touching the intended scope.
+3. Reads the parent plan/dependencies plus the candidate issue's full body and ownership/checkpoint comments. A body or status row saying `work:ready`, `proposed`, or `unclaimed` makes the item only a candidate; it is not proof that nobody has started.
+4. Immediately before mutating claim fields, re-fetches that issue's body and comments and re-runs the local worktree/branch inspection. Do not claim from a cached status result.
+5. Stops without changing claim metadata or creating another worktree if any comment, branch, locked worktree, harness trail, or unexplained change indicates current or ambiguous prior intent touching the scope. Record the discovery and ask the integration owner or maintainer to reconcile it; do not decide that the apparent earlier claimant is stale or overwrite it.
+6. If the double-check is clear, claims the item by updating the structured harness/run/agent/branch/worktree/scope/deadline fields and applying `work:active`, then adds an append-only claim checkpoint comment.
+7. Re-fetches the issue and verifies that its own structured claim and comment still agree before creating the dedicated typed branch/worktree. If another claim raced, stop and preserve both records for maintainer resolution. One active claim owns one mutable worktree; agents never share one.
+8. Rechecks the registry, comments, and worktrees before expanding scope or changing a shared contract.
 
 Use a meaningful task/session name in any harness that supports naming. Harness-native resume, fork, clone, or session-browser features may help continue work but never replace the issue claim.
 
