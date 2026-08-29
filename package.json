@@ -10,6 +10,7 @@
     "prebuild": "npm run build:css",
     "build": "next build",
     "start": "next start",
+    "restart": "node scripts/restart-worker.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
