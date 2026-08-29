@@ -30,7 +30,10 @@ const OPEN_WORK_LABELS = new Set([
 function run(command, args, { allowFailure = false } = {}) {
   const result = spawnSync(command, args, { encoding: "utf8" });
   if (result.error || (!allowFailure && result.status !== 0)) {
-    const detail = result.error?.message ?? result.stderr.trim() ?? `exit ${result.status}`;
+    const detail =
+      result.error?.message ||
+      result.stderr?.trim() ||
+      (result.signal ? `terminated by ${result.signal}` : `exit status ${result.status}`);
     throw new Error(`${command} ${args.join(" ")} failed: ${detail}`);
   }
   return result;
