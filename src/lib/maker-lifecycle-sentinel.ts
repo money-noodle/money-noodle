@@ -34,8 +34,28 @@ export const MAKER_LIFECYCLE_CANDIDATE_IDS: MakerLifecycleCandidateId[] = ['make
 
 /** Why an arm bought nothing. A missing quote is unavailable evidence, never a decision not to trade. */
 export type MakerLifecycleNoTradeReason =
-  | 'filled-before-cutover' | 'no-quote-at-cutover' | 'above-price-ceiling' | 'insufficient-depth'
-  | 'cannot-size' | 'arm-does-not-take';
+  | 'filled-before-cutover' | 'never-rested' | 'no-quote-at-cutover' | 'above-price-ceiling'
+  | 'insufficient-depth' | 'cannot-size' | 'arm-does-not-take';
+
+/**
+ * Reasons the rule never had a decision to make, as opposed to a decision we failed to observe.
+ *
+ * A maker that filled at 2.2s was gone before the cutover instant, and one rejected before it rested never
+ * existed to abandon. Counting either as missing evidence understated coverage by thirteen points and would
+ * have sent the instrument chasing an observation problem it does not have.
+ */
+const NON_DECISION_REASONS: readonly MakerLifecycleNoTradeReason[] = ['filled-before-cutover', 'never-rested'];
+
+export function isMakerLifecycleNonDecision(sentinel: MakerLifecycleSentinel): boolean {
+  if (sentinel.cutover) return false;
+  // Records are immutable, so rows written before this distinction existed still say `no-quote-at-cutover`.
+  // A row with no cutover whose production maker nonetheless filled can only be one thing: the maker was
+  // gone before the cutover instant. Recognizing that at report time reclassifies the old rows without
+  // rewriting one of them.
+  if (sentinel.productionFilled) return true;
+  return sentinel.arms.every((arm) => arm.noTradeReason !== undefined
+    && NON_DECISION_REASONS.includes(arm.noTradeReason));
+}
 
 export interface MakerLifecycleArmDecision {
   candidateId: MakerLifecycleCandidateId;
@@ -120,8 +140,13 @@ export function makerLifecycleSentinelFromOrder(order: PaperOrder, recordedAt: s
   };
 
   if (!poll) {
-    // No usable quote at the cutover: unavailable evidence. Both arms record it identically.
-    return { ...base, arms: MAKER_LIFECYCLE_CANDIDATE_IDS.map((candidateId) => ({ candidateId, acquired: false, noTradeReason: 'no-quote-at-cutover' as const })) };
+    // Distinguish a missing observation from a maker that was already gone. A fill recorded on the terminal
+    // event, or a rest shorter than the cutover, means the rule was never reached rather than unobserved.
+    const restedSeconds = Number.isFinite(terminal.restingDurationMs) ? terminal.restingDurationMs! / 1000 : undefined;
+    const reason: MakerLifecycleNoTradeReason = productionQuantity > 0 ? 'filled-before-cutover'
+      : restedSeconds !== undefined && restedSeconds < MAKER_LIFECYCLE_CUTOVER_SECONDS ? 'never-rested'
+      : 'no-quote-at-cutover';
+    return { ...base, arms: MAKER_LIFECYCLE_CANDIDATE_IDS.map((candidateId) => ({ candidateId, acquired: false, noTradeReason: reason })) };
   }
 
   const filledAtCutover = finite(poll.filledCount) ? poll.filledCount : 0;
@@ -176,6 +201,8 @@ export interface MakerLifecycleTrackReport {
   records: number;
   resolvedRecords: number;
   unavailableRecords: number;
+  /** Rows where the rule never had a decision: the maker filled before the cutover, or never rested. */
+  nonDecisionRecords: number;
   coverage: number;
   production: MakerLifecycleArmReport;
   candidates: MakerLifecycleArmReport[];
@@ -207,7 +234,7 @@ function armResult(
   sentinel: MakerLifecycleSentinel, decision: MakerLifecycleArmDecision, production: { stake: number; pnl: number },
 ): { stake: number; pnl: number } | null {
   if (!sentinel.outcome) return null;
-  if (decision.noTradeReason === 'no-quote-at-cutover') return null;
+  if (decision.noTradeReason === 'no-quote-at-cutover' || decision.noTradeReason === 'never-rested') return null;
   if (decision.noTradeReason === 'filled-before-cutover') return production;
   if (!decision.acquired || decision.quantity === undefined) return { stake: 0, pnl: 0 };
   const cost = decision.costCents ?? 0;
@@ -225,7 +252,9 @@ export function buildMakerLifecycleSentinelReport(input: {
     // Money aggregations are re-narrowed by strategy (AGENTS.md §4); pooling tracks would not be separable.
     const rows = input.sentinels.filter((sentinel) => sentinel.executionMode === mode && sentinel.strategyId === strategyId);
     const resolved = rows.filter((sentinel) => sentinel.outcome);
-    const unavailable = rows.filter((sentinel) => !sentinel.cutover);
+    // Rows the rule never reached are not evidence gaps and are excluded from both sides of coverage.
+    const decisions = rows.filter((sentinel) => !isMakerLifecycleNonDecision(sentinel));
+    const unavailable = decisions.filter((sentinel) => !sentinel.cutover);
 
     const arm = (candidateId: MakerLifecycleCandidateId | 'production'): MakerLifecycleArmReport => {
       const scored = resolved.flatMap((sentinel) => {
@@ -265,7 +294,7 @@ export function buildMakerLifecycleSentinelReport(input: {
         reviewUnlocked: candidateId !== 'production'
           && windows >= MAKER_LIFECYCLE_REVIEW_WINDOWS
           && cents.windows >= MAKER_LIFECYCLE_MINIMUM_DIVERGENT_WINDOWS
-          && rows.length > 0 && (rows.length - unavailable.length) / rows.length + 1e-12 >= MAKER_LIFECYCLE_MINIMUM_COVERAGE,
+          && decisions.length > 0 && (decisions.length - unavailable.length) / decisions.length + 1e-12 >= MAKER_LIFECYCLE_MINIMUM_COVERAGE,
       };
     };
 
@@ -273,7 +302,8 @@ export function buildMakerLifecycleSentinelReport(input: {
       records: rows.length,
       resolvedRecords: resolved.length,
       unavailableRecords: unavailable.length,
-      coverage: rows.length ? (rows.length - unavailable.length) / rows.length : 0,
+      nonDecisionRecords: rows.length - decisions.length,
+      coverage: decisions.length ? (decisions.length - unavailable.length) / decisions.length : 0,
       production: arm('production'),
       candidates: MAKER_LIFECYCLE_CANDIDATE_IDS.map(arm),
     };

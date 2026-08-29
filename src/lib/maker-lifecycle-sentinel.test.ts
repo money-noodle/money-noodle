@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  MAKER_LIFECYCLE_CANDIDATE_IDS, buildMakerLifecycleSentinelReport, makerLifecycleSentinelFromOrder,
-  makerLifecycleTakerLimit,
+  MAKER_LIFECYCLE_CANDIDATE_IDS, buildMakerLifecycleSentinelReport, isMakerLifecycleNonDecision,
+  makerLifecycleSentinelFromOrder, makerLifecycleTakerLimit,
 } from './maker-lifecycle-sentinel';
 import type { PaperOrder } from './types';
 
@@ -109,6 +109,57 @@ describe('maker lifecycle sentinel', () => {
     for (const arm of sentinel.arms) expect(arm.noTradeReason).toBe('filled-before-cutover');
   });
 
+  // Regression: thirteen makers filled at ~2.2s before any management_quote existed, and three never
+  // rested. Recording all of them as no-quote-at-cutover understated coverage by thirteen points and would
+  // have sent the instrument chasing an observation problem it does not have.
+  it('separates a maker that was already gone from an observation it failed to make', () => {
+    const noPoll = (terminal: Record<string, unknown>) => ([
+      { at: AT, event: 'accepted', limitPrice: 0.5, filledCount: 0, remainingCount: 0.6 },
+      { at: plus(2.3), event: 'terminal_fill', ...terminal },
+    ] as unknown as PaperOrder['entryExecutionObservations']);
+
+    const filledEarly = makerLifecycleSentinelFromOrder(order(noPoll({ filledCount: 0.57, remainingCount: 0, restingDurationMs: 2300 })), AT)!;
+    for (const arm of filledEarly.arms) expect(arm.noTradeReason).toBe('filled-before-cutover');
+    expect(isMakerLifecycleNonDecision(filledEarly)).toBe(true);
+
+    const gone = makerLifecycleSentinelFromOrder(order(noPoll({ filledCount: 0, remainingCount: 0.6, restingDurationMs: 1200 })), AT)!;
+    for (const arm of gone.arms) expect(arm.noTradeReason).toBe('never-rested');
+    expect(isMakerLifecycleNonDecision(gone)).toBe(true);
+
+    // Rested past the cutover with nothing recorded is still a genuine gap.
+    const genuineGap = makerLifecycleSentinelFromOrder(order(noPoll({ filledCount: 0, remainingCount: 0.6, restingDurationMs: 13_700 })), AT)!;
+    for (const arm of genuineGap.arms) expect(arm.noTradeReason).toBe('no-quote-at-cutover');
+    expect(isMakerLifecycleNonDecision(genuineGap)).toBe(false);
+  });
+
+  it('keeps non-decisions out of both sides of coverage', () => {
+    const base = makerLifecycleSentinelFromOrder(order(series(0.5)), AT)!;
+    const orders = [{ id: base.orderId, stakeCents: 30, pnlCents: 30 } as unknown as PaperOrder];
+    const nonDecision = makerLifecycleSentinelFromOrder(order([
+      { at: AT, event: 'accepted', limitPrice: 0.5, filledCount: 0, remainingCount: 0.6 },
+      { at: plus(2.3), event: 'terminal_fill', filledCount: 0.57, remainingCount: 0, restingDurationMs: 2300 },
+    ] as unknown as PaperOrder['entryExecutionObservations']), AT)!;
+    // productionFilled false: a row with no cutover whose maker nonetheless filled is a pre-cutover fill,
+    // not a gap, so a genuine gap must be an unobserved maker that was still resting.
+    const gap = { ...base, id: 'gap', cutover: undefined, productionFilled: false,
+      arms: MAKER_LIFECYCLE_CANDIDATE_IDS.map((candidateId) => ({ candidateId, acquired: false, noTradeReason: 'no-quote-at-cutover' as const })) };
+
+    const report = buildMakerLifecycleSentinelReport({
+      startedAt: AT, orders,
+      sentinels: [
+        { ...base, productionFilled: true, outcome: 'UP', resolvedAt: AT },
+        { ...nonDecision, id: 'early', productionFilled: true, outcome: 'UP', resolvedAt: AT },
+        { ...gap, outcome: 'UP', resolvedAt: AT },
+      ],
+    });
+    const track = report.tracks.live;
+    expect(track.records).toBe(3);
+    expect(track.nonDecisionRecords).toBe(1);
+    expect(track.unavailableRecords).toBe(1);
+    // One observed and one gap among two real decisions: 50%, not 33% as the old denominator gave.
+    expect(track.coverage).toBeCloseTo(0.5, 6);
+  });
+
   it('fails closed on a row it cannot narrow by strategy', () => {
     expect(makerLifecycleSentinelFromOrder(order(series(0.5), { strategyId: undefined }), AT)).toBeNull();
   });
@@ -146,7 +197,7 @@ describe('maker lifecycle sentinel', () => {
   // decision not to trade penalized an arm for a data gap.
   it('leaves an unavailable cycle out of the scored cohort entirely', () => {
     const base = makerLifecycleSentinelFromOrder(order(series(0.5)), AT)!;
-    const blind = { ...base, id: 'blind', cutover: undefined, outcome: 'UP' as const, resolvedAt: AT, productionFilled: true,
+    const blind = { ...base, id: 'blind', cutover: undefined, outcome: 'UP' as const, resolvedAt: AT, productionFilled: false,
       arms: MAKER_LIFECYCLE_CANDIDATE_IDS.map((candidateId) => ({ candidateId, acquired: false, noTradeReason: 'no-quote-at-cutover' as const })) };
     const report = buildMakerLifecycleSentinelReport({
       startedAt: AT,
