@@ -14,29 +14,109 @@ concurrency:
 
 jobs:
   foundation:
-    name: foundation guidance and coordination
+    name: affected projects and repository gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.24.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Select affected base
+        id: affected
+        shell: bash
+        env:
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [[ -n "$PR_BASE" ]]; then
+            base="$PR_BASE"
+          elif [[ -n "$BEFORE" && ! "$BEFORE" =~ ^0+$ ]]; then
+            base="$BEFORE"
+          else
+            base="$(git merge-base HEAD origin/v2)"
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+
+      - name: Verify runtime, formatting, guidance, and coordination
+        run: |
+          pnpm verify:runtime
+          pnpm format:check
+          pnpm verify:foundation
+          pnpm verify:boundaries
+          grep -Fx '@AGENTS.md' CLAUDE.md
+          grep -F 'AGENTS.md' .github/copilot-instructions.md
+
+      - name: Verify affected project boundaries
+        env:
+          NX_BASE: ${{ steps.affected.outputs.base }}
+        run: pnpm nx affected -t lint,typecheck,test,contract,build --base="$NX_BASE" --head=HEAD
+
+      - name: Audit dependencies
+        run: pnpm audit --audit-level high
+
+  containers:
+    name: container ${{ matrix.project }}
+    needs: foundation
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: platform-api
+            image: money-noodle/platform-api:local
+          - project: web
+            image: money-noodle/web:local
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.24.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build attributable OCI image with provenance and SBOM
+        run: pnpm nx run ${{ matrix.project }}:container
+
+      - name: Scan image
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: ${{ matrix.image }}
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+
+  secrets:
+    name: secret scan
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          node-version: 22
+          fetch-depth: 0
 
-      - name: Check coordination tools
-        run: |
-          node --check tools/coordination-lib.mjs
-          node --check tools/coordination-status.mjs
-          node --check tools/verify-doc-links.mjs
-
-      - name: Test coordination logic
-        run: node --test tools/coordination-lib.test.mjs
-
-      - name: Verify documentation links
-        run: node tools/verify-doc-links.mjs
-
-      - name: Verify harness entry points
-        run: |
-          grep -Fx '@AGENTS.md' CLAUDE.md
-          grep -F 'AGENTS.md' .github/copilot-instructions.md
+      - uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

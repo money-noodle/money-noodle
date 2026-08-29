@@ -1,0 +1,16 @@
+openapi: 3.1.0
+info:
+  title: Money Noodle Platform API
+  summary: Interface-neutral Money Noodle platform contract.
+  description: >-
+    Canonical v1 transport contract. This foundation document deliberately exposes no
+    operations until the first accepted vertical slice is implemented.
+  version: 1.0.0
+  license:
+    name: MIT
+    identifier: MIT
+jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
+servers:
+  - url: /
+    description: Runtime-configured API origin.
+paths: {}
