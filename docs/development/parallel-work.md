@@ -1,0 +1,106 @@
+# Parallel agent work standard
+
+## Purpose and source of truth
+
+Parallel work should increase throughput without hidden overlap, conflicting authority, or abandoned state. This protocol is harness-neutral: Pi, Claude Code, GitHub Copilot, and other agents coordinate through the same repository and GitHub records.
+
+GitHub Issues are the canonical work registry because they are remote, branch-independent, auditable, and visible across harnesses, worktrees, and machines. A GitHub Project may add views later without replacing issues. Chat history, local session lists, worktrees, and harness-specific storage are supporting evidence, never the shared registry.
+
+Harness bridge files such as `CLAUDE.md` and `.github/copilot-instructions.md` only route agents to root `AGENTS.md`; they do not duplicate requirements or status. A harness that does not auto-discover `AGENTS.md` must use an equivalent thin bridge.
+
+Every agent session begins by reading `AGENTS.md` and running:
+
+```bash
+node tools/coordination-status.mjs
+```
+
+The command reports active/blocked/review claims, suspected stale work, open PRs, and local worktrees without modifying anything. If the command or GitHub is unavailable, inspect Git/worktrees manually and ask the maintainer before entering potentially overlapping scope. Never interpret an unreachable registry as an empty registry.
+
+## Plan for parallelism
+
+A complex task starts as one shared parent plan—normally a parent issue, with a version-controlled plan document linked when the design needs diagrams or substantial detail. The shared plan owns the outcome, architecture context, work graph, acceptance, major risks, integration owner, and current completion state. All agents work from and contribute to this plan; private per-session plans are temporary reasoning and cannot silently diverge from it.
+
+Create child issues only where each unit has:
+
+- one independently verifiable outcome;
+- explicit project/path and contract scope plus exclusions;
+- declared inputs, outputs, dependencies, and blockers;
+- acceptance checks and handoff artifact;
+- identified shared files, schemas, contracts, infrastructure, generated outputs, and integration order.
+
+Represent dependencies as a directed acyclic graph and group ready items into parallel waves. Keep child state, dependency changes, newly discovered work, integration order, and accepted plan changes reflected in the shared parent plan. Parallelize across stable boundaries; serialize shared decisions and contract changes that would make downstream work speculative. Prefer contract-first work: one owner changes an OpenAPI/schema/event contract, then independent consumers work against the accepted version.
+
+Do not split work merely to keep agents busy. Tasks are not safely parallel when they edit the same source, migration sequence, lockfile, generated artifact, architecture decision, or infrastructure state unless one task explicitly owns integration.
+
+## Work states and portable claim record
+
+Use labels `work:proposed`, `work:ready`, `work:active`, `work:blocked`, `work:review`, `work:done`, and `work:abandoned`, plus an `area:*` label when useful. The issue records or links:
+
+- task/parent IDs, scope, exclusions, dependencies, and acceptance;
+- branch and worktree description;
+- `Claim-Harness` such as `pi`, `claude-code`, `copilot`, or `other`;
+- an opaque `Claim-Run-ID` when the harness provides one;
+- a human-readable `Claim-Agent` or session name;
+- `Claimed-At`, `Check-In-By`, and latest checkpoint;
+- shared hotspots, integration owner, and recovery/handoff notes.
+
+Harness/run identifiers are diagnostic, not identity or authority. Do not publish local session-file paths, credentials, full prompts, transcripts, customer data, or secrets. Use the issue template at `.github/ISSUE_TEMPLATE/parallel-work.md`; preserve its machine-readable field names so status tooling remains portable.
+
+Use issue comments as an append-only checkpoint trail. Update the structured claim fields when ownership, branch, state, or deadline changes. A session existing inside a harness does not prove its claim is alive; the registry checkpoint does.
+
+## Claim and isolation protocol
+
+Before editing, every agent:
+
+1. Fetches refs and runs the coordination status command.
+2. Inspects Git status/worktrees, open PRs, and every active/blocked claim touching the intended scope.
+3. Reads the parent plan/dependencies and chooses an unblocked `work:ready` item.
+4. Claims it by recording harness, run ID if available, agent/session name, branch, worktree, exact scope, and realistic check-in deadline; then applies `work:active`.
+5. Creates a dedicated typed branch and Git worktree. One active claim owns one mutable worktree; agents never share one.
+6. Rechecks the registry before expanding scope or changing a shared contract.
+
+Use a meaningful task/session name in any harness that supports naming. Harness-native resume, fork, clone, or session-browser features may help continue work but never replace the issue claim.
+
+A claim is an advisory coordination lease, not a repository lock or permission to bypass review. If overlap appears, stop at a clean boundary, checkpoint both records, and ask the integration owner or maintainer to repartition or serialize work.
+
+## Checkpoints, stale work, and cleanup detection
+
+Checkpoint after meaningful milestones, before a known long wait, and before ending a session. Record completed evidence, current branch/commit or uncommitted-state warning, checks, blockers, next action, and next `Check-In-By`. Do not emit empty heartbeat noise.
+
+A claim is **suspected stale**, never automatically abandoned, when:
+
+- `Check-In-By` has passed without a later checkpoint;
+- its branch/worktree is missing or contradicts the issue;
+- its PR is merged/closed while the issue remains active;
+- it reports active work but has no recoverable branch/commit and an unexplained dirty worktree exists;
+- another agent discovers unfinished overlapping changes not represented by a claim.
+
+The status command highlights what it can prove from GitHub and local Git. It cannot enumerate every proprietary harness session, so mandatory registration is what makes cross-harness discovery possible.
+
+A new agent surfaces suspected stale evidence and asks the maintainer whether to resume, hand off, extend, clean up, abandon, or authorize a completion plan. It should include a concrete proposed recovery/completion path—remaining work, reusable evidence, branch strategy, checks, risks, and cleanup—linked into the shared parent plan. Planning unfinished work is allowed before takeover; modifying or claiming it is not. Never reset, delete, overwrite, force-push, remove a worktree, or take over another claim automatically.
+
+On approved takeover:
+
+- preserve prior branches, commits, and issue history;
+- record authorization and reason;
+- choose explicitly between the existing branch and a recovery branch;
+- replace claim metadata and deadline;
+- add the approved completion/recovery steps to the shared parent plan;
+- independently validate inherited work before trusting it.
+
+Future automation or agent skills may create/checkpoint claims after this process is stable. They must remain harness-neutral at the registry boundary and ask rather than auto-release, auto-clean, or auto-take over.
+
+## Integration and completion
+
+The integration owner manages shared contracts, merge order, compatibility, and final acceptance. Dependents incorporate the accepted dependency version before completion. Never resolve overlap by silently selecting one agent's output.
+
+Before releasing a claim, the agent:
+
+1. runs focused and affected checks;
+2. records commits/diff, evidence, unresolved risks, and deployment impact;
+3. pushes or opens a PR only when authorized;
+4. sets `work:review`, `work:done`, `work:blocked`, or `work:abandoned` accurately;
+5. leaves explicit continuation and cleanup instructions;
+6. removes a worktree only after changes are preserved and removal is authorized/safe.
+
+An unfinished agent checkpoints and marks work blocked or abandoned; it never leaves an apparently active claim. A merged task is not complete until integration checks and, for `main`, production deployment verification succeed.

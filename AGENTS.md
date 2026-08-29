@@ -1,147 +1,80 @@
-# Money Noodle v2 Agent Guide
+# Money Noodle v2 Platform Agent Guide
 
-## Mission and phase
+## Start here
 
-Money Noodle v2 is a clean rebuild. The current order of work is:
+Money Noodle v2 is an architecture-first rebuild of a continuously deployed, multi-tenant financial learning, gaming, analysis, and funded-trading platform. The current sequence is architecture → implementation → testing → deployed validation. Do not recreate v1 behavior by default.
 
-1. understand and document the problem;
-2. establish and validate the architecture;
-3. implement in small vertical slices;
-4. test each slice and the boundaries around it;
-5. validate the deployed system against explicit acceptance criteria.
+`AGENTS.md` is the required entry point and operational map, not the repository's encyclopedia. Read it first, run `node tools/coordination-status.mjs`, then read the linked document relevant to the task completely. The shared plan and work status are the cross-harness coordination authority; a missing or unreachable registry never means work is unclaimed. Keep detailed standards and rationale in their owning documents so this guide stays short, current, and useful.
 
-Do not skip architecture to recreate familiar v1 behavior. A prototype may reduce an architectural uncertainty, but it must be isolated, disposable, and clearly identified as a spike rather than production code.
+## Current non-negotiables
 
-The known architectural concerns are rapid and explainable risk reasoning, useful visual presentation, forecasting from point-in-time data, data quality, parallel experimentation, process isolation, deployability, security, and multitenancy. These are drivers, not a complete specification. Ask for the product outcome and constraints when they are not documented; do not infer them from v1.
+- Treat all v1 material as historical evidence, never current authority. Revalidate before reuse.
+- Resolve architecture and acceptance criteria before production implementation. Isolated disposable spikes may answer bounded questions.
+- Use one monorepo with independently buildable and deployable projects. Favor TypeScript; use another language when a bounded project has a documented material advantage.
+- Follow Clean Architecture. User interfaces present state and submit intent; they do not perform platform work. APIs are stateless and lightweight. Jobs and provider integrations run in isolated deployment units.
+- Assume a person may use web, mobile, desktop, game, and MMO-style interfaces concurrently. Server state is authoritative. Offline behavior is explicit and designed per capability.
+- Funded trading is foundational, but v2 currently has **no real-money authority**. Simulation and funded balances, ledgers, execution authority, presentation, and audit remain structurally separate.
+- Run the integrated system remotely, not on a developer laptop. Prefer short-lived idempotent functions, containers, and jobs over resident multipurpose services.
+- CI/CD is mandatory. After cutover, a reviewed merge to `main` authorizes and triggers production deployment; agents must not merge unless explicitly asked.
+- Default authorization to deny, enforce tenant scope at every boundary, keep operational secrets in durable managed storage, and preserve reconstructable audit/accounting records.
+- Keep architecture visually current with version-controlled diagrams-as-code. A boundary or topology change is incomplete when its current diagram is stale.
+- All agents and harnesses coordinate through one shared plan and GitHub work status. Before editing, claim a bounded non-overlapping scope and use a dedicated branch/worktree. Suspected stale work includes a proposed completion/cleanup plan and is surfaced to the maintainer, never taken over automatically.
+- Whimsy guides the user experience; precise industry terminology guides code and infrastructure. Never let playful language conceal financial meaning or risk.
+- Prefer self-healing leases, reconciliation, cleanup, and status checks. Administrative repair exists as an authorized, audited fallback.
 
-## V1 is evidence, not authority
+## Authority and reading map
 
-Nothing from v1 is a requirement, fact, accepted design, or proven result merely because it exists or is written confidently. This includes code, documentation, reports, configuration, schemas, environment variables, provider choices, thresholds, and operational practices. The few files retained by the v2 reset may also contain v1 assumptions.
+Authority descends from the maintainer's current instruction, to accepted current specifications/decisions, to implemented behavior, to tests and dated validation evidence, and finally to historical material. Resolve conflicts visibly. Proposed documents do not become accepted merely by being committed.
 
-V1 is preserved at the immutable `archive/v1-final` tag and on `release/v1`. Consult it only when history is relevant. When using it:
+| Task area | Read completely |
+| --- | --- |
+| Documentation authority and placement | [`docs/README.md`](docs/README.md) |
+| Product experience, risk profiles, offline use, and whimsy | [`docs/product/experience.md`](docs/product/experience.md) |
+| Whimsical-to-domain vocabulary | [`docs/product/glossary.md`](docs/product/glossary.md) |
+| Architecture, monorepo, diagrams, runtime boundaries, and self-healing | [`docs/architecture/principles.md`](docs/architecture/principles.md) |
+| Data placement, telemetry, audit, identity, ownership, and roles | [`docs/architecture/data-identity-observability.md`](docs/architecture/data-identity-observability.md) |
+| Implementation and testing standards | [`docs/engineering/standards.md`](docs/engineering/standards.md) |
+| CI/CD, remote operation, secrets, and deployment | [`docs/operations/delivery.md`](docs/operations/delivery.md) |
+| Branches, tags, and v2 cutover | [`docs/development/version-control.md`](docs/development/version-control.md) |
+| Parallel planning, claims, worktrees, stale sessions, and handoff | [`docs/development/parallel-work.md`](docs/development/parallel-work.md) |
 
-- first state the v2 question independently;
-- label the v1 material as a hypothesis or historical observation;
-- identify its data, date, assumptions, and failure modes;
-- reproduce or revalidate any load-bearing claim with v2 evidence;
-- prefer a simpler or materially different design when it better meets the current drivers.
+As architecture becomes concrete, add a source/deployment map here or link its index. Do not make agents infer current boundaries from directory names alone.
 
-Never copy v1 implementation into v2 without an explicit rationale and current tests. Similar behavior is not proof that the old boundary or abstraction should survive.
-
-## Authority and claims
-
-For the desired system, authority descends in this order:
-
-1. the maintainer's current instruction;
-2. accepted v2 specifications and architecture decisions;
-3. implemented behavior, which says only what the system currently does;
-4. tests and dated validation reports, which are evidence within their documented scope;
-5. historical material, including all v1 content.
-
-Resolve contradictions visibly instead of choosing silently. Distinguish facts, assumptions, hypotheses, decisions, and unknowns in design work. Cite the artifact or reproducible command behind consequential claims. A test proves only the property it actually exercises.
-
-Do not present estimates, forecasts, simulations, paper results, or backtests as realized outcomes. Record sample size, as-of time, exclusions, uncertainty, and the largest known validity threat with quantitative findings.
-
-## Architecture before implementation
-
-Do not begin production feature implementation until the maintainer has accepted a baseline architecture appropriate to that feature. The baseline should cover, at the level needed to make the next decisions:
-
-- system context, actors, use cases, and out-of-scope behavior;
-- measurable quality attributes and failure budgets;
-- domain boundaries and dependency direction;
-- trust boundaries, identity, authorization, and tenant isolation;
-- data ownership, lineage, schemas, quality states, retention, and recovery;
-- forecast and experiment lifecycles, including leakage prevention;
-- risk evaluation, authorization, execution, and audit boundaries;
-- runtime processes, deployment topology, scaling, and failure isolation;
-- user-facing read models and visual explanations;
-- observability, incident response, and safe degradation;
-- alternatives, tradeoffs, unresolved risks, and validation plans.
-
-Use diagrams where relationships or data flow are easier to inspect visually. Record durable, cross-cutting choices as short architecture decision records: context, options, decision, consequences, status, and validation. Do not write an ADR to justify a decision after silently coding it.
-
-Prefer technology-neutral requirements before selecting infrastructure. A technology choice must identify the constraint it satisfies, alternatives considered, operational cost, security implications, and an exit path when lock-in is material.
-
-As records are introduced, keep a small navigable set rather than a diary: an architecture overview, accepted ADRs, bounded specifications, current status, experiment definitions, and dated validation reports. Proposed text does not become accepted merely by being committed.
-
-## Design principles to evaluate
-
-These are v2 defaults to test through architecture work, not claims that a particular implementation already exists:
-
-- Keep domain decisions deterministic and separate from I/O, orchestration, presentation, and vendor adapters.
-- Separate observation, forecast, risk, authorization, execution, and reconciliation. A forecast must not acquire execution authority by being returned from the same process.
-- Make risk decisions explainable under time pressure: include inputs, source/as-of times, quality, uncertainty, policy version, decision, and reasons. Missing, stale, contradictory, or unauthorized inputs fail closed at authority boundaries.
-- Keep canonical writes owned by one boundary. Derive purpose-built, rebuildable read models for rich visual surfaces instead of forcing the UI onto transactional models.
-- Treat source time and ingestion time separately. Preserve provenance and schema/version information so point-in-time reconstruction is possible.
-- Make forecasting reproducible from versioned inputs, code/configuration, horizons, and evaluation cohorts. Prevent future-data leakage and compare against declared baselines.
-- Give every experiment an identity, hypothesis, owner, cohort/assignment rule, metrics, guardrails, start/stop criteria, and isolated state. Experiments must not silently mutate production policy or share execution authority.
-- Design long-running work, scheduled work, and request/response services explicitly. Do not assume local disk, process residency, ordering, or serverless behavior without documenting it.
-- Carry authenticated tenant context from the trusted boundary to every tenant-owned read, write, cache key, event, job, metric, and audit record. Client-supplied tenant identifiers are never authorization.
-- Use least privilege and defense in depth. Test cross-tenant denial, not only same-tenant success.
-- Prefer reversible increments and explicit compatibility boundaries over a large coupled build.
-
-Money Noodle v2 begins with **no real-money authority**. Adding any funded capability requires explicit maintainer approval plus an accepted threat model, deterministic limits, independent authorization, idempotency, reconciliation, kill controls, tamper-evident audit, sandbox/paper evidence, and failure-path tests. Never deploy, enable external side effects, rotate credentials, or move funds without an explicit instruction.
-
-## Data, security, and privacy
-
-- Validate external data at ingestion and retain the reason for rejection or degradation.
-- Represent unknown, absent, stale, invalid, and zero as different states.
-- Define units, precision, timezone, identifiers, and null semantics in contracts; do not rely on naming conventions alone.
-- Never commit secrets, private keys, tokens, customer data, or production snapshots. Do not print secret values in commands or handoffs.
-- Encrypt sensitive data in transit and at rest using managed controls where possible. Document key ownership and rotation.
-- Authorization belongs server-side and defaults to deny. Administrative and service access must be scoped and audited.
-- Tenant isolation must be enforced at repository/service boundaries and, where supported, again in storage policy. Background jobs and caches require the same isolation as HTTP requests.
-- Logs, traces, analytics, exports, backups, and error reports are part of the data boundary; redact and scope them accordingly.
-- Define retention, deletion, export, backup, and restore behavior before storing sensitive tenant data.
-
-## Implementation and validation workflow
+## Working method
 
 For each change:
 
-1. Inspect the current branch, accepted v2 records, and relevant source. Do not rely on memory.
-2. Write the problem, scope, assumptions, acceptance criteria, and risks.
-3. Resolve architecture-impacting decisions before production code. Use a bounded spike only for an explicit uncertainty.
-4. Implement the smallest end-to-end slice that preserves boundaries. Avoid speculative frameworks and generalized abstractions without a second demonstrated use.
-5. Add tests at the cheapest effective level and negative tests at trust, tenant, data-quality, and authority boundaries.
-6. Run all relevant repository checks plus focused tests. Never weaken a gate merely to make it pass.
-7. Validate the acceptance criteria independently of the implementation path and record remaining uncertainty.
-8. Update architecture, specification, decision, and operational records in the same change when their truth changed.
+1. Inspect branch/status, run the coordination status command, and read the shared plan, active worktrees/claims, routed current documents, and relevant source.
+2. Update the shared plan as needed, then state and claim the problem, scope, facts, assumptions, unknowns, acceptance criteria, dependencies, and risk.
+3. Resolve cross-boundary decisions and update proposed/accepted visual architecture before production code.
+4. Implement the smallest reversible vertical slice with explicit contracts.
+5. Add focused tests plus negative tests at authority, tenant, data-quality, concurrency, and external-effect boundaries.
+6. Run all available affected-project and repository checks. Never weaken a gate merely to pass.
+7. Validate acceptance independently of the implementation path and record remaining uncertainty.
+8. Update the owning docs, diagrams, decisions, status, and this map in the same change when their truth changed.
 
-Favor pure domain tests, schema/contract tests, adapter integration tests, and a small number of end-to-end journeys. Use deterministic clocks, random seeds, and fixtures. Add regression tests for defects. Risk rules need boundary and invariant/property tests; forecasting needs leakage, calibration, baseline, and walk-forward checks; multitenancy needs explicit cross-tenant attack cases; process isolation needs crash, retry, duplication, and partial-failure tests; deployment needs migration, startup, health, rollback, and restore checks.
+Recalculate before making consequential quantitative claims. Distinguish fact, hypothesis, estimate, simulation, and realized result. Include as-of time, sample, exclusions, uncertainty, and the largest validity threat.
 
-Read the current package/build manifests before naming commands. Do not assume v1 commands or the retained CI workflow apply to v2. If a required check does not yet exist, report that gap rather than claiming completion. Never delete or rewrite a failing test without explaining why its asserted requirement is invalid.
+## Keep the guidance operational
 
-## Branch and tag strategy
+This is a living standard and safety envelope, not an exhaustive specification or ceiling on judgment. Requirements and safety controls remain constraints until deliberately changed; conventions and preferred tools are challengeable defaults. Surface stale or obstructive guidance and propose a better validated approach rather than following it mechanically.
 
-### Preserved state
+- Keep this root file navigational and present-tense. Move detailed subject matter to one owning document and link it here.
+- Do not duplicate a rule across several files. A summary here must point to its authority.
+- Rewrite stale guidance instead of appending corrections or migration diaries. History belongs in Git, ADRs, releases, and dated validation records.
+- Use nested `AGENTS.md` files only for stable instructions local to a substantial subtree.
+- Use agent skills for repeatable procedures that benefit from executable or stepwise guidance, not as hidden requirement authority. Skills must route back to current repository documents and remain testable. Automate parallel-work preflight only after the documented manual protocol is stable.
+- Update this file when phase, terminology, source map, commands, safety boundaries, deployment, or routing changes.
+- At v2 cutover, remove migration-only v1/v2 language and evolve this into the **Money Noodle Platform Agent Guide**.
 
-- `archive/v1-final` is the immutable annotated tag for the final v1 `main` tip before the rebuild (`4b71b61894622b1c01f3552f9c7af5592cb2800a`). Never move or delete it.
-- `release/v1` preserves the maintainable v1 line. Only explicitly requested critical v1 fixes branch from and merge back to it. Never merge v2 work into it.
-- `main` represents the current releasable major version. It remains v1 until the v2 cutover, then becomes the protected v2 trunk.
-- `v2` is the temporary integration branch rooted at the v2 reset. It is the base and merge target until cutover; do not merge later v1 commits into it merely to make histories look current.
+## Current repository state
 
-### Working branches
+Development currently targets `v2`; work occurs on short-lived typed branches such as the current `arch/v2-foundation`. `main` remains the v1 production line until the controlled cutover. The immutable v1 archive and maintenance refs are documented in [`docs/development/version-control.md`](docs/development/version-control.md).
 
-Create a short-lived branch from the current integration target for every bounded change. While building v2, that target is `v2`; after cutover it is `main`.
+The v2 foundation has selected pnpm workspaces and Nx, but their manifests and command contract are not implemented or validated yet. Foundation CI currently validates documentation and coordination tooling only; full project type, lint, test, build, and deployment gates remain missing until workspace scaffolding. Read current manifests before naming commands; report missing gates instead of claiming completion. Update this section as soon as foundation tooling exists.
 
-Use `<type>/<short-kebab-description>`:
+## Safety and handoff
 
-- `arch/` architecture and ADRs;
-- `feat/` product behavior;
-- `fix/` defects;
-- `test/` test or validation infrastructure;
-- `docs/` non-architectural documentation;
-- `chore/` tooling and maintenance;
-- `spike/` disposable uncertainty reduction.
+Never commit or print secrets, customer data, private keys, or production snapshots. Never enable funded authority, trigger provider automation manually, alter protected refs, or deploy outside the approved pipeline without explicit instruction.
 
-The initial branch is `arch/v2-foundation`. Keep branches single-purpose, incorporate the latest target before merge, and do not mix opportunistic cleanup into them. Prefer reviewable commits whose imperative subject states the change or finding. Do not commit directly to `main`, `v2`, or `release/v1`; merge only after review and required checks pass.
-
-Use annotated, immutable Semantic Versioning tags (`vMAJOR.MINOR.PATCH`) for v2 releases after acceptance. Do not retroactively invent a v1 semantic version; its archive tag is its stable marker. Tags identify source; deployment and environment promotion are separate, auditable actions. Never retag a different commit.
-
-At v2 cutover: freeze writes to both lines, verify the v1 archive refs, run the complete v2 validation plan, merge v2 into `main` without rewriting history, verify that the resulting source tree is the accepted v2 tree, tag `v2.0.0`, and deploy only with explicit approval. Keep `release/v1` and `archive/v1-final`; remove the temporary `v2` branch only after the cutover is verified. Roll back through the deployment system to a known tag—never by moving a tag or force-pushing shared history.
-
-Do not push branches, merge, tag a release, alter protected refs, or deploy unless the maintainer requested that action. If a push is requested, confirm remote CI rather than assuming local checks predict it.
-
-## Handoff standard
-
-Report the branch, changed paths, architecture or requirement decisions, checks run and exact failures, evidence collected, security/tenant impact, deployment impact, and unresolved risks. Say explicitly when work is only a proposal, spike, unvalidated implementation, or locally validated change. Completion means the documented acceptance criteria are met—not merely that code was written.
+Report the branch, changed paths, decisions, checks and exact failures, evidence, security/tenant impact, deployment impact, and unresolved risks. Label work accurately as proposal, spike, unvalidated implementation, locally validated change, or deployed-and-verified change. Completion means documented acceptance criteria are met, not merely that code was written.
