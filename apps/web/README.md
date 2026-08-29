@@ -9,9 +9,10 @@
 - Runtime: Node.js 22.22.0, Next.js 16, React 19.
 - Platform transport: `@money-noodle/platform-api-client` only.
 - Deployment unit: `money-noodle/web` OCI image.
-- Configuration: `PORT` and `HOSTNAME`; the platform API origin is introduced with the first API-backed slice.
+- Configuration: `PORT`, `HOSTNAME`, required production `PLATFORM_API_ORIGIN`, and safe `ARTIFACT_VERSION`; these are non-secret typed values.
 - Data/schema ownership: none.
-- Health: provider-level process/readiness checks are defined during deployment composition; the public platform status is not implemented by this scaffold.
+- Health: `/health/live` reports process/artifact identity; `/health/ready` additionally requires valid production API-origin configuration.
+- Public presentation: the server-side generated client performs one 1.5-second, no-retry, no-store status read. Transport, timeout, malformed, and incompatible responses render `Status unknown` without stale or healthy fallback.
 
 ## Commands
 
@@ -26,4 +27,4 @@ pnpm nx run web:container
 pnpm nx run web:dev
 ```
 
-The current page is a non-authoritative scaffold and deliberately reports no platform status.
+The availability card presents only the API-provided state, source time, and artifact version. Text communicates every state independently of color. Existing `noodle.money` DNS and provider deployment remain outside this project.

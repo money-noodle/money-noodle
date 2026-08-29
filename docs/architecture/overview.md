@@ -271,7 +271,7 @@ flowchart LR
 
 ## Source and deployment map
 
-The workspace, projects, contracts, generated client, and container definitions below exist. Presentation/API adapters named for the vertical slice and `infra/` are created only in their owning implementation tasks.
+The workspace, projects, status contract, generated client, web presentation/API adapter, API inner layers/HTTP/deployment adapters, health routes, and container definitions below exist. `infra/` remains unimplemented until its owning task.
 
 | Path | Project/deployment | Boundary and ownership |
 | --- | --- | --- |

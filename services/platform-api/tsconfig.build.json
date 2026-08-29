@@ -4,7 +4,7 @@
     "declaration": true,
     "declarationMap": true,
     "noEmit": false,
-    "outDir": "../../dist/services/platform-api",
+    "outDir": "./dist",
     "rootDir": "src",
     "sourceMap": true
   },

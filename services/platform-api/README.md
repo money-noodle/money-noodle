@@ -9,11 +9,12 @@
 - Runtime: Node.js 22.22.0 and Fastify 5.
 - Canonical contract: `openapi/platform-api.v1.yaml` (OpenAPI 3.1).
 - Deployment unit: `money-noodle/platform-api` OCI image.
-- Configuration: optional `PORT`, default `3001`; no operational secret exists in this scaffold.
+- Configuration: optional `PORT` (default `3001`), safe `ARTIFACT_VERSION` (local default `development`), and optional contract path override; none is secret.
 - Data/schema ownership: none.
-- Health: liveness/readiness and the public platform-status operation are deliberately deferred to the first vertical slice.
+- Health: `/health/live` and `/health/ready` return minimal process/readiness and artifact identity without topology.
+- Public read: `GET /v1/platform/status` returns only the accepted state, UTC source time, service/version, schema version, and bounded request ID.
 
-The empty v1 document exposes no operation or response schema. RFC 9457 problem details are added with the first real operation so lint never hides an unused contract. Generated transport files are owned by `packages/platform-api-client` and must not enter API domain models.
+The API loads its canonical OpenAPI 3.1 document at startup and compiles JSON Schema 2020-12 runtime assertions for status, health, and RFC 9457 problem responses. A malformed application result fails closed as safe problem details. Generated transport files remain owned by `packages/platform-api-client` and never enter API domain models.
 
 ## Commands
 
@@ -29,4 +30,4 @@ pnpm nx run platform-api:container
 pnpm nx run platform-api:dev
 ```
 
-The scaffold server intentionally returns `404` for `/v1/platform/status`; issue #8 owns that behavior.
+The status query is framework-free and currently observes `available` without a database or external dependency. Request IDs accept a bounded propagated value or are regenerated; valid W3C trace context crosses the HTTP adapter for later provider-neutral OpenTelemetry composition.

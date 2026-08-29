@@ -2,9 +2,7 @@ openapi: 3.1.0
 info:
   title: Money Noodle Platform API
   summary: Interface-neutral Money Noodle platform contract.
-  description: >-
-    Canonical v1 transport contract. This foundation document deliberately exposes no
-    operations until the first accepted vertical slice is implemented.
+  description: Canonical v1 transport contract for public and operational platform reads.
   version: 1.0.0
   license:
     name: MIT
@@ -13,4 +11,165 @@ jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
 servers:
   - url: /
     description: Runtime-configured API origin.
-paths: {}
+security: []
+tags:
+  - name: Platform
+    description: Safe public platform observations.
+  - name: Operations
+    description: Minimal deployment health probes.
+paths:
+  /v1/platform/status:
+    get:
+      operationId: getPlatformStatus
+      summary: Read the current public platform availability observation.
+      tags: [Platform]
+      responses:
+        '200':
+          description: Current authoritative platform availability observation.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformStatus'
+        '404':
+          $ref: '#/components/responses/Problem'
+        default:
+          $ref: '#/components/responses/Problem'
+  /health/live:
+    get:
+      operationId: getLiveness
+      summary: Confirm that the API process can answer HTTP requests.
+      tags: [Operations]
+      responses:
+        '200':
+          description: Process is live.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '404':
+          $ref: '#/components/responses/Problem'
+        default:
+          $ref: '#/components/responses/Problem'
+  /health/ready:
+    get:
+      operationId: getReadiness
+      summary: Confirm that the API is ready to serve its declared contract.
+      tags: [Operations]
+      responses:
+        '200':
+          description: Deployment is ready.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '404':
+          $ref: '#/components/responses/Problem'
+        default:
+          $ref: '#/components/responses/Problem'
+components:
+  headers:
+    RequestId:
+      description: Bounded diagnostic correlation identifier.
+      schema:
+        $ref: '#/components/schemas/RequestId'
+  responses:
+    Problem:
+      description: Safe RFC 9457 problem details response.
+      headers:
+        x-request-id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    PlatformStatus:
+      type: object
+      additionalProperties: false
+      required: [state, asOf, service, schemaVersion, requestId]
+      properties:
+        state:
+          type: string
+          enum: [available, degraded, maintenance]
+        asOf:
+          type: string
+          format: date-time
+        service:
+          $ref: '#/components/schemas/ServiceDescriptor'
+        schemaVersion:
+          type: string
+          const: '1'
+        requestId:
+          $ref: '#/components/schemas/RequestId'
+    ServiceDescriptor:
+      type: object
+      additionalProperties: false
+      required: [name, version]
+      properties:
+        name:
+          type: string
+          const: platform-api
+        version:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._+-]*$'
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status, service, version]
+      properties:
+        status:
+          type: string
+          enum: [live, ready]
+        service:
+          type: string
+          const: platform-api
+        version:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._+-]*$'
+    Problem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, errorCode, requestId]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          default: about:blank
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+          minLength: 1
+          maxLength: 500
+        instance:
+          type: string
+          format: uri-reference
+        errorCode:
+          type: string
+          pattern: '^MN-[A-Z0-9-]{3,48}$'
+        requestId:
+          $ref: '#/components/schemas/RequestId'
+    RequestId:
+      type: string
+      minLength: 1
+      maxLength: 128
+      pattern: '^[A-Za-z0-9._:-]+$'

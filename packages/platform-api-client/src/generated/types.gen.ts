@@ -3,3 +3,121 @@
 export type ClientOptions = {
     baseUrl: `${string}://${string}` | (string & {});
 };
+
+export type PlatformStatus = {
+    state: 'available' | 'degraded' | 'maintenance';
+    asOf: string;
+    service: ServiceDescriptor;
+    schemaVersion: '1';
+    requestId: RequestId;
+};
+
+export type ServiceDescriptor = {
+    name: 'platform-api';
+    version: string;
+};
+
+export type Health = {
+    status: 'live' | 'ready';
+    service: 'platform-api';
+    version: string;
+};
+
+export type Problem = {
+    type: string;
+    title: string;
+    status: number;
+    detail?: string;
+    instance?: string;
+    errorCode: string;
+    requestId: RequestId;
+};
+
+export type RequestId = string;
+
+export type GetPlatformStatusData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/v1/platform/status';
+};
+
+export type GetPlatformStatusErrors = {
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    404: Problem;
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    default: Problem;
+};
+
+export type GetPlatformStatusError = GetPlatformStatusErrors[keyof GetPlatformStatusErrors];
+
+export type GetPlatformStatusResponses = {
+    /**
+     * Current authoritative platform availability observation.
+     */
+    200: PlatformStatus;
+};
+
+export type GetPlatformStatusResponse = GetPlatformStatusResponses[keyof GetPlatformStatusResponses];
+
+export type GetLivenessData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/health/live';
+};
+
+export type GetLivenessErrors = {
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    404: Problem;
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    default: Problem;
+};
+
+export type GetLivenessError = GetLivenessErrors[keyof GetLivenessErrors];
+
+export type GetLivenessResponses = {
+    /**
+     * Process is live.
+     */
+    200: Health;
+};
+
+export type GetLivenessResponse = GetLivenessResponses[keyof GetLivenessResponses];
+
+export type GetReadinessData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/health/ready';
+};
+
+export type GetReadinessErrors = {
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    404: Problem;
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    default: Problem;
+};
+
+export type GetReadinessError = GetReadinessErrors[keyof GetReadinessErrors];
+
+export type GetReadinessResponses = {
+    /**
+     * Deployment is ready.
+     */
+    200: Health;
+};
+
+export type GetReadinessResponse = GetReadinessResponses[keyof GetReadinessResponses];
