@@ -36,6 +36,8 @@ describe('execution ledger commit cache', () => {
     postgres.sync.mockResolvedValue(undefined);
   });
 
+  // Serialized against the real durable store, so it exceeds the 5s default whenever the box is also
+  // running the desk. Timed per test rather than globally, so a genuine hang elsewhere still fails fast.
   it('publishes a compact committed value only after atomic rename', async () => {
     const execution = await import('./paper-execution');
     const events: string[] = [];
@@ -47,16 +49,20 @@ describe('execution ledger commit cache', () => {
     expect(io.writeFile.mock.calls[0][1]).not.toContain('\n');
     expect(await execution.getPaperBankrollStartingCents()).toBe(1_000);
     expect(io.readFile).toHaveBeenCalledTimes(1);
-  });
+  }, 20_000);
 
+  // Serialized against the real durable store, so it exceeds the 5s default whenever the box is also
+  // running the desk. Timed per test rather than globally, so a genuine hang elsewhere still fails fast.
   it('invalidates memory and reloads the prior durable generation after failed rename', async () => {
     const execution = await import('./paper-execution');
     io.rename.mockRejectedValueOnce(new Error('rename failed'));
     await expect(execution.resetPaperBudget(1_000)).rejects.toThrow('rename failed');
     expect(await execution.getPaperBankrollStartingCents()).toBe(10_000);
     expect(io.readFile).toHaveBeenCalledTimes(2);
-  });
+  }, 20_000);
 
+  // Serialized against the real durable store, so it exceeds the 5s default whenever the box is also
+  // running the desk. Timed per test rather than globally, so a genuine hang elsewhere still fails fast.
   it('reloads disk when an operation throws after an intermediate commit', async () => {
     postgres.enabled.mockReturnValue(true);
     postgres.sync.mockImplementationOnce(() => { throw new Error('post-commit failure'); });
@@ -65,7 +71,7 @@ describe('execution ledger commit cache', () => {
     expect(io.rename).toHaveBeenCalledTimes(1);
     expect(await execution.getPaperBankrollStartingCents()).toBe(10_000);
     expect(io.readFile).toHaveBeenCalledTimes(2);
-  });
+  }, 20_000);
 
   it('does not retain the retired one-second strategy precheck', () => {
     const source = readFileSync(new URL('./paper-execution.ts', import.meta.url), 'utf8');
@@ -80,6 +86,8 @@ describe('execution ledger commit cache', () => {
     expect(summary).not.toContain('readLedgerView((value) => value)');
   });
 
+  // Serialized against the real durable store, so it exceeds the 5s default whenever the box is also
+  // running the desk. Timed per test rather than globally, so a genuine hang elsewhere still fails fast.
   it('returns detached filtered order rows rather than the committed objects', async () => {
     io.readFile.mockResolvedValue(JSON.stringify({
       ...emptyLedger,
@@ -95,5 +103,5 @@ describe('execution ledger commit cache', () => {
     rows[0].id = 'mutated-reader-copy';
     expect((await execution.getExecutionOrders({ executionMode: 'paper', strategyId: 'edge-binary-buy' }))[0].id).toBe('paper');
     expect(io.readFile).toHaveBeenCalledTimes(1);
-  });
+  }, 20_000);
 });

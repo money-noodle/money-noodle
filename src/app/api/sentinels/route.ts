@@ -2,6 +2,8 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { isAuthenticatedRequest } from '@/lib/auth';
 import { isStatelessDeployment, STATELESS_WORKER_MESSAGE } from '@/lib/runtime-environment';
 import { getExecutionOrders } from '@/lib/paper-execution';
+import { strategyOrders } from '@/lib/execution-report';
+import { EDGE_BINARY_BUY } from '@/lib/strategy-registry';
 import { getExitPolicySentinelReport } from '@/lib/exit-policy-sentinel-store';
 import { getMakerRestrictionSentinelReport } from '@/lib/maker-restriction-sentinel-store';
 import { getMakerLifecycleSentinelReport } from '@/lib/maker-lifecycle-sentinel-store';
@@ -60,7 +62,10 @@ export async function GET(request: NextRequest) {
   if (isStatelessDeployment()) return NextResponse.json({ error: STATELESS_WORKER_MESSAGE }, { status: 503 });
 
   try {
-    const orders = await getExecutionOrders({ includeArchivedEvidence: false });
+    // The same strategy-narrowed cohort the Performance view feeds these reports. Passing the whole ledger
+    // admitted rows that view excludes, so one instrument reported different windows and coverage in the two
+    // dialogs with nothing to say which was authoritative.
+    const orders = strategyOrders(await getExecutionOrders({ includeArchivedEvidence: false }), EDGE_BINARY_BUY);
     // One failing store must not blank the whole view: each projection is settled independently.
     const [exit, maker, lifecycle, spike, hourly] = await Promise.allSettled([
       getExitPolicySentinelReport(orders),

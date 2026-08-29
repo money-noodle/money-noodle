@@ -46,6 +46,16 @@ describe('sentinel registry', () => {
     expect(readFileSync(join(dir, 'sentinel-registry.ts'), 'utf8')).not.toMatch(/placeOrder|submitOrder|arm\(/);
   });
 
+  // The Performance view feeds these same reports `funding.edgeOrders`. Passing the whole ledger here made
+  // one instrument report different windows and coverage in two dialogs, with nothing saying which was right.
+  it('projects sentinels from the same strategy-narrowed cohort the performance view uses', () => {
+    const route = readFileSync(join(process.cwd(), 'src/app/api/sentinels/route.ts'), 'utf8');
+    expect(route).toMatch(/strategyOrders\(/);
+    expect(route).toMatch(/EDGE_BINARY_BUY/);
+    // The raw ledger must not reach a report builder unnarrowed.
+    expect(route).not.toMatch(/getExitPolicySentinelReport\(\s*await getExecutionOrders/);
+  });
+
   it('raises the Holm bar as the frozen family grows', () => {
     const two = holmBestArmThreshold(2);
     const five = holmBestArmThreshold(5);

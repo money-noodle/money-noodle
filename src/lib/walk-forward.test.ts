@@ -74,6 +74,8 @@ describe('walk-forward evaluation', () => {
     expect(after).toBe(before);
   });
 
+  // Deliberately slow: this replays a full evaluation and exceeds the 5s default whenever the box is
+  // also running the desk. Timed per test rather than globally, so a genuine hang elsewhere still fails fast.
   it('uses expanding chronological folds and never changes production', () => {
     const dataset = buildWalkForwardDataset(Array.from({ length: 100 }, (_, index) => forecast(index)));
     const run = runWalkForwardEvaluation(dataset, 100, '2026-02-10T00:00:00Z');
@@ -87,7 +89,7 @@ describe('walk-forward evaluation', () => {
     expect(run.candidate.windows).toBe(50);
     expect(run.productionChanged).toBe(false);
     expect(run.datasetFingerprint).toMatch(/^fnv1a-/);
-  });
+  }, 20_000);
 
   it('refuses to evaluate before its formal checkpoint', () => {
     const dataset = buildWalkForwardDataset(Array.from({ length: 99 }, (_, index) => forecast(index)));
