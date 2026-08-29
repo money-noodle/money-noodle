@@ -362,6 +362,17 @@ test('the delivery workflow does not weaken or replace the existing CI gate', ()
   ]) {
     assert.ok(ci.includes(gate), `ci.yml no longer runs its \`${gate}\` gate`);
   }
+  const secretJob = ci.match(/\n  secrets:\n([\s\S]*?)(?=\n  [a-z][a-z0-9-]*:\n|$)/)?.[1];
+  assert.ok(secretJob, 'ci.yml must retain the secret-scan job');
+  assert.match(
+    secretJob,
+    /pull-requests:\s*read/,
+    'gitleaks must be able to list pull-request commits; without read permission it exits 403 before scanning',
+  );
+  assert.ok(
+    !/pull-requests:\s*write/.test(secretJob),
+    'the secret scanner reads PR commits and never needs pull-request write authority',
+  );
 });
 
 test('the workflow authorised for delivery is the one that exists', () => {
