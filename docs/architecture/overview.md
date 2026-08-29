@@ -33,7 +33,7 @@ It is intentionally not a complete platform decomposition. New domains, stores, 
 
 ### Open decisions
 
-The hosting provider, image registry, secret store, infrastructure-as-code tool, telemetry backend, public DNS layout, production rollback mechanism, and quantitative service objectives remain to be selected or measured. Identity, PostgreSQL provider, tenant schema ownership, and provider integrations are deliberately deferred because the first slice does not need them.
+The hosting provider, image registry, secret store, infrastructure-as-code tool, telemetry backend, public DNS layout, production rollback mechanism, and quantitative service objectives remain to be selected or measured. A dated comparison and a proposed composition for all of these except the quantitative objectives is in [`../operations/deployment-composition.md`](../operations/deployment-composition.md) with proposed records [`ADR-0004`](decisions/ADR-0004-first-remote-hosting-composition.md) through [`ADR-0007`](decisions/ADR-0007-first-telemetry-backend.md); none is accepted, so these decisions remain open. Identity, PostgreSQL provider, tenant schema ownership, and provider integrations are deliberately deferred because the first slice does not need them.
 
 ## Accepted boundary
 

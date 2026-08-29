@@ -14,6 +14,7 @@
 | Data, telemetry, audit, identity, and authorization | [`architecture/data-identity-observability.md`](architecture/data-identity-observability.md) |
 | Engineering and testing | [`engineering/standards.md`](engineering/standards.md) |
 | Delivery and operations | [`operations/delivery.md`](operations/delivery.md) |
+| First remote deployment composition comparison (proposed) | [`operations/deployment-composition.md`](operations/deployment-composition.md) |
 | Version control and cutover | [`development/version-control.md`](development/version-control.md) |
 | Parallel planning, work claims, stale detection, and handoff | [`development/parallel-work.md`](development/parallel-work.md) |
 

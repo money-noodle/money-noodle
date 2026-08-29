@@ -32,7 +32,7 @@ Each service exclusively owns its database schema and data and uses a least-priv
 
 ## Secrets and infrastructure
 
-The secret-store provider and infrastructure-as-code tool remain open architecture decisions. Infrastructure definitions and desired configuration live in source control. Mutable infrastructure state lives in an encrypted durable remote backend with concurrency locking, versioning, and backup; never commit raw state to Git. Detect and surface drift against the source-controlled desired state, and keep reconstruction/reconciliation procedures tested.
+The secret-store provider and infrastructure-as-code tool remain open architecture decisions. A dated comparison and a proposed composition covering hosting, registry, DNS/TLS, CI federation, IaC and remote state, secret store, and telemetry backend is in [`deployment-composition.md`](deployment-composition.md); it is a proposal awaiting maintainer acceptance and does not change this standard. Infrastructure definitions and desired configuration live in source control. Mutable infrastructure state lives in an encrypted durable remote backend with concurrency locking, versioning, and backup; never commit raw state to Git. Detect and surface drift against the source-controlled desired state, and keep reconstruction/reconciliation procedures tested.
 
 Every operational secret has a durable source of truth in an approved managed secret store or equivalent encrypted durable system; laptop environment files are never canonical or unique. Document owner, access, rotation, recovery, and revocation.
 
