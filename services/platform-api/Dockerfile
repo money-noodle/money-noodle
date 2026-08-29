@@ -40,7 +40,8 @@ RUN apk add --no-cache --upgrade \
 
 COPY --from=build --chown=api:nodejs /runtime/package.json ./package.json
 COPY --from=build --chown=api:nodejs /runtime/node_modules ./node_modules
-COPY --from=build --chown=api:nodejs /workspace/dist/services/platform-api ./dist
+COPY --from=build --chown=api:nodejs /workspace/services/platform-api/dist ./dist
+COPY --from=build --chown=api:nodejs /workspace/services/platform-api/openapi ./services/platform-api/openapi
 
 USER api
 EXPOSE 3001

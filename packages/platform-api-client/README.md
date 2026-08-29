@@ -25,4 +25,4 @@ pnpm nx run platform-api-client:build
 pnpm nx run platform-api:contract
 ```
 
-The contract check regenerates into a temporary directory and compares bytes, so stale or nondeterministic generated output fails without relying on the Git staging state.
+The contract check regenerates into a temporary directory and compares bytes, so stale or nondeterministic generated output fails without relying on the Git staging state. The current client exports `getPlatformStatus`, `getLiveness`, `getReadiness`, and their OpenAPI-derived wire types. Generated static types do not replace runtime response validation at API and web trust boundaries.
