@@ -63,6 +63,8 @@ export interface EdgeSpikeArm {
 
 export interface EdgeSpikeSentinelReport {
   sentinelVersion: string;
+  /** When collection opened, so a reader can see how long the evidence took to accrue. */
+  startedAt?: string;
   policyVersion: string;
   samples: number;
   resolvedSamples: number;

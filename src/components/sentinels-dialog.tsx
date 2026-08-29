@@ -92,6 +92,12 @@ function SentinelCard({ sentinel }: { sentinel: SentinelProjection }) {
       <Lock className="mr-1 inline size-2.5"/>{sentinel.closedReason}
     </p>}
 
+    {/* A reviewed instrument shows what the review concluded, so a met threshold does not read as pending. */}
+    {sentinel.lastReviewedAt && <p className="mt-2 rounded border border-border bg-muted/20 p-2 text-[9px] leading-relaxed text-muted-foreground">
+      <span className="font-semibold text-foreground">Reviewed {sentinel.lastReviewedAt}.</span> {sentinel.lastReviewSummary}
+      {sentinel.lastReviewReport && <span className="ml-1 font-mono">({sentinel.lastReviewReport})</span>}
+    </p>}
+
     {sentinel.thresholds.length > 0 && <div className="mt-3 space-y-2">
       {sentinel.thresholds.map((threshold) => <ProgressRow key={threshold.label} {...threshold}/>)}
     </div>}

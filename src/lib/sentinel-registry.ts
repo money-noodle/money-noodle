@@ -46,6 +46,14 @@ export interface SentinelDescriptor {
   store: string;
   /** Why a non-collecting instrument stopped. Required whenever lifecycle is not `collecting`. */
   closedReason?: string;
+  /**
+   * When this instrument was last reviewed, and what that review concluded. A reviewed instrument that was
+   * told to keep collecting must not keep showing `locked-for-review`: the badge would ask for a review that
+   * has already happened, and the reader has no way to tell the difference.
+   */
+  lastReviewedAt?: string;
+  lastReviewSummary?: string;
+  lastReviewReport?: string;
 }
 
 export const SENTINELS: readonly SentinelDescriptor[] = [
@@ -85,6 +93,9 @@ export const SENTINELS: readonly SentinelDescriptor[] = [
     lifecycle: 'collecting',
     arms: ['admitted', 'declined'],
     store: 'edge-spike-sentinels',
+    lastReviewedAt: '2026-08-29',
+    lastReviewSummary: 'Reviewed at its bar: advantage −6.16pp ± 3.80 (t −1.62) and shrinking as evidence accrues, so arming the gate is not supported. The gate stays disarmed and collection continues.',
+    lastReviewReport: 'reports/edge-spike-gate-review-2026-08-29.md',
   },
   {
     id: 'hourly-threshold-observation-v1',
@@ -181,6 +192,10 @@ export function projectCompletion(
   if (!openedAt) return null;
   const elapsedMs = nowMs - Date.parse(openedAt);
   if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) return null;
+  // A rate only extrapolates a count. Coverage is a ratio that can sit below its bar indefinitely, so an
+  // unmet fraction threshold means the date is unknowable rather than soon -- projecting past it would
+  // promise a completion the instrument may never reach.
+  if (thresholds.some((threshold) => threshold.unit === 'fraction' && !threshold.met)) return null;
   const unmet = thresholds.filter((threshold) => !threshold.met && threshold.unit === 'count' && threshold.current > 0);
   if (!unmet.length) return null;
   const remainingMs = unmet.map((threshold) => (threshold.required - threshold.current) * (elapsedMs / threshold.current));

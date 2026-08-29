@@ -114,7 +114,12 @@ export async function GET(request: NextRequest) {
           };
         });
         const windows = Math.max(...tracks.map((track) => Math.max(0, ...track.arms.map((arm) => arm.windows))), 0);
-        if (limits) thresholds = [countThreshold('Complete windows', windows, limits.windows)];
+        const divergent = Math.max(...tracks.map((track) => Math.max(0, ...track.arms.map((arm) => arm.divergentWindows ?? 0))), 0);
+        // All three, not just the count: one met row beside a collecting badge reads as readiness.
+        if (limits) thresholds = [
+          countThreshold('Complete windows', windows, limits.windows),
+          countThreshold('Divergent windows', divergent, limits.divergentWindows),
+        ];
         reviewUnlocked = anyArmUnlocked([maker.value.tracks.live, maker.value.tracks.paper]);
       }
 
@@ -139,6 +144,7 @@ export async function GET(request: NextRequest) {
 
       if (descriptor.id === 'edge-spike-sentinel-v1' && spike.status === 'fulfilled') {
         const report = spike.value;
+        openedAt = report.startedAt ?? null;
         reviewUnlocked = report.reviewUnlocked;
         thresholds = [countThreshold('Resolved samples', report.resolvedSamples, report.reviewWindowsRequired)];
         observations = [
@@ -169,8 +175,10 @@ export async function GET(request: NextRequest) {
       return {
         ...descriptor,
         // A collecting instrument whose arms have cleared their counts is awaiting a maintainer, not still
-        // collecting. The registry constant cannot know that; the projection can.
-        lifecycle: descriptor.lifecycle === 'collecting' && reviewUnlocked ? 'locked-for-review' : descriptor.lifecycle,
+        // collecting -- unless a review has already happened and told it to keep going.
+        lifecycle: descriptor.lifecycle === 'collecting' && reviewUnlocked && !descriptor.lastReviewedAt
+          ? 'locked-for-review'
+          : descriptor.lifecycle,
         openedAt,
         reviewUnlocked,
         thresholds,

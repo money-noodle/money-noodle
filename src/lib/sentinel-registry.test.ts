@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   SENTINELS, SENTINEL_REGISTRY_VERSION, holmBestArmThreshold, projectCompletion, sentinelDescriptor,
@@ -80,6 +80,35 @@ describe('sentinel registry', () => {
     expect(projectCompletion(null, thresholds, now)).toBeNull();
     expect(projectCompletion(opened, [{ ...thresholds[0], current: 0 }], now)).toBeNull();
     expect(projectCompletion(opened, [{ ...thresholds[0], current: 60, met: true }], now)).toBeNull();
+  });
+
+  // Coverage is a ratio that can sit under its bar indefinitely, so extrapolating a count rate past it
+  // promised a completion date the instrument may never reach.
+  it('refuses to project a date while a ratio threshold is unmet', () => {
+    const opened = '2026-08-24T00:00:00.000Z';
+    const now = Date.parse('2026-08-28T00:00:00.000Z');
+    const counts: SentinelThresholdProgress[] = [{ label: 'Complete windows', current: 30, required: 60, met: false, unit: 'count' }];
+    expect(projectCompletion(opened, counts, now)).toBe('2026-09-01T00:00:00.000Z');
+    const withShortCoverage: SentinelThresholdProgress[] = [
+      ...counts,
+      { label: 'Observation coverage', current: 0.857, required: 0.9, met: false, unit: 'fraction' },
+    ];
+    expect(projectCompletion(opened, withShortCoverage, now)).toBeNull();
+    const withMetCoverage: SentinelThresholdProgress[] = [
+      ...counts,
+      { label: 'Observation coverage', current: 0.94, required: 0.9, met: true, unit: 'fraction' },
+    ];
+    expect(projectCompletion(opened, withMetCoverage, now)).toBe('2026-09-01T00:00:00.000Z');
+  });
+
+  // A review that concluded "keep collecting" must not leave the badge asking for a review.
+  it('records what a review concluded when one has happened', () => {
+    for (const sentinel of SENTINELS) {
+      if (!sentinel.lastReviewedAt) continue;
+      expect(sentinel.lastReviewSummary?.trim().length ?? 0, sentinel.id).toBeGreaterThan(20);
+      expect(sentinel.lastReviewReport, sentinel.id).toMatch(/^reports\/.+\.md$/);
+      expect(existsSync(join(process.cwd(), sentinel.lastReviewReport!)), `${sentinel.id} cites a missing report`).toBe(true);
+    }
   });
 
   it('resolves a descriptor by id and returns undefined for an unknown one', () => {

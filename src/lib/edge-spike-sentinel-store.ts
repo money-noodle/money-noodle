@@ -117,7 +117,14 @@ export function updateEdgeSpikeSentinels(observed: EdgeSpikeSentinel[]): Promise
 }
 
 export function getEdgeSpikeSentinelReport(policyVersion: string = BUY_POLICY_VERSION): Promise<EdgeSpikeSentinelReport> {
-  return serialized(async () => buildEdgeSpikeSentinelReport((await readStore()).sentinels, policyVersion));
+  return serialized(async () => {
+    const store = await readStore();
+    // The report is policy-scoped, so the meaningful start is when this cohort opened, not when the store
+    // was first created under an earlier policy.
+    const cohort = store.sentinels.filter((sentinel) => sentinel.policyVersion === policyVersion);
+    const openedAt = cohort.map((sentinel) => sentinel.createdAt).sort()[0] ?? store.startedAt;
+    return { ...buildEdgeSpikeSentinelReport(store.sentinels, policyVersion), startedAt: openedAt };
+  });
 }
 
 export function getEdgeSpikeSentinels(): Promise<EdgeSpikeSentinel[]> {
