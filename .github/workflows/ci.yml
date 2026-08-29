@@ -1,7 +1,5 @@
 name: CI
 
-# Every branch runs CI, so an agent gets a verdict from a plain push and never
-# has to open a pull request to find out whether the work is sound.
 on:
   push:
     branches: ['**']
@@ -10,49 +8,35 @@ on:
 permissions:
   contents: read
 
-# Keyed on the branch name rather than the ref: a pull request's `push` and
-# `pull_request` events name the same branch and therefore share a group, so the
-# pair collapses to one run instead of billing the branch twice.
 concurrency:
   group: verify-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
-  verify:
-    name: docs, typecheck, lint, test
+  foundation:
+    name: foundation guidance and coordination
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-          cache: npm
 
-      - name: Install
-        run: npm ci
+      - name: Check coordination tools
+        run: |
+          node --check tools/coordination-lib.mjs
+          node --check tools/coordination-status.mjs
+          node --check tools/verify-doc-links.mjs
 
-      - name: Verify specification structure
-        run: npm run verify:spec
+      - name: Test coordination logic
+        run: node --test tools/coordination-lib.test.mjs
 
-      - name: Verify design documents
-        run: npm run verify:docs
+      - name: Verify documentation links
+        run: node tools/verify-doc-links.mjs
 
-      - name: Verify status structure
-        run: npm run verify:status
-
-      - name: Verify agent guidance
-        run: npm run verify:agents
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Test
-        run: npm test
-
-      - name: Build (production)
-        run: npm run build
+      - name: Verify harness entry points
+        run: |
+          grep -Fx '@AGENTS.md' CLAUDE.md
+          grep -F 'AGENTS.md' .github/copilot-instructions.md

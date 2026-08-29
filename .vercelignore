@@ -1,6 +1,0 @@
-.next
-.cache
-data
-node_modules
-.env*
-*.tsbuildinfo
