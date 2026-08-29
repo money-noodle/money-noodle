@@ -12,6 +12,31 @@ dist/
 .env.*
 !.env.example
 
+# infrastructure working directories and state
+# `.terraform/` holds downloaded provider binaries: large, platform-specific, and
+# reproducible from `.terraform.lock.hcl`, which IS committed.
+# State is never committed: it is sensitive by default even when no secret was
+# ever declared (ADR-0006).
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+crash.log
+crash.*.log
+
+# Real infrastructure values. Every `*.tfvars` and backend config carries
+# account-specific identifiers supplied at bootstrap; only the `*.example`
+# templates are committed.
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+*.tfbackend
+!*.tfbackend.example
+
+# Saved plans can contain values that are sensitive even when no secret exists.
+*.tfplan
+*.tfplan.json
+
 # editor and OS files
 .DS_Store
 *.swp
