@@ -35,6 +35,7 @@ Reports marked **cited by current status** are the evidence [`STATUS.md`](../STA
 
 | Report | Question it answers |
 | --- | --- |
+| [`edge-spike-gate-review-2026-08-29`](edge-spike-gate-review-2026-08-29.md) | Whether the edge-spike sentinel's evidence supports arming the freshness gate |
 | [`early-taker-cutover-review-2026-08-28`](early-taker-cutover-review-2026-08-28.md) | Whether cancelling an unfilled maker at two seconds and taking the offer instead would have beaten the live rule |
 | [`maker-miss-fallback-v8-incident-2026-08-27`](maker-miss-fallback-v8-incident-2026-08-27.md) | Whether v8 executed its one-maker-then-taker-only lifecycle, what the refusal-routing defect affected, and what correction the fixed production cohort authorized — **cited by current status** |
 | [`maker-restriction-v1-fixed-review-2026-08-26`](maker-restriction-v1-fixed-review-2026-08-26.md) | Whether either prospective maker restriction cleared its fixed count, cash, clustered-return, Holm, and simultaneous-track gates — **cited by current status** |
