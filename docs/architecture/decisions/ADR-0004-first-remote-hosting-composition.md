@@ -1,8 +1,8 @@
 # ADR-0004: First remote hosting, registry, and public entry point
 
-> **Status:** Proposed
-> **Date proposed:** 2026-08-29
-> **Owners:** Platform foundation; maintainer decides
+> **Status:** Accepted
+> **Date accepted:** 2026-08-29
+> **Owners:** Platform foundation; accepted by maintainer
 > **Related architecture:** [`../overview.md`](../overview.md)
 > **Evidence:** [`../../operations/deployment-composition.md`](../../operations/deployment-composition.md)
 > **Depends on:** [`ADR-0003`](ADR-0003-first-slice-runtime-and-deployment.md)
@@ -17,13 +17,14 @@ Two compositions were compared in full against dated published pricing and docum
 
 ## Decision
 
-Deploy each accepted project as a scale-to-zero managed container service on **Google Cloud Run**, with **Artifact Registry** in the same region, and a **global external Application Load Balancer** with a managed certificate over a **Cloud DNS** zone as the public entry point.
+Deploy each accepted project in **`us-west1` (Oregon)** as a scale-to-zero managed container service on **Google Cloud Run**, with **Artifact Registry** in the same region. Use the default `*.run.app` service URLs for the first remote validation. The target domain cutover uses a **global external Application Load Balancer** with a managed certificate over a **Cloud DNS** zone.
 
 - One Cloud Run service per deployable project, request-based billing, minimum instances zero, deployed by image digest.
 - Each service holds its own service account, scaling configuration, health checks, telemetry service identity, and revision history.
 - Revisions are immutable. Rollback is a traffic reassignment to a prior revision on one service, requiring no rebuild and no change to the other service.
 - The registry is regional and colocated with the services so image pulls stay on the free intra-location path.
-- Custom domains are served through the load balancer with serverless network endpoint groups. **Cloud Run domain mappings are not used**, because the provider documents them as preview stage and "not production-ready".
+- The target public names are `noodle.money` for web and public `api.noodle.money` for the API. Custom domains are served through the load balancer with serverless network endpoint groups. **Cloud Run domain mappings are not used**, because the provider documents them as preview stage and "not production-ready".
+- Existing authoritative DNS for `noodle.money` points to Vercel as of acceptance and is not changed during interim `*.run.app` validation. Domain cutover requires a separately reviewed compatibility and rollback plan.
 - All provider composition lives in `infra/` behind per-project modules, per ADR-0003 and `principles.md`. No provider SDK enters `apps/web` or `services/platform-api` inner layers.
 
 ## Why this rather than the alternative
@@ -66,7 +67,7 @@ Rejected for production. The provider states they are preview stage, "not produc
 
 ### Default `*.run.app` URLs with no custom domain
 
-Deferred as an explicit interim option, not the target state. It removes ≈`$18.25`/month and unblocks the first remote validation before a domain is ready, at the cost of a non-production URL. The maintainer decides whether to take it.
+Accepted as the interim validation entry point, not the target domain state. It removes ≈`$18.25`/month and unblocks first remote evidence without disturbing the existing Vercel-hosted `noodle.money` records. The load balancer and target hostnames follow through a separately reviewed cutover.
 
 ## Consequences
 
@@ -87,9 +88,11 @@ Deferred as an explicit interim option, not the target state. It removes ≈`$18
 - Data residency becomes an explicit decision rather than a property of the provider.
 - OTLP metric ingestion is Pre-GA on this provider, so telemetry carries a stated risk acceptance.
 
-## Blocked on the maintainer
+## Maintainer inputs and remaining bootstrap values
 
-This decision cannot be accepted, and no resource may be created, until the maintainer settles provider account ownership, billing account and budget ceiling, region and data-residency position, domain ownership and DNS delegation, the public hostname layout, and whether to ship on an interim default URL. These are enumerated as M1 through M9 in [`deployment-composition.md`](../../operations/deployment-composition.md).
+The maintainer selected Google Cloud, confirmed maintainer ownership and root recovery, accepted a USD 30 monthly ceiling with alerts at 50%, 80%, and 100%, selected `us-west1`, stated that EU residency is not required for this slice, confirmed ownership of `noodle.money`, accepted the target public names, and selected interim `*.run.app` validation. The repository remains private during the rebuild.
+
+Implementation still needs non-secret project, billing-account, and workload-identity identifiers supplied through the reviewed bootstrap process. DNS delegation access must be confirmed before domain cutover, but it does not block interim validation. No account or resource is created by accepting this record.
 
 ## Validation
 

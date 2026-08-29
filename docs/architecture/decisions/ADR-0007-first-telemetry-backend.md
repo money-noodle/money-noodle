@@ -1,8 +1,8 @@
 # ADR-0007: First telemetry backend and cost containment
 
-> **Status:** Proposed
-> **Date proposed:** 2026-08-29
-> **Owners:** Platform foundation; maintainer decides
+> **Status:** Accepted
+> **Date accepted:** 2026-08-29
+> **Owners:** Platform foundation; accepted by maintainer
 > **Related architecture:** [`../data-identity-observability.md`](../data-identity-observability.md)
 > **Evidence:** [`../../operations/deployment-composition.md`](../../operations/deployment-composition.md)
 > **Depends on:** [`ADR-0004`](ADR-0004-first-remote-hosting-composition.md)
@@ -25,17 +25,17 @@ Each deployment carries its own service identity, and every signal carries the a
 
 ### Backend
 
-Use the **selected hosting provider's native OpenTelemetry-compatible backend** for the first slice, reached over OTLP, because it requires no additional account, no additional credential, no additional trust boundary, and — at first-slice volume — falls inside published free allotments.
+Use **Google Cloud's native OpenTelemetry-compatible backend** for the first slice, reached over OTLP, because it requires no additional account, no additional credential, no additional trust boundary, and — at first-slice volume — falls inside published free allotments.
 
 This is deliberately the **weakest-commitment** choice in the composition. It is selected because it is the cheapest to reverse, not because it is the best long-term backend. That judgement requires measured volume, cardinality, and query-pattern evidence that does not yet exist.
 
-Where a signal's ingestion path on the selected provider is Pre-GA, that risk is recorded and accepted explicitly by the maintainer rather than absorbed silently.
+The maintainer accepts the Pre-GA OTLP metric-ingestion path for this financially inert first slice. Request behavior does not depend on telemetry, only bounded metadata is emitted, and OpenTelemetry keeps the backend replaceable. Reassess before identity, tenant, personal, financial, or funded data exists.
 
 ### Cost containment from the first deployment
 
 The following exist before the first remote deployment, not after the first surprising bill:
 
-- a **budget with an alert threshold** covering the whole account, per ADR-0004's maintainer decision M3;
+- a **USD 30 monthly budget ceiling** covering the first-slice project, with alerts at USD 15, USD 24, and USD 30 (50%, 80%, and 100%);
 - **ingestion volume, span count, log volume, and metric cardinality are themselves observed**, so telemetry cost is visible in the same place as telemetry;
 - **explicit retention configuration** starting at the accepted defaults — 7 to 14 days debug logs, 3 to 7 days detailed traces, 30 to 90 days operational metrics — never left at a provider default;
 - **head sampling configured but effectively unity at first-slice volume**, with the sampling decision propagated through trace context so it can be lowered later without re-instrumenting;

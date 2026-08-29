@@ -1,8 +1,8 @@
 # ADR-0005: Delivery trust, workload identity, and secret custody
 
-> **Status:** Proposed
-> **Date proposed:** 2026-08-29
-> **Owners:** Platform foundation; maintainer decides
+> **Status:** Accepted
+> **Date accepted:** 2026-08-29
+> **Owners:** Platform foundation; accepted by maintainer
 > **Related architecture:** [`../overview.md`](../overview.md)
 > **Evidence:** [`../../operations/deployment-composition.md`](../../operations/deployment-composition.md)
 > **Depends on:** [`ADR-0004`](ADR-0004-first-remote-hosting-composition.md)
@@ -21,7 +21,9 @@ This decision was the deciding factor in [`ADR-0004`](ADR-0004-first-remote-host
 
 GitHub Actions obtains provider credentials by presenting its per-job OIDC token to a workload identity pool and exchanging it for a short-lived access token. **No provider access key, secret key, service account key file, or equivalent long-lived credential is stored in GitHub, in the repository, in an image, or on a developer machine.**
 
-The identity pool's trust condition is constrained to this repository, and further to the specific ref or environment authorized to deploy. A token minted for a fork, a pull request from an untrusted source, or another repository must not be exchangeable for deployment authority.
+The identity pool's trust condition is constrained to this repository, and further to the specific ref or environment authorized to deploy. During the rebuild, only the selected `v2` delivery workflow may obtain first-slice deployment authority. At cutover, authority moves to protected `main`; `v2` loses it. A token minted for a fork, a pull request from an untrusted source, another workflow, or another repository must not be exchangeable for deployment authority.
+
+The repository remains private on its current GitHub plan during the first remote validation. Making it public would technically unlock free branch protection and hosted Actions, but is not selected as a tooling workaround because publication makes source and history externally copyable. Branch protection is mandatory before `v2` reaches production `main`; satisfy that through GitHub Pro or a separate intentional open-source decision.
 
 Any composition that cannot satisfy this without a stored key must record that gap explicitly as an accepted risk, with a named compensating control — a narrowly scoped credential, a documented rotation schedule, and a revocation procedure — rather than adopting a stored key silently.
 

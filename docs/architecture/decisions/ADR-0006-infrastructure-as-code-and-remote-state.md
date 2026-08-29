@@ -1,8 +1,8 @@
 # ADR-0006: Infrastructure-as-code tool and remote state
 
-> **Status:** Proposed
-> **Date proposed:** 2026-08-29
-> **Owners:** Platform foundation; maintainer decides
+> **Status:** Accepted
+> **Date accepted:** 2026-08-29
+> **Owners:** Platform foundation; accepted by maintainer
 > **Related architecture:** [`../overview.md`](../overview.md)
 > **Evidence:** [`../../operations/deployment-composition.md`](../../operations/deployment-composition.md)
 > **Depends on:** [`ADR-0004`](ADR-0004-first-remote-hosting-composition.md), [`ADR-0005`](ADR-0005-delivery-trust-and-secret-custody.md)
@@ -39,7 +39,7 @@ Web and API hold **separate state**, so applying one cannot lock, mutate, or bre
 
 ### State backend
 
-State lives in a **provider-managed object store**, in the same account and region as the resources it describes, with:
+State lives in dedicated **Google Cloud Storage** buckets in the maintainer-owned account and selected `us-west1` region, separated by stack, with:
 
 - **encryption at rest**, provider-managed at minimum;
 - **object versioning enabled from the first apply**, not retrofitted;
