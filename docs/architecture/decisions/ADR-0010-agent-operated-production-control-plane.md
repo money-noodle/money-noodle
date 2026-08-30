@@ -27,8 +27,8 @@ Execution uses a separate, short-lived workload identity selected by the operati
 
 ### Three control surfaces, not one generic administrative path
 
-- **Reviewed CI/CD** builds and deploys immutable artifacts and applies source-controlled infrastructure and configuration. It receives federated, short-lived identity and serialized access to the relevant state.
-- **Bounded administrative jobs** perform migrations, scheduled work, reconciliation, repair, backup and restore, secret versioning and rotation, workload-access changes, and other non-interactive operations. Each job exposes an allowlisted, schema-validated operation rather than arbitrary command or provider access, and uses a purpose-specific identity.
+- **Reviewed CI/CD** builds and deploys immutable artifacts and applies source-controlled infrastructure, configuration, and IAM/access policy. It receives federated, short-lived identity and serialized access to the relevant state.
+- **Bounded administrative jobs** perform migrations, scheduled work, reconciliation, repair, backup and restore, secret versioning and rotation, and other non-interactive operations. Each job exposes an allowlisted, schema-validated operation rather than arbitrary command or provider access, and uses a purpose-specific identity.
 - **Scoped read-only operational APIs and read jobs** expose safe status, versions, drift, telemetry, incident diagnostics, cost, backup readiness, and secret metadata without payloads. Reads use ordinary server authorization; sensitive exports or privileged reads receive their own evidence. A read is not forced through deployment CI merely to make it machine-readable.
 
 Unknown operations and unbounded shell, console, database, state, or provider access default to deny. Adding an operation requires a reviewed catalog version and negative tests before authority is granted.
