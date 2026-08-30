@@ -24,6 +24,8 @@
 | Record | Role |
 | --- | --- |
 | [`architecture/reference-assessment.md`](architecture/reference-assessment.md) | Dated v1 and Portfolio Copilot reference evidence and independent reuse rationale |
+| [`research/README.md`](research/README.md) | Reusable convention for dated, non-authoritative research assessments |
+| [`research/2026-08-30-typescript-unity-viability.md`](research/2026-08-30-typescript-unity-viability.md) | Dated TypeScript-with-Unity viability evidence; not a technology decision |
 
 Add accepted specifications, current status, experiment index, and validation index here as they are created.
 
@@ -36,6 +38,7 @@ Add accepted specifications, current status, experiment index, and validation in
 - **Specification:** bounded normative behavior and acceptance criteria.
 - **Current status:** concise implemented/deployed truth and known gaps, not a diary.
 - **Experiment:** hypothesis, assignment, metrics, guardrails, stop criteria, and result.
+- **Research assessment:** dated question, source snapshots, facts, inference, uncertainty, and conclusion; evidence only, never requirement, status, validation, decision, or acceptance authority.
 - **Validation report:** dated method, evidence, limitations, and conclusion.
 
 ## Where a decision goes
