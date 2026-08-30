@@ -108,16 +108,22 @@ function writeExecutable(directory, name, body) {
   chmodSync(path, 0o755);
 }
 
-function writeGitShim(directory) {
+function writeGitShim(
+  directory,
+  worktreeOutput = 'worktree /fake/worktree\nHEAD abc1234\nbranch refs/heads/test/sample\n\n',
+) {
+  const worktreeFile = join(directory, 'git-worktrees.out');
+  writeFileSync(worktreeFile, worktreeOutput);
   writeExecutable(
     directory,
     'git',
     `#!/bin/sh
 ${SHIM_PATH}
-printf 'git %s\\n' "$*" >> "$INVOCATION_LOG"
+printf 'git GIT_OPTIONAL_LOCKS=%s %s\\n' "$GIT_OPTIONAL_LOCKS" "$*" >> "$INVOCATION_LOG"
+if [ "$1" = "--no-optional-locks" ]; then shift; else exit 126; fi
 case "$1" in
   status) printf '## test/sample...origin/main\\n' ;;
-  worktree) printf 'worktree /fake/worktree\\nHEAD abc1234\\nbranch refs/heads/test/sample\\n\\n' ;;
+  worktree) cat '${worktreeFile}' ;;
   for-each-ref) printf 'test/sample\\tabc1234\\n' ;;
   *) printf 'unexpected git invocation: %s\\n' "$*" >&2; exit 127 ;;
 esac
@@ -150,13 +156,13 @@ process.exit(response.status ?? 0);
   );
 }
 
-function runStatus(t, { responses = defaultResponses(), gh = true, args = [] } = {}) {
+function runStatus(t, { responses = defaultResponses(), gh = true, args = [], gitWorktrees } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'mn-coordination-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const invocationLog = join(directory, 'invocations.log');
   writeFileSync(invocationLog, '');
   writeFileSync(join(directory, 'sentinel.txt'), 'unchanged\n');
-  writeGitShim(directory);
+  writeGitShim(directory, gitWorktrees);
   if (gh) writeGhShim(directory, responses);
   const beforeFiles = readdirSync(directory).sort();
   const beforeSentinel = readFileSync(join(directory, 'sentinel.txt'), 'utf8');
@@ -363,6 +369,28 @@ test('local branch and registered worktree contradictions are surfaced without r
   assert(item.questions.some(({ code }) => code === 'branch-worktree-mismatch'));
 });
 
+test('locked and prunable porcelain evidence cannot report a matched worktree', (t) => {
+  for (const [marker, code] of [
+    ['locked worktree is in use', 'worktree-locked'],
+    ['prunable gitdir points to a missing location', 'worktree-prunable'],
+  ]) {
+    const gitWorktrees = [
+      'worktree /fake/worktree',
+      'HEAD abc1234',
+      'branch refs/heads/test/sample',
+      marker,
+      '',
+    ].join('\n');
+    const result = runStatus(t, { args: ['--json'], gitWorktrees });
+    const report = JSON.parse(result.stdout);
+    const item = report.registry.workItems.find(({ number }) => number === 9);
+
+    assert.equal(result.exitCode, 2);
+    assert.equal(item.localEvidence.status, 'contradiction');
+    assert(item.questions.some((question) => question.code === code));
+  }
+});
+
 test('an unreachable registry is coordination-unknown, never an empty board', (t) => {
   const responses = defaultResponses();
   responses[`api:${ISSUES_ENDPOINT}`] = { status: 1, stderr: 'dial tcp: no such host\n' };
@@ -378,6 +406,19 @@ test('malformed paginated output is coordination-unknown', (t) => {
   const result = runStatus(t, { responses });
 
   assertReportsUnknown(result, /invalid paginated response/);
+});
+
+test('impossible GitHub calendar timestamps fail closed', (t) => {
+  const responses = defaultResponses();
+  responses[`api:${ISSUES_ENDPOINT}`] = {
+    stdout: JSON.stringify([[{ ...ACTIVE_CLAIM, updated_at: '2026-02-30T19:08:12Z' }]]),
+  };
+  const result = runStatus(t, { responses, args: ['--json'] });
+  const report = JSON.parse(result.stdout);
+
+  assert.equal(result.exitCode, 2);
+  assert.equal(report.coordinationKnown, false);
+  assert.match(report.errors[0].message, /strict valid ISO instant/);
 });
 
 test('malformed issue records fail closed rather than dropping work', (t) => {
@@ -405,13 +446,19 @@ test('status uses only read-only commands and does not change local files', (t) 
   assert.equal(result.exitCode, 0);
   assert.deepEqual(result.afterFiles, result.beforeFiles);
   assert.equal(result.afterSentinel, result.beforeSentinel);
+  const gitInvocations = result.invocations.filter((entry) => entry.startsWith('git '));
+  assert.equal(gitInvocations.length, 3);
+  assert(
+    gitInvocations.every((entry) =>
+      entry.startsWith('git GIT_OPTIONAL_LOCKS=0 --no-optional-locks '),
+    ),
+  );
   assert(
     result.invocations.every(
       (entry) =>
-        entry.startsWith('git status ') ||
-        entry === 'git status --short --branch' ||
-        entry === 'git worktree list --porcelain' ||
-        entry.startsWith('git for-each-ref ') ||
+        entry === 'git GIT_OPTIONAL_LOCKS=0 --no-optional-locks status --short --branch' ||
+        entry === 'git GIT_OPTIONAL_LOCKS=0 --no-optional-locks worktree list --porcelain' ||
+        entry.startsWith('git GIT_OPTIONAL_LOCKS=0 --no-optional-locks for-each-ref --format=') ||
         entry === 'gh --version' ||
         entry === 'gh auth status' ||
         entry.startsWith('gh repo view ') ||

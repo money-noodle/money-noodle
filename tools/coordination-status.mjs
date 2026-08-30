@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import {
   SCHEMA_VERSION,
   analyzeCoordination,
+  isoInstantMilliseconds,
 } from "./coordination-lib.mjs";
 
 const REQUIRED_LABELS = [
@@ -20,8 +21,11 @@ const REQUIRED_LABELS = [
 const ADVISORY =
   "Candidate output is triage evidence only; it never proves that claiming is safe or authorizes takeover, cleanup, integration, push, or deployment.";
 
-function run(command, args, { allowFailure = false } = {}) {
-  const result = spawnSync(command, args, { encoding: "utf8" });
+function run(command, args, { allowFailure = false, env = {} } = {}) {
+  const result = spawnSync(command, args, {
+    encoding: "utf8",
+    env: { ...process.env, ...env },
+  });
   if (result.error || (!allowFailure && result.status !== 0)) {
     const detail =
       result.error?.message ||
@@ -58,7 +62,9 @@ function requiredString(value, context) {
 
 function requiredTimestamp(value, context) {
   const timestamp = requiredString(value, context);
-  if (Number.isNaN(Date.parse(timestamp))) throw new Error(`${context} must be an ISO timestamp`);
+  if (isoInstantMilliseconds(timestamp) === undefined) {
+    throw new Error(`${context} must be a strict valid ISO instant`);
+  }
   return timestamp;
 }
 
@@ -127,10 +133,14 @@ function parseWorktrees(output) {
   return entries;
 }
 
+function runGit(args) {
+  return run("git", ["--no-optional-locks", ...args], { env: { GIT_OPTIONAL_LOCKS: "0" } });
+}
+
 function readLocalGit() {
-  const status = run("git", ["status", "--short", "--branch"]).stdout.trim();
-  const worktrees = parseWorktrees(run("git", ["worktree", "list", "--porcelain"]).stdout);
-  const branches = run("git", [
+  const status = runGit(["status", "--short", "--branch"]).stdout.trim();
+  const worktrees = parseWorktrees(runGit(["worktree", "list", "--porcelain"]).stdout);
+  const branches = runGit([
     "for-each-ref",
     "--format=%(refname:short)%09%(objectname)",
     "refs/heads/",
@@ -217,7 +227,7 @@ function buildReport() {
 
   try {
     report.local = readLocalGit();
-    report.registry = readRegistry(report.local, Date.parse(generatedAt));
+    report.registry = readRegistry(report.local, isoInstantMilliseconds(generatedAt));
     report.coordinationKnown = true;
     if (report.registry.labels.missing.length > 0) {
       report.warnings.push({

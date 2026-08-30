@@ -29,6 +29,13 @@ const COMMENT_RECORD_FIELDS = [
   "Checkpoint-At",
   "Checkpoint-Commit",
 ];
+const OWNERSHIP_FIELDS = [
+  "Claim-Harness",
+  "Claim-Run-ID",
+  "Claim-Agent",
+  "Claim-Branch",
+  "Claim-Worktree",
+];
 
 export const NONTERMINAL_CLAIMED_STATES = new Set(["active", "blocked", "review"]);
 const UNCLAIMED_VALUES = new Set(["", "missing", "none", "unclaimed"]);
@@ -63,10 +70,56 @@ export function claimField(body, name) {
   return structuredFields(body, [name]).fields[name] ?? "missing";
 }
 
+export function isoInstantMilliseconds(value) {
+  if (typeof value !== "string") return undefined;
+  const match = value.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|([+-])(\d{2}):(\d{2}))$/,
+  );
+  if (!match) return undefined;
+
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, fraction = "", zone, sign, offsetHourText, offsetMinuteText] = match;
+  const [year, month, day, hour, minute, second] = [
+    yearText,
+    monthText,
+    dayText,
+    hourText,
+    minuteText,
+    secondText,
+  ].map(Number);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > daysInMonth[month - 1] ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59
+  ) {
+    return undefined;
+  }
+
+  let offsetMinutes = 0;
+  if (zone !== "Z") {
+    const offsetHour = Number(offsetHourText);
+    const offsetMinute = Number(offsetMinuteText);
+    if (offsetHour > 14 || offsetMinute > 59 || (offsetHour === 14 && offsetMinute !== 0)) {
+      return undefined;
+    }
+    offsetMinutes = (offsetHour * 60 + offsetMinute) * (sign === "+" ? 1 : -1);
+  }
+
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  date.setUTCHours(hour, minute, second, Number((fraction + "000").slice(0, 3)));
+  return date.getTime() - offsetMinutes * 60_000;
+}
+
 export function deadlineStatus(value, nowMs = Date.now()) {
   if (typeof value !== "string" || UNCLAIMED_VALUES.has(value.trim().toLowerCase())) return "unknown";
-  const deadline = Date.parse(value);
-  if (Number.isNaN(deadline)) return "invalid";
+  const deadline = isoInstantMilliseconds(value);
+  if (deadline === undefined) return "invalid";
   return deadline < nowMs ? "overdue" : "current";
 }
 
@@ -97,7 +150,9 @@ export function hasClaimSignal(body) {
   if (PORTABLE_CLAIM_FIELDS.some((name) => new RegExp(`^${escapeRegExp(name)}:`, "m").test(body))) {
     return true;
   }
-  return /\bclaim(?:ed|ing)?\b|\bcheck[- ]?in\b|\bcheckpoint\b/i.test(body);
+  return /\bclaim(?:ed|ing)?\b|\bcheck[- ]?in\b|\bcheckpoint\b|\b(?:started|starting|began|beginning)\s+(?:the\s+)?work\b|\b(?:take|taking|took|assume|assuming)\s+ownership\b/i.test(
+    body,
+  );
 }
 
 function meaningful(value) {
@@ -107,7 +162,7 @@ function meaningful(value) {
 function latestComment(comments) {
   if (comments.length === 0) return null;
   return [...comments].sort((left, right) => {
-    const time = Date.parse(left.updatedAt) - Date.parse(right.updatedAt);
+    const time = isoInstantMilliseconds(left.createdAt) - isoInstantMilliseconds(right.createdAt);
     return time || left.id - right.id;
   }).at(-1);
 }
@@ -159,9 +214,15 @@ function evaluateDependencies(value, issueByNumber, issueNumber) {
       result.blocked.push(dependencyNumber);
       continue;
     }
-    const dependencyState = claimField(dependency.body, "Claim-State").toLowerCase();
-    const dependencyLabels = stateLabels(dependency.labels);
-    if (dependencyState === "done" && dependencyLabels.length === 1 && dependencyLabels[0] === "work:done") {
+    const dependencyRecord = structuredFields(dependency.body, ["Claim-State"]);
+    const dependencyState = dependencyRecord.fields["Claim-State"];
+    const dependencyWorkLabels = dependency.labels.filter((label) => label.startsWith("work:"));
+    if (
+      dependencyRecord.duplicates.length === 0 &&
+      dependencyState === "done" &&
+      dependencyWorkLabels.length === 1 &&
+      dependencyWorkLabels[0] === "work:done"
+    ) {
       result.satisfied.push(dependencyNumber);
     } else {
       result.unknown.push(dependencyNumber);
@@ -182,6 +243,26 @@ function evaluateLocalEvidence(fields, local) {
   const pathMatch = local.worktrees.find((entry) => entry.path === worktree);
   const branchWorktrees = local.worktrees.filter((entry) => entry.branch === branch);
   const localBranch = local.branches.some((entry) => entry.name === branch);
+
+  const relevantWorktrees = [...new Set([pathMatch, ...branchWorktrees].filter(Boolean))];
+  for (const entry of relevantWorktrees) {
+    if (entry.locked) {
+      questions.push(
+        question(
+          "worktree-locked",
+          `locally observed worktree ${entry.path} is locked${entry.locked === true ? "" : `: ${entry.locked}`}`,
+        ),
+      );
+    }
+    if (entry.prunable) {
+      questions.push(
+        question(
+          "worktree-prunable",
+          `locally observed worktree ${entry.path} is prunable${entry.prunable === true ? "" : `: ${entry.prunable}`}`,
+        ),
+      );
+    }
+  }
 
   if (pathMatch && pathMatch.branch !== branch) {
     questions.push(
@@ -259,12 +340,12 @@ function analyzeWorkItem(issue, comments, issueByNumber, local, nowMs) {
       );
     }
   } else if (["proposed", "ready"].includes(claimState)) {
-    const unexpectedOwnerFields = PORTABLE_CLAIM_FIELDS.slice(1, 7).filter((name) => meaningful(fields[name]));
-    if (unexpectedOwnerFields.length > 0) {
+    const unexpectedClaimFields = PORTABLE_CLAIM_FIELDS.slice(1).filter((name) => meaningful(fields[name]));
+    if (unexpectedClaimFields.length > 0) {
       questions.push(
         question(
-          "unexpected-claim-owner",
-          `${unexpectedOwnerFields.join(", ")} carry ownership while Claim-State is ${claimState}`,
+          "unexpected-claim-evidence",
+          `${unexpectedClaimFields.join(", ")} retain claim or deadline evidence while Claim-State is ${claimState}`,
         ),
       );
     }
@@ -278,8 +359,50 @@ function analyzeWorkItem(issue, comments, issueByNumber, local, nowMs) {
   }
 
   const latest = latestComment(comments);
-  const latestClaim = latestComment(comments.filter((comment) => hasClaimSignal(comment.body)));
+  const claimComments = comments.filter((comment) => hasClaimSignal(comment.body));
+  const claimCommentEvidence = claimComments.map(commentEvidence);
+  const latestClaim = latestComment(claimComments);
   const latestClaimEvidence = commentEvidence(latestClaim);
+  const unstructuredClaimComments = claimCommentEvidence.filter(
+    (evidence) => Object.keys(evidence.structuredFields).length === 0,
+  );
+  if (unstructuredClaimComments.length > 0) {
+    questions.push(
+      question(
+        "unstructured-claim-comment",
+        `claim/ownership comments ${unstructuredClaimComments.map(({ id }) => id).join(", ")} have no portable fields; do not infer ownership`,
+      ),
+    );
+  }
+
+  const editedClaimComments = claimComments.filter(
+    (comment) => isoInstantMilliseconds(comment.updatedAt) !== isoInstantMilliseconds(comment.createdAt),
+  );
+  if (editedClaimComments.length > 0) {
+    questions.push(
+      question(
+        "edited-claim-comment",
+        `claim/ownership comments ${editedClaimComments.map(({ id }) => id).join(", ")} were edited; creation order cannot resolve their intent`,
+      ),
+    );
+  }
+
+  const competingClaimComments = claimCommentEvidence.filter((evidence) => {
+    const commentState = evidence.structuredFields["Claim-State"];
+    if (["done", "abandoned"].includes(commentState)) return false;
+    return OWNERSHIP_FIELDS.some(
+      (name) => meaningful(evidence.structuredFields[name]) && evidence.structuredFields[name] !== fields[name],
+    );
+  });
+  if (competingClaimComments.length > 0) {
+    questions.push(
+      question(
+        "competing-ownership-comment",
+        `claim/ownership comments ${competingClaimComments.map(({ id }) => id).join(", ")} carry ownership fields that disagree with the body`,
+      ),
+    );
+  }
+
   if (latestClaimEvidence) {
     const commentRecordFields = Object.entries(latestClaimEvidence.structuredFields).filter(
       ([name]) => PORTABLE_CLAIM_FIELDS.includes(name) || CHECKPOINT_FIELDS.includes(name),
@@ -292,14 +415,7 @@ function analyzeWorkItem(issue, comments, issueByNumber, local, nowMs) {
         ),
       );
     }
-    if (commentRecordFields.length === 0) {
-      questions.push(
-        question(
-          "unstructured-claim-comment",
-          "latest claim/checkpoint comment has no portable claim or checkpoint fields to reconcile",
-        ),
-      );
-    } else {
+    if (commentRecordFields.length > 0) {
       const missingCommentFields = COMMENT_RECORD_FIELDS.filter(
         (name) => latestClaimEvidence.structuredFields[name] === undefined,
       );
@@ -358,6 +474,7 @@ function analyzeWorkItem(issue, comments, issueByNumber, local, nowMs) {
     dependencies,
     latestComment: commentEvidence(latest),
     latestClaimComment: latestClaimEvidence,
+    claimComments: claimCommentEvidence,
     localEvidence: { status: localEvidence.status },
     questions,
     reconciliation: "consistent",

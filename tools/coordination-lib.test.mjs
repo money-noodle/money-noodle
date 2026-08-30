@@ -59,11 +59,21 @@ test("structured fields read exact portable names and report duplicates", () => 
   assert.equal(claimField(body, "Claim-Run-ID"), "missing");
 });
 
-test("deadlines distinguish current, overdue, unknown, and invalid", () => {
+test("deadlines require strict real ISO instants", () => {
   assert.equal(deadlineStatus("2026-08-29T21:00:00Z", NOW), "current");
+  assert.equal(deadlineStatus("2026-08-29T22:30:00+02:00", NOW), "current");
   assert.equal(deadlineStatus("2026-08-29T19:00:00Z", NOW), "overdue");
   assert.equal(deadlineStatus("unclaimed", NOW), "unknown");
-  assert.equal(deadlineStatus("tomorrowish", NOW), "invalid");
+  for (const invalid of [
+    "tomorrowish",
+    "2026-08-29",
+    "2026-08-29T21:00:00",
+    "2026-02-30T21:00:00Z",
+    "2026-08-29T24:00:00Z",
+    "2026-08-29T21:00:00+14:01",
+  ]) {
+    assert.equal(deadlineStatus(invalid, NOW), "invalid", invalid);
+  }
 });
 
 test("every nonterminal claimed state warns on bad check-in evidence", () => {
@@ -98,6 +108,36 @@ test("ready work becomes candidate evidence only when dependencies are proven do
   assert.equal(result.workItems[0].candidateSafety, "not-established");
 });
 
+test("ambiguous closed dependency completion records remain unknown", () => {
+  const mutations = [
+    (dependency) => {
+      dependency.body += "\nClaim-State: done";
+    },
+    (dependency) => {
+      dependency.body = dependency.body.replace("Claim-State: done", "Claim-State: Done");
+    },
+    (dependency) => {
+      dependency.labels.push("work:dnoe");
+    },
+  ];
+
+  for (const [index, mutate] of mutations.entries()) {
+    const dependency = issue({ number: 20 + index, state: "done" });
+    dependency.state = "closed";
+    mutate(dependency);
+    const candidate = issue({ number: 30 + index, dependencies: `#${dependency.number}` });
+    const result = analyzeCoordination({
+      issues: [dependency, candidate],
+      commentsByIssue: new Map(),
+      local: EMPTY_LOCAL,
+      nowMs: NOW,
+    });
+
+    assert.equal(result.workItems[0].dependencies.status, "unknown");
+    assert.equal(result.workItems[0].triage, "question");
+  }
+});
+
 test("an open dependency keeps ready work blocked without asserting claim safety", () => {
   const dependency = issue({ number: 2, state: "active" });
   const candidate = issue({ number: 3, dependencies: "#2" });
@@ -112,6 +152,22 @@ test("an open dependency keeps ready work blocked without asserting claim safety
   assert.equal(item.dependencies.status, "blocked");
   assert.equal(item.triage, "blocked");
   assert.equal(item.candidateSafety, "not-established");
+});
+
+test("ready and proposed records with leftover deadlines are not candidates", () => {
+  for (const state of ["ready", "proposed"]) {
+    const work = issue({ number: state === "ready" ? 40 : 41, state, claimed: false });
+    work.body = work.body.replace("Check-In-By: unclaimed", "Check-In-By: 2026-08-29T21:00:00Z");
+    const result = analyzeCoordination({
+      issues: [work],
+      commentsByIssue: new Map(),
+      local: EMPTY_LOCAL,
+      nowMs: NOW,
+    });
+
+    assert.equal(result.workItems[0].triage, "question");
+    assert(result.workItems[0].questions.some(({ code }) => code === "unexpected-claim-evidence"));
+  }
 });
 
 test("unclaimed blocked work does not invent stale-claim ownership", () => {
@@ -186,8 +242,91 @@ test("latest structured comment is reconciled against the body", () => {
   assert(result.workItems[0].questions.some(({ code }) => code === "body-comment-mismatch"));
 });
 
+test("competing structured ownership comments cannot be hidden by a later matching checkpoint", () => {
+  const active = issue({ number: 4, state: "active" });
+  const current = [
+    "Claim-State: active",
+    "Claim-Harness: pi",
+    "Claim-Run-ID: run-4",
+    "Claim-Agent: agent-4",
+    "Claim-Branch: test/4",
+    "Claim-Worktree: /worktree/4",
+    "Check-In-By: 2026-08-29T21:00:00Z",
+    "Checkpoint-At: unclaimed",
+    "Checkpoint-Commit: uncommitted",
+  ];
+  const competing = current.map((line) =>
+    line === "Claim-Run-ID: run-4" ? "Claim-Run-ID: competing-run" : line,
+  );
+  const comments = new Map([
+    [4, [
+      {
+        id: 1,
+        author: "other-agent",
+        body: competing.join("\n"),
+        createdAt: "2026-08-29T19:00:00Z",
+        updatedAt: "2026-08-29T19:00:00Z",
+      },
+      {
+        id: 2,
+        author: "maintainer",
+        body: current.join("\n"),
+        createdAt: "2026-08-29T19:30:00Z",
+        updatedAt: "2026-08-29T19:30:00Z",
+      },
+    ]],
+  ]);
+  const result = analyzeCoordination({ issues: [active], commentsByIssue: comments, local: EMPTY_LOCAL, nowMs: NOW });
+
+  assert(result.workItems[0].questions.some(({ code }) => code === "competing-ownership-comment"));
+  assert.equal(result.workItems[0].triage, "question");
+});
+
+test("editing an older ownership comment cannot make updated ordering hide intent", () => {
+  const active = issue({ number: 4, state: "active" });
+  const body = [
+    "Claim-State: active",
+    "Claim-Harness: pi",
+    "Claim-Run-ID: run-4",
+    "Claim-Agent: agent-4",
+    "Claim-Branch: test/4",
+    "Claim-Worktree: /worktree/4",
+    "Check-In-By: 2026-08-29T21:00:00Z",
+    "Checkpoint-At: unclaimed",
+    "Checkpoint-Commit: uncommitted",
+  ].join("\n");
+  const comments = new Map([
+    [4, [
+      {
+        id: 1,
+        author: "agent-4",
+        body,
+        createdAt: "2026-08-29T19:00:00Z",
+        updatedAt: "2026-08-29T19:45:00Z",
+      },
+      {
+        id: 2,
+        author: "maintainer",
+        body,
+        createdAt: "2026-08-29T19:30:00Z",
+        updatedAt: "2026-08-29T19:30:00Z",
+      },
+    ]],
+  ]);
+  const result = analyzeCoordination({ issues: [active], commentsByIssue: comments, local: EMPTY_LOCAL, nowMs: NOW });
+
+  assert.equal(result.workItems[0].latestClaimComment.id, 2);
+  assert(result.workItems[0].questions.some(({ code }) => code === "edited-claim-comment"));
+});
+
 test("claim signals without structured fields remain ambiguous", () => {
-  assert.equal(hasClaimSignal("Claimed by another session; checkpoint pending."), true);
+  for (const signal of [
+    "Claimed by another session; checkpoint pending.",
+    "I started work on this item.",
+    "Taking ownership now.",
+  ]) {
+    assert.equal(hasClaimSignal(signal), true, signal);
+  }
   const active = issue({ number: 4, state: "active" });
   const comments = new Map([
     [4, [{
@@ -253,6 +392,28 @@ test("local branch and worktree mismatches are contradictions, not cleanup instr
   assert.equal(result.workItems[0].localEvidence.status, "contradiction");
   assert(result.workItems[0].questions.some(({ code }) => code === "branch-worktree-mismatch"));
   assert(result.workItems[0].questions.every(({ message }) => !/remove|clean|reset/i.test(message)));
+});
+
+test("locked or prunable registered worktrees are contradictions, never matches", () => {
+  for (const property of ["locked", "prunable"]) {
+    const active = issue({ number: 6, state: "active" });
+    const local = {
+      status: "",
+      branches: [{ name: "test/6", head: "abc" }],
+      worktrees: [{
+        path: "/worktree/6",
+        head: "abc",
+        branch: "test/6",
+        locked: null,
+        prunable: null,
+        [property]: "adversarial evidence",
+      }],
+    };
+    const result = analyzeCoordination({ issues: [active], commentsByIssue: new Map(), local, nowMs: NOW });
+
+    assert.equal(result.workItems[0].localEvidence.status, "contradiction");
+    assert(result.workItems[0].questions.some(({ code }) => code === `worktree-${property}`));
+  }
 });
 
 test("duplicate branch registration across claims becomes a maintainer question", () => {

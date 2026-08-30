@@ -30,7 +30,9 @@ Shared-Hotspots: none
 ## Portable claim
 
 <!--
-Preserve these exact field names for cross-harness status tooling. Use "unclaimed" until active.
+Preserve these exact field names for cross-harness status tooling. Ready/proposed work keeps every
+ownership and deadline field "unclaimed". Once claimed, Check-In-By is a strict calendar-valid ISO
+instant with `T` and `Z` or an explicit offset.
 Before replacing them, do the full pre-claim double-check from docs/development/parallel-work.md:
 re-fetch this body and its ownership/checkpoint comments, then inspect `git worktree list --porcelain`
 and branches immediately before mutation. Status output or an unclaimed body alone is insufficient.
@@ -51,8 +53,9 @@ Check-In-By: unclaimed
 ## Current checkpoint
 
 <!--
-Concise current state. Add milestone history as issue comments. Every ownership/checkpoint comment
-must repeat the current Claim-State, Claim-Harness, Claim-Run-ID, Claim-Agent, Claim-Branch,
+Concise current state. Add milestone history as new issue comments; never edit ownership comments.
+Every ownership/checkpoint comment must repeat the current Claim-State, Claim-Harness,
+Claim-Run-ID, Claim-Agent, Claim-Branch,
 Claim-Worktree, Check-In-By, Checkpoint-At, and Checkpoint-Commit field lines before any prose so
 read-only tooling can reconcile the append-only trail with this body. An unstructured claim-bearing
 comment or disagreement is intentionally a maintainer question, never inferred ownership.
