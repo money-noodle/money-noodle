@@ -1,0 +1,70 @@
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: '/'
+    schedule:
+      interval: weekly
+      day: monday
+      time: '05:00'
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    groups:
+      production-minor-and-patch:
+        dependency-type: production
+        update-types:
+          - minor
+          - patch
+      development-minor-and-patch:
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: '/'
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: '05:00'
+      timezone: Etc/UTC
+    open-pull-requests-limit: 3
+    groups:
+      actions-minor-and-patch:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: docker
+    directory: '/apps/web'
+    schedule:
+      interval: weekly
+      day: wednesday
+      time: '05:00'
+      timezone: Etc/UTC
+    open-pull-requests-limit: 2
+    groups:
+      images-minor-and-patch:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: docker
+    directory: '/services/platform-api'
+    schedule:
+      interval: weekly
+      day: thursday
+      time: '05:00'
+      timezone: Etc/UTC
+    open-pull-requests-limit: 2
+    groups:
+      images-minor-and-patch:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
