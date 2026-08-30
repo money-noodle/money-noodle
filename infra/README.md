@@ -47,6 +47,14 @@ one cannot lock, mutate, or break another.
 | `docker/login-action` | `v4.6.0` (`dbcb8138…`) | https://github.com/docker/login-action/tags | 2026-08-29 |
 | `actions/attest-build-provenance` | `v4.2.2` (`4d101475…`) | https://github.com/actions/attest-build-provenance/releases/latest | 2026-08-29 |
 
+### Manually managed supply-chain pin
+
+The digest-pinned BuildKit Syft scanner is embedded in Nx project container
+command strings and the [delivery workflow](../.github/workflows/delivery.yml), so Dependabot
+cannot discover it. Updating it requires manual upstream version and digest
+verification, followed by the container builds, delivery policy checks, and CI
+image-vulnerability scan.
+
 Provider `8.0.0` was published on 2026-08-26, three days before this was written,
 and its release notes describe resource removals, field removals, and increased
 validation. `7.46.0` — the last release of the mature line, published 2026-08-25 —
