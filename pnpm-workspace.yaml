@@ -1,0 +1,18 @@
+packages:
+  - apps/*
+  - services/*
+  - packages/*
+
+injectWorkspacePackages: true
+
+overrides:
+  js-yaml@4.2.0: 4.3.2
+
+allowBuilds:
+  '@parcel/watcher': true
+  '@pb33f/openapi-changes': true
+  '@swc/core': true
+  esbuild: true
+  nx: true
+  sharp: true
+  unrs-resolver: true

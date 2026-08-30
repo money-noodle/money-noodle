@@ -1,0 +1,114 @@
+:root {
+  color-scheme: light dark;
+  font-family: ui-rounded, 'Nunito Sans', system-ui, sans-serif;
+  --canvas: #fff8e7;
+  --ink: #251a12;
+  --muted: #65564a;
+  --card: #fffdf7;
+  --border: #7a6757;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --canvas: #19140f;
+    --ink: #fff7e9;
+    --muted: #d7c8b9;
+    --card: #282018;
+    --border: #bca995;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  display: grid;
+  min-height: 100vh;
+  margin: 0;
+  color: var(--ink);
+  background: var(--canvas);
+  place-items: center;
+}
+
+main {
+  width: min(42rem, 100%);
+  padding: 2rem;
+  text-align: center;
+}
+
+h1 {
+  margin-block: 0 0.5rem;
+  font-size: clamp(2.75rem, 8vw, 5rem);
+}
+
+h2,
+p {
+  margin-block: 0;
+}
+
+.lede {
+  color: var(--muted);
+  font-size: 1.125rem;
+}
+
+.status-card {
+  padding: 1.5rem;
+  margin-block-start: 2rem;
+  text-align: left;
+  background: var(--card);
+  border: 0.2rem solid var(--border);
+  border-radius: 1.25rem;
+  box-shadow: 0.4rem 0.4rem 0 rgb(0 0 0 / 18%);
+}
+
+.status-card--available {
+  border-color: #28724f;
+}
+
+.status-card--degraded,
+.status-card--maintenance {
+  border-color: #9b641b;
+}
+
+.status-card--unknown {
+  border-color: #6f6878;
+}
+
+.status-card__eyebrow {
+  margin-block-end: 0.25rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.status-card h2 {
+  margin-block-end: 0.5rem;
+  font-size: 2rem;
+}
+
+.status-card__source {
+  display: grid;
+  gap: 0.75rem;
+  padding-block-start: 1rem;
+  margin-block: 1rem 0 0;
+  border-block-start: 1px solid var(--border);
+}
+
+.status-card__source div {
+  display: grid;
+  grid-template-columns: minmax(6rem, 1fr) 2fr;
+  gap: 1rem;
+}
+
+.status-card__source dt {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.status-card__source dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}

@@ -1,0 +1,731 @@
+name: Delivery
+
+# Infrastructure checks, artifact publication, and the gated production apply.
+#
+# SAFETY POSTURE. As committed, this workflow cannot reach Google Cloud at all.
+# Every provider-touching job is guarded on repository variables that do not yet
+# exist, so with nothing configured the checks run and everything else is
+# skipped. Configuring those variables is the maintainer's separately recorded
+# provider authorization. Apply and rollback also require a recorded verification
+# of real required-reviewer protection; apply additionally needs a typed
+# confirmation. See `infra/bootstrap.md`.
+#
+# `ci.yml` remains the repository's gate for application projects and is
+# deliberately untouched by this file.
+
+on:
+  pull_request:
+    paths:
+      - 'infra/**'
+      - 'tools/infra-*.mjs'
+      - '.github/workflows/delivery.yml'
+  push:
+    branches: ['v2']
+    paths:
+      - 'infra/**'
+      - 'tools/infra-*.mjs'
+      - '.github/workflows/delivery.yml'
+  schedule:
+    # Drift detection. Reads only; never corrects.
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Operation to perform'
+        required: true
+        default: 'plan'
+        type: choice
+        options:
+          - plan
+          - apply
+          - rollback
+      stack:
+        description: 'Stack to operate on'
+        required: true
+        default: 'platform'
+        type: choice
+        options:
+          - platform
+          - api
+          - web
+      confirmation:
+        description: 'Type APPLY-TO-PRODUCTION to authorise an apply. Ignored for plan.'
+        required: false
+        type: string
+      image_digest:
+        description: 'sha256: digest to deploy. Required when applying the web or api stack.'
+        required: false
+        type: string
+      source_commit:
+        description: 'Full reviewed source commit that produced image_digest. Required for web or api plan/apply.'
+        required: false
+        type: string
+      rollback_revision:
+        description: 'Existing Cloud Run revision to send all traffic to. Rollback only.'
+        required: false
+        type: string
+
+# Default-deny. Jobs that exchange a provider token raise `id-token` only on
+# their own job.
+permissions:
+  contents: read
+
+# Deployment concurrency is serialised so two applies to one stack cannot
+# interleave (ADR-0006). In-progress runs are never cancelled here: cancelling
+# mid-apply is how state locks are orphaned.
+concurrency:
+  group: delivery-${{ github.event.inputs.stack || 'all' }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  TOFU_VERSION: '1.12.6'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Static checks. No credential, no provider API, no state backend.
+  # ---------------------------------------------------------------------------
+  checks:
+    name: infrastructure checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event_name != 'schedule'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.24.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          # The wrapper rewrites stdout, which makes plan output harder to read
+          # and can leak values into logs.
+          tofu_wrapper: false
+
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Static infrastructure and delivery policy guards
+        run: node --test tools/infra-policy.test.mjs tools/infra-delivery-policy.test.mjs
+
+      - name: Format, validate, and test every module and stack
+        run: node tools/infra-check.mjs all
+
+      - name: Prove the checks reached no provider
+        # `tofu init -backend=false` and mocked-provider tests cannot contact a
+        # provider, but a stray credential file would still be evidence of a
+        # configuration mistake. This asserts the runner never had one.
+        run: |
+          if [[ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]]; then
+            echo "A credential path was present during static checks." >&2
+            exit 1
+          fi
+          if compgen -G "$HOME/.config/gcloud/*" > /dev/null; then
+            echo "Provider credentials were present during static checks." >&2
+            exit 1
+          fi
+          echo "Static checks ran with no provider credential available."
+
+  # ---------------------------------------------------------------------------
+  # Guard. Everything below needs bootstrap identifiers that only the maintainer
+  # can supply. Until they exist, every downstream job is skipped.
+  # ---------------------------------------------------------------------------
+  authorization:
+    name: authorization state
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      federation_configured: ${{ steps.state.outputs.federation_configured }}
+      provider_configured: ${{ steps.state.outputs.provider_configured }}
+      apply_authorized: ${{ steps.state.outputs.apply_authorized }}
+      environment_reviewers_verified: ${{ steps.state.outputs.environment_reviewers_verified }}
+    steps:
+      - id: state
+        env:
+          WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          DEPLOYER_SERVICE_ACCOUNT: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          PROJECT_NUMBER: ${{ vars.GCP_PROJECT_NUMBER }}
+          STATE_BUCKET_PREFIX: ${{ vars.GCP_STATE_BUCKET_PREFIX }}
+          REGISTRY_HOST: ${{ vars.GCP_REGISTRY_HOST }}
+          REGISTRY_REPOSITORY: ${{ vars.GCP_REGISTRY_REPOSITORY }}
+          BILLING_ACCOUNT_ID: ${{ vars.GCP_BILLING_ACCOUNT_ID }}
+          BUDGET_ALERT_EMAILS: ${{ vars.GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON }}
+          APPLY_AUTHORIZED: ${{ vars.INFRA_APPLY_AUTHORIZED }}
+          ENVIRONMENT_REVIEWERS_VERIFIED: ${{ vars.PRODUCTION_ENVIRONMENT_REVIEWERS_VERIFIED }}
+        run: |
+          if [[ -n "$WORKLOAD_IDENTITY_PROVIDER" && -n "$DEPLOYER_SERVICE_ACCOUNT" ]]; then
+            echo 'federation_configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'federation_configured=false' >> "$GITHUB_OUTPUT"
+            echo '::notice::Federation is not configured. No provider job will run. See infra/bootstrap.md.'
+          fi
+
+          required=(PROJECT_ID PROJECT_NUMBER STATE_BUCKET_PREFIX REGISTRY_HOST REGISTRY_REPOSITORY BILLING_ACCOUNT_ID BUDGET_ALERT_EMAILS)
+          configured=true
+          for name in "${required[@]}"; do
+            [[ -n "${!name}" ]] || configured=false
+          done
+          [[ "$PROJECT_NUMBER" =~ ^[0-9]+$ ]] || configured=false
+          [[ "$BILLING_ACCOUNT_ID" =~ ^[0-9A-F]{6}-[0-9A-F]{6}-[0-9A-F]{6}$ ]] || configured=false
+          jq -e 'type == "array" and length > 0 and all(.[]; type == "string" and length > 0)' \
+            <<< "$BUDGET_ALERT_EMAILS" >/dev/null 2>&1 || configured=false
+          echo "provider_configured=$configured" >> "$GITHUB_OUTPUT"
+          [[ "$configured" == true ]] || echo '::notice::Required provider inputs are incomplete or invalid. Provider jobs will not run.'
+
+          # These are separate, deliberately typed repository variables.
+          # Federation and valid inputs are not by themselves authorization.
+          if [[ "$APPLY_AUTHORIZED" == 'true' ]]; then
+            echo 'apply_authorized=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'apply_authorized=false' >> "$GITHUB_OUTPUT"
+          fi
+          if [[ "$ENVIRONMENT_REVIEWERS_VERIFIED" == 'true' ]]; then
+            echo 'environment_reviewers_verified=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'environment_reviewers_verified=false' >> "$GITHUB_OUTPUT"
+            echo '::notice::Production required-reviewer protection is not recorded as verified; apply and rollback are blocked.'
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Build once, publish by digest, attest provenance.
+  # ---------------------------------------------------------------------------
+  publish:
+    name: publish ${{ matrix.project }}
+    needs: [checks, authorization]
+    if: >-
+      needs.authorization.outputs.federation_configured == 'true' &&
+      needs.authorization.outputs.provider_configured == 'true' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/v2'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      id-token: write # OIDC token for federation
+      attestations: write # build provenance
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - project: platform-api
+            image: platform-api
+          - project: web
+            image: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.24.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Short-lived credentials by OIDC exchange. No provider key is stored in
+      # GitHub, in the repository, in an image, or on any machine (ADR-0005).
+      - id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+          audience: money-noodle-delivery
+          token_format: access_token
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ vars.GCP_REGISTRY_HOST }}
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - name: Build and push by digest with provenance and SBOM
+        id: build
+        env:
+          REPOSITORY: ${{ vars.GCP_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REGISTRY_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          image="$REPOSITORY/${{ matrix.image }}"
+          docker buildx build \
+            --push \
+            --provenance=true \
+            --attest=type=sbom,generator=docker.io/docker/buildkit-syft-scanner@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9 \
+            --file ${{ matrix.project == 'web' && 'apps/web' || 'services/platform-api' }}/Dockerfile \
+            --tag "$image:${{ github.sha }}" \
+            --metadata-file metadata.json \
+            .
+          digest="$(jq -r '."containerimage.digest"' metadata.json)"
+          if [[ "$digest" != sha256:* ]]; then
+            echo "Build did not report a digest." >&2
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      - name: Scan the published image
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: ${{ steps.build.outputs.image }}@${{ steps.build.outputs.digest }}
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.build.outputs.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  # ---------------------------------------------------------------------------
+  # Plan. Evidence, never authorisation.
+  # ---------------------------------------------------------------------------
+  #
+  # DEVIATION FROM ADR-0006, recorded rather than hidden. That decision expects
+  # "pull requests run `plan` for affected stacks and publish the plan for
+  # review". This job does not run on `pull_request`, because planning reads
+  # remote state, state is sensitive by default even when no secret was declared,
+  # and ADR-0005 requires that a token minted for a pull request — including one
+  # from a fork — not be exchangeable for provider authority. Granting PR runs
+  # the credential needed to plan would disclose state to anyone who can open a
+  # pull request.
+  #
+  # Closing the gap properly needs a second, read-only "planner" principal bound
+  # to same-repository pull requests only. That is a bounded follow-up, listed in
+  # `infra/README.md`. Until then pull requests get the full static check suite,
+  # which needs no credential at all.
+  plan:
+    name: plan ${{ matrix.stack }}
+    needs: [checks, authorization]
+    if: >-
+      needs.authorization.outputs.federation_configured == 'true' &&
+      needs.authorization.outputs.provider_configured == 'true' &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'plan'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # A push checks shared platform drift. Service plans require an explicit
+        # digest/source pair and therefore run only for the selected dispatch.
+        stack: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('["{0}"]', github.event.inputs.stack) || '["platform"]') }}
+    env:
+      TF_VAR_bootstrap_state_bucket: ${{ format('{0}-bootstrap', vars.GCP_STATE_BUCKET_PREFIX) }}
+      TF_VAR_platform_state_bucket: ${{ format('{0}-platform', vars.GCP_STATE_BUCKET_PREFIX) }}
+      TF_VAR_api_state_bucket: ${{ format('{0}-api', vars.GCP_STATE_BUCKET_PREFIX) }}
+      TF_VAR_project_number: ${{ vars.GCP_PROJECT_NUMBER }}
+      TF_VAR_billing_account_id: ${{ vars.GCP_BILLING_ACCOUNT_ID }}
+      TF_VAR_budget_alert_email_addresses: ${{ vars.GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON }}
+      TF_VAR_image_digest: ${{ github.event.inputs.image_digest }}
+      TF_VAR_artifact_version: ${{ github.event.inputs.source_commit }}
+      TF_VAR_source_commit: ${{ github.event.inputs.source_commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          tofu_wrapper: false
+
+      - id: plan-auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+          audience: money-noodle-delivery
+          token_format: access_token
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        if: matrix.stack != 'platform'
+        with:
+          registry: ${{ vars.GCP_REGISTRY_HOST }}
+          username: oauth2accesstoken
+          password: ${{ steps.plan-auth.outputs.access_token }}
+
+      - name: Verify selected service artifact
+        if: matrix.stack != 'platform'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ vars.GCP_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REGISTRY_REPOSITORY }}/${{ matrix.stack == 'web' && 'web' || 'platform-api' }}
+          DIGEST: ${{ github.event.inputs.image_digest }}
+          SOURCE_COMMIT: ${{ github.event.inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo 'A full image digest is required.' >&2; exit 1; }
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo 'A full source commit is required.' >&2; exit 1; }
+          gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+            --repo "${{ github.repository }}" \
+            --signer-workflow "${{ github.repository }}/.github/workflows/delivery.yml" \
+            --source-digest "$SOURCE_COMMIT" \
+            --source-ref refs/heads/v2 \
+            --deny-self-hosted-runners \
+            --predicate-type https://slsa.dev/provenance/v1
+
+      - name: Plan
+        working-directory: infra/stacks/${{ matrix.stack }}
+        env:
+          STATE_BUCKET_PREFIX: ${{ vars.GCP_STATE_BUCKET_PREFIX }}
+        run: |
+          set -euo pipefail
+          tofu init -input=false \
+            -backend-config="bucket=${STATE_BUCKET_PREFIX}-${{ matrix.stack }}" \
+            -backend-config="prefix=stacks/${{ matrix.stack }}"
+          # `-lock-timeout` waits for a concurrent operation rather than failing
+          # immediately or, worse, proceeding without the lock.
+          tofu plan -input=false -lock-timeout=5m -out=stack.tfplan
+          # Rendered without values that state may hold; the binary plan is never
+          # uploaded as an artifact.
+          tofu show -no-color stack.tfplan > plan.txt
+          # Notification destinations are account data, not review evidence.
+          # Redact them before the plan reaches logs or a job summary.
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          path = Path('plan.txt')
+          text = path.read_text()
+          for address in json.loads(os.environ['TF_VAR_budget_alert_email_addresses']):
+              text = text.replace(address, '<budget-alert-address>')
+          path.write_text(text)
+          PY
+          echo '### Plan for `${{ matrix.stack }}`' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -c 60000 plan.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove plan artifacts
+        if: always()
+        working-directory: infra/stacks/${{ matrix.stack }}
+        run: rm -f stack.tfplan plan.txt
+
+  # ---------------------------------------------------------------------------
+  # Drift. Detected and reported; never silently corrected (ADR-0006).
+  # ---------------------------------------------------------------------------
+  drift:
+    name: drift ${{ matrix.stack }}
+    needs: authorization
+    if: >-
+      needs.authorization.outputs.federation_configured == 'true' &&
+      needs.authorization.outputs.provider_configured == 'true' &&
+      github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: [platform, api, web]
+    env:
+      TF_VAR_bootstrap_state_bucket: ${{ format('{0}-bootstrap', vars.GCP_STATE_BUCKET_PREFIX) }}
+      TF_VAR_platform_state_bucket: ${{ format('{0}-platform', vars.GCP_STATE_BUCKET_PREFIX) }}
+      TF_VAR_api_state_bucket: ${{ format('{0}-api', vars.GCP_STATE_BUCKET_PREFIX) }}
+      TF_VAR_project_number: ${{ vars.GCP_PROJECT_NUMBER }}
+      TF_VAR_billing_account_id: ${{ vars.GCP_BILLING_ACCOUNT_ID }}
+      TF_VAR_budget_alert_email_addresses: ${{ vars.GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          tofu_wrapper: false
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+          audience: money-noodle-delivery
+
+      - name: Detect drift
+        working-directory: infra/stacks/${{ matrix.stack }}
+        env:
+          STATE_BUCKET_PREFIX: ${{ vars.GCP_STATE_BUCKET_PREFIX }}
+        run: |
+          set -euo pipefail
+          tofu init -input=false \
+            -backend-config="bucket=${STATE_BUCKET_PREFIX}-${{ matrix.stack }}" \
+            -backend-config="prefix=stacks/${{ matrix.stack }}"
+          if [[ '${{ matrix.stack }}' != 'platform' ]]; then
+            export TF_VAR_image_digest="$(tofu output -raw deployed_digest)"
+            export TF_VAR_artifact_version="$(tofu output -raw artifact_version)"
+            export TF_VAR_source_commit="$(tofu output -raw source_commit)"
+            revision_suffix="$(tofu output -raw configured_revision_suffix 2>/dev/null || true)"
+            [[ -z "$revision_suffix" ]] || export TF_VAR_revision_suffix="$revision_suffix"
+          fi
+          # `-refresh-only` compares reviewed desired state with observed reality
+          # and proposes no changes. `-detailed-exitcode` returns 2 on difference.
+          set +e
+          tofu plan -input=false -lock-timeout=5m -refresh-only -detailed-exitcode -no-color > drift.txt
+          status=$?
+          set -e
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          path = Path('drift.txt')
+          text = path.read_text()
+          for address in json.loads(os.environ['TF_VAR_budget_alert_email_addresses']):
+              text = text.replace(address, '<budget-alert-address>')
+          path.write_text(text)
+          PY
+          case "$status" in
+            0) echo "No drift detected in ${{ matrix.stack }}." ;;
+            2)
+              echo '::warning::Drift detected in ${{ matrix.stack }}. It is reported, not corrected.'
+              {
+                echo '### Drift in `${{ matrix.stack }}`'
+                echo
+                echo 'A manual provider change is an exception that must be reconciled back into code.'
+                echo '```'
+                tail -c 50000 drift.txt
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *) echo "Drift detection failed." >&2; cat drift.txt >&2; exit 1 ;;
+          esac
+          rm -f drift.txt
+
+  # ---------------------------------------------------------------------------
+  # Apply. Gated four ways: an explicit repository variable, a protected
+  # environment with required reviewers, a manual dispatch, and a typed phrase.
+  # ---------------------------------------------------------------------------
+  apply:
+    name: apply ${{ github.event.inputs.stack }}
+    needs: [checks, authorization]
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.action == 'apply' &&
+      github.event.inputs.confirmation == 'APPLY-TO-PRODUCTION' &&
+      needs.authorization.outputs.federation_configured == 'true' &&
+      needs.authorization.outputs.provider_configured == 'true' &&
+      needs.authorization.outputs.apply_authorized == 'true' &&
+      needs.authorization.outputs.environment_reviewers_verified == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TF_VAR_bootstrap_state_bucket: ${{ format('{0}-bootstrap', vars.GCP_STATE_BUCKET_PREFIX) }}
+      TF_VAR_platform_state_bucket: ${{ format('{0}-platform', vars.GCP_STATE_BUCKET_PREFIX) }}
+      TF_VAR_api_state_bucket: ${{ format('{0}-api', vars.GCP_STATE_BUCKET_PREFIX) }}
+      TF_VAR_project_number: ${{ vars.GCP_PROJECT_NUMBER }}
+      TF_VAR_billing_account_id: ${{ vars.GCP_BILLING_ACCOUNT_ID }}
+      TF_VAR_budget_alert_email_addresses: ${{ vars.GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          tofu_wrapper: false
+
+      - id: apply-auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+          audience: money-noodle-delivery
+          token_format: access_token
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        if: github.event.inputs.stack != 'platform'
+        with:
+          registry: ${{ vars.GCP_REGISTRY_HOST }}
+          username: oauth2accesstoken
+          password: ${{ steps.apply-auth.outputs.access_token }}
+
+      - name: Require a digest and source commit when deploying a service
+        if: github.event.inputs.stack != 'platform'
+        env:
+          DIGEST: ${{ github.event.inputs.image_digest }}
+          SOURCE_COMMIT: ${{ github.event.inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "image_digest must be a full sha256 digest; a tag is not deployable." >&2
+            exit 1
+          }
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "source_commit must be a full commit SHA." >&2; exit 1; }
+
+      - name: Verify the artifact carries provenance from this repository
+        if: github.event.inputs.stack != 'platform'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ vars.GCP_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REGISTRY_REPOSITORY }}/${{ github.event.inputs.stack == 'web' && 'web' || 'platform-api' }}
+          DIGEST: ${{ github.event.inputs.image_digest }}
+        run: |
+          set -euo pipefail
+          # A digest without verifiable provenance from the declared source
+          # commit and exact signer workflow is not deployed (ADR-0005).
+          gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+            --repo "${{ github.repository }}" \
+            --signer-workflow "${{ github.repository }}/.github/workflows/delivery.yml" \
+            --source-digest "${{ github.event.inputs.source_commit }}" \
+            --source-ref refs/heads/v2 \
+            --deny-self-hosted-runners \
+            --predicate-type https://slsa.dev/provenance/v1
+
+      - name: Apply
+        working-directory: infra/stacks/${{ github.event.inputs.stack }}
+        env:
+          STATE_BUCKET_PREFIX: ${{ vars.GCP_STATE_BUCKET_PREFIX }}
+          TF_VAR_image_digest: ${{ github.event.inputs.image_digest }}
+          TF_VAR_artifact_version: ${{ github.event.inputs.source_commit }}
+          TF_VAR_source_commit: ${{ github.event.inputs.source_commit }}
+          TF_VAR_revision_suffix: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          tofu init -input=false \
+            -backend-config="bucket=${STATE_BUCKET_PREFIX}-${{ github.event.inputs.stack }}" \
+            -backend-config="prefix=stacks/${{ github.event.inputs.stack }}"
+          # Plan and apply the same plan file, so what was reviewed is what runs.
+          tofu plan -input=false -lock-timeout=5m -out=stack.tfplan
+          tofu apply -input=false -lock-timeout=5m -auto-approve stack.tfplan
+          rm -f stack.tfplan
+
+      - name: Verify health and the public contract
+        if: github.event.inputs.stack != 'platform'
+        working-directory: infra/stacks/${{ github.event.inputs.stack }}
+        run: |
+          set -euo pipefail
+          uri="$(tofu output -raw contract_service_uri)"
+          for path in /health/live /health/ready; do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' --retry 6 --retry-delay 5 \
+              --retry-all-errors --max-time 20 "${uri}${path}")"
+            [[ "$code" == '200' ]] || { echo "${path} returned ${code}" >&2; exit 1; }
+          done
+          if [[ '${{ github.event.inputs.stack }}' == 'api' ]]; then
+            curl -sSf --max-time 20 "${uri}/v1/platform/status" | jq -e '.state and .asOf' > /dev/null
+          fi
+
+      - name: Report the deployed artifact
+        working-directory: infra/stacks/${{ github.event.inputs.stack }}
+        run: |
+          {
+            echo "### Applied \`${{ github.event.inputs.stack }}\`"
+            echo
+            echo "- source commit: \`${{ github.event.inputs.source_commit }}\`"
+            echo "- workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # Rollback. Traffic reassignment to an existing revision. No rebuild, and it
+  # touches only the named stack.
+  # ---------------------------------------------------------------------------
+  rollback:
+    name: rollback ${{ github.event.inputs.stack }}
+    needs: authorization
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.action == 'rollback' &&
+      github.event.inputs.rollback_revision != '' &&
+      github.event.inputs.stack != 'platform' &&
+      needs.authorization.outputs.federation_configured == 'true' &&
+      needs.authorization.outputs.provider_configured == 'true' &&
+      needs.authorization.outputs.apply_authorized == 'true' &&
+      needs.authorization.outputs.environment_reviewers_verified == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TF_VAR_platform_state_bucket: ${{ format('{0}-platform', vars.GCP_STATE_BUCKET_PREFIX) }}
+      TF_VAR_api_state_bucket: ${{ format('{0}-api', vars.GCP_STATE_BUCKET_PREFIX) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          tofu_wrapper: false
+
+      - id: rollback-auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+          audience: money-noodle-delivery
+          token_format: access_token
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ vars.GCP_REGISTRY_HOST }}
+          username: oauth2accesstoken
+          password: ${{ steps.rollback-auth.outputs.access_token }}
+
+      - name: Load and verify the configured artifact from state
+        working-directory: infra/stacks/${{ github.event.inputs.stack }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATE_BUCKET_PREFIX: ${{ vars.GCP_STATE_BUCKET_PREFIX }}
+          IMAGE: ${{ vars.GCP_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REGISTRY_REPOSITORY }}/${{ github.event.inputs.stack == 'web' && 'web' || 'platform-api' }}
+        run: |
+          set -euo pipefail
+          tofu init -input=false \
+            -backend-config="bucket=${STATE_BUCKET_PREFIX}-${{ github.event.inputs.stack }}" \
+            -backend-config="prefix=stacks/${{ github.event.inputs.stack }}"
+          digest="$(tofu output -raw deployed_digest)"
+          version="$(tofu output -raw artifact_version)"
+          source_commit="$(tofu output -raw source_commit)"
+          revision_suffix="$(tofu output -raw configured_revision_suffix 2>/dev/null || true)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]]
+          [[ -n "$version" ]]
+          gh attestation verify "oci://${IMAGE}@${digest}" \
+            --repo "${{ github.repository }}" \
+            --signer-workflow "${{ github.repository }}/.github/workflows/delivery.yml" \
+            --source-digest "$source_commit" \
+            --source-ref refs/heads/v2 \
+            --deny-self-hosted-runners \
+            --predicate-type https://slsa.dev/provenance/v1
+          {
+            echo "TF_VAR_image_digest=$digest"
+            echo "TF_VAR_artifact_version=$version"
+            echo "TF_VAR_source_commit=$source_commit"
+            [[ -z "$revision_suffix" ]] || echo "TF_VAR_revision_suffix=$revision_suffix"
+          } >> "$GITHUB_ENV"
+
+      - name: Reassign traffic to the prior revision without changing the template
+        working-directory: infra/stacks/${{ github.event.inputs.stack }}
+        env:
+          ROLLBACK_REVISION: ${{ github.event.inputs.rollback_revision }}
+        run: |
+          set -euo pipefail
+          [[ "$ROLLBACK_REVISION" =~ ^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$ ]] || {
+            echo 'rollback_revision is not a valid Cloud Run revision name.' >&2
+            exit 1
+          }
+          tofu plan -input=false -lock-timeout=5m -out=rollback.tfplan \
+            -var="rollback_revision=${ROLLBACK_REVISION}"
+          tofu apply -input=false -lock-timeout=5m -auto-approve rollback.tfplan
+          rm -f rollback.tfplan
+
+      - name: Verify the rolled-back service is healthy
+        working-directory: infra/stacks/${{ github.event.inputs.stack }}
+        run: |
+          set -euo pipefail
+          uri="$(tofu output -raw contract_service_uri)"
+          code="$(curl -sS -o /dev/null -w '%{http_code}' --retry 6 --retry-delay 5 \
+            --retry-all-errors --max-time 20 "${uri}/health/ready")"
+          [[ "$code" == '200' ]] || { echo "readiness returned ${code}" >&2; exit 1; }

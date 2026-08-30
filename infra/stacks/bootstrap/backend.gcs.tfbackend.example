@@ -1,0 +1,11 @@
+# Backend configuration for the bootstrap stack, supplied with
+# `tofu init -backend-config=backend.gcs.tfbackend`.
+#
+# Copy to `backend.gcs.tfbackend` and fill in. That filename is git-ignored:
+# the bucket name is account-specific and is not committed.
+#
+# The bootstrap stack creates this bucket during its first, local-state apply and
+# is then migrated into it. See `infra/bootstrap.md`.
+
+bucket = "REPLACE-WITH-STATE-BUCKET-PREFIX-bootstrap"
+prefix = "stacks/bootstrap"
