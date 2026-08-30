@@ -95,7 +95,7 @@ variable "allowed_audiences" {
 variable "repository_owner" {
   description = "GitHub owner authorised for delivery."
   type        = string
-  default     = "phairow"
+  default     = "money-noodle"
 }
 
 variable "repository_name" {

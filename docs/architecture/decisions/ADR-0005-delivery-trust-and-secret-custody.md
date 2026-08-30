@@ -22,13 +22,21 @@ This decision was the deciding factor in [`ADR-0004`](ADR-0004-first-remote-host
 
 GitHub Actions obtains provider credentials by presenting its per-job OIDC token to a workload identity pool and exchanging it for a short-lived access token. **No provider access key, secret key, service account key file, or equivalent long-lived credential is stored in GitHub, in the repository, in an image, or on a developer machine.**
 
-The identity pool's trust condition is constrained to this repository and to protected `main`, the sole integration and delivery ref. Every Money Noodle configuration boundary rejects a ref allowlist other than exactly `refs/heads/main`; a stack input cannot reauthorize a deleted or additional branch. A token minted for a deleted migration branch, a tag, a fork, a pull request from an untrusted source, another workflow, or another repository must not be exchangeable for deployment authority.
+The identity pool's trust condition is constrained to the organization-owned `money-noodle/money-noodle` repository, protected `main`, and the delivery workflow. Every Money Noodle configuration boundary rejects a ref allowlist other than exactly `refs/heads/main` and a workflow allowlist other than exactly `.github/workflows/delivery.yml`; a stack input cannot reauthorize a deleted or additional branch or workflow. A token minted for a deleted migration branch, a tag, a fork, a pull request from an untrusted source, another workflow, or another repository must not be exchangeable for deployment authority.
 
 The closed event set is `push`, `workflow_dispatch`, and `schedule`. Schedule is permitted only inside the same immutable-repository, exact-`main`, exact-`.github/workflows/delivery.yml` conjunction so the declared read-only drift job can authenticate. It does not authorize another scheduled workflow, ref, repository, event, or an apply.
 
-The source repository intentionally publishes one squashed root snapshot under the MIT license; `phairow/money-noodle-private-archive` retains the private development history and is never a delivery source. Publication makes the snapshot permanently externally copyable and forkable. This is an explicit source-distribution choice, not an incidental tooling workaround. Public pull requests remain untrusted, execute with read-only CI permissions, and never receive a provider token. Host-side protection of `main` is mandatory before ordinary merges resume; workflow text alone is not evidence that protection exists.
+The organization-owned source repository `money-noodle/money-noodle` publishes a squashed root snapshot under the MIT license; the personal `phairow/money-noodle-private-archive` retains the private development history and is never a delivery source. Publication makes source, issues, pull requests, commit metadata, Actions logs and summaries, artifacts, and caches public or potentially externally observable and permanently copyable. Secret payloads, customer or production data, billing/account identifiers, private recovery material, durable provider credentials, raw state, and unredacted incident evidence never enter those surfaces.
+
+Public pull requests remain untrusted, execute with read-only CI permissions, and never receive a provider token. `pull_request_target` does not execute contributor-controlled source. Every action is pinned to an immutable commit, and each externally downloaded binary is exact-version and checksum verified before execution. Host-side protection of `main` and the production environment is mandatory; workflow text alone is not evidence that either protection exists.
 
 Any composition that cannot satisfy this without a stored key must record that gap explicitly as an accepted risk, with a named compensating control — a narrowly scoped credential, a documented rotation schedule, and a revocation procedure — rather than adopting a stored key silently.
+
+### Agents execute reviewed automation; humans retain approval and recovery
+
+Agents are intended technical operators for routine work through reviewed automation, short-lived identity, least privilege, default-deny inputs, independent post-operation verification, and durable redacted evidence. They receive no standing cloud authority and cannot infer approval from assignment, workflow access, or a successful check. Routine operations do not bypass the pipeline through a cloud console, developer laptop, or durable local credential.
+
+Humans retain explicit scoped approval of production effects, provider/domain account ownership, root recovery, break-glass custody, and responsibility for the protected production approval. One-time bootstrap and authorized recovery are bounded human procedures that must be reconciled into code and remote state, not alternative routine control planes.
 
 ### Three separate principals
 
@@ -42,11 +50,11 @@ Developer access is separate from all three and is least-privilege. No principal
 
 ### Artifact trust
 
-Artifacts are built once from a reviewed commit and deployed **by digest**, never by a mutable tag. Every deployment records the image digest, the source commit, the build workflow run, and the generated SBOM. Dependency, secret, and container scans run before publication. Build provenance attestation is produced at publish time and the deployment step verifies that the digest it is asked to deploy carries an attestation from this repository's workflow. A digest without verifiable provenance is not deployed.
+Artifacts are built once from a reviewed commit and deployed **by digest**, never by a mutable tag. Every deployment records the image digest, the source commit, the build workflow run, and the generated SBOM. Dependency, secret, and container scans run before publication. Build provenance attestation is produced at publish time and the deployment step verifies that the digest it is asked to deploy carries an attestation from this repository's exact workflow on protected `main`. A digest without verifiable provenance is not deployed.
 
 ### Secret custody
 
-A managed secret store is declared and reachable from the first apply even though the first slice stores nothing in it, so that the first capability needing a credential does not also have to invent custody. Every secret, when one exists, records owner, consuming principal, rotation interval, revocation procedure, and recovery path. Laptop environment files are never canonical. Secret values never enter Git, images, build logs, telemetry, status views, issue comments, or agent handoffs.
+A managed secret store is declared and reachable from the first apply even though the first slice stores nothing in it, so that the first capability needing a credential does not also have to invent custody. Every secret, when one exists, records owner, consuming principal, rotation interval, revocation procedure, and recovery path. Laptop environment files are never canonical. Secret values never enter Git, images, build logs, telemetry, status views, issue comments, pull requests, Actions summaries/artifacts/caches, commit metadata, prompts copied into public coordination, or agent handoffs.
 
 Runtime configuration that is genuinely non-secret is typed configuration, not a secret. Putting non-secrets in the secret store obscures which values actually matter.
 

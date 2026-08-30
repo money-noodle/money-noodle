@@ -563,6 +563,48 @@ test('every federation composition boundary enforces exact main, workflow, and e
   }
 });
 
+test('bootstrap targets the current organization source without committing numeric identities', () => {
+  const bootstrapPath = join(repoRoot, 'infra', 'stacks', 'bootstrap', 'variables.tf');
+  const bootstrap = read(bootstrapPath);
+  assert.match(
+    bootstrap,
+    /variable "repository_owner" \{[\s\S]*?default\s*=\s*"money-noodle"[\s\S]*?\n\}/,
+    'bootstrap must default to the organization that owns the public source',
+  );
+  assert.match(
+    bootstrap,
+    /variable "repository_name" \{[\s\S]*?default\s*=\s*"money-noodle"[\s\S]*?\n\}/,
+    'bootstrap must default to the current source repository name',
+  );
+  for (const variable of ['repository_id', 'repository_owner_id']) {
+    const block = bootstrap.match(new RegExp(`variable "${variable}" \\{([\\s\\S]*?)\\n\\}`))?.[1];
+    assert.ok(block, `bootstrap must declare ${variable}`);
+    assert.doesNotMatch(block, /\bdefault\s*=/, `${variable} must remain a bootstrap API input`);
+  }
+
+  const bootstrapTests = read(
+    join(repoRoot, 'infra', 'stacks', 'bootstrap', 'tests', 'bootstrap.tftest.hcl'),
+  );
+  assert.match(
+    bootstrapTests,
+    /var\.repository_owner == "money-noodle" && var\.repository_name == "money-noodle"/,
+    'OpenTofu tests must guard the current organization-owned source defaults',
+  );
+
+  const guide = read(join(repoRoot, 'infra', 'bootstrap.md'));
+  for (const endpoint of [
+    'repos/money-noodle/money-noodle --jq .id',
+    'repos/money-noodle/money-noodle --jq .owner.id',
+    '/repos/money-noodle/money-noodle/actions/secrets',
+    'repos/money-noodle/money-noodle/environments/production',
+  ]) {
+    assert.ok(
+      guide.includes(endpoint),
+      `bootstrap guidance must use current API endpoint ${endpoint}`,
+    );
+  }
+});
+
 test('the workflow authorised for delivery is the one that exists', () => {
   // The trust conjunction names an exact `job_workflow_ref`. If the bootstrap
   // default and the workflow filename disagree, every delivery run is refused

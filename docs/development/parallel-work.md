@@ -61,7 +61,7 @@ Use labels `work:proposed`, `work:ready`, `work:active`, `work:blocked`, `work:r
 - `Claimed-At`, `Check-In-By`, and latest checkpoint;
 - shared hotspots, integration owner, and recovery/handoff notes.
 
-Harness/run identifiers are diagnostic, not identity or authority. Do not publish local session-file paths, credentials, full prompts, transcripts, customer data, or secrets. Use the issue template at `.github/ISSUE_TEMPLATE/parallel-work.md`; preserve its machine-readable field names so status tooling remains portable.
+Harness/run identifiers are diagnostic, not identity or authority. This repository and its issue registry are public: issue bodies, comments, checkpoints, branch names, commit metadata, and copied prompt text are externally observable. Do not publish local session-file paths, credentials, full prompts, transcripts, customer or production data, billing/account identifiers, private recovery material, or secrets. Use the issue template at `.github/ISSUE_TEMPLATE/parallel-work.md`; preserve its machine-readable field names so status tooling remains portable.
 
 Use issue comments as an append-only checkpoint trail. Update the structured claim fields when ownership, branch, state, or deadline changes. Body edits, labels, comments, branch creation, and worktree creation are not one atomic operation: a newer ownership/checkpoint comment or locked worktree can prove claim intent while structured body fields still say `ready` or `unclaimed`. Either form of conflicting evidence requires investigation; never overwrite one merely because the other lags. A session existing inside a harness does not prove its claim is alive; the registry checkpoint does.
 

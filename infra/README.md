@@ -1,9 +1,10 @@
 # Infrastructure
 
-> **Status:** Unvalidated implementation. Locally validated by static analysis and
-> offline tests only. **No provider resource has been applied**, and no Google
-> Cloud account, project, resource, credential, or DNS record has been created,
-> inspected, or authenticated against.
+> **Status:** Locally and hosted-CI validated implementation; provider-unvalidated.
+> The hosted baseline ran static analysis, format/validation, and mocked-provider
+> tests without a provider credential. **No provider resource has been applied**,
+> and no Google Cloud project resource, federation, credential, Money Noodle
+> deployment, or DNS record exists.
 > **Owner:** GitHub issue #14 (`cc-gcp-delivery-foundation`), parent plan #2
 > **Implements:** [`ADR-0004`](../docs/architecture/decisions/ADR-0004-first-remote-hosting-composition.md) through [`ADR-0007`](../docs/architecture/decisions/ADR-0007-first-telemetry-backend.md), with dated comparison evidence in [`deployment-composition.md`](../docs/operations/deployment-composition.md)
 
@@ -85,9 +86,9 @@ Every check here is static. `init` runs with `-backend=false`, and every
 
 ## Testing
 
-55 OpenTofu test runs execute offline across the trust policy, service contract,
+61 OpenTofu test runs execute offline across the trust policy, service contract,
 rollback behaviour, bootstrap defaults, state durability, budget, and federation
-modules. 36 static guards run in the repository gate. Nearly all are **negative** tests: a
+modules. 37 infrastructure static guards run in the repository gate. Nearly all are **negative** tests: a
 test proving the pipeline can deploy proves nothing about who else can.
 
 The trust policy is the piece worth understanding. `modules/delivery-trust`

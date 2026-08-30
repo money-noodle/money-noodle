@@ -1,6 +1,6 @@
 # Money Noodle documentation
 
-`AGENTS.md` is the repository entry point. This index owns documentation placement and prevents the root guide from becoming an encyclopedia.
+`AGENTS.md` is the agent entry point. The root [`README.md`](../README.md) is the concise public project entry; [`SECURITY.md`](../SECURITY.md) owns private vulnerability and accidental-disclosure reporting, and [`CONTRIBUTING.md`](../CONTRIBUTING.md) owns public contribution expectations. This index routes detailed authority and prevents any entry point from becoming an encyclopedia.
 
 ## Current map
 

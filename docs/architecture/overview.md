@@ -19,8 +19,8 @@ It is intentionally not a complete platform decomposition. New domains, stores, 
 ### Current facts
 
 - The repository implements pnpm workspaces and Nx projects for the Next.js web, Fastify API, and generated OpenAPI client, with exact runtime/tool versions and a frozen lockfile.
-- The public-source snapshot is staged on sole integration branch `main` as one root commit; a separate private archive preserves development history.
-- CI is configured to validate formatting, lint, types, tests/coverage, contracts, builds, dependencies, secrets, attested OCI images, SBOMs, and HIGH/CRITICAL image vulnerabilities. GitHub Actions are currently disabled, so the squashed snapshot has no observed hosted-CI result yet.
+- The GitHub Free `money-noodle` organization owns the public `money-noodle/money-noodle` source repository on sole protected integration branch `main`; its published history begins with one squashed root snapshot, and the personal `phairow/money-noodle-private-archive` preserves private development history without becoming a delivery source. The transfer preserved the source repository's immutable ID and host records.
+- GitHub Actions are enabled with read-only defaults, host-enforced full-SHA action pinning, and a selected-action allowlist; private vulnerability reporting, secret scanning, and push protection are enabled. Strict `main` protection requires `affected projects and repository gates`, `secret scan`, `container platform-api`, and `container web`. The initial hosted baseline passed formatting, lint, types, tests/coverage, contracts, builds, dependency and full-history secret scans, no-provider OpenTofu checks, attested OCI builds, SBOMs, and HIGH/CRITICAL image-vulnerability gates. Hosted CI is not deployment validation.
 - TypeScript is the default, REST/OpenAPI is required, the API must remain interface-neutral, and deployable projects must build and deploy independently.
 - The web is a presentation client. It cannot become a worker, provider adapter, scheduler, data authority, or direct database client.
 - Production has no real-money authority. Simulation and funded concepts remain structurally separate when they are introduced.
@@ -379,7 +379,7 @@ The API reads the read model and never calls a provider billing, deployment, or 
 
 The workspace, projects, status contract, generated client, web presentation/API adapter, API inner layers/HTTP/deployment adapters, health routes, and container definitions below exist. `infra/` now exists as reviewable, statically validated configuration; **no provider resource has been applied**, and the outstanding items before an apply can be trusted are listed in [`../../infra/README.md`](../../infra/README.md).
 
-No row below is proposed. `jobs/` does not exist, and neither the administrative ingestion unit, its read model, nor its API operations are represented here, because [`ADR-0009`](decisions/ADR-0009-administrative-observability-surface.md) is proposed rather than accepted. Rows are added when the projects exist, not when they are decided. The source repository is still private with Actions disabled, and no Google Cloud resource or federation exists.
+No row below is proposed. `jobs/` does not exist, and neither the administrative ingestion unit, its read model, nor its API operations are represented here, because [`ADR-0009`](decisions/ADR-0009-administrative-observability-surface.md) is proposed rather than accepted. Rows are added when the projects exist, not when they are decided. The source repository is public, Actions and host protections are enabled, and the initial hosted baseline passed; no Google Cloud resource, federation, provider credential, or remote deployment exists.
 
 | Path | Project/deployment | Boundary and ownership |
 | --- | --- | --- |

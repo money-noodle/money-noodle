@@ -1,8 +1,11 @@
 # One-time bootstrap procedure
 
 > **Status:** Proposed procedure. **Nothing in this repository has been applied.**
-> No Google Cloud account, project, resource, credential, or billing relationship
-> was created, inspected, or authenticated against while writing it.
+> The organization-owned `money-noodle/money-noodle` source repository and GitHub
+> Actions are public, but no Google Cloud
+> repository variable, secret, federation, project resource, credential, or
+> Money Noodle deployment exists. No provider was authenticated against while
+> writing or validating this procedure.
 > **Prepared:** 2026-08-29 by `cc-gcp-delivery-foundation` (harness `claude-code`), GitHub issue #14
 > **Decisions implemented:** [`ADR-0004`](../docs/architecture/decisions/ADR-0004-first-remote-hosting-composition.md), [`ADR-0005`](../docs/architecture/decisions/ADR-0005-delivery-trust-and-secret-custody.md), [`ADR-0006`](../docs/architecture/decisions/ADR-0006-infrastructure-as-code-and-remote-state.md), [`ADR-0007`](../docs/architecture/decisions/ADR-0007-first-telemetry-backend.md)
 
@@ -17,9 +20,12 @@ down.
 
 ## What the maintainer must supply
 
-None of these values are in this repository, and none may be committed. They are
-passed as OpenTofu variables and, afterwards, as GitHub **repository variables**
-(not secrets — they are identifiers, not credentials).
+None of these values are in this repository, and none may be committed or placed
+in a public issue, pull request, workflow input, log, summary, artifact, cache, or
+handoff. They are passed as OpenTofu variables and, afterwards, through private
+host configuration as GitHub **repository variables**. They are identifiers, not
+credentials, but actual billing/account/provider identifiers are still withheld
+from public surfaces and from workflow output.
 
 | Value | Where it comes from | Used for |
 | --- | --- | --- |
@@ -27,8 +33,8 @@ passed as OpenTofu variables and, afterwards, as GitHub **repository variables**
 | `project_number` | Same project, numeric form | Budget filter, Cloud Run service agent identity |
 | `billing_account_id` | The billing account linked to that project | Narrow budget-management grant plus the USD 30 budget |
 | `state_bucket_prefix` | A name the maintainer chooses; bucket names are globally unique | The four state buckets |
-| `repository_id` | `gh api repos/phairow/money-noodle --jq .id` | Trust conjunction |
-| `repository_owner_id` | `gh api repos/phairow/money-noodle --jq .owner.id` | Trust conjunction |
+| `repository_id` | `gh api repos/money-noodle/money-noodle --jq .id` | Trust conjunction |
+| `repository_owner_id` | `gh api repos/money-noodle/money-noodle --jq .owner.id` | Trust conjunction |
 | `budget_alert_email_addresses` | Where budget alerts should go | Budget notification channels |
 
 Two authorizations are also required, and they are separate on purpose:
@@ -54,9 +60,11 @@ Two authorizations are also required, and they are separate on purpose:
 
 ## Step 1 — create the project and enable billing
 
-Done by the maintainer in the console or with `gcloud`. This is the one
-click-or-command step that precedes code, because a project must exist before
-anything can be declared inside it.
+Done by the maintainer in the console or with `gcloud`. This explicitly scoped,
+one-time account-owner bootstrap is an exception to the rule against routine
+console/laptop operation, because a project must exist before anything can be
+declared inside it. It grants no permission for later agents or humans to bypass
+the reviewed pipeline, and every resulting resource is reconciled below.
 
 Record, in a place that is not this repository: the project id, the project
 number, and the billing account id.
@@ -122,7 +130,9 @@ tofu output -raw contract_workload_identity_provider   # → GCP_WORKLOAD_IDENTI
 tofu output -raw contract_deployer_service_account_email # → GCP_DEPLOYER_SERVICE_ACCOUNT
 ```
 
-Set as GitHub **repository variables**, never secrets:
+Set as GitHub **repository variables**, never secrets. Configure them directly in
+the private host settings; never pass their values through a public issue,
+`workflow_dispatch` input, Actions output, or agent handoff:
 
 | Variable | Value |
 | --- | --- |
@@ -138,10 +148,10 @@ Set as GitHub **repository variables**, never secrets:
 | `INFRA_APPLY_AUTHORIZED` | `false` until both authorization gates below pass |
 | `PRODUCTION_ENVIRONMENT_REVIEWERS_VERIFIED` | `false` until required-reviewer protection is observed |
 
-None of these is a credential. The workload identity provider name is an
-identifier; holding it grants nothing without a token that satisfies the trust
-conjunction. **No service account key is created at any point in this procedure.**
-If one exists, something has gone wrong.
+None of these is a credential, but their values remain non-public operational
+configuration. The workload identity provider name grants nothing without a
+token that satisfies the trust conjunction. **No service account key is created
+at any point in this procedure.** If one exists, something has gone wrong.
 
 ## Step 5 — verify the trust boundary before granting apply authority
 
@@ -152,7 +162,7 @@ proving the pipeline *can* deploy proves nothing about who else can.
 2. A pull request run, including one from a public fork, fails to obtain credentials.
 3. A different workflow in this repository fails to obtain credentials.
 4. An event outside `push`, `workflow_dispatch`, and `schedule` fails to obtain credentials.
-5. `gh api /repos/phairow/money-noodle/actions/secrets` lists no provider key.
+5. `gh api /repos/money-noodle/money-noodle/actions/secrets` lists no provider key.
 
 Then prove the one scheduled exception: `schedule` authenticates only for protected `main` and the exact `.github/workflows/delivery.yml` job workflow reference, allowing its read-only drift plan. The scheduled job receives no apply path and no issue-write permission.
 
@@ -160,16 +170,16 @@ Then verify the `production` GitHub environment actually has a required-reviewer
 rule; naming an environment in YAML does not create that rule:
 
 ```sh
-gh api repos/phairow/money-noodle/environments/production \
+gh api repos/money-noodle/money-noodle/environments/production \
   --jq '.protection_rules'
 ```
 
 Record the dated API evidence in the authorized apply issue. Set
 `PRODUCTION_ENVIRONMENT_REVIEWERS_VERIFIED=true` only when the response contains
-the intended required reviewer and self-review policy. If the current private
-repository plan does not offer that protection, leave the variable false: apply
-and rollback remain mechanically blocked until the maintainer changes the plan
-or explicitly revises the accepted gate.
+the intended required reviewer and self-review policy. If the repository host
+cannot enforce that protection, leave the variable false: apply and rollback
+remain mechanically blocked until the maintainer changes the hosting control or
+explicitly revises the accepted gate.
 
 Only after the negative federation tests and environment check pass should
 `INFRA_APPLY_AUTHORIZED` be set to `true`.

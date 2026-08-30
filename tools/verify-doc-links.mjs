@@ -11,7 +11,15 @@ function markdownFiles(path) {
   });
 }
 
-const files = ["AGENTS.md", "CLAUDE.md", ...markdownFiles("docs"), ...markdownFiles(".github/ISSUE_TEMPLATE")];
+const files = [
+  "README.md",
+  "SECURITY.md",
+  "CONTRIBUTING.md",
+  "AGENTS.md",
+  "CLAUDE.md",
+  ...markdownFiles("docs"),
+  ...markdownFiles(".github/ISSUE_TEMPLATE"),
+];
 if (existsSync(".github/copilot-instructions.md")) files.push(".github/copilot-instructions.md");
 
 const failures = [];

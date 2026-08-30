@@ -19,6 +19,11 @@ run "defaults_are_valid_and_budget_authority_is_narrow" {
   command = plan
 
   assert {
+    condition     = var.repository_owner == "money-noodle" && var.repository_name == "money-noodle"
+    error_message = "Bootstrap must target the current organization-owned source repository."
+  }
+
+  assert {
     condition     = length(var.allowed_refs) == 1 && one(var.allowed_refs) == "refs/heads/main"
     error_message = "Bootstrap must grant delivery authority only to protected main."
   }

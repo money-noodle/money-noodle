@@ -8,7 +8,7 @@
 > **Depends on:** [`../architecture/overview.md`](../architecture/overview.md), [`ADR-0003`](../architecture/decisions/ADR-0003-first-slice-runtime-and-deployment.md)
 > **Accepted decisions:** [`ADR-0004`](../architecture/decisions/ADR-0004-first-remote-hosting-composition.md), [`ADR-0005`](../architecture/decisions/ADR-0005-delivery-trust-and-secret-custody.md), [`ADR-0006`](../architecture/decisions/ADR-0006-infrastructure-as-code-and-remote-state.md), [`ADR-0007`](../architecture/decisions/ADR-0007-first-telemetry-backend.md)
 
-The maintainer accepted Composition A and the recorded M1-M9 choices on 2026-08-29. **No provider account, project, resource, credential, domain, billing relationship, or DNS record was created, inspected privately, or modified while preparing or accepting this document.** Public DNS inspection showed `noodle.money` delegated to Vercel nameservers; it remains untouched. This comparison is built from published vendor documentation. Every quantitative claim is an **estimate** computed from **dated published list prices** against **assumed** workload parameters; none is measured, and no remote baseline exists yet.
+Repository names, ownership, visibility, and plan statements in this document are dated evidence as of 2026-08-29, not current repository authority; [`../development/version-control.md`](../development/version-control.md) owns current source truth. The maintainer accepted Composition A and the recorded M1-M9 choices on 2026-08-29. **No provider account, project, resource, credential, domain, billing relationship, or DNS record was created, inspected privately, or modified while preparing or accepting this document.** Public DNS inspection showed `noodle.money` delegated to Vercel nameservers; it remains untouched. This comparison is built from published vendor documentation. Every quantitative claim is an **estimate** computed from **dated published list prices** against **assumed** workload parameters; none is measured, and no remote baseline exists yet.
 
 ## Accepted composition elements
 
@@ -152,7 +152,7 @@ Every figure below was read from the cited primary vendor page on **2026-08-29**
 | GitHub Actions, public repositories | "GitHub Actions usage is free… for public repositories that use standard GitHub-hosted runners" | https://docs.github.com/en/billing/concepts/product-billing/github-actions | 2026-08-29 |
 | Standard Linux runner overage | Linux 2-core (x64) `$0.006` per minute; Linux 2-core (arm64) `$0.005`; Linux 1-core (x64) `$0.002` | https://docs.github.com/en/billing/concepts/product-billing/github-actions | 2026-08-29 |
 
-`phairow/money-noodle` is **private**, so Actions minutes are drawn from the plan allowance rather than being free.
+**As-of evidence (2026-08-29, not current repository truth):** `phairow/money-noodle` was **private**, so Actions minutes were drawn from the plan allowance rather than being free.
 
 ## Cost model
 

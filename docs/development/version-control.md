@@ -2,10 +2,12 @@
 
 ## Current source and preserved history
 
-- `main` is the sole integration and delivery branch in `phairow/money-noodle`. It contains one root commit, `e312a6fdd5034933e595b14843dd30c300c010de`, with tree `94f6a37695412f9c4b0397711567c238a9cf71e1`.
-- `phairow/money-noodle-private-archive` preserves the private development and prior-generation history. It is historical evidence, not an integration remote or a source of current authority. Never publish it, merge its historical branches into this repository, or recreate removed refs here.
-- The source repository is intentionally becoming public under the committed MIT license. Publication exposes the snapshot permanently to copying and forking; it is a deliberate source-distribution decision, not a temporary workaround for Actions or branch-protection pricing.
-- The source repository is still private and GitHub Actions are disabled while the main/public control migration is reviewed. No visibility, Actions, protection, or provider change is authorized by a repository commit alone.
+- `main` is the sole integration and delivery branch in the public GitHub Free organization repository `money-noodle/money-noodle`. Its published history begins at squashed root commit `e312a6fdd5034933e595b14843dd30c300c010de`, with tree `94f6a37695412f9c4b0397711567c238a9cf71e1`; later public control commits do not restore private development history.
+- The personal `phairow/money-noodle-private-archive` preserves the private development and prior-generation history. It is historical evidence, not an integration remote or a source of current authority. Never publish it, merge its historical branches into this repository, or recreate removed refs here.
+- Public source distribution under the committed MIT license is intentional and permanent, not a workaround for Actions or branch-protection pricing. Source, issues, pull requests, reviews, commit identities and messages, Actions logs and summaries, artifacts, and caches are public or potentially externally observable.
+- The 2026-08-30 transfer from the personal source repository preserved the immutable repository ID, issues, pull requests, branches, and host protections. The repository and owner numeric IDs are intentionally not committed; bootstrap reads both from the current repository API.
+- As of 2026-08-30, Actions are enabled with read-only default workflow permission, host-enforced full-SHA action pinning, and a selected-action allowlist that includes Trivy's pinned transitive `aquasecurity/setup-trivy` action. Private vulnerability reporting, secret scanning, and secret-scanning push protection are enabled. `main` protection strictly requires `affected projects and repository gates`, `secret scan`, `container platform-api`, and `container web`, plus one approval, stale-review dismissal, last-push approval, conversation resolution, admin enforcement, and no force push or deletion.
+- The `production` environment has a protected-branch policy and required owner reviewer with `prevent_self_review=true`. The initiating actor therefore needs a distinct eligible actor to approve a deployment; the configured owner reviewer alone is not sufficient deployment authority. No repository provider/apply variable or secret, Google Cloud federation, or deployment exists, so provider effects remain mechanically blocked independently of that approval.
 
 ## Protected trunk and working branches
 
@@ -23,18 +25,19 @@ Keep work single-purpose and commits reviewable with imperative subjects. Incorp
 
 `main` is also the only ref eligible for delivery federation, artifact provenance, and production operations. Deleted migration branches, tags, pull-request refs, forks, other workflows, and sibling repositories must not obtain provider authority.
 
-## Controlled publication and Actions sequence
+## Public repository controls
 
-The maintainer performs these repository-hosting operations separately from code integration. Keep Actions disabled and allow no intervening merge while the controls are changing.
+Public visibility is a security boundary, not merely a hosting setting:
 
-1. Integrate and locally validate the reviewed main/public migration while the source repository remains private and Actions remain disabled.
-2. Change only the source repository visibility to public, recognizing that this makes the squashed snapshot externally copyable. Keep the private archive private.
-3. Configure and inspect `main` protection: one required reviewer, required CI checks after their names exist, no direct push, no force push, and no deletion. Do not treat committed workflow YAML as evidence of host-side protection.
-4. Re-enable Actions with the repository's restricted default permissions. Run CI manually on `main`. Its prerequisite step fails unless reachable commit and root-snapshot path counts are both nonzero. CI downloads the exact official Gitleaks 8.24.3 Linux x64 archive, verifies its independently checked release SHA-256 before execution, and explicitly scans `--all` reachable history on every push, pull request, and manual run. The scanner log is withheld and parsed mechanically; accept the hosted baseline only when it reports nonzero commits and bytes scanned with no finding. The same manual run executes OpenTofu 1.12.6 format, validation, and mocked-provider tests without an OIDC token or provider credential. Record that run and result before accepting ordinary pull requests.
-5. Verify required check names and attach them to `main` protection. Re-run a pull request through the protected path before treating merges as authorized.
-6. Leave every Google Cloud repository variable and apply authorization unset. Provider delivery stays skipped until the separately reviewed bootstrap and remote-validation work supplies and verifies them.
+- Never place secret payloads, customer or production data, billing/account identifiers, private recovery material, durable provider credentials, or unredacted provider state in source, issues, pull requests, commit metadata, prompts copied into the registry, Actions output, artifacts, or caches. Use the private route in [`../../SECURITY.md`](../../SECURITY.md) for vulnerabilities and accidental disclosure.
+- Public pull requests and forks are untrusted. They receive read-only CI without a provider token. Never use `pull_request_target` to execute contributor-controlled source, and never make a pull request or successful check sufficient to obtain deployment authority.
+- Every action is pinned to an immutable commit. Every externally downloaded binary is exact-version and checksum verified before execution. The selected-action host allowlist, default permissions, job permissions, dependency/container scans, and full-history scan are reviewed together; no one control proves public code safe.
+- OIDC trust is invariantly constrained to this exact repository, protected `refs/heads/main`, `.github/workflows/delivery.yml`, and the closed `push`, `workflow_dispatch`, and `schedule` event set. Pull requests, forks, tags, other branches, workflows, repositories, and events cannot exchange a token.
+- Production apply and rollback additionally require configured federation/provider inputs, recorded apply authorization, verified `production` required-reviewer protection, and the environment approval. Apply also requires a typed confirmation. Humans retain explicit scoped approval; automation cannot infer it from a green check.
 
-Public pull requests and forks are untrusted. They receive read-only CI without provider credentials; do not use `pull_request_target` to execute contributor-controlled source. Pinned third-party actions, least-privilege job permissions, dependency/container scans, and the full-history manual secret baseline are publication controls, not proof that public code is safe to deploy.
+The initial hosted manual baseline on `main`, [run 33292553091](https://github.com/money-noodle/money-noodle/actions/runs/33292553091), completed successfully on 2026-08-30. It exercised the repository gates, OpenTofu 1.12.6 format/validation/mocked tests with no provider credential, nonzero full-history Gitleaks coverage, both OCI builds, SBOM/provenance generation, and image-vulnerability scanning. This is hosted CI evidence, not provider or deployment validation.
+
+The four observed CI contexts are attached to `main` protection in strict mode. Continue to leave every Google Cloud repository variable, secret, federation input, and apply authorization unset until separately reviewed bootstrap and remote-validation work supplies and verifies them.
 
 ## Tags and releases
 
