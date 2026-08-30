@@ -1,0 +1,15 @@
+.git
+.claude
+.next
+coverage
+dist
+node_modules
+*.md
+.github/ISSUE_TEMPLATE
+tools/coordination-lib.mjs
+tools/coordination-lib.test.mjs
+tools/coordination-status.mjs
+tools/verify-doc-links.mjs
+apps/web/next-env.d.ts
+packages/platform-api-client/src/generated
+pnpm-lock.yaml

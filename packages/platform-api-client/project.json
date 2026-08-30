@@ -1,0 +1,42 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "platform-api-client",
+  "projectType": "library",
+  "sourceRoot": "packages/platform-api-client/src",
+  "tags": ["type:package", "scope:platform-contract"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/dist"],
+      "options": {
+        "command": "tsc --project packages/platform-api-client/tsconfig.build.json"
+      }
+    },
+    "generate": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "node tools/generate-platform-api-client.mjs"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "eslint packages/platform-api-client --max-warnings=0"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "outputs": ["{workspaceRoot}/coverage/packages/platform-api-client"],
+      "options": {
+        "command": "vitest run --config packages/platform-api-client/vitest.config.ts --coverage"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc --project packages/platform-api-client/tsconfig.json --noEmit"
+      }
+    }
+  }
+}

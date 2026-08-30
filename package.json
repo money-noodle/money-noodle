@@ -1,0 +1,52 @@
+{
+  "name": "money-noodle-platform",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Money Noodle v2 platform monorepo",
+  "license": "MIT",
+  "packageManager": "pnpm@11.24.0",
+  "engines": {
+    "node": "22.22.0",
+    "pnpm": "11.24.0"
+  },
+  "scripts": {
+    "build": "nx run-many -t build",
+    "check": "pnpm verify:runtime && pnpm format:check && pnpm verify:foundation && pnpm verify:boundaries && pnpm nx run-many -t lint,typecheck,test,contract,build",
+    "container": "nx run-many -t container",
+    "contract": "nx run-many -t contract",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "graph": "nx graph",
+    "lint": "nx run-many -t lint",
+    "test": "nx run-many -t test",
+    "typecheck": "nx run-many -t typecheck",
+    "verify:boundaries": "node tools/verify-boundary-rules.mjs",
+    "verify:foundation": "node --check tools/coordination-lib.mjs && node --check tools/coordination-status.mjs && node --check tools/verify-doc-links.mjs && node --test tools/*.test.mjs && node tools/verify-doc-links.mjs",
+    "verify:runtime": "node tools/verify-runtime.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@hey-api/openapi-ts": "0.99.0",
+    "@nx/eslint": "23.1.2",
+    "@nx/eslint-plugin": "23.1.2",
+    "@nx/js": "23.1.2",
+    "@next/eslint-plugin-next": "16.3.3",
+    "@nx/vite": "23.1.2",
+    "@pb33f/openapi-changes": "0.2.11",
+    "@redocly/cli": "2.49.0",
+    "@types/node": "22.19.11",
+    "@vitejs/plugin-react": "6.1.1",
+    "@vitest/coverage-v8": "4.1.11",
+    "eslint": "10.9.1",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-jsx-a11y-x": "0.2.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "nx": "23.1.2",
+    "prettier": "3.9.6",
+    "tsx": "4.23.12",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.68.0",
+    "vite": "8.2.2",
+    "vitest": "4.1.11"
+  }
+}

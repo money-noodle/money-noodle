@@ -1,0 +1,61 @@
+# Delivery and operations standards
+
+## Operating model
+
+The laptop is a development client, never a production host, scheduler, control plane, or sole canonical state location. Developers may run bounded projects and disposable dependencies locally, not the full integrated platform. Remote environments remain observable and recoverable without a laptop and evolve through small compatible deployments.
+
+The only standing environment classes initially are local development and production. CI may create disposable test dependencies, but there is no required persistent preview or staging environment. Validation that cannot safely occur against production must run locally or in isolated ephemeral CI resources before merge.
+
+The API platform is central to every interface, with web as the primary initial presentation. Keep APIs interface-neutral so mobile, desktop, game, and MMO clients use the same authority and contracts. Prefer isolated serverless functions, containers, and managed jobs. Keep user request paths separate from work and maintenance. Production status, deployed versions, health, queues, jobs, leases, reconciliation, data quality, and incidents must be discoverable through scoped operational views.
+
+## CI/CD
+
+CI/CD is mandatory for every deployable project, shared package, infrastructure module, schema, and governed documentation set. Pull requests validate affected boundaries and integration through applicable formatting/linting, types, tests/coverage, contracts/schemas, builds, dependency/secret scanning, infrastructure plans, migrations, and docs/diagram checks.
+
+`main` is the sole integration and production branch. Once delivery is remotely configured and validated, merging to protected `main` automatically invokes production artifact publication and the authorized delivery path. GitHub Actions may orchestrate provider-native automation, but every stage and final verification reports to the commit. Merge is deployment authorization; agents do not merge without explicit instruction.
+
+The organization-owned source repository `money-noodle/money-noodle` is public from a squashed root snapshot; the personal `phairow/money-noodle-private-archive` remains separate private historical evidence and is never a delivery source. GitHub Actions are enabled with read-only defaults, host-enforced full-SHA action pinning, and a selected-action allowlist that includes Trivy's pinned transitive `aquasecurity/setup-trivy` action. Strict `main` protection requires `affected projects and repository gates`, `secret scan`, `container platform-api`, and `container web`. The initial hosted baseline passed repository, no-provider OpenTofu, full-history secret, both container, provenance/SBOM, and vulnerability gates. This is hosted CI evidence, not deployment validation. Current host truth is in [`../development/version-control.md`](../development/version-control.md).
+
+Prefer immutable attributable artifacts built once and deployed after gates. If a provider builds from source, pin inputs, run an equivalent production build in CI, and retain artifact/commit attestation. Use reviewed idempotent infrastructure as code, backward-compatible schema/contracts, and independent project deployment. Maintain tested rollback/restore. A merge is not complete until deployment, migrations, health, smoke, and observability checks pass. Failed health or verification automatically rolls back when rollback is safe; otherwise automation halts, exposes the blocked state, and runs the project's declared recovery path. Do not require progressive rollout or a post-merge manual approval by default.
+
+Protect `main` with one required reviewer and all required checks, no direct push/history rewriting, deployment concurrency, and serialization for unsafe infrastructure/schema operations. Restrict workflow permissions by default. Every action reference is pinned to an immutable commit, and every externally downloaded binary is exact-version and checksum verified before execution. Public pull-request jobs are read-only and hold no OIDC/provider authority; never use `pull_request_target` to execute contributor-controlled source.
+
+## Public automation boundary
+
+Repository source, issues, pull requests, commit metadata, Actions logs and summaries, artifacts, and caches are public or potentially externally observable. They must not carry secret payloads, customer or production data, billing/account identifiers, private recovery material, durable provider credentials, production snapshots, raw state, or unredacted incident evidence. Use synthetic inputs and redacted evidence, and route vulnerabilities or accidental disclosure through [`../../SECURITY.md`](../../SECURITY.md).
+
+Untrusted contribution code may compile, test, build containers, and run offline mocked-provider checks with read-only repository access. It may not receive an OIDC token, provider credential, protected environment, repository write permission, or deployment authority. A successful pull request check is evidence for review only.
+
+Provider authentication is default-deny and short-lived. The workload-identity conjunction accepts only the immutable repository identity, protected `refs/heads/main`, exact `.github/workflows/delivery.yml`, and the closed `push`, `workflow_dispatch`, and `schedule` event set. The scheduled exception reaches only the declared read-only drift path. Production apply and rollback additionally require separately configured federation/provider inputs and apply authorization, recorded verification of the protected `production` reviewer rule, and the environment approval; apply also requires a typed confirmation. No repository variable or secret is currently configured, so every provider path is mechanically blocked before authentication.
+
+## Agent execution and human authority
+
+Agents are intended technical operators for routine checks and, once configured, routine operations. They execute only reviewed automation with short-lived identity, least privilege, deny-by-default inputs, bounded side effects, independent post-operation verification, and durable redacted evidence. An agent does not convert a plan, issue assignment, green check, or broad standing instruction into production authority.
+
+Humans retain provider and domain account ownership, root recovery, break-glass custody, and explicit scoped approval for production effects. The protected production environment has `prevent_self_review=true`: the initiating actor cannot approve the same deployment, and a distinct eligible actor must approve it. The configured owner reviewer alone does not make deployment operable. Routine work must not bypass reviewed automation through a cloud console, ad hoc provider command, resident laptop process, or locally held durable credential. The explicitly reviewed one-time bootstrap and authorized recovery procedures are bounded exceptions; reconcile every resulting change into code and remote state. This boundary states who executes and who authorizes without defining the broader operation catalog reserved for separate work.
+
+## Independent deployment and dependencies
+
+Every project is independently buildable, versioned, deployable, observable, and rollback-capable. Each project owns a machine-readable manifest of build dependencies, runtime dependencies, API/event/schema contracts, compatible version ranges, deployment unit, health checks, and owned data/schema. CI computes the affected dependency graph from declared manifests and changed contracts; it does not guess from runtime traffic.
+
+A deployed service reports source/artifact version, configuration/schema version, health, and dependency compatibility without exposing secrets. At runtime it checks declared dependencies and degrades or fails clearly when required capabilities are absent or incompatible. It must not discover new authority dynamically or silently coordinate through another service's database.
+
+The delivery pipeline deploys only affected projects and dependents requiring coordination. Prefer backward-compatible contracts so dependencies can deploy independently; when coordination is unavoidable, CI produces an explicit ordered plan and verifies every step. The operational view shows project deployment state, versions, dependencies, compatibility, and rollback/recovery status.
+
+Each service exclusively owns its database schema and data and uses a least-privilege database role. Other services use its API/events or an explicitly owned projection rather than reading or writing its tables. A service ships and runs its own versioned migrations as part of its deployment and provides a tested rollback or forward-recovery plan. Migration execution is single-owner and concurrency-safe, not an uncontrolled startup action by every replica. Expand/contract compatibility must allow safe application rollback whenever possible; destructive or irreversible migrations require backup, restore validation, and an explicit coordinated plan.
+
+## Secrets and infrastructure
+
+The first composition selects Google Secret Manager, OpenTofu, separate GCS-backed state, Cloud Run, Artifact Registry, federated GitHub Actions trust, and provider-native OpenTelemetry ingestion; the accepted decisions and dated comparison evidence are in [`deployment-composition.md`](deployment-composition.md) and ADR-0004 through ADR-0007. That composition is implemented as reviewable configuration in [`../../infra/README.md`](../../infra/README.md) and **has not been applied**; the one-time procedure and the exact identifiers the maintainer must supply are in [`../../infra/bootstrap.md`](../../infra/bootstrap.md). Until the complete validated bootstrap repository-variable contract exists, every provider-touching job in `.github/workflows/delivery.yml` is skipped. Apply and rollback additionally require explicit apply authorization, a recorded verification that the `production` environment really has required-reviewer protection, and the environment gate itself; apply also requires a typed confirmation. Naming an environment in workflow YAML is not treated as proof that GitHub configured its protection. Infrastructure definitions and desired configuration live in source control. Mutable infrastructure state lives in an encrypted durable remote backend with concurrency locking, versioning, and backup; never commit raw state to Git. Detect and surface drift against the source-controlled desired state, and keep reconstruction/reconciliation procedures tested.
+
+Every operational secret has a durable source of truth in an approved managed secret store or equivalent encrypted durable system; laptop environment files are never canonical or unique. Document owner, access, rotation, recovery, and revocation.
+
+Prefer short-lived workload identity and CI federation over long-lived cloud keys. Delivery receives only project/environment-specific secrets; developers use separate least-privilege access. Never commit, print, or expose secret values in status views, logs, artifacts, or handoffs.
+
+Manual provider changes and click-only infrastructure are exceptions requiring reconciliation back into code. Never deploy around the pipeline or trigger provider automation manually without explicit authority.
+
+## Maintenance and recovery
+
+Run lightweight bounded health, reconciliation, cleanup, retention, and integrity work during operation. Keep it isolated, resumable, retry/overlap safe, and observable. Automatic recovery is the primary path; authorized audited administrative repair and break-glass access are fallbacks.
+
+Define service and data-class availability, consistency, RPO, RTO, backups, restore tests, and incident behavior before production authority. A failed dependency degrades explicitly rather than presenting stale or unknown state as healthy.
