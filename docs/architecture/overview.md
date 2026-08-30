@@ -346,6 +346,50 @@ flowchart LR
     client --> consumers
 ```
 
+### Proposed agent-operated production control plane
+
+Every new control-plane element below is **proposed**, not accepted architecture. The versioned catalog, approval envelope, operation evidence, bootstrap/break-glass bounds, and payload-blind secret lifecycle are in [`production-control-plane.md`](../operations/production-control-plane.md) and proposed [`ADR-0010`](decisions/ADR-0010-agent-operated-production-control-plane.md). Existing CI/CD, provider, runtime, and managed-secret boundaries remain as shown in the accepted deployment diagrams above.
+
+```mermaid
+flowchart LR
+    human["Human approver<br/>account, approval, recovery"]
+    agent["Agent operator<br/>plan, request, invoke, verify"]
+    auth["Authorization service<br/>exact expiring grant<br/>proposed"]
+
+    subgraph execution["Purpose-specific short-lived execution"]
+        ci["Reviewed CI/CD<br/>accepted foundation"]
+        admin["Bounded administrative jobs<br/>proposed"]
+    end
+
+    reads["Scoped read-only operational APIs/jobs<br/>proposed"]
+    state["Provider + authoritative platform state<br/>external / future"]
+    audit["Append-only operation audit<br/>proposed, not telemetry"]
+    ingress["Private payload-blind ingress<br/>proposed"]
+    secretStore["Managed secret store<br/>accepted empty boundary"]
+    runtime["Runtime consumers<br/>least privilege"]
+
+    agent -->|"safe intent + plan digest"| auth
+    human -->|"one scoped approval"| auth
+    auth --> ci
+    auth --> admin
+    ci --> state
+    admin --> state
+    state --> reads
+    agent -->|"independent read-only observation"| reads
+
+    human -->|"external payload, never through agent"| ingress
+    ingress --> secretStore
+    admin -->|"generate/version inside boundary"| secretStore
+    secretStore --> runtime
+
+    auth --> audit
+    ci --> audit
+    admin --> audit
+    reads --> audit
+```
+
+An operation absent from the catalog is denied rather than routed to a shell, provider console, laptop, or generic administrative endpoint. A human authorizes the exact effect; the agent coordinates technical execution; a separate workload identity performs it; and verification reads authoritative/provider-observed state rather than trusting workflow success. Secret values take the ingress/store path and never cross the agent, OpenTofu plan/state, or public automation boundary.
+
 ### Proposed administrative observability
 
 Every element below is **proposed**, not accepted architecture. It is drafted in [`ADR-0009`](decisions/ADR-0009-administrative-observability-surface.md), depends on [`ADR-0008`](decisions/ADR-0008-single-object-store.md), and nothing in it exists on disk or in the provider. Dotted edges mark that proposed status; the solid boundaries it attaches to are the accepted ones above.
@@ -379,7 +423,7 @@ The API reads the read model and never calls a provider billing, deployment, or 
 
 The workspace, projects, status contract, generated client, web presentation/API adapter, API inner layers/HTTP/deployment adapters, health routes, and container definitions below exist. `infra/` now exists as reviewable, statically validated configuration; **no provider resource has been applied**, and the outstanding items before an apply can be trusted are listed in [`../../infra/README.md`](../../infra/README.md).
 
-No row below is proposed. `jobs/` does not exist, and neither the administrative ingestion unit, its read model, nor its API operations are represented here, because [`ADR-0009`](decisions/ADR-0009-administrative-observability-surface.md) is proposed rather than accepted. Rows are added when the projects exist, not when they are decided. The source repository is public, Actions and host protections are enabled, and the initial hosted baseline passed; no Google Cloud resource, federation, provider credential, or remote deployment exists.
+No row below is proposed. `jobs/` does not exist, and neither the administrative ingestion unit/read model/API operations from proposed [`ADR-0009`](decisions/ADR-0009-administrative-observability-surface.md) nor the authorization service, bounded administrative operations, operation audit, and secret ingress from proposed [`ADR-0010`](decisions/ADR-0010-agent-operated-production-control-plane.md) are represented here. Rows are added when projects exist, not when they are proposed. The source repository is public, Actions and host protections are enabled, and the initial hosted baseline passed; no Google Cloud resource, federation, provider credential, or remote deployment exists.
 
 | Path | Project/deployment | Boundary and ownership |
 | --- | --- | --- |

@@ -18,6 +18,25 @@ maintainer, and then reconciles itself into remote state so that no part of the
 platform is held together by something a person did by hand and nobody wrote
 down.
 
+## Relationship to the proposed production control plane
+
+[`production-control-plane.md`](../docs/operations/production-control-plane.md)
+assesses whether a short-lived agent-operated bootstrap runner can safely reduce
+this maintainer procedure. The answer is **not with the current general-purpose
+agent shell**: short token lifetime does not prevent arbitrary provider calls or
+exposure of private bootstrap inputs. A future constrained runner must execute
+only an immutable reviewed plan, receive sealed inputs unavailable to the agent,
+allowlist provider actions/resources and outputs, use a non-exportable expiring
+credential, emit durable private audit, and destroy itself after independent
+verification.
+
+Even such a runner cannot own the provider/billing relationship, accept payment
+or legal terms, hold root recovery/MFA custody, or approve production. Until it
+is implemented and independently validated, the steps below remain the explicit
+human-only bootstrap exception. Every created resource still migrates into
+reviewed remote state, and accepting the proposal would not itself authorize
+this procedure or any provider effect.
+
 ## What the maintainer must supply
 
 None of these values are in this repository, and none may be committed or placed
