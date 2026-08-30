@@ -16,6 +16,7 @@ Parent-Plan: #ISSUE
 
 ## Dependencies and integration
 
+<!-- Use "none" or a comma-separated list such as "#12, #13". -->
 Depends-On: none
 Integration-Owner: maintainer
 Shared-Hotspots: none
@@ -49,7 +50,13 @@ Check-In-By: unclaimed
 
 ## Current checkpoint
 
-<!-- Concise current state. Add milestone history as issue comments. -->
+<!--
+Concise current state. Add milestone history as issue comments. Every ownership/checkpoint comment
+must repeat the current Claim-State, Claim-Harness, Claim-Run-ID, Claim-Agent, Claim-Branch,
+Claim-Worktree, Check-In-By, Checkpoint-At, and Checkpoint-Commit field lines before any prose so
+read-only tooling can reconcile the append-only trail with this body. An unstructured claim-bearing
+comment or disagreement is intentionally a maintainer question, never inferred ownership.
+-->
 
 Checkpoint-At: unclaimed
 Checkpoint-Commit: uncommitted
