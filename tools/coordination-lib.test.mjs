@@ -31,6 +31,8 @@ function issue({
     body: [
       "Parent-Plan: #27",
       `Depends-On: ${dependencies}`,
+      "Integration-Owner: maintainer",
+      "Reconciled-Claim-Comment-IDs: none",
       `Claim-State: ${state}`,
       `Claim-Harness: ${claimed ? "pi" : "unclaimed"}`,
       `Claim-Run-ID: ${claimed ? `run-${number}` : "unclaimed"}`,
@@ -44,6 +46,34 @@ function issue({
       "Next-Action: test",
       "Blockers: none",
     ].join("\n"),
+  };
+}
+
+function checkpointComment({
+  id,
+  number = 4,
+  state = "active",
+  claimed = ["active", "blocked", "review"].includes(state),
+  runId = claimed ? `run-${number}` : "unclaimed",
+  createdAt = "2026-08-29T19:30:00Z",
+  updatedAt = createdAt,
+}) {
+  return {
+    id,
+    author: claimed ? `agent-${number}` : "maintainer",
+    body: [
+      `Claim-State: ${state}`,
+      `Claim-Harness: ${claimed ? "pi" : "unclaimed"}`,
+      `Claim-Run-ID: ${runId}`,
+      `Claim-Agent: ${claimed ? `agent-${number}` : "unclaimed"}`,
+      `Claim-Branch: ${claimed ? `test/${number}` : "unclaimed"}`,
+      `Claim-Worktree: ${claimed ? `/worktree/${number}` : "unclaimed"}`,
+      `Check-In-By: ${claimed ? "2026-08-29T21:00:00Z" : "unclaimed"}`,
+      "Checkpoint-At: unclaimed",
+      "Checkpoint-Commit: uncommitted",
+    ].join("\n"),
+    createdAt,
+    updatedAt,
   };
 }
 
@@ -223,6 +253,215 @@ test("a complete matching latest checkpoint comment reconciles consistently", ()
 
   assert.equal(result.workItems[0].reconciliation, "consistent");
   assert.equal(result.workItems[0].triage, "claimed");
+});
+
+test("authorized reconciliation keeps historical prose visible and clears its question", () => {
+  const active = issue({ number: 4, state: "active" });
+  active.body = active.body.replace(
+    "Reconciled-Claim-Comment-IDs: none",
+    "Reconciled-Claim-Comment-IDs: 1",
+  );
+  const historical = {
+    id: 1,
+    author: "agent-4",
+    body: "Claimed this item before structured checkpoints existed.",
+    createdAt: "2026-08-29T19:00:00Z",
+    updatedAt: "2026-08-29T19:00:00Z",
+  };
+  const current = checkpointComment({ id: 2 });
+  const result = analyzeCoordination({
+    issues: [active],
+    commentsByIssue: new Map([[4, [historical, current]]]),
+    local: EMPTY_LOCAL,
+    nowMs: NOW,
+  });
+  const item = result.workItems[0];
+
+  assert.equal(item.reconciliation, "consistent");
+  assert.equal(item.claimCommentResolution.status, "valid");
+  assert.deepEqual(item.claimCommentResolution.reconciledIds, [1]);
+  assert.deepEqual(item.claimCommentResolution.unresolvedIds, [2]);
+  assert.equal(item.claimComments.find(({ id }) => id === 1).reconciliation, "reconciled");
+  assert.equal(item.latestClaimComment.id, 2);
+  assert.equal(item.latestUnresolvedClaimComment.id, 2);
+});
+
+test("authorized takeover can supersede exact prior structured ownership", () => {
+  const active = issue({ number: 4, state: "active" });
+  active.body = active.body.replace(
+    "Reconciled-Claim-Comment-IDs: none",
+    "Reconciled-Claim-Comment-IDs: 10",
+  );
+  const prior = checkpointComment({ id: 10, runId: "prior-run", createdAt: "2026-08-29T19:00:00Z" });
+  const current = checkpointComment({ id: 11 });
+  const result = analyzeCoordination({
+    issues: [active],
+    commentsByIssue: new Map([[4, [prior, current]]]),
+    local: EMPTY_LOCAL,
+    nowMs: NOW,
+  });
+
+  assert.equal(result.workItems[0].reconciliation, "consistent");
+  assert.deepEqual(result.workItems[0].claimCommentResolution.reconciledIds, [10]);
+  assert(result.workItems[0].questions.every(({ code }) => code !== "competing-ownership-comment"));
+});
+
+test("authorized release to ready can reconcile the prior claim without hiding it", () => {
+  const ready = issue({ number: 4, state: "ready", claimed: false });
+  ready.body = ready.body.replace(
+    "Reconciled-Claim-Comment-IDs: none",
+    "Reconciled-Claim-Comment-IDs: 20",
+  );
+  const prior = checkpointComment({ id: 20, createdAt: "2026-08-29T19:00:00Z" });
+  const release = checkpointComment({ id: 21, state: "ready", claimed: false });
+  const result = analyzeCoordination({
+    issues: [ready],
+    commentsByIssue: new Map([[4, [prior, release]]]),
+    local: EMPTY_LOCAL,
+    nowMs: NOW,
+  });
+  const item = result.workItems[0];
+
+  assert.equal(item.triage, "candidate");
+  assert.equal(item.candidateSafety, "not-established");
+  assert.deepEqual(item.claimCommentResolution.reconciledIds, [20]);
+  assert.equal(item.claimComments.find(({ id }) => id === 20).reconciliation, "reconciled");
+});
+
+test("malformed unknown duplicate non-claim edited or self-authorized resolutions fail closed", () => {
+  const cases = [
+    { value: "1,2", comments: [], code: "malformed-resolution" },
+    { value: "999", comments: [], code: "unknown-resolution-id" },
+    {
+      value: "1, 1",
+      comments: [{
+        id: 1,
+        author: "agent-4",
+        body: "Claimed this item.",
+        createdAt: "2026-08-29T19:00:00Z",
+        updatedAt: "2026-08-29T19:00:00Z",
+      }],
+      code: "duplicate-resolution-id",
+    },
+    {
+      value: "1",
+      duplicateField: true,
+      comments: [{
+        id: 1,
+        author: "agent-4",
+        body: "Claimed this item.",
+        createdAt: "2026-08-29T19:00:00Z",
+        updatedAt: "2026-08-29T19:00:00Z",
+      }],
+      code: "duplicate-resolution-field",
+    },
+    {
+      value: "1",
+      comments: [{
+        id: 1,
+        author: "observer",
+        body: "No ownership intent here.",
+        createdAt: "2026-08-29T19:00:00Z",
+        updatedAt: "2026-08-29T19:00:00Z",
+      }],
+      code: "non-claim-resolution-id",
+    },
+    {
+      value: "1",
+      comments: [{
+        id: 1,
+        author: "agent-4",
+        body: "Claimed this item.",
+        createdAt: "2026-08-29T19:00:00Z",
+        updatedAt: "2026-08-29T19:05:00Z",
+      }],
+      code: "edited-resolution-id",
+    },
+    {
+      value: "1",
+      integrationOwner: "unclaimed",
+      comments: [{
+        id: 1,
+        author: "agent-4",
+        body: "Claimed this item.",
+        createdAt: "2026-08-29T19:00:00Z",
+        updatedAt: "2026-08-29T19:00:00Z",
+      }],
+      code: "resolution-authority-unknown",
+    },
+    {
+      value: "1",
+      integrationOwner: "self",
+      comments: [{
+        id: 1,
+        author: "agent-4",
+        body: "Claimed this item.",
+        createdAt: "2026-08-29T19:00:00Z",
+        updatedAt: "2026-08-29T19:00:00Z",
+      }],
+      code: "claimant-self-resolution",
+    },
+  ];
+
+  for (const [index, scenario] of cases.entries()) {
+    const active = issue({ number: 50 + index, state: "active" });
+    const integrationOwner = scenario.integrationOwner === "self"
+      ? `agent-${50 + index}`
+      : scenario.integrationOwner ?? "maintainer";
+    active.body = active.body
+      .replace("Reconciled-Claim-Comment-IDs: none", `Reconciled-Claim-Comment-IDs: ${scenario.value}`)
+      .replace("Integration-Owner: maintainer", `Integration-Owner: ${integrationOwner}`);
+    if (scenario.duplicateField) {
+      active.body += `\nReconciled-Claim-Comment-IDs: ${scenario.value}`;
+    }
+    const current = checkpointComment({ id: 100 + index, number: 50 + index });
+    const result = analyzeCoordination({
+      issues: [active],
+      commentsByIssue: new Map([[50 + index, [...scenario.comments, current]]]),
+      local: EMPTY_LOCAL,
+      nowMs: NOW,
+    });
+    const item = result.workItems[0];
+
+    assert.equal(item.claimCommentResolution.status, "invalid", scenario.code);
+    assert.deepEqual(item.claimCommentResolution.reconciledIds, [], scenario.code);
+    assert(item.claimCommentResolution.problems.some(({ code }) => code === scenario.code));
+    assert(item.questions.some(({ code }) => code === "claim-comment-resolution-invalid"));
+  }
+});
+
+test("later unlisted competing intent remains unresolved", () => {
+  const active = issue({ number: 4, state: "active" });
+  active.body = active.body.replace(
+    "Reconciled-Claim-Comment-IDs: none",
+    "Reconciled-Claim-Comment-IDs: 1",
+  );
+  const historical = {
+    id: 1,
+    author: "agent-4",
+    body: "Claimed this item before structured checkpoints existed.",
+    createdAt: "2026-08-29T19:00:00Z",
+    updatedAt: "2026-08-29T19:00:00Z",
+  };
+  const current = checkpointComment({ id: 2, createdAt: "2026-08-29T19:30:00Z" });
+  const laterCompeting = checkpointComment({
+    id: 3,
+    runId: "later-competing-run",
+    createdAt: "2026-08-29T19:45:00Z",
+  });
+  const result = analyzeCoordination({
+    issues: [active],
+    commentsByIssue: new Map([[4, [historical, current, laterCompeting]]]),
+    local: EMPTY_LOCAL,
+    nowMs: NOW,
+  });
+  const item = result.workItems[0];
+
+  assert.deepEqual(item.claimCommentResolution.reconciledIds, [1]);
+  assert.deepEqual(item.claimCommentResolution.unresolvedIds, [2, 3]);
+  assert.equal(item.latestUnresolvedClaimComment.id, 3);
+  assert(item.questions.some(({ code }) => code === "competing-ownership-comment"));
+  assert.equal(item.triage, "question");
 });
 
 test("latest structured comment is reconciled against the body", () => {

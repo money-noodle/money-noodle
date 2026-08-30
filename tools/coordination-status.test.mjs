@@ -59,6 +59,8 @@ function claimIssue({
     body: [
       'Parent-Plan: #2',
       `Depends-On: ${dependencies}`,
+      'Integration-Owner: maintainer',
+      'Reconciled-Claim-Comment-IDs: none',
       `Claim-State: ${state}`,
       'Claim-Harness: pi',
       'Claim-Run-ID: run-123',
@@ -314,6 +316,59 @@ test('unstructured claim comments fail closed instead of inferring ownership', (
   assert(
     report.registry.maintainerQuestions.some(({ code }) => code === 'unstructured-claim-comment'),
   );
+});
+
+test('JSON retains explicitly reconciled historical claim comments as visible evidence', (t) => {
+  const reconciled = {
+    ...ACTIVE_CLAIM,
+    body: ACTIVE_CLAIM.body.replace(
+      'Reconciled-Claim-Comment-IDs: none',
+      'Reconciled-Claim-Comment-IDs: 500',
+    ),
+  };
+  const responses = defaultResponses();
+  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE, reconciled]]) };
+  responses[`api:${commentEndpoint(9)}`] = {
+    stdout: JSON.stringify([
+      [
+        {
+          id: 500,
+          user: { login: 'test-agent' },
+          body: 'Started work before structured comments existed.',
+          created_at: '2026-08-29T18:30:00Z',
+          updated_at: '2026-08-29T18:30:00Z',
+        },
+        {
+          id: 501,
+          user: { login: 'maintainer' },
+          body: [
+            'Claim-State: active',
+            'Claim-Harness: pi',
+            'Claim-Run-ID: run-123',
+            'Claim-Agent: pi-sample',
+            'Claim-Branch: test/sample',
+            'Claim-Worktree: /fake/worktree',
+            `Check-In-By: ${FAR_FUTURE}`,
+            'Checkpoint-At: 2026-08-29T18:00:00Z',
+            'Checkpoint-Commit: uncommitted',
+          ].join('\n'),
+          created_at: '2026-08-29T19:00:00Z',
+          updated_at: '2026-08-29T19:00:00Z',
+        },
+      ],
+    ]),
+  };
+  const result = runStatus(t, { responses, args: ['--json'] });
+  const report = JSON.parse(result.stdout);
+  const item = report.registry.workItems.find(({ number }) => number === 9);
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(item.claimCommentResolution.status, 'valid');
+  assert.equal(item.claimCommentResolution.authority, 'maintainer-or-integration-owner');
+  assert.deepEqual(item.claimCommentResolution.reconciledIds, [500]);
+  assert.deepEqual(item.claimCommentResolution.unresolvedIds, [501]);
+  assert.equal(item.claimComments.find(({ id }) => id === 500).reconciliation, 'reconciled');
+  assert.equal(item.latestUnresolvedClaimComment.id, 501);
 });
 
 test('claim-bearing issues missing work labels stay visible and warn', (t) => {

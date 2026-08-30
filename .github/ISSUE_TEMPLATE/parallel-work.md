@@ -21,6 +21,14 @@ Depends-On: none
 Integration-Owner: maintainer
 Shared-Hotspots: none
 
+<!--
+Only the maintainer or declared Integration-Owner may replace "none" with an exact canonical list
+such as "123, 456" after reviewing the full append-only trail. The current Claim-Agent never
+chooses or self-authorizes these IDs. Unknown, non-claim, edited, duplicated, or malformed evidence
+fails closed; comments remain visible and are never edited or deleted.
+-->
+Reconciled-Claim-Comment-IDs: none
+
 ## Acceptance
 
 - [ ] Acceptance criterion

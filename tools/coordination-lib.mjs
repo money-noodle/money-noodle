@@ -36,6 +36,7 @@ const OWNERSHIP_FIELDS = [
   "Claim-Branch",
   "Claim-Worktree",
 ];
+export const CLAIM_COMMENT_RESOLUTION_FIELD = "Reconciled-Claim-Comment-IDs";
 
 export const NONTERMINAL_CLAIMED_STATES = new Set(["active", "blocked", "review"]);
 const UNCLAIMED_VALUES = new Set(["", "missing", "none", "unclaimed"]);
@@ -145,6 +146,36 @@ export function parseDependencies(value) {
   return { status: "declared", numbers: [...new Set(tokens.map((token) => Number(token.slice(1))))] };
 }
 
+export function parseReconciledClaimCommentIds(value) {
+  if (value === undefined || value === "missing" || value === "none") {
+    return { status: "none", ids: [], problems: [] };
+  }
+  if (typeof value !== "string" || !/^[1-9]\d*(?:, [1-9]\d*)*$/.test(value)) {
+    return {
+      status: "invalid",
+      ids: [],
+      problems: [{ code: "malformed-resolution", message: "expected none or comma-space-separated positive comment IDs" }],
+    };
+  }
+
+  const ids = value.split(", ").map(Number);
+  if (ids.some((id) => !Number.isSafeInteger(id))) {
+    return {
+      status: "invalid",
+      ids,
+      problems: [{ code: "unsafe-resolution-id", message: "comment IDs must be safe positive integers" }],
+    };
+  }
+  if (new Set(ids).size !== ids.length) {
+    return {
+      status: "invalid",
+      ids,
+      problems: [{ code: "duplicate-resolution-id", message: "comment IDs may appear only once" }],
+    };
+  }
+  return { status: "declared", ids, problems: [] };
+}
+
 export function hasClaimSignal(body) {
   if (typeof body !== "string") throw new TypeError("comment body must be a string");
   if (PORTABLE_CLAIM_FIELDS.some((name) => new RegExp(`^${escapeRegExp(name)}:`, "m").test(body))) {
@@ -157,6 +188,64 @@ export function hasClaimSignal(body) {
 
 function meaningful(value) {
   return typeof value === "string" && !UNCLAIMED_VALUES.has(value.trim().toLowerCase());
+}
+
+function evaluateClaimCommentResolution(record, fields, comments) {
+  const raw = fields[CLAIM_COMMENT_RESOLUTION_FIELD] ?? "missing";
+  const parsed = parseReconciledClaimCommentIds(raw);
+  const problems = [...parsed.problems];
+  if (record.duplicates.includes(CLAIM_COMMENT_RESOLUTION_FIELD)) {
+    problems.push({
+      code: "duplicate-resolution-field",
+      message: `${CLAIM_COMMENT_RESOLUTION_FIELD} must occur exactly once at most`,
+    });
+  }
+
+  const integrationOwner = fields["Integration-Owner"] ?? "missing";
+  if (parsed.ids.length > 0 && !meaningful(integrationOwner)) {
+    problems.push({
+      code: "resolution-authority-unknown",
+      message: "a declared Integration-Owner is required to authorize reconciliation",
+    });
+  }
+  if (parsed.ids.length > 0 && integrationOwner === fields["Claim-Agent"]) {
+    problems.push({
+      code: "claimant-self-resolution",
+      message: "the current claimant cannot also be the reconciliation authority",
+    });
+  }
+
+  const commentById = new Map(comments.map((comment) => [comment.id, comment]));
+  for (const id of parsed.ids) {
+    const comment = commentById.get(id);
+    if (!comment) {
+      problems.push({ code: "unknown-resolution-id", commentId: id, message: `comment ${id} does not exist` });
+    } else if (!hasClaimSignal(comment.body)) {
+      problems.push({
+        code: "non-claim-resolution-id",
+        commentId: id,
+        message: `comment ${id} is not claim-bearing`,
+      });
+    } else if (isoInstantMilliseconds(comment.updatedAt) !== isoInstantMilliseconds(comment.createdAt)) {
+      problems.push({
+        code: "edited-resolution-id",
+        commentId: id,
+        message: `comment ${id} was edited and cannot be reconciled by ID`,
+      });
+    }
+  }
+
+  const valid = problems.length === 0;
+  return {
+    field: CLAIM_COMMENT_RESOLUTION_FIELD,
+    raw,
+    status: valid ? (parsed.status === "declared" ? "valid" : "none") : "invalid",
+    authority: "maintainer-or-integration-owner",
+    integrationOwner,
+    requestedIds: parsed.ids,
+    reconciledIds: valid ? parsed.ids : [],
+    problems,
+  };
 }
 
 function latestComment(comments) {
@@ -309,7 +398,14 @@ function classify(item) {
 }
 
 function analyzeWorkItem(issue, comments, issueByNumber, local, nowMs) {
-  const record = structuredFields(issue.body, [...PORTABLE_CLAIM_FIELDS, ...CHECKPOINT_FIELDS, "Parent-Plan", "Depends-On"]);
+  const record = structuredFields(issue.body, [
+    ...PORTABLE_CLAIM_FIELDS,
+    ...CHECKPOINT_FIELDS,
+    "Parent-Plan",
+    "Depends-On",
+    "Integration-Owner",
+    CLAIM_COMMENT_RESOLUTION_FIELD,
+  ]);
   const fields = record.fields;
   const claimState = (fields["Claim-State"] ?? "missing").toLowerCase();
   const questions = record.duplicates.map((name) =>
@@ -360,34 +456,53 @@ function analyzeWorkItem(issue, comments, issueByNumber, local, nowMs) {
 
   const latest = latestComment(comments);
   const claimComments = comments.filter((comment) => hasClaimSignal(comment.body));
-  const claimCommentEvidence = claimComments.map(commentEvidence);
+  const claimCommentResolution = evaluateClaimCommentResolution(record, fields, comments);
+  if (claimCommentResolution.status === "invalid") {
+    questions.push(
+      question(
+        "claim-comment-resolution-invalid",
+        claimCommentResolution.problems.map(({ message }) => message).join("; "),
+      ),
+    );
+  }
+  const reconciledIds = new Set(claimCommentResolution.reconciledIds);
+  const claimCommentEvidence = claimComments.map((comment) => ({
+    ...commentEvidence(comment),
+    reconciliation: reconciledIds.has(comment.id) ? "reconciled" : "unresolved",
+  }));
+  const unresolvedClaimComments = claimComments.filter((comment) => !reconciledIds.has(comment.id));
+  const unresolvedClaimCommentEvidence = claimCommentEvidence.filter(
+    ({ reconciliation }) => reconciliation === "unresolved",
+  );
   const latestClaim = latestComment(claimComments);
   const latestClaimEvidence = commentEvidence(latestClaim);
-  const unstructuredClaimComments = claimCommentEvidence.filter(
+  const latestUnresolvedClaim = latestComment(unresolvedClaimComments);
+  const latestUnresolvedClaimEvidence = commentEvidence(latestUnresolvedClaim);
+  const unstructuredClaimComments = unresolvedClaimCommentEvidence.filter(
     (evidence) => Object.keys(evidence.structuredFields).length === 0,
   );
   if (unstructuredClaimComments.length > 0) {
     questions.push(
       question(
         "unstructured-claim-comment",
-        `claim/ownership comments ${unstructuredClaimComments.map(({ id }) => id).join(", ")} have no portable fields; do not infer ownership`,
+        `unresolved claim/ownership comments ${unstructuredClaimComments.map(({ id }) => id).join(", ")} have no portable fields; do not infer ownership`,
       ),
     );
   }
 
-  const editedClaimComments = claimComments.filter(
+  const editedClaimComments = unresolvedClaimComments.filter(
     (comment) => isoInstantMilliseconds(comment.updatedAt) !== isoInstantMilliseconds(comment.createdAt),
   );
   if (editedClaimComments.length > 0) {
     questions.push(
       question(
         "edited-claim-comment",
-        `claim/ownership comments ${editedClaimComments.map(({ id }) => id).join(", ")} were edited; creation order cannot resolve their intent`,
+        `unresolved claim/ownership comments ${editedClaimComments.map(({ id }) => id).join(", ")} were edited; creation order cannot resolve their intent`,
       ),
     );
   }
 
-  const competingClaimComments = claimCommentEvidence.filter((evidence) => {
+  const competingClaimComments = unresolvedClaimCommentEvidence.filter((evidence) => {
     const commentState = evidence.structuredFields["Claim-State"];
     if (["done", "abandoned"].includes(commentState)) return false;
     return OWNERSHIP_FIELDS.some(
@@ -398,32 +513,32 @@ function analyzeWorkItem(issue, comments, issueByNumber, local, nowMs) {
     questions.push(
       question(
         "competing-ownership-comment",
-        `claim/ownership comments ${competingClaimComments.map(({ id }) => id).join(", ")} carry ownership fields that disagree with the body`,
+        `unresolved claim/ownership comments ${competingClaimComments.map(({ id }) => id).join(", ")} carry ownership fields that disagree with the body`,
       ),
     );
   }
 
-  if (latestClaimEvidence) {
-    const commentRecordFields = Object.entries(latestClaimEvidence.structuredFields).filter(
+  if (latestUnresolvedClaimEvidence) {
+    const commentRecordFields = Object.entries(latestUnresolvedClaimEvidence.structuredFields).filter(
       ([name]) => PORTABLE_CLAIM_FIELDS.includes(name) || CHECKPOINT_FIELDS.includes(name),
     );
-    if (latestClaimEvidence.duplicateFields.length > 0) {
+    if (latestUnresolvedClaimEvidence.duplicateFields.length > 0) {
       questions.push(
         question(
           "duplicate-comment-field",
-          `latest claim/checkpoint comment repeats ${latestClaimEvidence.duplicateFields.join(", ")}`,
+          `latest unresolved claim/checkpoint comment repeats ${latestUnresolvedClaimEvidence.duplicateFields.join(", ")}`,
         ),
       );
     }
     if (commentRecordFields.length > 0) {
       const missingCommentFields = COMMENT_RECORD_FIELDS.filter(
-        (name) => latestClaimEvidence.structuredFields[name] === undefined,
+        (name) => latestUnresolvedClaimEvidence.structuredFields[name] === undefined,
       );
       if (missingCommentFields.length > 0) {
         questions.push(
           question(
             "incomplete-claim-comment",
-            `latest claim/checkpoint comment omits ${missingCommentFields.join(", ")}`,
+            `latest unresolved claim/checkpoint comment omits ${missingCommentFields.join(", ")}`,
           ),
         );
       }
@@ -432,7 +547,7 @@ function analyzeWorkItem(issue, comments, issueByNumber, local, nowMs) {
           questions.push(
             question(
               "body-comment-mismatch",
-              `latest claim/checkpoint comment says ${name}=${value}, body says ${fields[name] ?? "missing"}`,
+              `latest unresolved claim/checkpoint comment says ${name}=${value}, body says ${fields[name] ?? "missing"}`,
             ),
           );
         }
@@ -467,6 +582,7 @@ function analyzeWorkItem(issue, comments, issueByNumber, local, nowMs) {
     labels: issue.labels,
     updatedAt: issue.updatedAt,
     parentPlan: fields["Parent-Plan"] ?? "missing",
+    integrationOwner: fields["Integration-Owner"] ?? "missing",
     claimState,
     claim: Object.fromEntries(PORTABLE_CLAIM_FIELDS.map((name) => [name, fields[name] ?? "missing"])),
     checkpoint: Object.fromEntries(CHECKPOINT_FIELDS.map((name) => [name, fields[name] ?? "missing"])),
@@ -474,7 +590,12 @@ function analyzeWorkItem(issue, comments, issueByNumber, local, nowMs) {
     dependencies,
     latestComment: commentEvidence(latest),
     latestClaimComment: latestClaimEvidence,
+    latestUnresolvedClaimComment: latestUnresolvedClaimEvidence,
     claimComments: claimCommentEvidence,
+    claimCommentResolution: {
+      ...claimCommentResolution,
+      unresolvedIds: unresolvedClaimCommentEvidence.map(({ id }) => id),
+    },
     localEvidence: { status: localEvidence.status },
     questions,
     reconciliation: "consistent",
