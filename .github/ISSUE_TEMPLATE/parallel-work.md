@@ -16,9 +16,18 @@ Parent-Plan: #ISSUE
 
 ## Dependencies and integration
 
+<!-- Use "none" or a comma-separated list such as "#12, #13". -->
 Depends-On: none
 Integration-Owner: maintainer
 Shared-Hotspots: none
+
+<!--
+Only the maintainer or declared Integration-Owner may replace "none" with an exact canonical list
+such as "123, 456" after reviewing the full append-only trail. The current Claim-Agent never
+chooses or self-authorizes these IDs. Unknown, non-claim, edited, duplicated, or malformed evidence
+fails closed; comments remain visible and are never edited or deleted.
+-->
+Reconciled-Claim-Comment-IDs: none
 
 ## Acceptance
 
@@ -29,7 +38,9 @@ Shared-Hotspots: none
 ## Portable claim
 
 <!--
-Preserve these exact field names for cross-harness status tooling. Use "unclaimed" until active.
+Preserve these exact field names for cross-harness status tooling. Ready/proposed work keeps every
+ownership and deadline field "unclaimed". Once claimed, Check-In-By is a strict calendar-valid ISO
+instant with `T` and `Z` or an explicit offset.
 Before replacing them, do the full pre-claim double-check from docs/development/parallel-work.md:
 re-fetch this body and its ownership/checkpoint comments, then inspect `git worktree list --porcelain`
 and branches immediately before mutation. Status output or an unclaimed body alone is insufficient.
@@ -49,7 +60,14 @@ Check-In-By: unclaimed
 
 ## Current checkpoint
 
-<!-- Concise current state. Add milestone history as issue comments. -->
+<!--
+Concise current state. Add milestone history as new issue comments; never edit ownership comments.
+Every ownership/checkpoint comment must repeat the current Claim-State, Claim-Harness,
+Claim-Run-ID, Claim-Agent, Claim-Branch,
+Claim-Worktree, Check-In-By, Checkpoint-At, and Checkpoint-Commit field lines before any prose so
+read-only tooling can reconcile the append-only trail with this body. An unstructured claim-bearing
+comment or disagreement is intentionally a maintainer question, never inferred ownership.
+-->
 
 Checkpoint-At: unclaimed
 Checkpoint-Commit: uncommitted

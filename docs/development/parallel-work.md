@@ -14,7 +14,20 @@ Every agent session begins by reading `AGENTS.md` and running:
 node tools/coordination-status.mjs
 ```
 
-The command reports active/blocked/review claims, suspected stale work, open PRs, and local worktrees without modifying anything. It reads structured issue bodies, not issue comments, so it is a triage aid rather than a claim lock or sufficient permission to claim. If the command or GitHub is unavailable, inspect Git/worktrees manually and ask the maintainer before entering potentially overlapping scope. Never interpret an unreachable registry as an empty registry.
+The command retrieves every page of issues, comments for every open issue, labels, and open pull requests; reconciles all plausible ownership comments plus the latest creation-ordered claim/checkpoint comment with the issue body; and compares registered locality with locally observable branches and worktrees without modifying anything. Local Git commands disable optional locks so status inspection cannot refresh the index. It is a triage aid, never a claim lock or sufficient permission to claim. If any required registry record is unavailable or malformed, the whole registry result is coordination-unknown rather than empty. Inspect Git/worktrees manually and ask the maintainer before entering potentially overlapping scope. Never interpret an unreachable registry as an empty registry.
+
+### Status output contract
+
+Human output remains the default. `node tools/coordination-status.mjs --json` emits one JSON document using schema version `1.0`; warnings still produce exit status 2, so consumers must read the document rather than treating a nonzero status as absent output. The versioned fields are:
+
+- top level: `schemaVersion`, `generatedAt`, `advisory`, `coordinationKnown`, `local`, `registry`, `warnings`, and `errors`;
+- `local`: the raw short status plus parsed local `branches` and `worktrees` evidence;
+- `registry`: `repository`, required/missing `labels`, `plans`, `workItems`, `pullRequests`, and flattened `maintainerQuestions` when `coordinationKnown` is true; it is `null` when required evidence cannot be retrieved or validated;
+- each work item: GitHub identity/state, structured `claim` and `checkpoint`, `deadline` (`current`, `overdue`, `invalid`, or `unknown`), dependency evidence (`clear`, `blocked`, or `unknown` plus issue-number sets), metadata for all plausible claim comments and the latest creation-ordered unresolved comment, `claimCommentResolution`, local evidence (`matched`, `not-observed`, `contradiction`, or `not-applicable`), reconciliation, questions, and triage;
+- `triage`: `candidate`, `blocked`, `claimed`, `review`, `proposed`, or `question`; every item also carries `candidateSafety: not-established` because even a candidate needs the full pre-claim protocol;
+- `warnings`: missing-label and maintainer-question records; `errors`: why `coordinationKnown` is false.
+
+Fields may be added compatibly within major version 1. Consumers must ignore unknown fields and fail closed on an unsupported `schemaVersion`, `coordinationKnown: false`, `registry: null`, unknown enum value, or maintainer question. A `candidate` means only that body and label both say ready, ownership and deadline fields remain unclaimed, declared dependencies are proved clear, and currently retrieved evidence has no contradiction. It never proves absence of a race, an external harness session, or later evidence. Check-in timestamps are strict, calendar-valid ISO instants with `T` and `Z` or an explicit offset; date-only, zone-less, normalized-impossible, and informal values are invalid.
 
 ## Plan for parallelism
 
@@ -63,7 +76,15 @@ Use labels `work:proposed`, `work:ready`, `work:active`, `work:blocked`, `work:r
 
 Harness/run identifiers are diagnostic, not identity or authority. This repository and its issue registry are public: issue bodies, comments, checkpoints, branch names, commit metadata, and copied prompt text are externally observable. Do not publish local session-file paths, credentials, full prompts, transcripts, customer or production data, billing/account identifiers, private recovery material, or secrets. Use the issue template at `.github/ISSUE_TEMPLATE/parallel-work.md`; preserve its machine-readable field names so status tooling remains portable.
 
-Use issue comments as an append-only checkpoint trail. Update the structured claim fields when ownership, branch, state, or deadline changes. Body edits, labels, comments, branch creation, and worktree creation are not one atomic operation: a newer ownership/checkpoint comment or locked worktree can prove claim intent while structured body fields still say `ready` or `unclaimed`. Either form of conflicting evidence requires investigation; never overwrite one merely because the other lags. A session existing inside a harness does not prove its claim is alive; the registry checkpoint does.
+Use issue comments as an append-only checkpoint trail; editing an ownership comment is ambiguous and becomes a maintainer question. Every ownership or checkpoint comment includes the current exact `Claim-State`, `Claim-Harness`, `Claim-Run-ID`, `Claim-Agent`, `Claim-Branch`, `Claim-Worktree`, and `Check-In-By` field lines so read-only tooling can reconcile it; checkpoint comments also include `Checkpoint-At` and `Checkpoint-Commit`. Explanatory prose may follow those fields. Update the issue body's structured claim fields when ownership, branch, state, or deadline changes. Body edits, labels, comments, branch creation, and worktree creation are not one atomic operation: any plausible ownership wording—including “started work” or “taking ownership”—is retained as intent evidence, and a newer matching comment cannot hide competing structured ownership. An unresolved unstructured claim-bearing comment, edited claim comment, or disagreement becomes a maintainer question; never overwrite or infer away one merely because another record is newer. A session existing inside a harness does not prove its claim is alive; the registry checkpoint does.
+
+### Explicit claim-comment reconciliation
+
+Append-only history needs an explicit release path rather than permanent ambiguity or deletion. The issue-body field `Reconciled-Claim-Comment-IDs` is `none` or a canonical comma-space-separated list of exact positive GitHub comment IDs, such as `123, 456`. It is authorization metadata, not claimant evidence: only the maintainer or the issue's declared `Integration-Owner` may change it, and the current `Claim-Agent` may not authorize its own dismissal of intent. A maintainer instruction may direct an execution session to apply the exact approved IDs, but the session never chooses them itself. GitHub's issue history remains the audit record; status tooling validates the declared authority boundary but cannot authenticate who typed a body edit.
+
+Use the field only after reading the complete append-only trail and deciding that each named historical claim comment is reconciled or superseded by an authorized release, handoff, or takeover. Update the field together with the structured body state, then append a new fully structured checkpoint and re-fetch status. The comments are never edited or deleted. JSON retains every entry in `claimComments`, marks each `reconciled` or `unresolved`, and exposes `claimCommentResolution` with `status` (`none`, `valid`, or `invalid`), authority, raw/requested/reconciled/unresolved IDs, and validation problems; `latestClaimComment` remains visible while `latestUnresolvedClaimComment` drives body reconciliation.
+
+The whole resolution is invalid and no ID is reconciled when the field is malformed or duplicated, repeats an ID, lacks a distinct declared integration owner, names an unknown or non-claim comment, or names an edited comment. Any unlisted older or later intent remains unresolved and can still question. A future comment never inherits authorization merely because an earlier ID was listed. This mechanism can make an authorized takeover or release-to-ready consistent; it never makes a candidate safe to claim and never permits automatic takeover.
 
 ## Claim and isolation protocol
 
@@ -90,13 +111,13 @@ Checkpoint after meaningful milestones, before a known long wait, and before end
 
 A claim is **suspected stale**, never automatically abandoned, when:
 
-- `Check-In-By` has passed without a later checkpoint;
-- its branch/worktree is missing or contradicts the issue;
+- an active, blocked, or review claim has an expired, invalid, or unknown `Check-In-By`; a later comment does not extend the structured deadline by itself;
+- its branch/worktree is missing or contradicts the issue, including locally observed registered worktrees marked locked or prunable;
 - its PR is merged/closed while the issue remains active;
 - it reports active work but has no recoverable branch/commit and an unexplained dirty worktree exists;
 - another agent discovers unfinished overlapping changes not represented by a claim.
 
-The status command highlights what it can prove from GitHub and local Git. It cannot enumerate every proprietary harness session, so mandatory registration is what makes cross-harness discovery possible.
+The status command highlights what it can prove from GitHub and local Git. A ready item is dependency-clear only when `Depends-On` is `none` or every referenced issue is closed with exactly one `Claim-State: done` field and exactly one `work:done` work-state label; duplicate, malformed, additional, missing, self-referential, or ambiguously completed evidence is unknown, while an open dependency is blocked. Claim-bearing open issues remain visible even if a work label is missing, and body/label/comment or locally observed branch/worktree disagreements become maintainer questions. The command cannot enumerate every proprietary harness session or prove remote locality, so `not-observed` is not a contradiction and mandatory registration remains what makes cross-harness discovery possible.
 
 A new agent surfaces suspected stale evidence and asks the maintainer whether to resume, hand off, extend, clean up, abandon, or authorize a completion plan. It should include a concrete proposed recovery/completion path—remaining work, reusable evidence, branch strategy, checks, risks, and cleanup—linked into the shared parent plan. Planning unfinished work is allowed before takeover; modifying or claiming it is not. Never reset, delete, overwrite, force-push, remove a worktree, or take over another claim automatically.
 
