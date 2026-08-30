@@ -19,6 +19,27 @@ run "defaults_are_valid_and_budget_authority_is_narrow" {
   command = plan
 
   assert {
+    condition     = length(var.allowed_refs) == 1 && one(var.allowed_refs) == "refs/heads/main"
+    error_message = "Bootstrap must grant delivery authority only to protected main."
+  }
+
+  assert {
+    condition = (
+      length(var.allowed_workflow_paths) == 1 &&
+      one(var.allowed_workflow_paths) == ".github/workflows/delivery.yml"
+    )
+    error_message = "Bootstrap must grant delivery authority only to the delivery workflow."
+  }
+
+  assert {
+    condition = (
+      length(var.allowed_event_names) == 3 &&
+      toset(var.allowed_event_names) == toset(["push", "workflow_dispatch", "schedule"])
+    )
+    error_message = "Bootstrap must permit only push, dispatch, and exact-workflow scheduled drift."
+  }
+
+  assert {
     condition = alltrue([
       for role in var.deployer_roles : !contains([
         "roles/owner",
@@ -56,4 +77,54 @@ run "owner_is_rejected" {
   }
 
   expect_failures = [var.deployer_roles]
+}
+
+run "the_deleted_v2_ref_cannot_be_bootstrapped" {
+  command = plan
+
+  variables {
+    allowed_refs = ["refs/heads/v2"]
+  }
+
+  expect_failures = [var.allowed_refs]
+}
+
+run "additional_refs_cannot_be_bootstrapped" {
+  command = plan
+
+  variables {
+    allowed_refs = ["refs/heads/main", "refs/heads/release"]
+  }
+
+  expect_failures = [var.allowed_refs]
+}
+
+run "another_workflow_cannot_be_bootstrapped" {
+  command = plan
+
+  variables {
+    allowed_workflow_paths = [".github/workflows/ci.yml"]
+  }
+
+  expect_failures = [var.allowed_workflow_paths]
+}
+
+run "additional_workflows_cannot_be_bootstrapped" {
+  command = plan
+
+  variables {
+    allowed_workflow_paths = [".github/workflows/delivery.yml", ".github/workflows/ci.yml"]
+  }
+
+  expect_failures = [var.allowed_workflow_paths]
+}
+
+run "additional_events_cannot_be_bootstrapped" {
+  command = plan
+
+  variables {
+    allowed_event_names = ["push", "workflow_dispatch", "schedule", "repository_dispatch"]
+  }
+
+  expect_failures = [var.allowed_event_names]
 }

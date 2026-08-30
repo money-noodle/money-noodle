@@ -3,7 +3,8 @@
 # ADR-0005: "A token minted for a fork, a pull request from an untrusted source,
 # another workflow, or another repository must not be exchangeable for deployment
 # authority." A test proving the pipeline *can* deploy proves nothing about who
-# else can, so every case below except the first is a denial.
+# else can. Only delivery and scheduled read-only drift are accepted below; every
+# other candidate is a denial.
 #
 # These values are deliberately fictional. Real identifiers are supplied at
 # bootstrap and are never committed.
@@ -13,13 +14,25 @@ variables {
   repository_name        = "example-repo"
   repository_id          = "111111111"
   repository_owner_id    = "222222222"
-  allowed_refs           = ["refs/heads/v2"]
+  allowed_refs           = ["refs/heads/main"]
   allowed_workflow_paths = [".github/workflows/delivery.yml"]
-  allowed_event_names    = ["push", "workflow_dispatch"]
+  allowed_event_names    = ["push", "workflow_dispatch", "schedule"]
 
   candidate_subjects = [
     {
       name                = "authorised-delivery-run"
+      repository          = "example-owner/example-repo"
+      repository_id       = "111111111"
+      repository_owner_id = "222222222"
+      ref                 = "refs/heads/main"
+      ref_type            = "branch"
+      job_workflow_ref    = "example-owner/example-repo/.github/workflows/delivery.yml@refs/heads/main"
+      event_name          = "push"
+    },
+    {
+      # The migration branch was deleted. Even a token carrying the formerly
+      # valid workflow/ref pair must now fail on the ref allowlist.
+      name                = "deleted-v2-branch"
       repository          = "example-owner/example-repo"
       repository_id       = "111111111"
       repository_owner_id = "222222222"
@@ -35,9 +48,9 @@ variables {
       repository          = "example-owner/other-repo"
       repository_id       = "999999999"
       repository_owner_id = "222222222"
-      ref                 = "refs/heads/v2"
+      ref                 = "refs/heads/main"
       ref_type            = "branch"
-      job_workflow_ref    = "example-owner/other-repo/.github/workflows/delivery.yml@refs/heads/v2"
+      job_workflow_ref    = "example-owner/other-repo/.github/workflows/delivery.yml@refs/heads/main"
       event_name          = "push"
     },
     {
@@ -47,9 +60,9 @@ variables {
       repository          = "attacker/example-repo"
       repository_id       = "888888888"
       repository_owner_id = "777777777"
-      ref                 = "refs/heads/v2"
+      ref                 = "refs/heads/main"
       ref_type            = "branch"
-      job_workflow_ref    = "attacker/example-repo/.github/workflows/delivery.yml@refs/heads/v2"
+      job_workflow_ref    = "attacker/example-repo/.github/workflows/delivery.yml@refs/heads/main"
       event_name          = "push"
     },
     {
@@ -60,9 +73,9 @@ variables {
       repository          = "example-owner/example-repo"
       repository_id       = "555555555"
       repository_owner_id = "222222222"
-      ref                 = "refs/heads/v2"
+      ref                 = "refs/heads/main"
       ref_type            = "branch"
-      job_workflow_ref    = "example-owner/example-repo/.github/workflows/delivery.yml@refs/heads/v2"
+      job_workflow_ref    = "example-owner/example-repo/.github/workflows/delivery.yml@refs/heads/main"
       event_name          = "push"
     },
     {
@@ -108,9 +121,9 @@ variables {
       repository          = "example-owner/example-repo"
       repository_id       = "111111111"
       repository_owner_id = "222222222"
-      ref                 = "refs/heads/v2"
+      ref                 = "refs/heads/main"
       ref_type            = "branch"
-      job_workflow_ref    = "example-owner/example-repo/.github/workflows/ci.yml@refs/heads/v2"
+      job_workflow_ref    = "example-owner/example-repo/.github/workflows/ci.yml@refs/heads/main"
       event_name          = "push"
     },
     {
@@ -121,31 +134,49 @@ variables {
       repository          = "example-owner/example-repo"
       repository_id       = "111111111"
       repository_owner_id = "222222222"
-      ref                 = "refs/heads/v2"
+      ref                 = "refs/heads/main"
       ref_type            = "branch"
       job_workflow_ref    = "third-party/actions/.github/workflows/deploy.yml@refs/heads/main"
       event_name          = "push"
     },
     {
-      # A scheduled run. Drift detection reads; it does not deploy.
-      name                = "scheduled-run"
+      # Scheduled authority exists only so this exact workflow on main can run
+      # read-only drift detection. Repository/workflow/ref clauses still apply.
+      name                = "authorised-scheduled-drift"
       repository          = "example-owner/example-repo"
       repository_id       = "111111111"
       repository_owner_id = "222222222"
-      ref                 = "refs/heads/v2"
+      ref                 = "refs/heads/main"
       ref_type            = "branch"
-      job_workflow_ref    = "example-owner/example-repo/.github/workflows/delivery.yml@refs/heads/v2"
+      job_workflow_ref    = "example-owner/example-repo/.github/workflows/delivery.yml@refs/heads/main"
       event_name          = "schedule"
+    },
+    {
+      # An event outside the closed event set must remain denied even when every
+      # repository, ref, and workflow claim is otherwise authorised.
+      name                = "unauthorised-event"
+      repository          = "example-owner/example-repo"
+      repository_id       = "111111111"
+      repository_owner_id = "222222222"
+      ref                 = "refs/heads/main"
+      ref_type            = "branch"
+      job_workflow_ref    = "example-owner/example-repo/.github/workflows/delivery.yml@refs/heads/main"
+      event_name          = "repository_dispatch"
     },
   ]
 }
 
-run "authorised_subject_is_accepted" {
+run "authorised_subjects_are_accepted" {
   command = plan
 
   assert {
     condition     = output.evaluations["authorised-delivery-run"].allowed
     error_message = "The intended delivery subject must be able to obtain authority, otherwise the policy is merely broken rather than strict."
+  }
+
+  assert {
+    condition     = output.evaluations["authorised-scheduled-drift"].allowed
+    error_message = "The exact delivery workflow on main must be able to authenticate for scheduled read-only drift."
   }
 }
 
@@ -155,7 +186,7 @@ run "every_other_subject_is_rejected" {
   assert {
     condition = alltrue([
       for name, evaluation in output.evaluations :
-      !evaluation.allowed if name != "authorised-delivery-run"
+      !evaluation.allowed if !contains(["authorised-delivery-run", "authorised-scheduled-drift"], name)
     ])
     error_message = "An unauthorised subject was accepted by the delivery trust condition."
   }
@@ -166,6 +197,11 @@ run "rejections_name_the_clause_that_refused_them" {
 
   # Asserting *why* each subject was refused, not merely that it was. A denial
   # for an accidental reason is a denial that disappears with the next edit.
+  assert {
+    condition     = contains(output.evaluations["deleted-v2-branch"].failed_clauses, "ref")
+    error_message = "The deleted v2 migration branch must be refused on the ref clause."
+  }
+
   assert {
     condition     = contains(output.evaluations["sibling-repository"].failed_clauses, "repository")
     error_message = "A sibling repository must be refused on the repository clause."
@@ -210,8 +246,8 @@ run "rejections_name_the_clause_that_refused_them" {
   }
 
   assert {
-    condition     = contains(output.evaluations["scheduled-run"].failed_clauses, "event_name")
-    error_message = "A scheduled run must be refused on the event_name clause; drift detection reads, it does not deploy."
+    condition     = contains(output.evaluations["unauthorised-event"].failed_clauses, "event_name")
+    error_message = "An event outside push, workflow_dispatch, and schedule must be refused on the event_name clause."
   }
 }
 
@@ -227,9 +263,9 @@ run "emitted_condition_matches_the_reviewed_text" {
       "assertion.repository_id == \"111111111\"",
       "assertion.repository == \"example-owner/example-repo\"",
       "assertion.ref_type == \"branch\"",
-      "assertion.ref in [\"refs/heads/v2\"]",
-      "assertion.event_name in [\"push\",\"workflow_dispatch\"]",
-      "assertion.job_workflow_ref in [\"example-owner/example-repo/.github/workflows/delivery.yml@refs/heads/v2\"]",
+      "assertion.ref in [\"refs/heads/main\"]",
+      "assertion.event_name in [\"push\",\"schedule\",\"workflow_dispatch\"]",
+      "assertion.job_workflow_ref in [\"example-owner/example-repo/.github/workflows/delivery.yml@refs/heads/main\"]",
     ])
     error_message = "The emitted CEL condition no longer matches the reviewed text."
   }
@@ -278,6 +314,26 @@ run "an_empty_ref_allowlist_is_refused" {
   expect_failures = [var.allowed_refs]
 }
 
+run "the_deleted_v2_ref_cannot_be_reauthorised" {
+  command = plan
+
+  variables {
+    allowed_refs = ["refs/heads/v2"]
+  }
+
+  expect_failures = [var.allowed_refs]
+}
+
+run "an_additional_ref_cannot_be_authorised" {
+  command = plan
+
+  variables {
+    allowed_refs = ["refs/heads/main", "refs/heads/release"]
+  }
+
+  expect_failures = [var.allowed_refs]
+}
+
 run "a_pull_request_event_cannot_be_authorised" {
   command = plan
 
@@ -296,6 +352,36 @@ run "a_pull_request_target_event_cannot_be_authorised" {
   }
 
   expect_failures = [var.allowed_event_names]
+}
+
+run "an_additional_event_cannot_be_authorised" {
+  command = plan
+
+  variables {
+    allowed_event_names = ["push", "workflow_dispatch", "schedule", "repository_dispatch"]
+  }
+
+  expect_failures = [var.allowed_event_names]
+}
+
+run "another_workflow_cannot_be_authorised" {
+  command = plan
+
+  variables {
+    allowed_workflow_paths = [".github/workflows/ci.yml"]
+  }
+
+  expect_failures = [var.allowed_workflow_paths]
+}
+
+run "an_additional_workflow_cannot_be_authorised" {
+  command = plan
+
+  variables {
+    allowed_workflow_paths = [".github/workflows/delivery.yml", ".github/workflows/ci.yml"]
+  }
+
+  expect_failures = [var.allowed_workflow_paths]
 }
 
 run "a_workflow_outside_the_workflows_directory_is_refused" {

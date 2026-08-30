@@ -34,7 +34,7 @@ Do not split work merely to keep agents busy. Tasks are not safely parallel when
 
 ## Coordinator and execution authority
 
-The primary or root agent session is the **coordinator**. It is coordination-only, even when a requested change is small. An **execution session** is a separate delegated subagent or maintainer-authorized agent session that performs one bounded repository change. The **integration checkout** is the worktree on the target branch (`v2` before cutover and `main` afterward); it is not an implementation worktree.
+The primary or root agent session is the **coordinator**. It is coordination-only, even when a requested change is small. An **execution session** is a separate delegated subagent or maintainer-authorized agent session that performs one bounded repository change. The **integration checkout** is the worktree on the sole integration branch, `main`; it is not an implementation worktree.
 
 The coordinator may:
 

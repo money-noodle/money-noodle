@@ -2,6 +2,7 @@
 
 > **Status:** Accepted
 > **Accepted:** 2026-08-29 by the maintainer
+> **Repository controls revised:** 2026-08-30 by the maintainer
 > **Scope:** First independently deployable Next.js web and interface-neutral API slice
 > **Related plan:** GitHub issue #2, child work item #4
 > **Reference evidence:** [`reference-assessment.md`](reference-assessment.md)
@@ -18,7 +19,8 @@ It is intentionally not a complete platform decomposition. New domains, stores, 
 ### Current facts
 
 - The repository implements pnpm workspaces and Nx projects for the Next.js web, Fastify API, and generated OpenAPI client, with exact runtime/tool versions and a frozen lockfile.
-- CI remotely validates formatting, lint, types, tests/coverage, contracts, builds, dependencies, secrets, attested OCI images, SBOMs, and HIGH/CRITICAL image vulnerabilities.
+- The public-source snapshot is staged on sole integration branch `main` as one root commit; a separate private archive preserves development history.
+- CI is configured to validate formatting, lint, types, tests/coverage, contracts, builds, dependencies, secrets, attested OCI images, SBOMs, and HIGH/CRITICAL image vulnerabilities. GitHub Actions are currently disabled, so the squashed snapshot has no observed hosted-CI result yet.
 - TypeScript is the default, REST/OpenAPI is required, the API must remain interface-neutral, and deployable projects must build and deploy independently.
 - The web is a presentation client. It cannot become a worker, provider adapter, scheduler, data authority, or direct database client.
 - Production has no real-money authority. Simulation and funded concepts remain structurally separate when they are introduced.
@@ -153,9 +155,9 @@ Dependencies point inward: adapters depend on application/domain contracts. The 
 
 ```mermaid
 flowchart TB
-    git["Reviewed repository commit"]
+    git["Reviewed protected main commit"]
     ci["GitHub Actions<br/>checks, scans, SBOM, provenance"]
-    oidc["GitHub OIDC token<br/>repository, workflow, ref constrained"]
+    oidc["GitHub OIDC token<br/>repository, workflow, main ref constrained"]
 
     subgraph gcp["Maintainer-owned Google Cloud project — us-west1"]
         wif["Workload Identity Federation"]
@@ -243,7 +245,7 @@ authorization gates before anything is applied.
 ```mermaid
 flowchart TB
     job["GitHub Actions job<br/>presents per-job OIDC token"]
-    cond{"Gate 1 — attribute condition<br/>repository + immutable ids +<br/>branch ref + event + exact workflow"}
+    cond{"Gate 1 — attribute condition<br/>repository + immutable ids +<br/>protected main ref + event + exact workflow"}
     pset{"Gate 2 — principal set<br/>attribute.repository/OWNER/NAME"}
     token["Short-lived access token<br/>no key at rest"]
 
@@ -377,7 +379,7 @@ The API reads the read model and never calls a provider billing, deployment, or 
 
 The workspace, projects, status contract, generated client, web presentation/API adapter, API inner layers/HTTP/deployment adapters, health routes, and container definitions below exist. `infra/` now exists as reviewable, statically validated configuration; **no provider resource has been applied**, and the outstanding items before an apply can be trusted are listed in [`../../infra/README.md`](../../infra/README.md).
 
-No row below is proposed. `jobs/` does not exist, and neither the administrative ingestion unit, its read model, nor its API operations are represented here, because [`ADR-0009`](decisions/ADR-0009-administrative-observability-surface.md) is proposed rather than accepted. Rows are added when the projects exist, not when they are decided.
+No row below is proposed. `jobs/` does not exist, and neither the administrative ingestion unit, its read model, nor its API operations are represented here, because [`ADR-0009`](decisions/ADR-0009-administrative-observability-surface.md) is proposed rather than accepted. Rows are added when the projects exist, not when they are decided. The source repository is still private with Actions disabled, and no Google Cloud resource or federation exists.
 
 | Path | Project/deployment | Boundary and ownership |
 | --- | --- | --- |
@@ -441,7 +443,7 @@ The detailed decision is in [`ADR-0002`](decisions/ADR-0002-openapi-and-generate
 - Remain stateless between requests. Durable state and coordination use explicit repositories in later slices.
 - Expose liveness/readiness plus safe public and scoped operational views.
 - Own and migrate only its declared future schema through a single-owner deployment step.
-- Never hold funded authority in this v2 phase.
+- Never hold funded authority in the current phase.
 
 ### Pipeline
 
@@ -489,7 +491,7 @@ Quantitative latency thresholds remain unset until remote evidence exists. Cloud
 
 ## Maintainer decisions recorded
 
-On 2026-08-29 the maintainer accepted:
+The maintainer accepted the first-slice choices on 2026-08-29 and revised the repository-publication choice on 2026-08-30:
 
 1. separate `apps/web`, `services/platform-api`, and `packages/platform-api-client` boundaries;
 2. Next.js 16 App Router, React 19, Node.js 22, and Fastify 5 as the first framework lines, with exact versions reverified and pinned during scaffolding;
@@ -499,7 +501,7 @@ On 2026-08-29 the maintainer accepted:
 6. Google Cloud Run and Artifact Registry in `us-west1`, federated GitHub Actions trust, OpenTofu with GCS state, Secret Manager, and Google Cloud telemetry;
 7. a maintainer-owned provider account, USD 30 monthly ceiling with 50/80/100 percent alerts, and no EU-residency requirement for this first slice;
 8. interim public `*.run.app` validation, followed by a separately reviewed `noodle.money` and public `api.noodle.money` cutover that preserves existing Vercel DNS until authorized;
-9. keeping the repository private during the rebuild, with GitHub Pro or an intentional open-source decision required before protected-`main` cutover;
+9. intentionally publishing the one-root MIT-licensed source snapshot while keeping the development-history archive private, with protected `main`, untrusted-fork controls, and a full-history secret-scan baseline required before ordinary merges resume;
 10. accepting Pre-GA OTLP metric ingestion only under the financially inert first-slice controls in ADR-0007;
 11. exclusion of identity, PostgreSQL/schema work, jobs, simulation, and funded authority from the first slice, which proposed [`ADR-0009`](decisions/ADR-0009-administrative-observability-surface.md) would deliberately extend for one scheduled ingestion unit; and
 12. setting quantitative response-time, availability, and rollback acceptance only after dated remote baseline evidence exists.

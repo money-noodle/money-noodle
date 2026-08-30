@@ -55,16 +55,20 @@ variable "repository_owner_id" {
 
 variable "allowed_refs" {
   description = <<-EOT
-    Exact git refs permitted to obtain delivery authority. During the v2 rebuild this
-    is `refs/heads/v2`. At cutover it becomes protected `refs/heads/main` and `v2`
-    is removed. Wildcards are rejected by validation on purpose: a pattern is how
-    an unintended ref acquires authority.
+    Exact git refs permitted to obtain delivery authority. Only protected
+    `refs/heads/main` is authorised. Wildcards are rejected by validation on
+    purpose: a pattern is how an unintended ref acquires authority.
   EOT
   type        = list(string)
 
   validation {
     condition     = length(var.allowed_refs) > 0
     error_message = "At least one ref must be authorised, otherwise delivery can never run."
+  }
+
+  validation {
+    condition     = length(var.allowed_refs) == 1 && one(var.allowed_refs) == "refs/heads/main"
+    error_message = "Money Noodle delivery authority is invariantly limited to exactly `refs/heads/main`."
   }
 
   validation {
@@ -85,6 +89,14 @@ variable "allowed_workflow_paths" {
     mint a deployment credential.
   EOT
   type        = list(string)
+
+  validation {
+    condition = (
+      length(var.allowed_workflow_paths) == 1 &&
+      one(var.allowed_workflow_paths) == ".github/workflows/delivery.yml"
+    )
+    error_message = "Money Noodle delivery authority is invariantly limited to exactly `.github/workflows/delivery.yml`."
+  }
 
   validation {
     condition     = length(var.allowed_workflow_paths) > 0
@@ -109,7 +121,7 @@ variable "allowed_event_names" {
     hold provider authority.
   EOT
   type        = list(string)
-  default     = ["push", "workflow_dispatch"]
+  default     = ["push", "workflow_dispatch", "schedule"]
 
   validation {
     condition     = length(var.allowed_event_names) > 0
@@ -119,6 +131,14 @@ variable "allowed_event_names" {
   validation {
     condition     = !contains(var.allowed_event_names, "pull_request") && !contains(var.allowed_event_names, "pull_request_target")
     error_message = "Pull request events must never hold delivery authority; they can be triggered from an untrusted fork."
+  }
+
+  validation {
+    condition = (
+      length(var.allowed_event_names) == 3 &&
+      toset(var.allowed_event_names) == toset(["push", "workflow_dispatch", "schedule"])
+    )
+    error_message = "Only push, workflow_dispatch, and schedule may obtain delivery trust; schedule is reserved for exact-workflow read-only drift."
   }
 }
 

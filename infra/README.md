@@ -85,9 +85,9 @@ Every check here is static. `init` runs with `-backend=false`, and every
 
 ## Testing
 
-46 OpenTofu test runs execute offline across the trust policy, service contract,
+55 OpenTofu test runs execute offline across the trust policy, service contract,
 rollback behaviour, bootstrap defaults, state durability, budget, and federation
-modules. 34 static guards run in the repository gate. Nearly all are **negative** tests: a
+modules. 36 static guards run in the repository gate. Nearly all are **negative** tests: a
 test proving the pipeline can deploy proves nothing about who else can.
 
 The trust policy is the piece worth understanding. `modules/delivery-trust`
@@ -95,11 +95,12 @@ declares the clause set **once** and emits it twice — as the CEL string the
 provider enforces, and as an evaluator over candidate token claim sets. An output
 precondition fails the plan if those two ever diverge, so a clause added to the
 enforced condition without a matching check (or the reverse) cannot ship quietly.
-The test table then feeds it a sibling repository, a fork, a reclaimed repository
-name, an unauthorised branch, a tag, a pull request, an unauthorised workflow, an
-externally defined reusable workflow, and a scheduled run — asserting not only
-that each is refused but **which clause** refused it, because a denial for an
-accidental reason is a denial that disappears with the next edit.
+The test table accepts scheduled read-only drift only for the same exact repository,
+main ref, and delivery workflow as other authority. It feeds the policy the deleted
+migration branch, a sibling repository, a fork, a reclaimed repository name, an
+unauthorised branch, tag, pull request, workflow, reusable workflow, and event —
+asserting not only that each is refused but **which clause** refused it, because a
+denial for an accidental reason is a denial that disappears with the next edit.
 
 ## What is deliberately absent
 

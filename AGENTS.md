@@ -1,21 +1,21 @@
-# Money Noodle v2 Platform Agent Guide
+# Money Noodle Platform Agent Guide
 
 ## Start here
 
-Money Noodle v2 is an architecture-first rebuild of a continuously deployed, multi-tenant financial learning, gaming, analysis, and funded-trading platform. The current sequence is architecture → implementation → testing → deployed validation. Do not recreate v1 behavior by default.
+Money Noodle is an architecture-first rebuild of a continuously deployed, multi-tenant financial learning, gaming, analysis, and funded-trading platform. The current sequence is architecture → implementation → testing → deployed validation. Do not recreate historical behavior by default.
 
 `AGENTS.md` is the required entry point and operational map, not the repository's encyclopedia. Read it first, run `node tools/coordination-status.mjs`, then read the linked document relevant to the task completely. The shared plan and work status are the cross-harness coordination authority; a missing or unreachable registry never means work is unclaimed. Keep detailed standards and rationale in their owning documents so this guide stays short, current, and useful.
 
 ## Current non-negotiables
 
-- Treat all v1 material as historical evidence, never current authority. Revalidate before reuse.
+- Treat the private archive and all prior-generation material as historical evidence, never current authority. Revalidate before reuse.
 - Resolve architecture and acceptance criteria before production implementation. Isolated disposable spikes may answer bounded questions.
 - Use one monorepo with independently buildable and deployable projects. Favor TypeScript; use another language when a bounded project has a documented material advantage.
 - Follow Clean Architecture. User interfaces present state and submit intent; they do not perform platform work. APIs are stateless and lightweight. Jobs and provider integrations run in isolated deployment units.
 - Assume a person may use web, mobile, desktop, game, and MMO-style interfaces concurrently. Server state is authoritative. Offline behavior is explicit and designed per capability.
-- Funded trading is foundational, but v2 currently has **no real-money authority**. Simulation and funded balances, ledgers, execution authority, presentation, and audit remain structurally separate.
+- Funded trading is foundational, but the platform currently has **no real-money authority**. Simulation and funded balances, ledgers, execution authority, presentation, and audit remain structurally separate.
 - Run the integrated system remotely, not on a developer laptop. Prefer short-lived idempotent functions, containers, and jobs over resident multipurpose services.
-- CI/CD is mandatory. After cutover, a reviewed merge to `main` authorizes and triggers production deployment; agents must not merge unless explicitly asked.
+- CI/CD is mandatory. Once delivery is configured, a reviewed merge to protected `main` authorizes and triggers production delivery; agents must not merge unless explicitly asked.
 - Default authorization to deny, enforce tenant scope at every boundary, keep operational secrets in durable managed storage, and preserve reconstructable audit/accounting records.
 - Keep architecture visually current with version-controlled diagrams-as-code. A boundary or topology change is incomplete when its current diagram is stale.
 - The primary/root agent session is coordination-only: it may inspect, plan, maintain claim/plan metadata, delegate, review, and perform explicitly authorized integration, but it must not edit tracked repository files or implement changes in the integration checkout. Delegate every repository change—including documentation, tests, tooling, and implementation—to an execution session with its own bounded claim, short-lived typed branch, and dedicated mutable worktree; review and integrate that work into the target branch rather than editing there. If delegation is unavailable, stop and ask the maintainer to start or authorize a separate execution session. Follow the claim, role, integration, and stale-work authority in [`docs/development/parallel-work.md`](docs/development/parallel-work.md); merge and push restrictions still apply.
@@ -37,7 +37,7 @@ Authority descends from the maintainer's current instruction, to accepted curren
 | Data placement, telemetry, audit, identity, ownership, and roles | [`docs/architecture/data-identity-observability.md`](docs/architecture/data-identity-observability.md) |
 | Implementation and testing standards | [`docs/engineering/standards.md`](docs/engineering/standards.md) |
 | CI/CD, remote operation, secrets, and deployment | [`docs/operations/delivery.md`](docs/operations/delivery.md) |
-| Branches, tags, and v2 cutover | [`docs/development/version-control.md`](docs/development/version-control.md) |
+| Branches, tags, publication, and releases | [`docs/development/version-control.md`](docs/development/version-control.md) |
 | Parallel planning, claims, worktrees, stale sessions, and handoff | [`docs/development/parallel-work.md`](docs/development/parallel-work.md) |
 
 Use the accepted source/deployment map instead of inferring current boundaries from directory names alone.
@@ -67,13 +67,12 @@ This is a living standard and safety envelope, not an exhaustive specification o
 - Use nested `AGENTS.md` files only for stable instructions local to a substantial subtree.
 - Use agent skills for repeatable procedures that benefit from executable or stepwise guidance, not as hidden requirement authority. Skills must route back to current repository documents and remain testable. Automate parallel-work preflight only after the documented manual protocol is stable.
 - Update this file when phase, terminology, source map, commands, safety boundaries, deployment, or routing changes.
-- At v2 cutover, remove migration-only v1/v2 language and evolve this into the **Money Noodle Platform Agent Guide**.
 
 ## Current repository state
 
-Development currently targets `v2`; work occurs on short-lived typed branches such as the current `arch/v2-foundation`. `main` remains the v1 production line until the controlled cutover. The immutable v1 archive and maintenance refs are documented in [`docs/development/version-control.md`](docs/development/version-control.md).
+`main` is the sole integration and delivery branch. Work occurs on short-lived typed branches based on `main`; direct pushes, history rewriting, and unreviewed merges to `main` are forbidden. The source repository intentionally contains one squashed root snapshot for publication, while `phairow/money-noodle-private-archive` preserves the private development history. Publication, protection, and Actions sequencing are documented in [`docs/development/version-control.md`](docs/development/version-control.md).
 
-The first-slice workspace foundation now defines pnpm/Nx projects for the Next.js web, Fastify platform API, API-owned OpenAPI document, generated TypeScript client, and separate OCI artifacts; see [`docs/architecture/overview.md`](docs/architecture/overview.md) and [`docs/engineering/standards.md`](docs/engineering/standards.md). Use Node.js 22.22.0 and pnpm 11.24.0. Run `pnpm install --frozen-lockfile`, `pnpm check`, and—when Docker is available—`pnpm container`; use `pnpm nx run <project>:<target>` for a focused project. CI runs affected lint, type, test, contract, build, dependency, secret, container, provenance/SBOM, and image-vulnerability gates. The platform-status behavior is implemented for local and container validation; the remote provider/IaC deployment remains unimplemented. Never describe local or CI validation as deployed validation.
+The first-slice workspace foundation now defines pnpm/Nx projects for the Next.js web, Fastify platform API, API-owned OpenAPI document, generated TypeScript client, and separate OCI artifacts; see [`docs/architecture/overview.md`](docs/architecture/overview.md) and [`docs/engineering/standards.md`](docs/engineering/standards.md). Use Node.js 22.22.0 and pnpm 11.24.0. Run `pnpm install --frozen-lockfile`, `pnpm check`, and—when Docker is available—`pnpm container`; use `pnpm nx run <project>:<target>` for a focused project. CI runs affected lint, type, test, contract, build, dependency, secret, container, provenance/SBOM, and image-vulnerability gates. The platform-status behavior is implemented for local and container validation. GitHub Actions are currently disabled, the source repository is still private pending the controlled publication sequence, and no Google Cloud resource or federation exists. Never describe local or CI validation as deployed validation.
 
 ## Safety and handoff
 

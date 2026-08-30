@@ -20,7 +20,7 @@ on:
       - 'tools/infra-*.mjs'
       - '.github/workflows/delivery.yml'
   push:
-    branches: ['v2']
+    branches: ['main']
     paths:
       - 'infra/**'
       - 'tools/infra-*.mjs'
@@ -140,6 +140,7 @@ jobs:
     name: authorization state
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions: {}
     outputs:
       federation_configured: ${{ steps.state.outputs.federation_configured }}
       provider_configured: ${{ steps.state.outputs.provider_configured }}
@@ -203,7 +204,7 @@ jobs:
       needs.authorization.outputs.federation_configured == 'true' &&
       needs.authorization.outputs.provider_configured == 'true' &&
       github.event_name == 'push' &&
-      github.ref == 'refs/heads/v2'
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     permissions:
@@ -312,6 +313,7 @@ jobs:
     if: >-
       needs.authorization.outputs.federation_configured == 'true' &&
       needs.authorization.outputs.provider_configured == 'true' &&
+      github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' ||
        (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'plan'))
     runs-on: ubuntu-latest
@@ -373,7 +375,7 @@ jobs:
             --repo "${{ github.repository }}" \
             --signer-workflow "${{ github.repository }}/.github/workflows/delivery.yml" \
             --source-digest "$SOURCE_COMMIT" \
-            --source-ref refs/heads/v2 \
+            --source-ref refs/heads/main \
             --deny-self-hosted-runners \
             --predicate-type https://slsa.dev/provenance/v1
 
@@ -381,6 +383,7 @@ jobs:
         working-directory: infra/stacks/${{ matrix.stack }}
         env:
           STATE_BUCKET_PREFIX: ${{ vars.GCP_STATE_BUCKET_PREFIX }}
+          STACK: ${{ matrix.stack }}
         run: |
           set -euo pipefail
           tofu init -input=false \
@@ -403,10 +406,12 @@ jobs:
               text = text.replace(address, '<budget-alert-address>')
           path.write_text(text)
           PY
-          echo '### Plan for `${{ matrix.stack }}`' >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          tail -c 60000 plan.txt >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### Plan for \`$STACK\`"
+            echo '```'
+            tail -c 60000 plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Remove plan artifacts
         if: always()
@@ -422,13 +427,13 @@ jobs:
     if: >-
       needs.authorization.outputs.federation_configured == 'true' &&
       needs.authorization.outputs.provider_configured == 'true' &&
+      github.ref == 'refs/heads/main' &&
       github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: read
       id-token: write
-      issues: write
     strategy:
       fail-fast: false
       matrix:
@@ -458,15 +463,17 @@ jobs:
         working-directory: infra/stacks/${{ matrix.stack }}
         env:
           STATE_BUCKET_PREFIX: ${{ vars.GCP_STATE_BUCKET_PREFIX }}
+          STACK: ${{ matrix.stack }}
         run: |
           set -euo pipefail
           tofu init -input=false \
-            -backend-config="bucket=${STATE_BUCKET_PREFIX}-${{ matrix.stack }}" \
-            -backend-config="prefix=stacks/${{ matrix.stack }}"
-          if [[ '${{ matrix.stack }}' != 'platform' ]]; then
-            export TF_VAR_image_digest="$(tofu output -raw deployed_digest)"
-            export TF_VAR_artifact_version="$(tofu output -raw artifact_version)"
-            export TF_VAR_source_commit="$(tofu output -raw source_commit)"
+            -backend-config="bucket=${STATE_BUCKET_PREFIX}-${STACK}" \
+            -backend-config="prefix=stacks/${STACK}"
+          if [[ "$STACK" != 'platform' ]]; then
+            TF_VAR_image_digest="$(tofu output -raw deployed_digest)"
+            TF_VAR_artifact_version="$(tofu output -raw artifact_version)"
+            TF_VAR_source_commit="$(tofu output -raw source_commit)"
+            export TF_VAR_image_digest TF_VAR_artifact_version TF_VAR_source_commit
             revision_suffix="$(tofu output -raw configured_revision_suffix 2>/dev/null || true)"
             [[ -z "$revision_suffix" ]] || export TF_VAR_revision_suffix="$revision_suffix"
           fi
@@ -486,11 +493,11 @@ jobs:
           path.write_text(text)
           PY
           case "$status" in
-            0) echo "No drift detected in ${{ matrix.stack }}." ;;
+            0) echo "No drift detected in $STACK." ;;
             2)
-              echo '::warning::Drift detected in ${{ matrix.stack }}. It is reported, not corrected.'
+              echo "::warning::Drift detected in $STACK. It is reported, not corrected."
               {
-                echo '### Drift in `${{ matrix.stack }}`'
+                echo "### Drift in \`$STACK\`"
                 echo
                 echo 'A manual provider change is an exception that must be reconciled back into code.'
                 echo '```'
@@ -511,6 +518,7 @@ jobs:
     needs: [checks, authorization]
     if: >-
       github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
       github.event.inputs.action == 'apply' &&
       github.event.inputs.confirmation == 'APPLY-TO-PRODUCTION' &&
       needs.authorization.outputs.federation_configured == 'true' &&
@@ -580,7 +588,7 @@ jobs:
             --repo "${{ github.repository }}" \
             --signer-workflow "${{ github.repository }}/.github/workflows/delivery.yml" \
             --source-digest "${{ github.event.inputs.source_commit }}" \
-            --source-ref refs/heads/v2 \
+            --source-ref refs/heads/main \
             --deny-self-hosted-runners \
             --predicate-type https://slsa.dev/provenance/v1
 
@@ -636,6 +644,7 @@ jobs:
     needs: authorization
     if: >-
       github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
       github.event.inputs.action == 'rollback' &&
       github.event.inputs.rollback_revision != '' &&
       github.event.inputs.stack != 'platform' &&
@@ -696,7 +705,7 @@ jobs:
             --repo "${{ github.repository }}" \
             --signer-workflow "${{ github.repository }}/.github/workflows/delivery.yml" \
             --source-digest "$source_commit" \
-            --source-ref refs/heads/v2 \
+            --source-ref refs/heads/main \
             --deny-self-hosted-runners \
             --predicate-type https://slsa.dev/provenance/v1
           {

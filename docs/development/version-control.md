@@ -1,15 +1,15 @@
-# Version control and release strategy
+# Version control, publication, and release strategy
 
-## Preserved state
+## Current source and preserved history
 
-- `archive/v1-final` is the immutable annotated tag for final v1 `main` before the rebuild, commit `4b71b61894622b1c01f3552f9c7af5592cb2800a`. Never move/delete it.
-- `release/v1` is the maintainable v1 line. Only explicitly requested critical fixes merge to it; never merge v2 work into it.
-- `main` remains v1 production until cutover, then becomes the protected production trunk whose merges deploy.
-- `v2` is the temporary integration branch rooted at the reset. Do not merge later v1 work into it merely to align history.
+- `main` is the sole integration and delivery branch in `phairow/money-noodle`. It contains one root commit, `e312a6fdd5034933e595b14843dd30c300c010de`, with tree `94f6a37695412f9c4b0397711567c238a9cf71e1`.
+- `phairow/money-noodle-private-archive` preserves the private development and prior-generation history. It is historical evidence, not an integration remote or a source of current authority. Never publish it, merge its historical branches into this repository, or recreate removed refs here.
+- The source repository is intentionally becoming public under the committed MIT license. Publication exposes the snapshot permanently to copying and forking; it is a deliberate source-distribution decision, not a temporary workaround for Actions or branch-protection pricing.
+- The source repository is still private and GitHub Actions are disabled while the main/public control migration is reviewed. No visibility, Actions, protection, or provider change is authorized by a repository commit alone.
 
-## Working branches
+## Protected trunk and working branches
 
-Create one short-lived branch from the current integration target (`v2` before cutover, `main` afterward) using `<type>/<short-kebab-description>`:
+Create one short-lived branch from current `main` using `<type>/<short-kebab-description>`:
 
 - `arch/` architecture and ADRs;
 - `feat/` product behavior;
@@ -19,12 +19,27 @@ Create one short-lived branch from the current integration target (`v2` before c
 - `chore/` tooling/maintenance;
 - `spike/` disposable uncertainty reduction.
 
-The current foundation branch is `arch/v2-foundation`. Keep work single-purpose and commits reviewable with imperative subjects. Incorporate the latest target before merge. Do not commit directly to `main`, `v2`, or `release/v1`; merge only after review and required checks.
+Keep work single-purpose and commits reviewable with imperative subjects. Incorporate current `main` before integration. Do not commit directly to `main`; merge only after review and required checks. Protect `main` with required review and checks, no direct push or history rewriting, and the deployment controls in [`../operations/delivery.md`](../operations/delivery.md).
 
-## Tags and cutover
+`main` is also the only ref eligible for delivery federation, artifact provenance, and production operations. Deleted migration branches, tags, pull-request refs, forks, other workflows, and sibling repositories must not obtain provider authority.
 
-Use immutable annotated Semantic Versioning tags (`vMAJOR.MINOR.PATCH`) for accepted v2 releases. Do not invent retroactive v1 semver; its archive tag is stable. Tags supplement commit/deployment records and never move.
+## Controlled publication and Actions sequence
 
-Before cutover, configure and validate production CD and branch protection. Freeze incompatible writes; verify archive refs; run the complete v2 validation plan; merge v2 to `main` without rewriting history. Merge approval authorizes automated deployment. Verify the resulting tree, deployment, migrations, health, and smoke checks, then tag `v2.0.0`. Keep v1 archive/maintenance refs and remove `v2` only after verification.
+The maintainer performs these repository-hosting operations separately from code integration. Keep Actions disabled and allow no intervening merge while the controls are changing.
 
-Rollback through deployment automation to a known artifact/tag, never by moving tags or force-pushing shared history. Do not push, merge, release-tag, alter protected refs, or trigger deployment unless requested. When requested, confirm remote CI/CD rather than assuming local success.
+1. Integrate and locally validate the reviewed main/public migration while the source repository remains private and Actions remain disabled.
+2. Change only the source repository visibility to public, recognizing that this makes the squashed snapshot externally copyable. Keep the private archive private.
+3. Configure and inspect `main` protection: one required reviewer, required CI checks after their names exist, no direct push, no force push, and no deletion. Do not treat committed workflow YAML as evidence of host-side protection.
+4. Re-enable Actions with the repository's restricted default permissions. Run CI manually on `main`. Its prerequisite step fails unless reachable commit and root-snapshot path counts are both nonzero. CI downloads the exact official Gitleaks 8.24.3 Linux x64 archive, verifies its independently checked release SHA-256 before execution, and explicitly scans `--all` reachable history on every push, pull request, and manual run. The scanner log is withheld and parsed mechanically; accept the hosted baseline only when it reports nonzero commits and bytes scanned with no finding. The same manual run executes OpenTofu 1.12.6 format, validation, and mocked-provider tests without an OIDC token or provider credential. Record that run and result before accepting ordinary pull requests.
+5. Verify required check names and attach them to `main` protection. Re-run a pull request through the protected path before treating merges as authorized.
+6. Leave every Google Cloud repository variable and apply authorization unset. Provider delivery stays skipped until the separately reviewed bootstrap and remote-validation work supplies and verifies them.
+
+Public pull requests and forks are untrusted. They receive read-only CI without provider credentials; do not use `pull_request_target` to execute contributor-controlled source. Pinned third-party actions, least-privilege job permissions, dependency/container scans, and the full-history manual secret baseline are publication controls, not proof that public code is safe to deploy.
+
+## Tags and releases
+
+Use immutable annotated Semantic Versioning tags (`vMAJOR.MINOR.PATCH`) for accepted platform releases. The first accepted generation release may be `v2.0.0`; that product/API generation label does not name a branch. Tags supplement commit and deployment records and never move.
+
+A reviewed merge to protected `main` is production authorization only after delivery is configured. Verify the resulting deployment, migrations, health, smoke checks, and telemetry before tagging a release. At present no Google Cloud project resource, workload-identity federation, or remote deployment exists, so no commit or tag may be described as deployed.
+
+Rollback through delivery automation to a known digest and release record, never by moving tags or force-pushing shared history. Do not push, merge, publish, change visibility or Actions settings, release-tag, alter protected refs, invoke provider APIs, or trigger deployment unless explicitly authorized. When authorized, confirm remote CI/CD and hosting controls rather than assuming local success.

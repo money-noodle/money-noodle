@@ -4,6 +4,9 @@ on:
   push:
     branches: ['**']
   pull_request:
+  # After publication and Actions enablement, this is the one-time full-snapshot
+  # baseline path. It is main-only and the secret job proves nonzero coverage.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -38,15 +41,23 @@ jobs:
         id: affected
         shell: bash
         env:
+          EVENT_NAME: ${{ github.event_name }}
           BEFORE: ${{ github.event.before }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
         run: |
-          if [[ -n "$PR_BASE" ]]; then
+          if [[ "$EVENT_NAME" == 'workflow_dispatch' ]]; then
+            # A manual run is the post-publication baseline, not an affected-only
+            # optimization. The empty tree makes every snapshot path affected,
+            # including the sole root commit.
+            base="$(git hash-object -t tree /dev/null)"
+          elif [[ -n "$PR_BASE" ]]; then
             base="$PR_BASE"
           elif [[ -n "$BEFORE" && ! "$BEFORE" =~ ^0+$ ]]; then
             base="$BEFORE"
+          elif git rev-parse HEAD^ >/dev/null 2>&1; then
+            base="HEAD^"
           else
-            base="$(git merge-base HEAD origin/v2)"
+            base="$(git hash-object -t tree /dev/null)"
           fi
           echo "base=$base" >> "$GITHUB_OUTPUT"
 
@@ -66,6 +77,38 @@ jobs:
 
       - name: Audit dependencies
         run: pnpm audit --audit-level high
+
+  infrastructure-baseline:
+    name: manual OpenTofu baseline
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: '1.12.6'
+          tofu_wrapper: false
+
+      - name: Format, validate, and test every module and stack
+        run: node tools/infra-check.mjs all
+
+      - name: Prove the manual infrastructure baseline had no provider credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]]; then
+            echo 'A credential path was present during the manual infrastructure baseline.' >&2
+            exit 1
+          fi
+          if compgen -G "$HOME/.config/gcloud/*" > /dev/null; then
+            echo 'Provider credentials were present during the manual infrastructure baseline.' >&2
+            exit 1
+          fi
+          echo 'Manual OpenTofu checks ran with no provider credential available.'
 
   containers:
     name: container ${{ matrix.project }}
@@ -124,12 +167,106 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      pull-requests: read
+    env:
+      GITLEAKS_VERSION: '8.24.3'
+      # Official v8.24.3 checksums manifest; independently matched against the
+      # downloaded Linux x64 archive before publication.
+      GITLEAKS_LINUX_X64_SHA256: '9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
-      - uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Establish the manual full-history baseline
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == 'refs/heads/main' ]] || {
+            echo 'The manual baseline must run from main.' >&2
+            exit 1
+          }
+          commit_count="$(git rev-list --count --all)"
+          snapshot_path_count="$(
+            git rev-list --max-parents=0 --all |
+              while read -r root; do
+                git diff-tree --root --no-commit-id --name-only -r "$root"
+              done |
+              sort -u |
+              awk 'NF { count += 1 } END { print count + 0 }'
+          )"
+          [[ "$commit_count" -gt 0 && "$snapshot_path_count" -gt 0 ]] || {
+            echo "Secret baseline coverage is empty: commits=$commit_count snapshot_paths=$snapshot_path_count" >&2
+            exit 1
+          }
+          {
+            echo '### Secret-scan baseline inputs'
+            echo
+            echo "- reachable commits: $commit_count"
+            echo "- root-snapshot paths: $snapshot_path_count"
+            echo '- scanner acceptance: the following step must report nonzero commits and bytes'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install checksum-verified Gitleaks
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          archive="$RUNNER_TEMP/$asset"
+          curl --fail --silent --show-error --location \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${asset}" \
+            --output "$archive"
+          printf '%s  %s\n' "$GITLEAKS_LINUX_X64_SHA256" "$archive" |
+            sha256sum --check --strict -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" version
+
+      - name: Scan full reachable history and require nonzero evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          scan_log="$RUNNER_TEMP/gitleaks.log"
+          report="$RUNNER_TEMP/gitleaks.sarif"
+          trap 'rm -f "$scan_log" "$report"' EXIT
+
+          set +e
+          "$RUNNER_TEMP/gitleaks" detect \
+            --source=. \
+            --redact \
+            --no-banner \
+            --exit-code=2 \
+            --report-format=sarif \
+            --report-path="$report" \
+            --log-level=info \
+            --log-opts='--all' > "$scan_log" 2>&1
+          status=$?
+          set -e
+
+          if [[ "$status" -ne 0 ]]; then
+            echo 'Secret scan failed or found a potential secret; findings are withheld from logs.' >&2
+            exit "$status"
+          fi
+
+          scanned_commits="$(
+            grep -Eo '[0-9]+ commits scanned\.' "$scan_log" |
+              tail -n 1 |
+              grep -Eo '^[0-9]+' || true
+          )"
+          scanned_bytes="$(
+            grep -Eo 'scanned ~[0-9]+ bytes' "$scan_log" |
+              tail -n 1 |
+              grep -Eo '[0-9]+' || true
+          )"
+          if [[ ! "$scanned_commits" =~ ^[1-9][0-9]*$ || ! "$scanned_bytes" =~ ^[1-9][0-9]*$ ]]; then
+            echo 'Secret scan did not prove nonzero commit and byte coverage; scanner output is withheld.' >&2
+            exit 1
+          fi
+
+          echo "Gitleaks scanned $scanned_commits commits and $scanned_bytes bytes; no leaks found."
+          {
+            echo '### Secret-scan evidence'
+            echo
+            echo "- commits scanned: $scanned_commits"
+            echo "- bytes scanned: $scanned_bytes"
+            echo '- findings: none'
+          } >> "$GITHUB_STEP_SUMMARY"

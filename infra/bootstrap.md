@@ -148,10 +148,13 @@ If one exists, something has gone wrong.
 These are negative tests, and they matter more than a successful deploy. A test
 proving the pipeline *can* deploy proves nothing about who else can.
 
-1. A workflow run on a branch other than `v2` fails to obtain credentials.
-2. A pull request run, including one from a fork, fails to obtain credentials.
+1. A workflow run on any branch other than protected `main` fails to obtain credentials; explicitly prove the deleted `v2` ref and a second added ref are rejected as configuration inputs.
+2. A pull request run, including one from a public fork, fails to obtain credentials.
 3. A different workflow in this repository fails to obtain credentials.
-4. `gh api /repos/phairow/money-noodle/actions/secrets` lists no provider key.
+4. An event outside `push`, `workflow_dispatch`, and `schedule` fails to obtain credentials.
+5. `gh api /repos/phairow/money-noodle/actions/secrets` lists no provider key.
+
+Then prove the one scheduled exception: `schedule` authenticates only for protected `main` and the exact `.github/workflows/delivery.yml` job workflow reference, allowing its read-only drift plan. The scheduled job receives no apply path and no issue-write permission.
 
 Then verify the `production` GitHub environment actually has a required-reviewer
 rule; naming an environment in YAML does not create that rule:
@@ -203,7 +206,7 @@ Record the date, what was restored, and how it was verified.
 - It does not create a secret **value**. The secret store is declared empty; the
   first slice needs no operational secret.
 - It does not grant the deployer owner, editor, or any secret-reading role.
-- It does not enable any funded authority, because none exists in v2.
+- It does not enable any funded authority, because none exists in the current platform.
 
 ## Reconciliation
 

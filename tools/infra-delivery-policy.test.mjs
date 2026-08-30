@@ -76,6 +76,10 @@ test('no job grants provider authority to a pull request', () => {
       condition.includes("federation_configured == 'true'"),
       `job "${job.name}" must be gated on federation being configured, so an unconfigured repository reaches no provider`,
     );
+    assert.ok(
+      condition.includes("github.ref == 'refs/heads/main'"),
+      `job "${job.name}" must be gated on protected main; no other ref may reach a provider`,
+    );
   }
 });
 
@@ -93,6 +97,11 @@ test('an unconfigured repository cannot reach a provider at all', () => {
   assert.ok(
     !/secrets\./.test(authorization.body),
     'authorization state must not depend on a secret; federation identifiers are non-secret by construction',
+  );
+  assert.match(
+    authorization.body,
+    /permissions:\s*\{\}/,
+    'the authorization job reads only repository variables and must receive no token permissions',
   );
 });
 
@@ -201,6 +210,11 @@ test('service plans are explicit and bind the digest to its attested source comm
     plan.body,
     /--signer-workflow/,
     'service plan must constrain the workflow that signed provenance',
+  );
+  assert.match(
+    plan.body,
+    /--source-ref refs\/heads\/main/,
+    'service plan must accept provenance only from protected main',
   );
 });
 
@@ -314,6 +328,20 @@ test('drift is reported and never silently corrected', () => {
     !/tofu apply/.test(drift.body),
     'the drift job must not apply. A difference between reviewed desired state and observed reality is information the maintainer must see.',
   );
+  assert.match(
+    drift.body,
+    /github\.event_name == 'schedule'/,
+    'drift authority must be limited to the scheduled event',
+  );
+  assert.match(
+    drift.body,
+    /github\.ref == 'refs\/heads\/main'/,
+    'scheduled drift must remain limited to the exact main workflow ref',
+  );
+  assert.ok(
+    !/issues:\s*write/.test(drift.body),
+    'drift does not write issues and must not receive that permission',
+  );
 });
 
 test('no provider credential is stored as a GitHub secret', () => {
@@ -349,30 +377,190 @@ test('the workflow installs the OpenTofu version the repository pins', () => {
   );
 });
 
-test('the delivery workflow does not weaken or replace the existing CI gate', () => {
+test('the manual CI baseline covers applications and no-provider OpenTofu checks', () => {
   const ciPath = join(workflowDirectory, 'ci.yml');
   assert.ok(existsSync(ciPath), 'ci.yml must still exist');
 
   const ci = read(ciPath);
   for (const gate of [
     'pnpm audit --audit-level high',
-    'gitleaks/gitleaks-action',
     'aquasecurity/trivy-action',
     'pnpm nx affected -t lint,typecheck,test,contract,build',
   ]) {
     assert.ok(ci.includes(gate), `ci.yml no longer runs its \`${gate}\` gate`);
   }
-  const secretJob = ci.match(/\n  secrets:\n([\s\S]*?)(?=\n  [a-z][a-z0-9-]*:\n|$)/)?.[1];
-  assert.ok(secretJob, 'ci.yml must retain the secret-scan job');
+  for (const baselineControl of [
+    'workflow_dispatch:',
+    "GITHUB_REF\" == 'refs/heads/main'",
+    'git rev-list --count --all',
+    'snapshot_path_count=',
+    'git hash-object -t tree /dev/null',
+  ]) {
+    assert.ok(
+      ci.includes(baselineControl),
+      `ci.yml manual baseline no longer proves \`${baselineControl}\``,
+    );
+  }
+  assert.equal(
+    JSON.parse(read(join(repoRoot, 'nx.json'))).defaultBase,
+    'main',
+    'Nx affected calculations must default to sole integration branch main',
+  );
   assert.match(
-    secretJob,
-    /pull-requests:\s*read/,
-    'gitleaks must be able to list pull-request commits; without read permission it exits 403 before scanning',
+    read(join(repoRoot, 'tools', 'check-openapi-compatibility.mjs')),
+    /'origin\/main'/,
+    'OpenAPI compatibility must default to origin/main',
+  );
+
+  const infraBaseline = ci.match(
+    /\n  infrastructure-baseline:\n([\s\S]*?)(?=\n  [a-z][a-z0-9-]*:\n|$)/,
+  )?.[1];
+  assert.ok(infraBaseline, 'manual CI must define an OpenTofu-native infrastructure baseline');
+  assert.match(
+    infraBaseline,
+    /if: github\.event_name == 'workflow_dispatch' && github\.ref == 'refs\/heads\/main'/,
+    'OpenTofu installation is reserved for the manual baseline on main',
+  );
+  assert.match(
+    infraBaseline,
+    /opentofu\/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4/,
+    'manual infrastructure checks must use the reviewed pinned OpenTofu setup action',
+  );
+  assert.match(
+    infraBaseline,
+    /tofu_version:\s*'1\.12\.6'/,
+    'manual infrastructure checks must use repository-pinned OpenTofu 1.12.6',
+  );
+  assert.match(
+    infraBaseline,
+    /node tools\/infra-check\.mjs all/,
+    'manual infrastructure checks must run fmt, validate, and every mocked-provider test',
+  );
+  assert.match(
+    infraBaseline,
+    /GOOGLE_APPLICATION_CREDENTIALS/,
+    'manual infrastructure checks must prove no provider credential was present',
   );
   assert.ok(
-    !/pull-requests:\s*write/.test(secretJob),
-    'the secret scanner reads PR commits and never needs pull-request write authority',
+    !/id-token:\s*write/.test(infraBaseline),
+    'the no-provider infrastructure baseline must not receive an OIDC token',
   );
+});
+
+test('secret scanning is checksum-pinned, full-history, nonzero, and least-privilege', () => {
+  const ci = read(join(workflowDirectory, 'ci.yml'));
+  const secretJob = ci.match(/\n  secrets:\n([\s\S]*?)(?=\n  [a-z][a-z0-9-]*:\n|$)/)?.[1];
+  assert.ok(secretJob, 'ci.yml must retain the secret-scan job');
+
+  assert.ok(
+    !ci.includes('gitleaks/gitleaks-action'),
+    'the annotated-tag wrapper action must not return; CI installs the reviewed binary directly',
+  );
+  assert.match(secretJob, /GITLEAKS_VERSION:\s*'8\.24\.3'/, 'Gitleaks must be exact');
+  assert.match(
+    secretJob,
+    /GITLEAKS_LINUX_X64_SHA256:\s*'9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c'/,
+    'the Linux x64 release asset must carry its independently verified official checksum',
+  );
+  assert.match(
+    secretJob,
+    /gitleaks_\$\{GITLEAKS_VERSION\}_linux_x64\.tar\.gz/,
+    'CI must download only the reviewed Linux x64 release asset',
+  );
+  assert.match(
+    secretJob,
+    /sha256sum --check --strict/,
+    'the release archive checksum must be verified before extraction and execution',
+  );
+  assert.ok(
+    secretJob.indexOf('sha256sum --check --strict') <
+      secretJob.indexOf('"$RUNNER_TEMP/gitleaks" version'),
+    'checksum verification must precede binary execution',
+  );
+  for (const control of [
+    'fetch-depth: 0',
+    "--log-opts='--all'",
+    '--redact',
+    "grep -Eo '[0-9]+ commits scanned\\.'",
+    "grep -Eo 'scanned ~[0-9]+ bytes'",
+    '^[1-9][0-9]*$',
+    'findings are withheld from logs',
+  ]) {
+    assert.ok(secretJob.includes(control), `secret scanning no longer enforces \`${control}\``);
+  }
+  assert.match(
+    secretJob,
+    /permissions:\n\s+contents: read/,
+    'secret scanning needs only read access to repository contents',
+  );
+  assert.ok(
+    !/pull-requests:\s*(?:read|write)/.test(secretJob),
+    'the direct scanner does not call the pull-request API and must not receive that permission',
+  );
+  assert.ok(
+    !/secrets\.|GITHUB_TOKEN/.test(secretJob),
+    'secret scanning must not receive a repository or provider secret',
+  );
+});
+
+test('every federation composition boundary enforces exact main, workflow, and event sets', () => {
+  const boundaries = [
+    'infra/modules/delivery-trust/variables.tf',
+    'infra/modules/workload-identity-federation/variables.tf',
+    'infra/stacks/bootstrap/variables.tf',
+  ];
+  for (const relativePath of boundaries) {
+    const source = read(join(repoRoot, relativePath));
+    assert.match(
+      source,
+      /length\(var\.allowed_refs\) == 1 && one\(var\.allowed_refs\) == "refs\/heads\/main"/,
+      `${relativePath} must reject every ref allowlist except exactly main`,
+    );
+    const workflowVariable = source.match(
+      /variable "allowed_workflow_paths" \{([\s\S]*?)\n\}/,
+    )?.[1];
+    assert.ok(workflowVariable, `${relativePath} must declare allowed_workflow_paths`);
+    assert.match(
+      workflowVariable,
+      /validation \{[\s\S]*?length\(var\.allowed_workflow_paths\) == 1 &&\s*one\(var\.allowed_workflow_paths\) == "\.github\/workflows\/delivery\.yml"/,
+      `${relativePath} must validate every workflow allowlist as exactly the delivery workflow`,
+    );
+    for (const eventName of ['push', 'workflow_dispatch', 'schedule']) {
+      assert.ok(
+        source.includes(`"${eventName}"`),
+        `${relativePath} must include ${eventName} in the closed event set`,
+      );
+    }
+    assert.match(
+      source,
+      /length\(var\.allowed_event_names\) == 3/,
+      `${relativePath} must reject additional federation events`,
+    );
+  }
+
+  for (const testPath of [
+    'infra/modules/delivery-trust/tests/trust_policy.tftest.hcl',
+    'infra/modules/workload-identity-federation/tests/federation.tftest.hcl',
+    'infra/stacks/bootstrap/tests/bootstrap.tftest.hcl',
+  ]) {
+    const source = read(join(repoRoot, testPath));
+    assert.match(source, /allowed_refs = \["refs\/heads\/v2"\]/, `${testPath} must reject v2`);
+    assert.match(
+      source,
+      /allowed_refs = \["refs\/heads\/main", "refs\/heads\/release"\]/,
+      `${testPath} must reject an additional ref`,
+    );
+    assert.match(
+      source,
+      /allowed_workflow_paths = \["\.github\/workflows\/ci\.yml"\]/,
+      `${testPath} must reject another workflow`,
+    );
+    assert.match(
+      source,
+      /allowed_workflow_paths = \["\.github\/workflows\/delivery\.yml", "\.github\/workflows\/ci\.yml"\]/,
+      `${testPath} must reject an additional workflow`,
+    );
+  }
 });
 
 test('the workflow authorised for delivery is the one that exists', () => {
@@ -393,5 +581,28 @@ test('the workflow authorised for delivery is the one that exists', () => {
     authorised,
     '.github/workflows/delivery.yml',
     'the authorised delivery workflow must be the delivery workflow',
+  );
+  assert.match(
+    bootstrap,
+    /allowed_refs"[\s\S]*?default\s*=\s*\["refs\/heads\/main"\]/,
+    'bootstrap must authorize protected main as the sole delivery ref',
+  );
+  assert.match(
+    delivery,
+    /push:\n\s+branches: \['main'\]/,
+    'delivery publication must trigger only from main',
+  );
+  assert.ok(
+    !delivery.includes('refs/heads/v2'),
+    'the deleted v2 branch must not remain in delivery triggers or provenance verification',
+  );
+
+  const trustTests = read(
+    join(repoRoot, 'infra', 'modules', 'delivery-trust', 'tests', 'trust_policy.tftest.hcl'),
+  );
+  assert.match(
+    trustTests,
+    /name\s*=\s*"deleted-v2-branch"[\s\S]*?ref\s*=\s*"refs\/heads\/v2"/,
+    'the trust suite must retain a negative case proving the deleted v2 branch is denied',
   );
 });

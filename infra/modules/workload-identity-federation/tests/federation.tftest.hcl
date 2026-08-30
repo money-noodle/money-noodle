@@ -15,7 +15,7 @@ variables {
   repository_name             = "example-repo"
   repository_id               = "111111111"
   repository_owner_id         = "222222222"
-  allowed_refs                = ["refs/heads/v2"]
+  allowed_refs                = ["refs/heads/main"]
   allowed_workflow_paths      = [".github/workflows/delivery.yml"]
 }
 
@@ -35,6 +35,11 @@ run "the_trust_conjunction_reaches_the_provider" {
   assert {
     condition     = strcontains(google_iam_workload_identity_pool_provider.github.attribute_condition, "assertion.job_workflow_ref in")
     error_message = "The authorised workflow set must be part of the enforced condition."
+  }
+
+  assert {
+    condition     = strcontains(google_iam_workload_identity_pool_provider.github.attribute_condition, "\"schedule\"")
+    error_message = "The exact main/exact-workflow conjunction must permit scheduled read-only drift."
   }
 }
 
@@ -74,4 +79,54 @@ run "impersonation_is_bound_to_the_exact_repository" {
     condition     = !strcontains(google_service_account_iam_member.deployer_impersonation.member, "*")
     error_message = "A wildcard principal set would let any repository in the pool impersonate the deployer."
   }
+}
+
+run "the_deleted_v2_ref_cannot_cross_the_federation_boundary" {
+  command = plan
+
+  variables {
+    allowed_refs = ["refs/heads/v2"]
+  }
+
+  expect_failures = [var.allowed_refs]
+}
+
+run "additional_refs_cannot_cross_the_federation_boundary" {
+  command = plan
+
+  variables {
+    allowed_refs = ["refs/heads/main", "refs/heads/release"]
+  }
+
+  expect_failures = [var.allowed_refs]
+}
+
+run "another_workflow_cannot_cross_the_federation_boundary" {
+  command = plan
+
+  variables {
+    allowed_workflow_paths = [".github/workflows/ci.yml"]
+  }
+
+  expect_failures = [var.allowed_workflow_paths]
+}
+
+run "additional_workflows_cannot_cross_the_federation_boundary" {
+  command = plan
+
+  variables {
+    allowed_workflow_paths = [".github/workflows/delivery.yml", ".github/workflows/ci.yml"]
+  }
+
+  expect_failures = [var.allowed_workflow_paths]
+}
+
+run "an_unauthorised_event_cannot_cross_the_federation_boundary" {
+  command = plan
+
+  variables {
+    allowed_event_names = ["push", "workflow_dispatch", "schedule", "repository_dispatch"]
+  }
+
+  expect_failures = [var.allowed_event_names]
 }

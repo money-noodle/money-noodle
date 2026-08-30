@@ -115,25 +115,42 @@ variable "repository_owner_id" {
 }
 
 variable "allowed_refs" {
-  description = <<-EOT
-    Refs authorised for delivery. `refs/heads/v2` during the rebuild. At cutover
-    this becomes protected `refs/heads/main` and `v2` is removed, which ADR-0005
-    lists as one of its revisit triggers.
-  EOT
+  description = "Refs authorised for delivery. Only protected `refs/heads/main` is permitted."
   type        = list(string)
-  default     = ["refs/heads/v2"]
+  default     = ["refs/heads/main"]
+
+  validation {
+    condition     = length(var.allowed_refs) == 1 && one(var.allowed_refs) == "refs/heads/main"
+    error_message = "Bootstrap cannot reauthorize a migration or additional branch; allowed_refs must be exactly `refs/heads/main`."
+  }
 }
 
 variable "allowed_workflow_paths" {
-  description = "Workflows authorised for delivery."
+  description = "Workflows authorised for delivery. Only `.github/workflows/delivery.yml` is permitted."
   type        = list(string)
   default     = [".github/workflows/delivery.yml"]
+
+  validation {
+    condition = (
+      length(var.allowed_workflow_paths) == 1 &&
+      one(var.allowed_workflow_paths) == ".github/workflows/delivery.yml"
+    )
+    error_message = "Bootstrap cannot authorize another or additional workflow; allowed_workflow_paths must be exactly `.github/workflows/delivery.yml`."
+  }
 }
 
 variable "allowed_event_names" {
-  description = "Events authorised for delivery. Never `pull_request`."
+  description = "Events authorised for delivery: push, workflow_dispatch, and exact-workflow scheduled drift."
   type        = list(string)
-  default     = ["push", "workflow_dispatch"]
+  default     = ["push", "workflow_dispatch", "schedule"]
+
+  validation {
+    condition = (
+      length(var.allowed_event_names) == 3 &&
+      toset(var.allowed_event_names) == toset(["push", "workflow_dispatch", "schedule"])
+    )
+    error_message = "Bootstrap delivery events must be exactly push, workflow_dispatch, and schedule."
+  }
 }
 
 variable "labels" {

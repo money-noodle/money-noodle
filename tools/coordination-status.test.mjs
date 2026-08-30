@@ -22,7 +22,7 @@ const SHIM_PATH = 'PATH=/usr/bin:/bin';
 const GIT_SHIM = `#!/bin/sh
 ${SHIM_PATH}
 case "$1" in
-  status) printf '## test/coordination-status-coverage...origin/v2\\n' ;;
+  status) printf '## test/coordination-status-coverage...origin/main\\n' ;;
   worktree) printf '/fake/worktree abc1234 [test/coordination-status-coverage]\\n' ;;
   *) printf 'unexpected git invocation: %s\\n' "$*" >&2; exit 127 ;;
 esac

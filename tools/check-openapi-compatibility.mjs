@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const contractPath = 'services/platform-api/openapi/platform-api.v1.yaml';
-const baseRef = process.env.OPENAPI_BASE_REF ?? process.env.NX_BASE ?? 'origin/v2';
+const baseRef = process.env.OPENAPI_BASE_REF ?? process.env.NX_BASE ?? 'origin/main';
 const baseline = `${baseRef}:${contractPath}`;
 const probe = spawnSync('git', ['cat-file', '-e', baseline], { encoding: 'utf8' });
 

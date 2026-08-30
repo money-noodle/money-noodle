@@ -2,6 +2,7 @@
 
 > **Status:** Accepted
 > **Date accepted:** 2026-08-29
+> **Repository controls revised:** 2026-08-30
 > **Owners:** Platform foundation; accepted by maintainer
 > **Related architecture:** [`../overview.md`](../overview.md)
 > **Evidence:** [`../../operations/deployment-composition.md`](../../operations/deployment-composition.md)
@@ -21,9 +22,11 @@ This decision was the deciding factor in [`ADR-0004`](ADR-0004-first-remote-host
 
 GitHub Actions obtains provider credentials by presenting its per-job OIDC token to a workload identity pool and exchanging it for a short-lived access token. **No provider access key, secret key, service account key file, or equivalent long-lived credential is stored in GitHub, in the repository, in an image, or on a developer machine.**
 
-The identity pool's trust condition is constrained to this repository, and further to the specific ref or environment authorized to deploy. During the rebuild, only the selected `v2` delivery workflow may obtain first-slice deployment authority. At cutover, authority moves to protected `main`; `v2` loses it. A token minted for a fork, a pull request from an untrusted source, another workflow, or another repository must not be exchangeable for deployment authority.
+The identity pool's trust condition is constrained to this repository and to protected `main`, the sole integration and delivery ref. Every Money Noodle configuration boundary rejects a ref allowlist other than exactly `refs/heads/main`; a stack input cannot reauthorize a deleted or additional branch. A token minted for a deleted migration branch, a tag, a fork, a pull request from an untrusted source, another workflow, or another repository must not be exchangeable for deployment authority.
 
-The repository remains private on its current GitHub plan during the first remote validation. Making it public would technically unlock free branch protection and hosted Actions, but is not selected as a tooling workaround because publication makes source and history externally copyable. Branch protection is mandatory before `v2` reaches production `main`; satisfy that through GitHub Pro or a separate intentional open-source decision.
+The closed event set is `push`, `workflow_dispatch`, and `schedule`. Schedule is permitted only inside the same immutable-repository, exact-`main`, exact-`.github/workflows/delivery.yml` conjunction so the declared read-only drift job can authenticate. It does not authorize another scheduled workflow, ref, repository, event, or an apply.
+
+The source repository intentionally publishes one squashed root snapshot under the MIT license; `phairow/money-noodle-private-archive` retains the private development history and is never a delivery source. Publication makes the snapshot permanently externally copyable and forkable. This is an explicit source-distribution choice, not an incidental tooling workaround. Public pull requests remain untrusted, execute with read-only CI permissions, and never receive a provider token. Host-side protection of `main` is mandatory before ordinary merges resume; workflow text alone is not evidence that protection exists.
 
 Any composition that cannot satisfy this without a stored key must record that gap explicitly as an accepted risk, with a named compensating control — a narrowly scoped credential, a documented rotation schedule, and a revocation procedure — rather than adopting a stored key silently.
 
@@ -35,7 +38,7 @@ Any composition that cannot satisfy this without a stored key must record that g
 | **Web workload identity** | Call the API origin, export telemetry | Read the registry, read infrastructure state, read any secret, reach a database, run jobs, hold provider authority |
 | **API workload identity** | Read only the secrets it is explicitly granted, export telemetry, serve requests | Write the registry, write infrastructure state, deploy anything, read another service's secrets or future schema |
 
-Developer access is separate from all three and is least-privilege. No principal in this design holds funded authority, because none exists in v2.
+Developer access is separate from all three and is least-privilege. No principal in this design holds funded authority, because none exists in the current platform.
 
 ### Artifact trust
 
@@ -111,4 +114,4 @@ Negative tests are mandatory here. A test proving the pipeline *can* deploy prov
 - the first real operational secret is introduced, which will exercise custody for the first time;
 - identity, tenant data, or provider integrations are added, each of which adds principals;
 - funded authority is contemplated, which requires a separate and stricter authority design;
-- branch protection, deployment environments, or the deployment ref change.
+- branch protection, repository visibility, public-contribution controls, deployment environments, or the deployment ref change.
