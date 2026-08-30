@@ -47,13 +47,34 @@ one cannot lock, mutate, or break another.
 | `docker/login-action` | `v4.6.0` (`dbcb8138…`) | https://github.com/docker/login-action/tags | 2026-08-29 |
 | `actions/attest-build-provenance` | `v4.2.2` (`4d101475…`) | https://github.com/actions/attest-build-provenance/releases/latest | 2026-08-29 |
 
-### Manually managed supply-chain pin
+### Manually managed supply-chain pins
 
 The digest-pinned BuildKit Syft scanner is embedded in Nx project container
-command strings and the [delivery workflow](../.github/workflows/delivery.yml), so Dependabot
-cannot discover it. Updating it requires manual upstream version and digest
-verification, followed by the container builds, delivery policy checks, and CI
-image-vulnerability scan.
+command strings and the [delivery workflow](../.github/workflows/delivery.yml),
+so Dependabot cannot discover it. Updating it requires manual upstream version
+and digest verification, followed by the container builds, delivery policy
+checks, and CI image-vulnerability scan.
+
+GitHub-hosted Dependabot's Terraform updater uses the newer Terraform-compatible
+core `1.15.9`, which cannot satisfy this repository's deliberately exact OpenTofu
+`required_version = "1.12.6"` constraint. The repository retains exact OpenTofu
+`1.12.6`, so `.github/dependabot.yml` deliberately has no Terraform ecosystem
+entry.
+
+Updates to the `hashicorp/google` provider are therefore manual. Use the
+repository-pinned OpenTofu binary, review and update the exact provider constraint
+and committed `.terraform.lock.hcl` in every provider root, and regenerate every
+lock for both supported platforms by running this command from each root:
+
+```sh
+tofu providers lock -platform=linux_amd64 -platform=darwin_arm64
+```
+
+Then run `pnpm check`, including the full static policy suite, and
+`node tools/infra-check.mjs all`, which performs format, validation, and
+mocked-provider tests without a provider API call. Validation against an actual
+provider requires separate scoped authority and is not part of a routine
+provider update.
 
 Provider `8.0.0` was published on 2026-08-26, three days before this was written,
 and its release notes describe resource removals, field removals, and increased
@@ -61,14 +82,6 @@ validation. `7.46.0` — the last release of the mature line, published 2026-08-
 is pinned instead. This is a **deliberate deferral, not an oversight**: a
 foundation is a poor place to be the first user of a major version, and the
 upgrade is a bounded, reviewable change once 8.x has field evidence.
-
-`.terraform.lock.hcl` files are committed and carry checksums for `linux_amd64`
-and `darwin_arm64`, so CI and a developer machine resolve identical artifacts.
-Regenerate with:
-
-```sh
-tofu providers lock -platform=linux_amd64 -platform=darwin_arm64
-```
 
 ## Commands
 
