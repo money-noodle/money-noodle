@@ -9,6 +9,7 @@ updates:
       time: '05:00'
       timezone: Etc/UTC
     open-pull-requests-limit: 5
+    versioning-strategy: increase
     groups:
       production-minor-and-patch:
         dependency-type: production
@@ -63,6 +64,24 @@ updates:
     open-pull-requests-limit: 2
     groups:
       images-minor-and-patch:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: terraform
+    directories:
+      - '/infra/modules/*'
+      - '/infra/stacks/*'
+    schedule:
+      interval: weekly
+      day: friday
+      time: '05:00'
+      timezone: Etc/UTC
+    open-pull-requests-limit: 3
+    groups:
+      providers-minor-and-patch:
         patterns:
           - '*'
         update-types:
