@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const read = (path) => readFileSync(path, 'utf8');
@@ -16,6 +16,8 @@ const agents = read('AGENTS.md');
 const docsIndex = read('docs/README.md');
 const currentStatus = read('docs/current-status.md');
 const overview = read('docs/architecture/overview.md');
+const principles = read('docs/architecture/principles.md');
+const dataIdentityObservability = read('docs/architecture/data-identity-observability.md');
 const coordinationDecision = read(
   'docs/architecture/decisions/ADR-0011-agent-coordination-and-isolation-protocol.md',
 );
@@ -29,6 +31,13 @@ const adminSurfaceDecision = read(
   'docs/architecture/decisions/ADR-0009-administrative-observability-surface.md',
 );
 const datedComposition = read('docs/operations/deployment-composition.md');
+
+const decisionDirectory = 'docs/architecture/decisions';
+const decisionRecordPaths = readdirSync(decisionDirectory)
+  .filter((name) => /^ADR-\d{4}.*\.md$/.test(name))
+  .sort()
+  .map((name) => `${decisionDirectory}/${name}`);
+const decisionRecords = decisionRecordPaths.map((path) => [path, read(path)]);
 
 const currentStatusRoutes = [
   ['README.md', readme, 'docs/current-status.md'],
@@ -49,6 +58,109 @@ const currentStatusRoutes = [
 const workflowPaths = ['.github/workflows/ci.yml', '.github/workflows/delivery.yml'];
 
 const normalizePolicyText = (source) => source.replaceAll(/[`*_]/g, '').replaceAll(/[ \t]+/g, ' ');
+
+const supportedDecisionStatuses = new Set([
+  'Proposed',
+  'Working',
+  'Settled',
+  'Superseded',
+  'Retired',
+]);
+
+const parseDecisionRecordHeader = (path, source) => {
+  const headings = [...source.matchAll(/^# (ADR-\d{4}):/gm)];
+  const statuses = [...source.matchAll(/^> \*\*Status:\*\* ([^\n]+)$/gm)];
+
+  assert.equal(headings.length, 1, `${path} must contain exactly one ADR heading`);
+  assert.equal(statuses.length, 1, `${path} must contain exactly one Status header`);
+
+  const id = headings[0][1];
+  const status = statuses[0][1].trim();
+  assert.notEqual(status, 'Accepted', `${path} must not use obsolete Status: Accepted`);
+  assert.ok(
+    supportedDecisionStatuses.has(status),
+    `${path} must use a lifecycle status from the decision index`,
+  );
+
+  return { id, path, status };
+};
+
+const parseDecisionIndexStatuses = (source) => {
+  const statuses = new Map();
+  const rows = source.matchAll(/^\| \[\`(ADR-\d{4})\`\]\([^)]+\) \| ([^|]+?) \|/gm);
+
+  for (const [, id, rawStatus] of rows) {
+    assert.ok(!statuses.has(id), `decision index must contain exactly one row for ${id}`);
+    statuses.set(id, rawStatus.trim());
+  }
+
+  return statuses;
+};
+
+const assertDecisionLifecycleConsistency = (records, indexSource) => {
+  const headers = records.map(([path, source]) => parseDecisionRecordHeader(path, source));
+  const indexStatuses = parseDecisionIndexStatuses(indexSource);
+  const recordIds = headers.map(({ id }) => id).sort();
+  const indexIds = [...indexStatuses.keys()].sort();
+
+  assert.deepEqual(indexIds, recordIds, 'decision index rows must match the ADR files exactly');
+  for (const { id, path, status } of headers) {
+    assert.equal(indexStatuses.get(id), status, `${path} status must match the decision index`);
+  }
+
+  return headers;
+};
+
+const normalizeDecisionAuthorityText = (source) =>
+  normalizePolicyText(source.replaceAll(/\[([^\]]+)\]\([^)]+\)/g, '$1'));
+
+const assertNoProposedDecisionAuthority = (path, source, proposedIds) => {
+  const normalized = normalizeDecisionAuthorityText(source);
+  const lines = normalized.split('\n');
+
+  for (const id of proposedIds) {
+    const escapedId = id.replaceAll('-', '\\-');
+    const authorityPatterns = [
+      new RegExp(
+        String.raw`\b(?:see|per|under|as (?:required|decided|established) by)\s+(?:the\s+)?(?:proposed\s+)?${escapedId}\b`,
+        'i',
+      ),
+      new RegExp(
+        String.raw`\b${escapedId}\b[^.!?\n]{0,120}\b(?:requires|mandates|authorizes|establishes|decides|supersedes)\b`,
+        'i',
+      ),
+      new RegExp(
+        String.raw`\b(?:implements?|follows?|is governed|required|mandated|authorized)\b[^.!?\n]{0,120}\b${escapedId}\b`,
+        'i',
+      ),
+      new RegExp(
+        String.raw`\b${escapedId}\b[^.!?\n]{0,120}\b(?:is|remains)\s+(?:accepted|authoritative|current authority)\b`,
+        'i',
+      ),
+    ];
+
+    for (const pattern of authorityPatterns) {
+      assert.doesNotMatch(
+        normalized,
+        pattern,
+        `${path} must not treat Proposed ${id} as current authority`,
+      );
+    }
+
+    for (const line of lines.filter((candidate) => candidate.includes(id))) {
+      const startsWithDirection =
+        /^\s*(?:[-*]\s*)?(?:use|store|deploy|create|run|implement|require)\b/i.test(line);
+      const preservesProposalCondition = new RegExp(
+        String.raw`\b${escapedId}\b[^;\n]{0,120}\bseparately accepted\b[^;\n]{0,80}\bWorking\b`,
+        'i',
+      ).test(line);
+      assert.ok(
+        !startsWithDirection || preservesProposalCondition,
+        `${path} must not direct implementation from Proposed ${id}`,
+      );
+    }
+  }
+};
 
 const delegatedAuthoritySubject = String.raw`\b(?:(?:an?|the)\s+)?(?:agents?|workload identit(?:y|ies)|automation)\b`;
 const integrationExceptionAction =
@@ -458,6 +570,116 @@ test('current production truth requires distinct approval and remains mechanical
   assert.match(currentStatus, /mechanically blocked/);
   assert.match(currentStatus, /repository provider\/apply variable or secret/);
   assert.match(currentStatus, /aquasecurity\/setup-trivy/);
+});
+
+test('ADR headers use lifecycle statuses and match every decision-index row', () => {
+  const headers = assertDecisionLifecycleConsistency(decisionRecords, decisionIndex);
+  const statuses = new Map(headers.map(({ id, status }) => [id, status]));
+
+  for (let number = 1; number <= 7; number += 1) {
+    const id = `ADR-${String(number).padStart(4, '0')}`;
+    assert.equal(statuses.get(id), 'Working', `${id} must be Working`);
+  }
+  assert.equal(statuses.get('ADR-0008'), 'Proposed');
+  assert.equal(statuses.get('ADR-0009'), 'Proposed');
+
+  const acceptedMutation = decisionRecords.map(([path, source]) => [
+    path,
+    path.endsWith('ADR-0008-single-object-store.md')
+      ? source.replace('> **Status:** Proposed', '> **Status:** Accepted')
+      : source,
+  ]);
+  assert.throws(
+    () => assertDecisionLifecycleConsistency(acceptedMutation, decisionIndex),
+    /must not use obsolete Status: Accepted/,
+  );
+
+  const indexMismatch = decisionIndex.replace(
+    '| [`ADR-0008`](ADR-0008-single-object-store.md) | Proposed |',
+    '| [`ADR-0008`](ADR-0008-single-object-store.md) | Working |',
+  );
+  assert.notEqual(indexMismatch, decisionIndex, 'the index mismatch mutation must apply');
+  assert.throws(
+    () => assertDecisionLifecycleConsistency(decisionRecords, indexMismatch),
+    /ADR-0008-single-object-store\.md status must match the decision index/,
+  );
+});
+
+test('Proposed ADRs remain isolated from current architecture authority', () => {
+  const headers = assertDecisionLifecycleConsistency(decisionRecords, decisionIndex);
+  const proposedIds = headers.filter(({ status }) => status === 'Proposed').map(({ id }) => id);
+  const currentArchitectureSources = [
+    ['docs/architecture/data-identity-observability.md', dataIdentityObservability],
+    ['docs/architecture/principles.md', principles],
+    ['docs/architecture/overview.md', overview],
+  ];
+
+  for (const [path, source] of currentArchitectureSources) {
+    assertNoProposedDecisionAuthority(path, source, proposedIds);
+  }
+
+  const historicalDirection = dataIdentityObservability.match(
+    /^### Accepted historical and analytical direction$([\s\S]*?)^Open decisions include/m,
+  );
+  assert.ok(historicalDirection, 'the accepted historical direction must remain explicit');
+  assert.match(historicalDirection[1], /Use Scaleway's S3-compatible object storage/);
+  assert.match(historicalDirection[1], /accepted direction remains current/);
+  assert.match(historicalDirection[1], /ADR-0008[\s\S]*separately accepted and becomes Working/);
+  assert.doesNotMatch(historicalDirection[1], /^- Use Google Cloud Storage/m);
+
+  for (const proposedSpendRequirement of [
+    /month-to-date and forecast operating spend/i,
+    /operating-cost-ceiling proximity/i,
+    /free-tier\/quota headroom/i,
+  ]) {
+    assert.doesNotMatch(
+      principles,
+      proposedSpendRequirement,
+      'accepted principles must not contain ADR-0009 spend-surface requirements',
+    );
+  }
+
+  const proposedOverview = overview.match(
+    /^### Proposal only: administrative observability \(not current architecture\)$([\s\S]*?)^## Source and deployment map$/m,
+  );
+  assert.ok(proposedOverview, 'overview must isolate the proposal-only diagram');
+  assert.match(
+    proposedOverview[1],
+    /excluded from current architecture and the source\/deployment map/i,
+  );
+  assert.match(proposedOverview[1], /Neither record, its scope,[\s\S]*is accepted or implemented/);
+  for (const node of ['topic', 'job', 'readModel', 'adminView']) {
+    assert.match(
+      proposedOverview[1],
+      new RegExp(`^\\s*${node}\\["PROPOSED ONLY`, 'm'),
+      `${node} must be labeled proposal-only`,
+    );
+  }
+  const proposedEdges = proposedOverview[1].split('\n').filter((line) => line.includes('-.'));
+  assert.equal(proposedEdges.length, 7, 'the proposal diagram must retain seven proposed flows');
+  for (const edge of proposedEdges) {
+    assert.match(edge, /PROPOSED FLOW/, `proposed edge must be labeled: ${edge.trim()}`);
+  }
+  assert.match(
+    overview,
+    /No row below is proposed\.[\s\S]{0,220}proposal-only subsection above[\s\S]{0,160}outside this map/i,
+  );
+
+  for (const [path, mutation] of [
+    [
+      'accepted-storage mutation',
+      '- Use Google Cloud Storage for historical data. See proposed ADR-0008.',
+    ],
+    ['supersession mutation', 'ADR-0008 supersedes the current Scaleway direction.'],
+    ['admin-requirement mutation', 'ADR-0009 requires an administrative spend surface.'],
+    ['implementation mutation', 'Implement the ingestion job under ADR-0009.'],
+  ]) {
+    assert.throws(
+      () => assertNoProposedDecisionAuthority(path, mutation, proposedIds),
+      /must not (?:treat|direct implementation from) Proposed ADR-000[89]/,
+      mutation,
+    );
+  }
 });
 
 test('workflow and decision lifecycle each have one authority and proposed records are trimmed', () => {

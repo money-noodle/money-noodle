@@ -1,6 +1,6 @@
 # ADR-0001: Separate web and platform API deployments
 
-> **Status:** Accepted
+> **Status:** Working
 > **Date accepted:** 2026-08-29
 > **Owners:** Maintainer / platform foundation
 > **Related architecture:** [`../overview.md`](../overview.md)

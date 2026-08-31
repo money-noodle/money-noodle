@@ -1,5 +1,7 @@
 # ADR-0009: Administrative infrastructure, deployment, and cost observability
 
+> **Proposal only — not current authority.** No administrative ingestion job, spend read model, fourth principal, provider integration, API operation, or web surface is accepted by this record. The current first-slice exclusion of jobs remains in force. This proposal cannot guide implementation unless the maintainer separately accepts it and changes its status to Working; its Proposed ADR-0008 dependency would also need separate acceptance.
+
 > **Status:** Proposed
 > **Date proposed:** 2026-08-30
 > **Owners:** Platform foundation; proposed for maintainer acceptance
@@ -15,9 +17,11 @@ The infrastructure side is further along than the platform side, which is the ac
 
 The cost evidence that exists is an estimate, not a measurement. `deployment-composition.md` records dated published prices and free-tier limits with sources, but its largest unresolved items — U1's unverified warm-window billing and U4's unread egress rate, over U7's complete absence of a real image — mean no figure in it has been confirmed against a bill. [`ADR-0007`](ADR-0007-first-telemetry-backend.md) accepted the provider's native telemetry backend precisely because it is the cheapest choice to reverse, and named telemetry as the composition element most likely to become an unbudgeted recurring cost. A surface that shows measured spend is the instrument that makes that reversibility decidable.
 
-This record crosses an accepted exclusion, and that must be visible rather than smoothed over. `overview.md` records maintainer decision 11 as the "exclusion of identity, PostgreSQL/schema work, jobs, simulation, and funded authority from the first slice", and the ingestion unit decided here is a job. The maintainer has accepted this scope, so the exclusion is deliberately extended rather than quietly reinterpreted; the sequencing that keeps that extension honest is decided below. This record decides only. It creates no project, no provider resource, no credential, and no billing relationship, and implementation is separately scoped.
+This proposal would cross an accepted exclusion, and that must be visible rather than smoothed over. `overview.md` records maintainer decision 11 as the "exclusion of identity, PostgreSQL/schema work, jobs, simulation, and funded authority from the first slice", and the ingestion unit proposed here would be a job. The maintainer has **not** accepted this scope, so the exclusion remains current and unchanged. If separately accepted, this record would decide architecture only: it would still create no project, provider resource, credential, or billing relationship, and implementation would remain separately scoped.
 
 ## Decision
+
+Everything in this section is a proposed decision, not a current requirement. It would take effect only after separate maintainer acceptance and a status change to Working.
 
 ### Ingestion boundary
 
@@ -25,7 +29,7 @@ Reading provider cost, deployment, and service state is **provider integration**
 
 The platform API **never calls a provider billing, deployment, or infrastructure API inline on a request path**, and no provider credential exists on a request path or in a browser. The API's dependency is the read model, not the provider.
 
-This unit is the first inhabitant of `jobs/`, which `principles.md` declares as the home of scheduled, event-driven, and batch workloads but which does not yet exist on disk. It carries its own least-privilege reader identity — a **fourth principal**, added to the deployer, web, and API principals separated in [`ADR-0005`](ADR-0005-delivery-trust-and-secret-custody.md), and mechanically distinct from all three. It reads provider cost and deployment state and exports telemetry; it may not deploy, write infrastructure state, push or read the registry, serve requests, or hold any billing administration or payment authority. That distinction is not cosmetic: `infra/README.md` records that the deployer holds `roles/billing.costsManager` on exactly the selected billing account because project IAM cannot create a billing-account budget, and that it grants no billing administration or payment authority. A reader identity is therefore genuinely new work rather than a reuse of an existing grant. Provisioning it is implementation; deciding that it must be separate and least-privilege is this record.
+This unit is the first inhabitant of `jobs/`, which `principles.md` declares as the home of scheduled, event-driven, and batch workloads but which does not yet exist on disk. It carries its own least-privilege reader identity — a **fourth principal**, added to the deployer, web, and API principals separated in [`ADR-0005`](ADR-0005-delivery-trust-and-secret-custody.md), and mechanically distinct from all three. It reads provider cost and deployment state and exports telemetry; it may not deploy, write infrastructure state, push or read the registry, serve requests, or hold any billing administration or payment authority. That distinction is not cosmetic: `infra/README.md` records that the deployer holds `roles/billing.costsManager` on exactly the selected billing account because project IAM cannot create a billing-account budget, and that it grants no billing administration or payment authority. A reader identity is therefore genuinely new work rather than a reuse of an existing grant. Provisioning it would be implementation; accepting that it must be separate and least-privilege would be the decision proposed by this record.
 
 ### Cost data source
 
@@ -41,7 +45,7 @@ This is stated plainly because the surface must not present it as equivalent evi
 
 ### Read model and storage
 
-The read model is stored in **Google Cloud Storage**, per [`ADR-0008`](ADR-0008-single-object-store.md), which consolidates on a single object store and drops the previously accepted second provider. That decision is cited here, not re-made.
+If both proposals were separately accepted and Working, the read model would be stored in **Google Cloud Storage** under [`ADR-0008`](ADR-0008-single-object-store.md). ADR-0008 currently has no authority and the accepted Scaleway/S3-compatible historical-store direction remains current; this proposal neither re-makes nor pre-accepts ADR-0008.
 
 It is **one small schema-versioned JSON document, rewritten in full each run**, following the chunk and manifest contract in `data-identity-observability.md`: a stable chunk identity, schema and producer versions, a checksum, byte and record counts, and an event-time range, so a reader detects a missing, duplicate, corrupt, or incompatible document rather than trusting a listing. The dataset is bounded and tiny by construction — a platform-wide snapshot, not a history — so a full rewrite is correct and a partitioned chunk sequence would be ceremony. Retaining spend history is a separate later decision with its own retention policy.
 
@@ -79,13 +83,13 @@ No whimsical mapping is needed. `glossary.md` states that administrative surface
 
 The surface **reports; it does not act**. No scaling down, no capping, no disabling a service, and no billing detachment is triggered by any figure it renders, at any threshold, including the ceiling itself.
 
-This extends an existing accepted position rather than inventing one. `infra/modules/budget-guardrail/main.tf` already records why the budget notifies rather than disables billing: "an automatic shutdown would turn a cost surprise into an outage, and the accepted design surfaces conditions rather than silently acting on them." Rendering the same condition on a screen does not change that reasoning. A cost response is a human decision with a human's context, and any future automated control needs its own separately accepted safety design with deterministic triggers, false-positive analysis, and a bounded blast radius.
+If accepted, this would extend an existing current position rather than inventing one. `infra/modules/budget-guardrail/main.tf` already records why the budget notifies rather than disables billing: "an automatic shutdown would turn a cost surprise into an outage, and the current design surfaces conditions rather than silently acting on them." Rendering the same condition on a screen would not change that reasoning. A cost response is a human decision with a human's context, and any future automated control needs its own separately accepted safety design with deterministic triggers, false-positive analysis, and a bounded blast radius.
 
 ### Sequencing past the first-slice jobs exclusion
 
-This record deliberately extends past `overview.md`'s maintainer decision 11, which excluded jobs from the first slice. The maintainer accepted this scope. The exclusion is not reinterpreted as having meant something narrower, and it is not treated as void: it remains the accepted shape of the first slice, and this is the first documented departure from it.
+If accepted, this proposal would deliberately extend past `overview.md`'s maintainer decision 11, which excluded jobs from the first slice. That scope has not been accepted. The exclusion is not reinterpreted as having meant something narrower, and it is not void: it remains the current shape of the first slice unless and until this proposal becomes Working.
 
-Implementation is therefore **sequenced after the first dated remote baseline**, so the surface is built against measured spend rather than against the unresolved U1, U4, and U7 estimates in `deployment-composition.md`. Building a cost view before a bill exists would produce a screen that has never displayed a real number, and its first real number would arrive untested.
+Under the proposal, implementation would be **sequenced after the first dated remote baseline**, so the surface would be built against measured spend rather than against the unresolved U1, U4, and U7 estimates in `deployment-composition.md`. Building a cost view before a bill exists would produce a screen that has never displayed a real number, and its first real number would arrive untested.
 
 ## Alternatives considered
 
@@ -114,6 +118,8 @@ Rejected, per the decision above. An automatic shutdown converts a cost surprise
 Deferred, not rejected. There are no tenants, so any per-tenant figure would be an invented allocation of a `$30` platform-wide bill across zero subjects. The path is stated in the attribution decision above — provider labels per project and per tenant-scoped resource, an explicit allocation rule for shared and fixed cost, and a schema version bump on the read model — and it is deferred deliberately rather than omitted.
 
 ## Consequences
+
+These consequences are proposal analysis only. They would apply only after separate acceptance and promotion to Working.
 
 ### Positive
 

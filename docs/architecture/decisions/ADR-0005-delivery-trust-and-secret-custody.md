@@ -1,6 +1,6 @@
 # ADR-0005: Delivery trust, workload identity, and secret custody
 
-> **Status:** Accepted
+> **Status:** Working
 > **Date accepted:** 2026-08-29
 > **Repository controls revised:** 2026-08-30
 > **Owners:** Platform foundation; accepted by maintainer

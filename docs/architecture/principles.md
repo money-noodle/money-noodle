@@ -54,7 +54,7 @@ Assume one person uses several front ends concurrently. APIs never encode a sing
 
 Use bounded polling initially rather than requiring real-time connections. Define polling interval, jitter, backoff, cache validators/version cursor, request budget, and stop conditions per data class and interface. Each read contract defines freshness and stale/unknown behavior appropriate to the data, and every surface exposes source/as-of and synchronization state when material.
 
-Provide scoped operational views at all times. A public view exposes safe platform availability, incidents, and degradation without tenant or exploitable detail. User views expose their resources, activity, freshness, pending work, and actionable failures. Administrative views additionally expose safe deployment/config/schema versions, infrastructure and deployment state, service health, queues, jobs, leases, ownership, reconciliation, data quality, cleanup, incidents, month-to-date and forecast operating spend, operating-cost-ceiling proximity, and free-tier/quota headroom. Distinguish healthy, degraded, stale, blocked, retrying, and unknown.
+Provide scoped operational views at all times. A public view exposes safe platform availability, incidents, and degradation without tenant or exploitable detail. User views expose their resources, activity, freshness, pending work, and actionable failures. Administrative views additionally expose safe deployment/config/schema versions, infrastructure and deployment state, service health, queues, jobs, leases, ownership, reconciliation, data quality, cleanup, and incidents. Distinguish healthy, degraded, stale, blocked, retrying, and unknown.
 
 ## Resource lifecycle and self-healing
 
