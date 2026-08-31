@@ -32,6 +32,8 @@ const datedComposition = read('docs/operations/deployment-composition.md');
 
 const currentStatusRoutes = [
   ['README.md', readme, 'docs/current-status.md'],
+  ['SECURITY.md', security, 'docs/current-status.md'],
+  ['CONTRIBUTING.md', contributing, 'docs/current-status.md'],
   ['AGENTS.md', agents, 'docs/current-status.md'],
   ['docs/README.md', docsIndex, 'current-status.md'],
   ['docs/development/version-control.md', versionControl, '../current-status.md'],
@@ -243,11 +245,16 @@ test('security reporting is enabled, private, and requires revocation before his
   assert.ok(revoke >= 0 && cleanup > revoke, 'revocation or rotation must precede history cleanup');
 });
 
-test('contribution guidance denies public pull requests provider and deployment authority', () => {
+test('contribution guidance requires ordinary independent review and denies elevated authority', () => {
   assert.match(contributing, /Public forks and pull-request code are untrusted/);
   assert.match(contributing, /read-only validation with no provider identity/);
   assert.match(contributing, /cannot deploy/);
   assert.match(contributing, /parallel-work claim protocol/);
+  assert.match(contributing, /ordinary public contribution requires independent review/i);
+  assert.match(contributing, /docs\/development\/version-control\.md/);
+  assert.match(contributing, /temporary sole-maintainer exception belongs only to the maintainer/i);
+  assert.match(contributing, /contributors and agents cannot invoke or request it/i);
+  assertNoDelegatedIntegrationAuthority('CONTRIBUTING.md', contributing);
 });
 
 test('current source identity is organization-owned while the personal archive stays distinct', () => {
@@ -263,6 +270,7 @@ test('current source identity is organization-owned while the personal archive s
 });
 
 test('current repository truth has one owner and every governed entry point routes to it', () => {
+  assert.equal(currentStatusRoutes.length, 9, 'all nine governed entry points must route');
   const ownedMarkers = [
     /phairow\/money-noodle-private-archive/,
     /host-enforced full-SHA action pinning/i,
@@ -309,6 +317,7 @@ test('current repository truth names host security controls and rejects stale co
       path,
     );
     assert.doesNotMatch(source, /required check names still need attaching/i, path);
+    assertNoEnabledAdministratorEnforcementClaim(path, source);
   }
 
   assert.match(currentStatus, /organization membership reports only the maintainer/i);

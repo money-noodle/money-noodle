@@ -25,4 +25,4 @@ Repository source, issues, pull requests, commit metadata, Actions logs and summ
 
 External contribution code is untrusted. Pull-request checks are read-only and receive no provider identity or deployment authority. Money Noodle does not use `pull_request_target` to execute contributor-controlled source.
 
-There is currently no deployed Money Noodle environment and no real-money authority. Security reports about the source and automation are still welcome; do not infer production impact where no production system exists.
+[`docs/current-status.md`](docs/current-status.md) owns current deployment and real-money-authority status. Security reports about the source and automation are welcome regardless of deployment state; do not infer production impact beyond the current status evidence.

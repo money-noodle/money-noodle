@@ -30,6 +30,8 @@ pnpm audit --audit-level high
 
 Run `pnpm container` when Docker is available, plus focused OpenTofu or project checks for affected boundaries. Do not weaken or skip a gate to make a change pass. Update owning documentation and diagrams when their truth changes.
 
-Every change requires review before integration. Strict `main` protection requires all four hosted CI contexts and a qualifying approval. Production effects have separate authorization gates: federation/provider/apply variables must exist, and the protected environment prevents self-review and requires a distinct eligible approving actor. The configured owner reviewer alone is not deployment authority. A green pull request is evidence for review, not deployment authorization or deployed validation.
+Every ordinary public contribution requires independent review by an eligible maintainer before integration. [Current repository status](docs/current-status.md) owns volatile host-control and deployment facts; [version-control guidance](docs/development/version-control.md) owns the applicable integration policy, required evidence, and review rules. Its temporary sole-maintainer exception belongs only to the maintainer acting personally: contributors and agents cannot invoke or request it, treat it as authority, or use it to avoid independent review.
+
+Production effects have separate authorization gates. A green pull request is evidence for review, not deployment authorization or deployed validation; current provider and protected-environment configuration remains owned by the current-status document.
 
 By contributing, you agree that your contribution is licensed under the repository's [MIT license](LICENSE).
