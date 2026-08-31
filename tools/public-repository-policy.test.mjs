@@ -95,6 +95,43 @@ const assertNoEnabledAdministratorEnforcementClaim = (path, source) => {
   }
 };
 
+const exceptionControlWideningPatterns = [
+  /\bstale approval\s+(?:still\s+)?(?:(?:may|can|does|will)\s+)?(?:qualif(?:y|ies)|satisf(?:y|ies)|count(?:s)?|remain(?:s)? valid)\b/i,
+  /\b(?:temporary\s+)?(?:sole-maintainer\s+)?(?:integration\s+)?exception\b[^.!?\n]{0,120}\b(?:may|can|is authorized to)\s+(?:waive|bypass|skip|ignore)\b[^.!?\n]{0,80}\b(?:conversation resolution|stale-review dismissal|required checks?)\b/i,
+  /\b(?:conversation resolution|stale-review dismissal|required checks?)\b[^.!?\n]{0,100}\b(?:may|can|is authorized to)\s+be\s+(?:waived|bypassed|skipped|ignored)\b/i,
+  /\bhead change\b[^.!?\n]{0,80}\b(?:does not|need not|will not|cannot)\s+invalidate\b[^.!?\n]{0,100}\b(?:checks?|evidence|qualification)\b/i,
+  /\b(?:previous|prior|earlier)\b[^.!?\n]{0,80}\b(?:checks?|evidence|qualification)\b[^.!?\n]{0,80}\bremain(?:s)? valid\b[^.!?\n]{0,80}\bhead change\b/i,
+];
+
+const assertNoExceptionControlWidening = (path, source) => {
+  const normalized = normalizePolicyText(source);
+  for (const pattern of exceptionControlWideningPatterns) {
+    assert.doesNotMatch(
+      normalized,
+      pattern,
+      `${path} must not widen the exception beyond its two approval subgates`,
+    );
+  }
+};
+
+const exceptionSemanticContradictionPatterns = [
+  /\bunder\s+(?:the\s+)?(?:temporary\s+)?(?:sole-maintainer\s+)?(?:integration\s+)?exception\b[^.!?\n]{0,100}\b(?:required approving review|last-push approval)\s+(?:is|remains)\s+mandatory\b/i,
+  /\b(?:temporary\s+)?(?:sole-maintainer\s+)?(?:integration\s+)?exception\b[^.!?\n]{0,120}\b(?:may|can|is authorized to)\s+merge\s+(?:(?:with|despite)\s+unresolved conversations?|while\s+conversations?\s+(?:remain(?:s)?|are)\s+unresolved)\b/i,
+  /\b(?:head change|new head commit)\b\s+(?:still\s+)?(?:leaves?|keeps?)\b[^.!?\n]{0,120}\b(?:prior|previous|earlier)\b[^.!?\n]{0,120}\b(?:required[- ]checks?|exception evidence|qualification)\b[^.!?\n]{0,80}\b(?:qualified|valid)\b/i,
+  /\b(?:temporary\s+)?(?:sole-maintainer\s+)?(?:integration\s+)?exception\b[^.!?\n]{0,120}\b(?:may|can|is authorized to)\s+(?:also\s+)?(?:waive|bypass|skip|ignore)\s+(?:the\s+)?(?:branch deletion protection|deletion protection|force-push protection|(?:any|another|additional|other) protections?)\b/i,
+];
+
+const assertNoExceptionSemanticContradiction = (path, source) => {
+  const normalized = normalizePolicyText(source);
+  for (const pattern of exceptionSemanticContradictionPatterns) {
+    assert.doesNotMatch(
+      normalized,
+      pattern,
+      `${path} must preserve the exact temporary-exception control semantics`,
+    );
+  }
+};
+
 test('authority guards reject explicit widening and stale host truth', () => {
   assert.throws(
     () =>
@@ -126,6 +163,46 @@ test('authority guards reject explicit widening and stale host truth', () => {
       'Separately authorized host-control work enables branch-protection administrator enforcement.',
     ),
   );
+  for (const mutation of [
+    'A stale approval qualifies for the temporary exception.',
+    'The temporary exception may waive conversation resolution.',
+    'The temporary exception may waive stale-review dismissal.',
+    'The temporary exception may waive required checks.',
+    'A head change does not invalidate previous checks or exception evidence.',
+    'Previous exception evidence remains valid after a head change.',
+  ]) {
+    assert.throws(
+      () => assertNoExceptionControlWidening('control mutation', mutation),
+      /must not widen the exception beyond its two approval subgates/,
+      mutation,
+    );
+  }
+  for (const mutation of [
+    'Under the temporary exception, last-push approval is mandatory.',
+    'The temporary exception can merge with unresolved conversations.',
+    'A new head commit leaves prior required-check and exception evidence qualified.',
+    'The temporary exception may also bypass branch deletion protection.',
+  ]) {
+    assert.throws(
+      () => assertNoExceptionSemanticContradiction('semantic mutation', mutation),
+      /must preserve the exact temporary-exception control semantics/,
+      mutation,
+    );
+  }
+  for (const permitted of [
+    'Under the temporary exception, last-push approval is not mandatory.',
+    'The temporary exception cannot merge with unresolved conversations.',
+    'The temporary exception can merge only after all unresolved conversations are resolved.',
+    'A new head commit does not leave prior required-check or exception evidence qualified.',
+    'The temporary exception may not bypass branch deletion protection.',
+    'Retirement work may make last-push approval mandatory after the temporary exception expires.',
+    'Retirement work restores branch deletion protection after the temporary exception expires.',
+  ]) {
+    assert.doesNotThrow(
+      () => assertNoExceptionSemanticContradiction('denial or retirement wording', permitted),
+      permitted,
+    );
+  }
 });
 
 test('public entry points route to security, contribution, architecture, and license owners', () => {
@@ -254,12 +331,38 @@ test('temporary integration exception is maintainer-only, exact-head, evidenced,
     assert.match(source, /agent|workload identity/i, path);
     assert.match(source, /provider/i, path);
     assert.match(source, /deploy/i, path);
+    assert.match(source, /required approving review/i, path);
+    assert.match(source, /last-push approval/i, path);
+    assert.match(source, /stale approval never qualifies/i, path);
+    assert.match(source, /conversation resolution[^.!?\n]{0,160}(?:remains?|is) mandatory/i, path);
+    assert.match(
+      source,
+      /(?:every|all four) required checks?[^.!?\n]{0,320}exact current head/i,
+      path,
+    );
+    assert.match(
+      source,
+      /head change invalidates all previous required-check and exception-evidence qualification/i,
+      path,
+    );
+    assert.doesNotMatch(
+      source,
+      /last-push(?:-control| approval| controls?)[^.!?\n]{0,120}\bremains? (?:mandatory|forbidden)/i,
+      `${path} must not retain the superseded mandatory last-push subgate wording`,
+    );
+    assertNoExceptionControlWidening(path, source);
+    assertNoExceptionSemanticContradiction(path, source);
   }
 
+  assert.match(versionControl, /may waive \*\*only\*\* the unavailable independent-review gate/);
+  assert.match(versionControl, /comprises exactly two approval subgates/i);
   assert.match(
     versionControl,
-    /may waive \*\*only\*\* unavailable independent pull-request approval/,
+    /required approving review and last-push approval[\s\S]{0,120}may waive either or both/i,
   );
+  for (const [path, source] of governedSources.slice(1)) {
+    assert.match(source, /stale-review dismissal remains in force/i, path);
+  }
   assert.match(
     versionControl,
     /pull request remains the only route|Integration still occurs through a pull request/i,
@@ -289,6 +392,7 @@ test('temporary integration exception is maintainer-only, exact-head, evidenced,
   }
 
   assert.match(versionControl, /durable public evidence/i);
+  assert.match(versionControl, /approval subgate or subgates waived/i);
   assert.match(versionControl, /identifying the pull request/i);
   assert.match(versionControl, /exact qualifying head commit/i);
   assert.match(versionControl, /resulting `main` commit/i);
