@@ -12,14 +12,16 @@ Use REST APIs described by canonical versioned OpenAPI documents. Validate reque
 
 ## Implementation workflow
 
-1. Read current guidance, accepted records, and source; do not work from memory.
-2. State problem, scope, assumptions, acceptance, and risk.
-3. Resolve architecture-impacting decisions before production code; spike only a bounded uncertainty.
-4. Implement the smallest reversible vertical slice.
-5. Test at the cheapest effective level and add negative boundary cases.
-6. Run affected and repository checks; never weaken gates to pass.
-7. Validate acceptance independently and record uncertainty.
-8. Update specifications, decisions, diagrams, status, and agent guidance whose truth changed.
+1. Inspect branch and status, run the coordination status command, review the decision lifecycle for records that have become production-proven, and read the shared plan, active worktrees and claims, routed current documents, accepted records, and relevant source; do not work from memory.
+2. Update the shared plan as needed, then state and claim the problem, scope, facts, assumptions, unknowns, acceptance criteria, dependencies, and risk.
+3. Resolve cross-boundary and architecture-impacting decisions and update proposed or accepted visual architecture before production code; spike only a bounded uncertainty.
+4. Implement the smallest reversible vertical slice with explicit contracts.
+5. Test at the cheapest effective level, adding focused tests and negative cases at authority, tenant, data-quality, concurrency, and external-effect boundaries.
+6. Run every available affected-project and repository check; never weaken a gate merely to pass.
+7. Validate acceptance independently of the implementation path and record remaining uncertainty.
+8. Update the owning specifications, decisions, diagrams, status, and agent guidance whose truth changed.
+
+Recalculate before making consequential quantitative claims. Distinguish fact, hypothesis, estimate, simulation, and realized result. Include as-of time, sample, exclusions, uncertainty, and the largest validity threat.
 
 Avoid speculative abstractions. Complex logic belongs in small named dependency-free units with exhaustive boundary tests. Add regression tests for every defect.
 

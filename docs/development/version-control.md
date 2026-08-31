@@ -2,12 +2,9 @@
 
 ## Current source and preserved history
 
-- `main` is the sole integration and delivery branch in the public GitHub Free organization repository `money-noodle/money-noodle`. Its public delivery history is one intentionally squashed root snapshot; it does not preserve private development history or migration-diary detail.
-- The personal `phairow/money-noodle-private-archive` preserves the private development and prior-generation history. It is historical evidence, not an integration remote or a source of current authority. Never publish it, merge its historical branches into this repository, or recreate removed refs here.
-- Public source distribution under the committed MIT license is intentional and permanent, not a workaround for Actions or branch-protection pricing. Source, issues, pull requests, reviews, commit identities and messages, Actions logs and summaries, artifacts, and caches are public or potentially externally observable.
-- The 2026-08-30 transfer from the personal source repository preserved the immutable repository ID, issues, pull requests, branches, and host protections. The repository and owner numeric IDs are intentionally not committed; bootstrap reads both from the current repository API.
-- As of 2026-08-30, Actions are enabled with read-only default workflow permission, host-enforced full-SHA action pinning, and a selected-action allowlist that includes Trivy's pinned transitive `aquasecurity/setup-trivy` action. Private vulnerability reporting, secret scanning, and secret-scanning push protection are enabled. `main` protection strictly requires `affected projects and repository gates`, `secret scan`, `container platform-api`, and `container web`, plus one approval, stale-review dismissal, last-push approval, conversation resolution, admin enforcement, and no force push or deletion.
-- The `production` environment has a protected-branch policy and required owner reviewer with `prevent_self_review=true`. The initiating actor therefore needs a distinct eligible actor to approve a deployment; the configured owner reviewer alone is not sufficient deployment authority. No repository provider/apply variable or secret, Google Cloud federation, or deployment exists, so provider effects remain mechanically blocked independently of that approval.
+[`../current-status.md`](../current-status.md) owns current source identity, visibility, transfer, host protections, Actions configuration, protected-environment configuration, baseline evidence, and deployment gaps.
+
+Public source distribution under the committed MIT license is intentional and permanent, not a workaround for Actions or branch-protection pricing. Source, issues, pull requests, reviews, commit identities and messages, Actions logs and summaries, artifacts, and caches are public or potentially externally observable. Historical archives remain evidence only: never publish them, merge their historical branches into this repository, or recreate removed refs here. Repository and owner numeric IDs are intentionally not committed; bootstrap reads both from the current repository API.
 
 ## Protected trunk and working branches
 
@@ -35,9 +32,7 @@ Public visibility is a security boundary, not merely a hosting setting:
 - OIDC trust is invariantly constrained to this exact repository, protected `refs/heads/main`, `.github/workflows/delivery.yml`, and the closed `push`, `workflow_dispatch`, and `schedule` event set. Pull requests, forks, tags, other branches, workflows, repositories, and events cannot exchange a token.
 - Production apply and rollback additionally require configured federation/provider inputs, recorded apply authorization, verified `production` required-reviewer protection, and the environment approval. Apply also requires a typed confirmation. Humans retain explicit scoped approval; automation cannot infer it from a green check.
 
-The initial hosted manual baseline on `main`, [run 33292553091](https://github.com/money-noodle/money-noodle/actions/runs/33292553091), completed successfully on 2026-08-30. It exercised the repository gates, OpenTofu 1.12.6 format/validation/mocked tests with no provider credential, nonzero full-history Gitleaks coverage, both OCI builds, SBOM/provenance generation, and image-vulnerability scanning. This is hosted CI evidence, not provider or deployment validation.
-
-The four observed CI contexts are attached to `main` protection in strict mode. Continue to leave every Google Cloud repository variable, secret, federation input, and apply authorization unset until separately reviewed bootstrap and remote-validation work supplies and verifies them.
+Current hosted baseline evidence and the observed strict required-check attachment are recorded in [`../current-status.md`](../current-status.md). Continue to leave every Google Cloud repository variable, secret, federation input, and apply authorization unset until separately reviewed bootstrap and remote-validation work supplies and verifies them.
 
 ## Tags and releases
 

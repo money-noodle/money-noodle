@@ -6,6 +6,7 @@
 
 | Area | Authority |
 | --- | --- |
+| Current repository, host-control, validation, and deployment truth | [`current-status.md`](current-status.md) |
 | Product experience and capability boundaries | [`product/experience.md`](product/experience.md) |
 | Product vocabulary mappings | [`product/glossary.md`](product/glossary.md) |
 | Architecture and runtime standards | [`architecture/principles.md`](architecture/principles.md) |
@@ -27,7 +28,7 @@
 | [`research/README.md`](research/README.md) | Reusable convention for dated, non-authoritative research assessments |
 | [`research/2026-08-30-typescript-unity-viability.md`](research/2026-08-30-typescript-unity-viability.md) | Dated TypeScript-with-Unity viability evidence; not a technology decision |
 
-Add accepted specifications, current status, experiment index, and validation index here as they are created.
+Add accepted specifications, an experiment index, and a validation index here as they are created.
 
 ## Document roles
 
@@ -55,16 +56,7 @@ Everything else stays one line in the log, or becomes a paragraph in the living 
 
 ## Decision lifecycle
 
-Every governed document makes its status clear. Decisions carry one of:
-
-- **Proposed** — drafted for acceptance. Not authority. Committing it does not accept it.
-- **Working** — decided enough to build on, and **freely editable in place**. Nothing is proven yet, so the record is expected to change as reality arrives. No supersession ceremony applies. This is where most accepted decisions live, and they may stay here indefinitely.
-- **Settled** — working in production with dated evidence, and depended upon. Only a Settled record is superseded rather than rewritten, because only a Settled record has readers who relied on it. Promotion is the maintainer's alone, one record at a time; see [`architecture/decisions/README.md`](architecture/decisions/README.md).
-- **Superseded** or **Retired** — replaced or withdrawn, kept for history and out of current indexes.
-
-The distinction that matters is Working versus Settled. Locking a decision before it is built preserves a guess at the cost of making correction ceremonious. A Working record is corrected by editing it; that is the intended path, not a failure of the process.
-
-Dated evidence is never rewritten to match a later decision. It records what was known on its date.
+The architecture [`decision index`](architecture/decisions/README.md#lifecycle) owns decision statuses, in-place editing rules, evidence requirements, and promotion to Settled. Dated evidence is never rewritten to match a later decision; it records what was known on its date.
 
 ## Placement rules
 

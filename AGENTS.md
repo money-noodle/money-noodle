@@ -30,7 +30,8 @@ Authority descends from the maintainer's current instruction, to accepted curren
 
 | Task area | Read completely |
 | --- | --- |
-| Documentation authority, placement, and decision lifecycle | [`docs/README.md`](docs/README.md) |
+| Documentation authority and placement | [`docs/README.md`](docs/README.md) |
+| Current repository, host-control, validation, and deployment truth | [`docs/current-status.md`](docs/current-status.md) |
 | Public security reporting and accidental disclosure | [`SECURITY.md`](SECURITY.md) |
 | Public contribution and untrusted-fork expectations | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | Decision index, log, and promotion to Settled | [`docs/architecture/decisions/README.md`](docs/architecture/decisions/README.md) |
@@ -48,18 +49,7 @@ Use the accepted source/deployment map instead of inferring current boundaries f
 
 ## Working method
 
-For each change:
-
-1. Inspect branch/status, run the coordination status command, review the decision lifecycle for records that have become production-proven, and read the shared plan, active worktrees/claims, routed current documents, and relevant source.
-2. Update the shared plan as needed, then state and claim the problem, scope, facts, assumptions, unknowns, acceptance criteria, dependencies, and risk.
-3. Resolve cross-boundary decisions and update proposed/accepted visual architecture before production code.
-4. Implement the smallest reversible vertical slice with explicit contracts.
-5. Add focused tests plus negative tests at authority, tenant, data-quality, concurrency, and external-effect boundaries.
-6. Run all available affected-project and repository checks. Never weaken a gate merely to pass.
-7. Validate acceptance independently of the implementation path and record remaining uncertainty.
-8. Update the owning docs, diagrams, decisions, status, and this map in the same change when their truth changed.
-
-Recalculate before making consequential quantitative claims. Distinguish fact, hypothesis, estimate, simulation, and realized result. Include as-of time, sample, exclusions, uncertainty, and the largest validity threat.
+Follow the single [`implementation workflow`](docs/engineering/standards.md#implementation-workflow) for every change. The parallel-work standard owns the additional claim, isolation, checkpoint, and handoff protocol for agent sessions.
 
 ## Keep the guidance operational
 
@@ -74,9 +64,7 @@ This is a living standard and safety envelope, not an exhaustive specification o
 
 ## Current repository state
 
-`main` is the sole integration and delivery branch. Work occurs on short-lived typed branches based on `main`; direct pushes, history rewriting, and unreviewed merges to `main` are forbidden. The MIT-licensed source repository, `money-noodle/money-noodle`, is owned by the GitHub Free `money-noodle` organization and begins with one squashed root snapshot; `phairow/money-noodle-private-archive` privately preserves development history and is never a delivery source. The transfer preserved the repository's immutable ID, issues, pull requests, and protections. `main` protection strictly requires `affected projects and repository gates`, `secret scan`, `container platform-api`, and `container web`, plus one approval, stale-review dismissal, last-push approval, conversation resolution, admin enforcement, and no force push or deletion. Actions use read-only defaults, a selected-action allowlist, and host-enforced full-SHA action pinning; private vulnerability reporting, secret scanning, and push protection are enabled, and the initial hosted `main` baseline passed. See [`docs/development/version-control.md`](docs/development/version-control.md).
-
-The first-slice workspace foundation defines pnpm/Nx projects for the Next.js web, Fastify platform API, API-owned OpenAPI document, generated TypeScript client, and separate OCI artifacts; see [`docs/architecture/overview.md`](docs/architecture/overview.md) and [`docs/engineering/standards.md`](docs/engineering/standards.md). Use Node.js 22.22.0 and pnpm 11.24.0. Run `pnpm install --frozen-lockfile`, `pnpm check`, and—when Docker is available—`pnpm container`; use `pnpm nx run <project>:<target>` for a focused project. Hosted CI now validates affected lint, type, test, contract, build, dependency, full-history secret, container, provenance/SBOM, image-vulnerability, and no-provider OpenTofu gates. The platform-status behavior is implemented and locally/CI validated. No Google Cloud resource, federation, provider credential, repository provider/apply variable, or Money Noodle deployment exists. Production effects remain mechanically blocked; the protected environment prevents self-review and requires a distinct eligible approving actor in addition to all workflow authorization gates. Never describe local or CI validation as deployed validation.
+Read [`docs/current-status.md`](docs/current-status.md) for current repository, host-control, validation, and deployment facts. Use the accepted [`source and deployment map`](docs/architecture/overview.md#source-and-deployment-map) for project boundaries and the engineering [`command contract`](docs/engineering/standards.md#command-contract) for local checks. Never describe local or CI validation as deployed validation.
 
 ## Safety and handoff
 
