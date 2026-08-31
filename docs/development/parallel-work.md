@@ -62,6 +62,14 @@ Every repository change—including documentation, tests, generated artifacts, t
 
 If the harness cannot create or delegate a subagent, the coordinator stops before changing repository files and asks the maintainer to start or authorize a separate execution session. Tool limitations, urgency, or a change's small size do not allow the coordinator to become the executor.
 
+### The temporary integration exception is not agent authority
+
+[`version-control.md`](version-control.md#temporary-sole-maintainer-integration-exception) defines a temporary exception under which only the maintainer acting personally as the human principal may waive unavailable independent pull-request approval. It is not coordinator, execution-session, integration-owner, workload-identity, automation, or collaborator authority. An agent or workload identity cannot invoke it, request that it be invoked, infer it from an issue, assignment, green check, successful run, prior bypass, or broad instruction, or treat it as authority to merge.
+
+A claim, completed acceptance checklist, successful required check, durable evidence record, integration ownership, or instruction to prepare a pull request does not establish that the exception applies. Agents stop after their authorized implementation, checks, commit, and handoff unless separately authorized for another operation; they do not recommend or ask for the exception as a way around unavailable review. Only the maintainer personally decides whether its documented conditions are met and performs any qualifying merge.
+
+Even for the maintainer, the exception waives only the unavailable independent-review gate, comprising exactly the required approving review and last-push approval subgates. Stale approval never qualifies, and stale-review dismissal remains in force. Pull-request integration, conversation resolution, every required check on the exact current head, and durable exception evidence remain mandatory. Any head change invalidates all previous required-check and exception-evidence qualification. Direct push, force push, history rewriting, any other protection bypass or weakening, failed-check bypass, provider authentication, production self-review, environment administrator bypass, apply, rollback, and deployment remain forbidden. The exception expires before provider delivery is enabled and never transfers account ownership, recovery, tenant, audit, funded-authority, provider, or production authority to an agent or workload identity.
+
 ## Work states and portable claim record
 
 Use labels `work:proposed`, `work:ready`, `work:active`, `work:blocked`, `work:review`, `work:done`, and `work:abandoned`, plus an `area:*` label when useful. The issue records or links:
@@ -134,7 +142,7 @@ Future automation or agent skills may create/checkpoint claims after this proces
 
 ## Integration and completion
 
-The integration owner manages shared contracts, merge order, compatibility, and final acceptance. Coordinator status does not confer integration ownership or permission to push or merge, and integration ownership does not remove the requirement for explicit authorization. Delegated commits receive review and required checks before an authorized, conflict-free integration into the target branch; fixes and conflict resolution return to an execution worktree instead of being authored in the integration checkout. Dependents incorporate the accepted dependency version before completion. Never resolve overlap by silently selecting one agent's output.
+The integration owner manages shared contracts, merge order, compatibility, and final acceptance. Coordinator status does not confer integration ownership or permission to push or merge, and integration ownership does not remove the requirement for explicit authorization. The temporary maintainer-only exception above cannot be delegated through integration ownership or a work-item instruction. Delegated commits receive review and required checks before an authorized, conflict-free integration into the target branch; fixes and conflict resolution return to an execution worktree instead of being authored in the integration checkout. Dependents incorporate the accepted dependency version before completion. Never resolve overlap by silently selecting one agent's output.
 
 Before releasing a claim, the agent:
 

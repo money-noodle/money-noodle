@@ -12,6 +12,7 @@
 | Architecture and runtime standards | [`architecture/principles.md`](architecture/principles.md) |
 | First web/API architecture, diagrams, and source/deployment map | [`architecture/overview.md`](architecture/overview.md) |
 | Architecture decision index and lifecycle | [`architecture/decisions/README.md`](architecture/decisions/README.md) |
+| Agent coordination and isolation protocol | [`architecture/decisions/ADR-0011-agent-coordination-and-isolation-protocol.md`](architecture/decisions/ADR-0011-agent-coordination-and-isolation-protocol.md) |
 | Running decision log | [`architecture/decisions/log.md`](architecture/decisions/log.md) |
 | Data, telemetry, audit, identity, and authorization | [`architecture/data-identity-observability.md`](architecture/data-identity-observability.md) |
 | Engineering and testing | [`engineering/standards.md`](engineering/standards.md) |
