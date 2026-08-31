@@ -13,6 +13,8 @@ const versionControl = read('docs/development/version-control.md');
 const parallelWork = read('docs/development/parallel-work.md');
 const delivery = read('docs/operations/delivery.md');
 const agents = read('AGENTS.md');
+const docsIndex = read('docs/README.md');
+const currentStatus = read('docs/current-status.md');
 const overview = read('docs/architecture/overview.md');
 const coordinationDecision = read(
   'docs/architecture/decisions/ADR-0011-agent-coordination-and-isolation-protocol.md',
@@ -20,13 +22,28 @@ const coordinationDecision = read(
 const trustDecision = read(
   'docs/architecture/decisions/ADR-0005-delivery-trust-and-secret-custody.md',
 );
+const decisionIndex = read('docs/architecture/decisions/README.md');
+const engineering = read('docs/engineering/standards.md');
+const objectStoreDecision = read('docs/architecture/decisions/ADR-0008-single-object-store.md');
+const adminSurfaceDecision = read(
+  'docs/architecture/decisions/ADR-0009-administrative-observability-surface.md',
+);
 const datedComposition = read('docs/operations/deployment-composition.md');
 
-const currentTruthPaths = [
-  'AGENTS.md',
-  'docs/development/version-control.md',
-  'docs/operations/delivery.md',
-  'docs/architecture/overview.md',
+const currentStatusRoutes = [
+  ['README.md', readme, 'docs/current-status.md'],
+  ['SECURITY.md', security, 'docs/current-status.md'],
+  ['CONTRIBUTING.md', contributing, 'docs/current-status.md'],
+  ['AGENTS.md', agents, 'docs/current-status.md'],
+  ['docs/README.md', docsIndex, 'current-status.md'],
+  ['docs/development/version-control.md', versionControl, '../current-status.md'],
+  ['docs/operations/delivery.md', delivery, '../current-status.md'],
+  ['docs/architecture/overview.md', overview, '../current-status.md'],
+  [
+    'docs/architecture/decisions/ADR-0005-delivery-trust-and-secret-custody.md',
+    trustDecision,
+    '../../current-status.md',
+  ],
 ];
 
 const workflowPaths = ['.github/workflows/ci.yml', '.github/workflows/delivery.yml'];
@@ -210,12 +227,13 @@ test('public entry points route to security, contribution, architecture, and lic
     'SECURITY.md',
     'CONTRIBUTING.md',
     'docs/architecture/overview.md',
+    'docs/current-status.md',
     'LICENSE',
   ]) {
     assert.ok(readme.includes(`](${target})`), `README.md must route readers to ${target}`);
   }
   assert.match(readme, /no real-money authority/i);
-  assert.match(readme, /Nothing here is remotely deployed yet/i);
+  assert.match(currentStatus, /nothing here has been remotely deployed/i);
 });
 
 test('security reporting is enabled, private, and requires revocation before history cleanup', () => {
@@ -227,53 +245,69 @@ test('security reporting is enabled, private, and requires revocation before his
   assert.ok(revoke >= 0 && cleanup > revoke, 'revocation or rotation must precede history cleanup');
 });
 
-test('contribution guidance denies public pull requests provider and deployment authority', () => {
+test('contribution guidance requires ordinary independent review and denies elevated authority', () => {
   assert.match(contributing, /Public forks and pull-request code are untrusted/);
   assert.match(contributing, /read-only validation with no provider identity/);
   assert.match(contributing, /cannot deploy/);
   assert.match(contributing, /parallel-work claim protocol/);
+  assert.match(contributing, /ordinary public contribution requires independent review/i);
+  assert.match(contributing, /docs\/development\/version-control\.md/);
+  assert.match(contributing, /temporary sole-maintainer exception belongs only to the maintainer/i);
+  assert.match(contributing, /contributors and agents cannot invoke or request it/i);
+  assertNoDelegatedIntegrationAuthority('CONTRIBUTING.md', contributing);
 });
 
 test('current source identity is organization-owned while the personal archive stays distinct', () => {
-  for (const [path, source] of [
-    ['AGENTS.md', agents],
-    ['docs/development/version-control.md', versionControl],
-    ['docs/operations/delivery.md', delivery],
-    ['docs/architecture/overview.md', overview],
-    ['ADR-0005', trustDecision],
-  ]) {
-    assert.match(source, /money-noodle\/money-noodle/, `${path} must name the current source`);
-    assert.doesNotMatch(
-      source,
-      /phairow\/money-noodle(?!-private-archive)/,
-      `${path} must not name the transferred personal source`,
-    );
-    assert.match(
-      source,
-      /phairow\/money-noodle-private-archive/,
-      `${path} must keep the private archive distinct`,
-    );
-  }
+  assert.match(currentStatus, /money-noodle\/money-noodle/);
+  assert.doesNotMatch(currentStatus, /phairow\/money-noodle(?!-private-archive)/);
+  assert.match(currentStatus, /phairow\/money-noodle-private-archive/);
   assert.match(
-    versionControl,
+    currentStatus,
     /github\.com\/money-noodle\/money-noodle\/actions\/runs\/33292553091/,
   );
   assert.match(datedComposition, /As-of evidence \(2026-08-29, not current repository truth\)/);
   assert.match(datedComposition, /phairow\/money-noodle` was \*\*private\*\*/);
 });
 
-test('current repository truth names host security controls and strict required checks', () => {
-  const requiredContexts = [
+test('current repository truth has one owner and every governed entry point routes to it', () => {
+  assert.equal(currentStatusRoutes.length, 9, 'all nine governed entry points must route');
+  const ownedMarkers = [
+    /phairow\/money-noodle-private-archive/,
+    /host-enforced full-SHA action pinning/i,
+    /Strict `main` protection requires/,
+    /branch-protection administrator enforcement is currently disabled/i,
+    /active default-branch `stable` ruleset/i,
+    /mechanically blocked/,
+    /aquasecurity\/setup-trivy/,
+  ];
+
+  for (const [path, source, target] of currentStatusRoutes) {
+    assert.ok(source.includes(`](${target})`), `${path} must route to ${target}`);
+    for (const marker of ownedMarkers) {
+      assert.doesNotMatch(source, marker, `${path} must route rather than restate ${marker}`);
+    }
+  }
+
+  for (const marker of ownedMarkers) assert.match(currentStatus, marker);
+});
+
+test('current repository truth names host security controls and rejects stale contradictions', () => {
+  for (const context of [
     'affected projects and repository gates',
     'secret scan',
     'container platform-api',
     'container web',
-  ];
-  for (const path of ['README.md', ...currentTruthPaths]) {
-    const source = read(path);
-    for (const context of requiredContexts) {
-      assert.ok(source.includes(context), `${path} must name required context ${context}`);
-    }
+  ]) {
+    assert.ok(currentStatus.includes(context), `current status must name ${context}`);
+  }
+  assert.match(currentStatus, /host-enforced full-SHA action pinning/i);
+  assert.match(currentStatus, /secret scanning/i);
+  assert.match(currentStatus, /push protection/i);
+
+  for (const [path, source] of [
+    ...currentStatusRoutes.map(([path, source]) => [path, source]),
+    ['docs/current-status.md', currentStatus],
+  ]) {
     assert.doesNotMatch(source, /source repository is still private/i, path);
     assert.doesNotMatch(source, /GitHub Actions are currently disabled/i, path);
     assert.doesNotMatch(source, /intentionally becoming public/i, path);
@@ -283,26 +317,18 @@ test('current repository truth names host security controls and strict required 
       path,
     );
     assert.doesNotMatch(source, /required check names still need attaching/i, path);
-  }
-  for (const [path, source] of [
-    ['README.md', readme],
-    ['AGENTS.md', agents],
-    ['docs/development/version-control.md', versionControl],
-    ['docs/architecture/overview.md', overview],
-  ]) {
-    assert.match(source, /host-enforced full-SHA action pinning/i, path);
-    assert.match(source, /secret scanning/i, path);
-    assert.match(source, /push protection/i, path);
+    assertNoEnabledAdministratorEnforcementClaim(path, source);
   }
 
-  assert.match(versionControl, /organization membership reports only the maintainer/i);
-  assert.match(versionControl, /two write-role outside collaborators/i);
-  assert.match(versionControl, /Branch-protection administrator enforcement is currently disabled/);
-  assert.match(versionControl, /active default-branch `stable` ruleset/i);
-  assert.match(versionControl, /always-allowed `OrganizationAdmin` bypass actor/);
+  assert.match(currentStatus, /organization membership reports only the maintainer/i);
+  assert.match(currentStatus, /two write-role outside collaborators/i);
+  assert.match(currentStatus, /Branch-protection administrator enforcement is currently disabled/);
+  assert.match(currentStatus, /active default-branch `stable` ruleset/i);
+  assert.match(currentStatus, /always-allowed `OrganizationAdmin` bypass actor/);
   for (const [path, source] of [
     ['AGENTS.md', agents],
     ['ADR-0011', coordinationDecision],
+    ['docs/current-status.md', currentStatus],
     ['docs/development/parallel-work.md', parallelWork],
     ['docs/development/version-control.md', versionControl],
     ['docs/operations/delivery.md', delivery],
@@ -426,26 +452,40 @@ test('temporary integration exception is maintainer-only, exact-head, evidenced,
 });
 
 test('current production truth requires distinct approval and remains mechanically blocked', () => {
-  for (const [path, source] of [
-    ['docs/development/version-control.md', versionControl],
-    ['docs/operations/delivery.md', delivery],
-  ]) {
-    assert.match(source, /prevent_self_review=true/, path);
-    assert.match(source, /distinct eligible actor/, path);
-    assert.match(source, /configured owner reviewer alone/, path);
-    assert.match(source, /mechanically blocked/, path);
+  assert.match(currentStatus, /prevent_self_review=true/);
+  assert.match(currentStatus, /distinct eligible actor/);
+  assert.match(currentStatus, /configured owner reviewer alone/);
+  assert.match(currentStatus, /mechanically blocked/);
+  assert.match(currentStatus, /repository provider\/apply variable or secret/);
+  assert.match(currentStatus, /aquasecurity\/setup-trivy/);
+});
+
+test('workflow and decision lifecycle each have one authority and proposed records are trimmed', () => {
+  assert.match(engineering, /^## Implementation workflow$/m);
+  assert.match(agents, /docs\/engineering\/standards\.md#implementation-workflow/);
+  assert.doesNotMatch(agents, /^\d+\. (?:Inspect|Update|Resolve|Implement|Add|Run|Validate)/m);
+
+  assert.match(decisionIndex, /^## Lifecycle$/m);
+  assert.match(docsIndex, /architecture\/decisions\/README\.md#lifecycle/);
+  assert.doesNotMatch(docsIndex, /^- \*\*(?:Proposed|Working|Settled)/m);
+  assert.doesNotMatch(decisionIndex, /still carry `## Validation`/);
+  for (const source of [objectStoreDecision, adminSurfaceDecision]) {
+    assert.doesNotMatch(source, /^## (?:Validation|Revisit when)$/m);
   }
+});
+
+test('current provider configuration remains absent and mechanically blocked', () => {
   assert.match(
-    versionControl,
+    currentStatus,
     /Repository and production-environment Actions variables and secrets are empty/,
   );
-  assert.match(versionControl, /no provider delivery or Google Cloud federation exists/);
+  assert.match(currentStatus, /no Google Cloud project resource/i);
+  assert.match(currentStatus, /provider delivery/);
   assert.match(
-    delivery,
-    /Repository and production-environment Actions variables and secrets are empty/,
+    currentStatus,
+    /every provider path remains mechanically blocked before authentication/i,
   );
-  assert.match(delivery, /every provider path is mechanically blocked before authentication/);
-  assert.match(versionControl, /aquasecurity\/setup-trivy/);
+  assert.match(currentStatus, /aquasecurity\/setup-trivy/);
 });
 
 test('no workflow executes contributor source through pull_request_target', () => {

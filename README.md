@@ -1,15 +1,12 @@
 # Money Noodle
 
-Money Noodle is an architecture-first rebuild of a multi-tenant platform for financial learning, games, analysis, simulation, and—only after a separate authority design—funded trading. Whimsy may shape the experience; code, infrastructure, and risk language stay precise.
+Money Noodle is an [MIT-licensed](LICENSE) architecture-first rebuild of a multi-tenant platform for financial learning, games, analysis, simulation, and—only after a separate authority design—funded trading. Whimsy may shape the experience; code, infrastructure, and risk language stay precise.
 
 The platform currently has **no real-money authority**.
 
 ## Current reality
 
-- The GitHub Free `money-noodle` organization owns this public source repository under the [MIT license](LICENSE), with protected `main` as its sole integration branch.
-- GitHub Actions are enabled with host-enforced full-SHA action pinning; private vulnerability reporting, secret scanning, and push protection are enabled. Strict `main` protection requires `affected projects and repository gates`, `secret scan`, `container platform-api`, and `container web`; the initial hosted baseline passed every job.
-- No Google Cloud project resource, workload-identity federation, provider credential, repository provider/apply variable, or Money Noodle deployment has been configured. Production effects remain mechanically blocked, and the protected environment prevents self-review and requires a distinct eligible approving actor. Nothing here is remotely deployed yet.
-- Google Cloud Run is the intended first runtime, but the committed OpenTofu composition remains unapplied.
+[`docs/current-status.md`](docs/current-status.md) owns the current repository, host-control, validation, and deployment truth. Nothing in the architecture documents or local command output should be read as newer deployment evidence.
 
 ## Current projects
 
