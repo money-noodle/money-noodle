@@ -16,6 +16,10 @@ The same review observed a claimed branch advancing between reads, a local integ
 
 In this record, a **principal** is a person holding authority, an **agent** is an AI session executing bounded work, and a **workload identity** is a machine credential something runs as. “Human” and “AI” may remain as clarifiers, and provider-specific dialect inside infrastructure code is outside the broad vocabulary adoption deferred to work item #39.
 
+A read-only host review on 2026-08-31 found a temporary bootstrap gap. Organization membership reported only the maintainer; two repository outside collaborators had write permission, but neither raw permission nor outside-collaborator status established maintainer designation, eligibility, independence, or availability to review. `main` protection required the four contexts `affected projects and repository gates`, `secret scan`, `container platform-api`, and `container web`, one approval, stale-review dismissal, last-push approval, conversation resolution, and no force push or deletion. Branch-protection administrator enforcement was disabled, while the active default-branch `stable` ruleset had an always-allowed `OrganizationAdmin` bypass actor and separate pull-request controls.
+
+Pull request #49 had been merged personally by the maintainer without a review as commit `09d1827d05f9146046da58e5b21212093a49f509`; all four required checks passed for that merge commit in run 33356799551. This is historical evidence of the bootstrap problem, not reusable merge authority or proof that a future pull request satisfies the exact-current-head rule below. The `production` environment separately reported only the maintainer as required reviewer, `prevent_self_review=true`, and administrator bypass capability. Repository and production-environment Actions variables and secrets were empty and no provider delivery was enabled. An integration exception therefore must not weaken the independent production-approval boundary or claim that administrator enforcement has already been repaired.
+
 ## Decision
 
 Adopt the following eight coordination and isolation rules as one protocol. They define required behavior and safety boundaries, not an implementation design.
@@ -72,11 +76,27 @@ Nothing is durable coordination output until it is in the shared registry. Exter
 
 These rules preserve the existing default-deny boundary. They do not authorize automatic takeover, release, abandonment, cleanup, conflict resolution, integration, merge, deployment, or provider effects, and they do not transfer recovery or production authority from a principal to an agent or workload identity.
 
+### Temporary sole-maintainer integration exception
+
+Until a second maintainer-designated, eligible, independent, and available reviewer exists, the maintainer acting personally as the human principal may use a narrow pull-request integration exception. It is not delegable to an agent, integration owner, workload identity, automation, collaborator, or other principal. An agent or workload identity cannot invoke it, request that it be invoked, infer it from an issue, assignment, green check, successful run, prior bypass, or broad instruction, or treat it as authority to merge.
+
+The exception waives only unavailable independent pull-request approval. The pull request remains the only route into `main`; direct push, force push, history rewriting, conversation bypass, stale-review or last-push-control bypass, and protection weakening remain forbidden. Before the maintainer uses the exception, every required check must have passed for the pull request's exact current head commit. Stale, missing, pending, cancelled, skipped-required, neutral-required, or failed evidence does not qualify, and a later head change invalidates the evidence.
+
+Every exception merge leaves durable public evidence identifying the pull request, its exact qualifying head commit, the resulting `main` commit, the specific reason an independent eligible review was unavailable, and the name, conclusion, and run reference for every required check on that exact head. A successful check, the evidence record, or a prior exception documents conditions; none grants an agent or workload identity authority to request, perform, or repeat the merge.
+
+The exception expires immediately when a second maintainer-designated eligible independent reviewer is added, or before provider delivery is enabled, whichever occurs first. Raw repository permission does not satisfy or defeat the designation rule by itself. Expiry immediately forbids another exception merge, but host-control retirement is not complete until separately authorized work enables branch-protection administrator enforcement, removes the active `OrganizationAdmin` ruleset bypass, and records verification of both changes. This decision performs none of those host changes and does not state that administrator enforcement is enabled.
+
+The exception never reaches production approval or provider authority. It cannot satisfy or bypass `prevent_self_review=true`, authorize environment administrator bypass, enable federation or provider inputs, invoke apply or rollback, deploy, or weaken any secret, tenant, audit, or funded-authority boundary. It becomes current operating policy only when the documentation and policy tests implementing work item #50 are integrated; it does not activate the deferred rules assigned to work items #39–#45.
+
 ## Alternatives considered
 
 ### Keep issue-first optimistic claims and prose-only reconciliation
 
 **Rejected.** Re-fetching before an issue edit narrows but does not settle the race, and inconsistent fields cannot support dependable liveness, dependency, locality, or scope conclusions. This alternative would become credible only if the registry offered one atomic operation covering claim ownership, the remote reference, and validated fields; no such operation is available.
+
+### Delegate the approval exception to agents or integration owners
+
+**Rejected.** Execution and coordination evidence do not confer the maintainer's personal integration authority. Delegation would let a plan, assignment, green check, or automation path become a self-authorizing bypass and would collapse the separation between implementation, review, integration, and production approval. This alternative could be reconsidered only through a separately accepted authority design with independent principals and mechanically enforced non-self-approval; the temporary bootstrap exception is intentionally not that design.
 
 ### Make harness state or a long-running coordinator the authority
 
@@ -100,6 +120,8 @@ These rules preserve the existing default-deny boundary. They do not authorize a
 - Integration checkout drift and authored work gain explicit prevention and remote verification boundaries.
 - Serializing paths protect shared contracts and governed files where mergeability does not prove semantic safety.
 - Decisions from coordination-only and no-claim sessions become durable when settled rather than depending on a session-end ritual.
+- The sole-maintainer bootstrap gap has a narrow, reconstructable pull-request path without widening agent, workload, provider, or deployment authority.
+- Exact-current-head check evidence and explicit expiry make a prior successful bypass unusable as standing authority.
 
 ### Negative
 
@@ -111,3 +133,5 @@ These rules preserve the existing default-deny boundary. They do not authorize a
 - Declared scope, observed diffs, and serializing paths add maintenance and can reduce concurrency; ordinary overlap warnings still require judgment.
 - A principal-operated integration checkout and separate scratch integration worktree use more local resources and add lifecycle steps.
 - Per-decision recording interrupts coordination work and requires judgment about when a decision has actually settled.
+- A temporary maintainer-only exception still depends on personal discipline until the second reviewer and host-control retirement conditions are complete.
+- Each exception merge adds evidence overhead, and expiry can halt integration before replacement review capacity or host controls are ready.
