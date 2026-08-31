@@ -29,8 +29,8 @@ infra/
   stacks/
     bootstrap/              state buckets, deployer, federation. Applied once, by hand.
     platform/               registry, budget, telemetry retention, secret boundary
-    api/                    the API Cloud Run service and its own identity
-    web/                    the web Cloud Run service and its own identity
+    api/                    the API Cloud Run service and its own workload identity
+    web/                    the web Cloud Run service and its own workload identity
 ```
 
 Each stack holds **separate state** under its own bucket and prefix, so applying
@@ -167,7 +167,7 @@ These are honest gaps, not oversights. None can be closed without a provider.
    is the negative test that closes this.
 5. **Pull-request plans are not implemented.** ADR-0006 expects them; granting
    them would disclose sensitive state to anyone who can open a pull request. A
-   separate read-only planner principal, bound to same-repository pull requests,
+   separate read-only planner workload identity, bound to same-repository pull requests,
    is the bounded follow-up. Recorded in `.github/workflows/delivery.yml`.
 6. **Trace and metric retention are not configurable** through this provider, so
    ADR-0007's 3-to-7-day trace and 30-to-90-day metric targets are *not* met by

@@ -34,19 +34,19 @@ Any composition that cannot satisfy this without a stored key must record that g
 
 ### Agents execute reviewed automation; humans retain approval and recovery
 
-Agents are intended technical operators for routine work through reviewed automation, short-lived identity, least privilege, default-deny inputs, independent post-operation verification, and durable redacted evidence. They receive no standing cloud authority and cannot infer approval from assignment, workflow access, or a successful check. Routine operations do not bypass the pipeline through a cloud console, developer laptop, or durable local credential.
+Agents are intended technical operators for routine work through reviewed automation, short-lived workload identity, least privilege, default-deny inputs, independent post-operation verification, and durable redacted evidence. They receive no standing cloud authority and cannot infer approval from assignment, workflow access, or a successful check. Routine operations do not bypass the pipeline through a cloud console, developer laptop, or durable local credential.
 
 Humans retain explicit scoped approval of production effects, provider/domain account ownership, root recovery, break-glass custody, and responsibility for the protected production approval. One-time bootstrap and authorized recovery are bounded human procedures that must be reconciled into code and remote state, not alternative routine control planes.
 
-### Three separate principals
+### Three separate workload identities
 
-| Principal | May | May not |
+| Workload identity | May | May not |
 | --- | --- | --- |
 | **Deployer** (CI, federated) | Push images to the registry, read and write remote infrastructure state, create and update the declared infrastructure, deploy service revisions, reassign revision traffic | Read tenant data, read secret values that runtime workloads consume, serve requests, act interactively |
 | **Web workload identity** | Call the API origin, export telemetry | Read the registry, read infrastructure state, read any secret, reach a database, run jobs, hold provider authority |
 | **API workload identity** | Read only the secrets it is explicitly granted, export telemetry, serve requests | Write the registry, write infrastructure state, deploy anything, read another service's secrets or future schema |
 
-Developer access is separate from all three and is least-privilege. No principal in this design holds funded authority, because none exists in the current platform.
+Developer access is separate from all three and is least-privilege. No workload identity in this design holds funded authority, because none exists in the current platform.
 
 ### Artifact trust
 
@@ -54,7 +54,7 @@ Artifacts are built once from a reviewed commit and deployed **by digest**, neve
 
 ### Secret custody
 
-A managed secret store is declared and reachable from the first apply even though the first slice stores nothing in it, so that the first capability needing a credential does not also have to invent custody. Every secret, when one exists, records owner, consuming principal, rotation interval, revocation procedure, and recovery path. Laptop environment files are never canonical. Secret values never enter Git, images, build logs, telemetry, status views, issue comments, pull requests, Actions summaries/artifacts/caches, commit metadata, prompts copied into public coordination, or agent handoffs.
+A managed secret store is declared and reachable from the first apply even though the first slice stores nothing in it, so that the first capability needing a credential does not also have to invent custody. Every secret, when one exists, records owner, consuming workload identity, rotation interval, revocation procedure, and recovery path. Laptop environment files are never canonical. Secret values never enter Git, images, build logs, telemetry, status views, issue comments, pull requests, Actions summaries/artifacts/caches, commit metadata, prompts copied into public coordination, or agent handoffs.
 
 Runtime configuration that is genuinely non-secret is typed configuration, not a secret. Putting non-secrets in the secret store obscures which values actually matter.
 
@@ -68,7 +68,7 @@ The browser receives no deployment credential, no provider identifier, no worklo
 
 The common pattern, and the one the alternative provider documents. Rejected as the founding design. GitHub's encrypted secret storage is sound, but the credential is long-lived, has no intrinsic expiry, is copied wherever it is used, and its compromise is silent until an audit finds it. For a platform whose stated trajectory includes funded trading authority, a standing long-lived deployment key is the wrong first habit. It remains acceptable **only** as an explicitly recorded risk with compensating controls, if the maintainer selects a composition that offers nothing better.
 
-### One shared principal for CI and both runtimes
+### One shared workload identity for CI and both runtimes
 
 Rejected. It would let a compromised presentation container publish images or mutate infrastructure, collapsing the trust boundaries the accepted architecture exists to establish.
 
@@ -82,7 +82,7 @@ Rejected. The first capability that needs a credential would then have to design
 
 ### Grant the deployer broad administrative rights for convenience
 
-Rejected. It contradicts default-deny and makes the CI principal the most powerful identity in the platform, reachable from any workflow change.
+Rejected. It contradicts default-deny and makes the CI workload identity the most powerful identity in the platform, reachable from any workflow change.
 
 ## Consequences
 
@@ -90,7 +90,7 @@ Rejected. It contradicts default-deny and makes the CI principal the most powerf
 
 - No long-lived cloud credential exists to leak, rotate, or forget.
 - Compromise of the GitHub account does not by itself yield standing provider access, because tokens are short-lived and trust is ref-constrained.
-- Separate principals make blast radius explicit and mechanically testable.
+- Separate workload identities make blast radius explicit and mechanically testable.
 - Digest-plus-attestation deployment makes "what is running" answerable from the commit.
 - Secret custody exists before the first secret, so no capability has to improvise it.
 
@@ -107,7 +107,7 @@ Before this decision is considered implemented:
 
 1. no provider key exists in GitHub secrets, the repository, any image layer, or any workflow log;
 2. a workflow run on an unauthorized ref, and one from a fork, both **fail** to obtain deployment credentials;
-3. the deployer principal cannot read a value placed in the secret store for a runtime principal;
+3. the deployer workload identity cannot read a value placed in the secret store for a runtime workload identity;
 4. the web workload identity cannot pull from the registry or read infrastructure state;
 5. the API workload identity cannot deploy a revision or write infrastructure state;
 6. deployment by a digest lacking valid provenance is rejected;
@@ -120,6 +120,6 @@ Negative tests are mandatory here. A test proving the pipeline *can* deploy prov
 
 - the selected provider changes its federation or attestation mechanism;
 - the first real operational secret is introduced, which will exercise custody for the first time;
-- identity, tenant data, or provider integrations are added, each of which adds principals;
+- identity, tenant data, or provider integrations are added, each of which adds workload identities;
 - funded authority is contemplated, which requires a separate and stricter authority design;
 - branch protection, repository visibility, public-contribution controls, deployment environments, or the deployment ref change.

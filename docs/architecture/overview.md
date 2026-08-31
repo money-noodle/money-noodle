@@ -163,8 +163,8 @@ flowchart TB
         registry["Artifact Registry<br/>immutable image digests"]
         state["Separate versioned GCS state<br/>locking and restore"]
         secrets["Secret Manager<br/>empty for first slice"]
-        webService["Cloud Run web<br/>own identity and revisions"]
-        apiService["Cloud Run API<br/>own identity and revisions"]
+        webService["Cloud Run web<br/>own workload identity and revisions"]
+        apiService["Cloud Run API<br/>own workload identity and revisions"]
         telemetry["Google Cloud telemetry<br/>OTLP ingestion"]
     end
 
@@ -216,11 +216,11 @@ flowchart LR
     end
 
     subgraph apiStack["stacks/api"]
-        apiSvc["Cloud Run API<br/>own runtime identity"]
+        apiSvc["Cloud Run API<br/>own workload identity"]
     end
 
     subgraph webStack["stacks/web"]
-        webSvc["Cloud Run web<br/>own runtime identity"]
+        webSvc["Cloud Run web<br/>own workload identity"]
     end
 
     bootstrapStack -->|contract_project_id<br/>contract_region<br/>contract_deployer_*| platformStack
@@ -358,7 +358,7 @@ flowchart LR
         runState["ACCEPTED CONTEXT<br/>Cloud Run revision and health state"]
     end
 
-    job["PROPOSED ONLY<br/>jobs/ ingestion unit<br/>scheduled and short-lived<br/>least-privilege reader identity"]
+    job["PROPOSED ONLY<br/>jobs/ ingestion unit<br/>scheduled and short-lived<br/>least-privilege reader workload identity"]
     readModel["PROPOSED ONLY<br/>Administrative read model<br/>one schema-versioned JSON document<br/>would use GCS only if ADR-0008 became Working"]
     apiService["ACCEPTED CONTEXT<br/>services/platform-api<br/>stateless"]
     adminView["PROPOSED ONLY<br/>apps/web administrative view<br/>would present state only"]
@@ -372,7 +372,7 @@ flowchart LR
     apiService -. "PROPOSED FLOW<br/>authorized DTOs with source and as-of" .-> adminView
 ```
 
-Only if both proposals were separately accepted, became Working, and were implemented would the API read this proposed read model without calling provider billing, deployment, or infrastructure APIs on a request path. The proposed ingestion identity would then be a fourth principal distinct from the deployer and service runtime identities. None of those statements describes the current system.
+Only if both proposals were separately accepted, became Working, and were implemented would the API read this proposed read model without calling provider billing, deployment, or infrastructure APIs on a request path. The proposed ingestion workload identity would then be a fourth workload identity distinct from the deployer and service runtime workload identities. None of those statements describes the current system.
 
 ## Source and deployment map
 
@@ -395,9 +395,9 @@ No row below is proposed. The proposal-only subsection above is illustrative, is
 | `packages/platform-api-client/` | shared generated package | Generated TypeScript transport client consumed by interfaces |
 | `infra/` | Google Cloud/OpenTofu composition, implemented and unapplied | All provider coupling. See [`../../infra/README.md`](../../infra/README.md) |
 | `infra/modules/` | provider-neutral building blocks | No environment values; `delivery-trust` is provider-free and tested offline |
-| `infra/stacks/bootstrap/` | one-time bootstrap | State buckets, deployer principal, workload identity federation |
+| `infra/stacks/bootstrap/` | one-time bootstrap | State buckets, deployer workload identity, workload identity federation |
 | `infra/stacks/platform/` | shared platform stack | Artifact Registry, budget, telemetry retention, secret boundary |
-| `infra/stacks/api/`, `infra/stacks/web/` | per-service stacks | Own Cloud Run service, runtime identity, and separate state per ADR-0006 |
+| `infra/stacks/api/`, `infra/stacks/web/` | per-service stacks | Own Cloud Run service, workload identity, and separate state per ADR-0006 |
 | `.github/workflows/delivery.yml` | delivery pipeline | Infrastructure checks, digest publication, gated apply, drift, rollback |
 | `docs/architecture/` | governed documentation | Current diagrams, decision records, and source/deployment map |
 
@@ -422,7 +422,7 @@ The detailed decision is in [`ADR-0002`](decisions/ADR-0002-openapi-and-generate
 - generated files are reproducible and never manually edited;
 - CI compares the contract with the accepted baseline and rejects undocumented breaking changes;
 - generated DTOs are transport types and are mapped before entering domain rules;
-- commands later add principal/scope, client identity, correlation, expected version, and idempotency as required by their capability design.
+- commands later add principal/scope, workload identity when machine-executed, client identity, correlation, expected version, and idempotency as required by their capability design.
 
 ## Runtime and deployment responsibilities
 

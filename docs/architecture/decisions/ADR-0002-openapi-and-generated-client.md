@@ -40,7 +40,7 @@ Versioning rules:
 
 Errors use `application/problem+json` following RFC 9457 with a stable Money Noodle error code, safe title/detail, HTTP status, instance/request reference, and trace/request ID as appropriate. Errors do not expose stack traces, secrets, provider payloads, tenant existence, or internal addresses.
 
-Future state-changing operations include explicit idempotency, expected resource version, principal/scope, client identity, and correlation semantics when their capability design requires them. Those fields are not invented for the first read-only operation.
+Future state-changing operations include explicit idempotency, expected resource version, principal/scope, workload identity when machine-executed, client identity, and correlation semantics when their capability design requires them. Those fields are not invented for the first read-only operation.
 
 ## Tooling boundary
 

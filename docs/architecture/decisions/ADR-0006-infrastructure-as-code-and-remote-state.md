@@ -44,7 +44,7 @@ State lives in dedicated **Google Cloud Storage** buckets in the maintainer-owne
 - **encryption at rest**, provider-managed at minimum;
 - **object versioning enabled from the first apply**, not retrofitted;
 - **locking on every operation that writes state** — native backend locking where the backend offers it, otherwise conditional-write lockfile locking, which must be proven by test rather than assumed;
-- **access restricted to the deployer principal** from ADR-0005; developers do not hold standing write access to state;
+- **access restricted to the deployer workload identity** from ADR-0005; developers do not hold standing write access to state;
 - **a tested restore**, exercised at least once before the first production apply.
 
 State is never committed to Git, never printed in logs or CI output, and never copied to a laptop. State may contain values that are sensitive even when no secret was ever declared, so it is treated as sensitive by default.
