@@ -20,6 +20,8 @@ In this record, a **principal** is a person holding authority, an **agent** is a
 
 Adopt the following eight coordination and isolation rules as one protocol. They define required behavior and safety boundaries, not an implementation design.
 
+These rules are accepted direction, not current operating procedure. None of these rules changes present authorization or process until the work item or items implementing that rule are integrated and the governing guidance is updated. Until then, [`AGENTS.md`](../../../AGENTS.md) and [`docs/development/parallel-work.md`](../../development/parallel-work.md) as currently written govern.
+
 ### 1. Liveness is per state
 
 Agent-owed work requires a check-in deadline. Principal-owed work requires a waiting-since age, has no deadline, surfaces unconditionally at every session start and status request, and never expires. Parked work requires neither timestamp.
