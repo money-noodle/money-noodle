@@ -1,6 +1,6 @@
 # ADR-0006: Infrastructure-as-code tool and remote state
 
-> **Status:** Accepted
+> **Status:** Working
 > **Date accepted:** 2026-08-29
 > **Owners:** Platform foundation; accepted by maintainer
 > **Related architecture:** [`../overview.md`](../overview.md)

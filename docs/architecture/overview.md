@@ -345,40 +345,40 @@ flowchart LR
     client --> consumers
 ```
 
-### Proposed administrative observability
+### Proposal only: administrative observability (not current architecture)
 
-Every element below is **proposed**, not accepted architecture. It is drafted in [`ADR-0009`](decisions/ADR-0009-administrative-observability-surface.md), depends on [`ADR-0008`](decisions/ADR-0008-single-object-store.md), and nothing in it exists on disk or in the provider. Dotted edges mark that proposed status; the solid boundaries it attaches to are the accepted ones above.
+> **Proposal only — excluded from current architecture and the source/deployment map.** The diagram illustrates [`ADR-0009`](decisions/ADR-0009-administrative-observability-surface.md), whose [`ADR-0008`](decisions/ADR-0008-single-object-store.md) dependency is also Proposed. Neither record, its scope, nor any proposed node, edge, label, identity, store, or deployment below is accepted or implemented. Accepted-context nodes are labeled only to show where the proposal would connect; every dotted edge is a proposed flow with no current authority.
 
 ```mermaid
 flowchart LR
-    subgraph gcp["Maintainer-owned Google Cloud project"]
-        budget["Budget guardrail<br/>USD 30 ceiling, implemented and unapplied"]
-        topic["Pub/Sub budget topic<br/>proposed"]
-        metrics["Cloud Monitoring usage metrics<br/>accepted"]
-        runState["Cloud Run revision and health state<br/>accepted"]
+    subgraph gcp["Accepted Google Cloud context — proposed connections have no current authority"]
+        budget["ACCEPTED CONTEXT<br/>Budget guardrail<br/>USD 30 ceiling, implemented and unapplied"]
+        topic["PROPOSED ONLY<br/>Pub/Sub budget topic"]
+        metrics["ACCEPTED CONTEXT<br/>Cloud Monitoring usage metrics"]
+        runState["ACCEPTED CONTEXT<br/>Cloud Run revision and health state"]
     end
 
-    job["jobs/ ingestion unit<br/>proposed, scheduled and short-lived<br/>least-privilege reader identity"]
-    readModel["Administrative read model<br/>proposed, one schema-versioned JSON document<br/>Google Cloud Storage per ADR-0008"]
-    apiService["services/platform-api<br/>accepted, stateless"]
-    adminView["apps/web administrative view<br/>proposed, presents state only"]
+    job["PROPOSED ONLY<br/>jobs/ ingestion unit<br/>scheduled and short-lived<br/>least-privilege reader identity"]
+    readModel["PROPOSED ONLY<br/>Administrative read model<br/>one schema-versioned JSON document<br/>would use GCS only if ADR-0008 became Working"]
+    apiService["ACCEPTED CONTEXT<br/>services/platform-api<br/>stateless"]
+    adminView["PROPOSED ONLY<br/>apps/web administrative view<br/>would present state only"]
 
-    budget -. "cost, forecast, threshold" .-> topic
-    topic -.-> job
-    metrics -. "usage for derived headroom" .-> job
-    runState -. "revision, digest, health" .-> job
-    job -. "writes read model" .-> readModel
-    readModel -. "read on request" .-> apiService
-    apiService -. "authorized DTOs carrying source and as-of" .-> adminView
+    budget -. "PROPOSED FLOW<br/>cost, forecast, threshold" .-> topic
+    topic -. "PROPOSED FLOW" .-> job
+    metrics -. "PROPOSED FLOW<br/>usage for derived headroom" .-> job
+    runState -. "PROPOSED FLOW<br/>revision, digest, health" .-> job
+    job -. "PROPOSED FLOW<br/>would write read model" .-> readModel
+    readModel -. "PROPOSED FLOW<br/>would be read on request" .-> apiService
+    apiService -. "PROPOSED FLOW<br/>authorized DTOs with source and as-of" .-> adminView
 ```
 
-The API reads the read model and never calls a provider billing, deployment, or infrastructure API on a request path. The ingestion identity is a fourth principal, distinct from the deployer and from each service runtime identity.
+Only if both proposals were separately accepted, became Working, and were implemented would the API read this proposed read model without calling provider billing, deployment, or infrastructure APIs on a request path. The proposed ingestion identity would then be a fourth principal distinct from the deployer and service runtime identities. None of those statements describes the current system.
 
 ## Source and deployment map
 
 The workspace, projects, status contract, generated client, web presentation/API adapter, API inner layers/HTTP/deployment adapters, health routes, and container definitions below exist. `infra/` now exists as reviewable, statically validated configuration; **no provider resource has been applied**, and the outstanding items before an apply can be trusted are listed in [`../../infra/README.md`](../../infra/README.md).
 
-No row below is proposed. `jobs/` does not exist, and neither the administrative ingestion unit, its read model, nor its API operations are represented here, because [`ADR-0009`](decisions/ADR-0009-administrative-observability-surface.md) is proposed rather than accepted. Rows are added when the projects exist, not when they are decided. [`../current-status.md`](../current-status.md) owns current host, validation, and deployment truth.
+No row below is proposed. The proposal-only subsection above is illustrative, is outside this map, and confers no source, storage, job, identity, provider, infrastructure, or deployment authority. `jobs/` does not exist, and neither the administrative ingestion unit, its read model, nor its API operations are represented here, because [`ADR-0009`](decisions/ADR-0009-administrative-observability-surface.md) is Proposed rather than Working. Rows are added when projects exist, not when they are merely proposed. [`../current-status.md`](../current-status.md) owns current host, validation, and deployment truth.
 
 | Path | Project/deployment | Boundary and ownership |
 | --- | --- | --- |
@@ -502,7 +502,7 @@ The maintainer accepted the first-slice choices on 2026-08-29 and revised the re
 8. interim public `*.run.app` validation, followed by a separately reviewed `noodle.money` and public `api.noodle.money` cutover that preserves existing Vercel DNS until authorized;
 9. intentionally publishing the one-root MIT-licensed source snapshot while keeping the development-history archive private, with protected `main`, untrusted-fork controls, and a full-history secret-scan baseline required before ordinary merges resume;
 10. accepting Pre-GA OTLP metric ingestion only under the financially inert first-slice controls in ADR-0007;
-11. exclusion of identity, PostgreSQL/schema work, jobs, simulation, and funded authority from the first slice, which proposed [`ADR-0009`](decisions/ADR-0009-administrative-observability-surface.md) would deliberately extend for one scheduled ingestion unit; and
+11. exclusion of identity, PostgreSQL/schema work, jobs, simulation, and funded authority from the first slice; proposed [`ADR-0009`](decisions/ADR-0009-administrative-observability-surface.md) would extend that exclusion for one scheduled ingestion unit only if separately accepted and made Working, and does not alter the current exclusion; and
 12. setting quantitative response-time, availability, and rollback acceptance only after dated remote baseline evidence exists.
 
 ## Next decomposition

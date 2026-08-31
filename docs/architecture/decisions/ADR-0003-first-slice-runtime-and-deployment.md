@@ -1,6 +1,6 @@
 # ADR-0003: First slice runtime and deployment shape
 
-> **Status:** Accepted
+> **Status:** Working
 > **Date accepted:** 2026-08-29
 > **Owners:** Platform foundation
 > **Related architecture:** [`../overview.md`](../overview.md)

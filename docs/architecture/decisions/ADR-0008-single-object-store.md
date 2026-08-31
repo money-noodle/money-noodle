@@ -1,11 +1,13 @@
 # ADR-0008: Single object store on Google Cloud Storage
 
+> **Proposal only — not current authority.** The accepted Scaleway/S3-compatible historical-store direction remains current. Nothing in this record authorizes Google Cloud Storage for historical or analytical data, changes a provider boundary, or guides implementation unless the maintainer separately accepts this proposal and changes its status to Working.
+
 > **Status:** Proposed
 > **Date proposed:** 2026-08-30
 > **Owners:** Platform foundation; proposed for maintainer acceptance
 > **Related architecture:** [`../data-identity-observability.md`](../data-identity-observability.md)
 > **Evidence:** [`../../operations/deployment-composition.md`](../../operations/deployment-composition.md)
-> **Supersedes:** the Scaleway object-storage direction in [`../data-identity-observability.md`](../data-identity-observability.md)
+> **Would supersede only if accepted:** the Scaleway object-storage direction in [`../data-identity-observability.md`](../data-identity-observability.md)
 > **Depends on:** [`ADR-0004`](ADR-0004-first-remote-hosting-composition.md), [`ADR-0006`](ADR-0006-infrastructure-as-code-and-remote-state.md)
 
 ## Context
@@ -16,32 +18,34 @@ ADR-0004 does not treat that as incidental. It records it as an accepted negativ
 
 The decisive fact is that the accepted Scaleway direction is **entirely unbuilt**. A repository-wide search on 2026-08-30 finds Scaleway named in exactly three documents — `data-identity-observability.md`, `deployment-composition.md`, and ADR-0004 — and nowhere else. There is no provider block in any `.tf` file, no object-storage adapter, no client dependency, no credential, no account, no bucket, and no stored object. The only object storage that exists is the infrastructure-state buckets accepted by [`ADR-0006`](ADR-0006-infrastructure-as-code-and-remote-state.md), which are Google Cloud Storage and hold state, not historical or analytical data.
 
-Consolidating now is therefore a **documentation supersession, not a migration**. Its whole cost is editing a paragraph. That is true only until the first historical dataset lands; after that the same change means moving objects, rewriting keys, revalidating checksums and manifests, re-testing restore, and retiring a second set of credentials. This record exists because that window is open and will not reopen.
+Under this proposal, consolidating now would be a **documentation supersession, not a migration**. Its whole cost would be editing current documentation. That is true only until the first historical dataset lands; after that the same change means moving objects, rewriting keys, revalidating checksums and manifests, re-testing restore, and retiring a second set of credentials. This proposal exists because that window is open and will not reopen.
 
-`principles.md` requires cloud-specific services to stay behind narrow adapters with open protocols and exportable formats, permits cloud-specific deployment composition, and forbids cloud-specific domain logic. This decision is composition.
+`principles.md` requires cloud-specific services to stay behind narrow adapters with open protocols and exportable formats, permits cloud-specific deployment composition, and forbids cloud-specific domain logic. This proposal concerns composition only.
 
 ## Decision
 
-**Google Cloud Storage is the platform's single object store.** Scaleway is not used for any purpose — not object storage, not compute, not registry, not DNS, not secrets, not telemetry. Historical and analytical data lands in Google Cloud Storage buckets in the maintainer-owned account and the accepted `us-west1` region.
+The following is the decision that **would** take effect only if this proposal were separately accepted and became Working. Until then, it has no current storage, provider, infrastructure, or deployment authority.
 
-- The platform holds **one provider account, one IAM model, one bill, and one audit scope**. This resolves the negative consequence ADR-0004 accepted rather than leaving it standing.
-- Historical and analytical buckets are **separate buckets** from the ADR-0006 infrastructure-state buckets, with their own IAM, lifecycle, versioning, and retention. Sharing a provider is not sharing a bucket.
-- The **portable object-storage adapter requirement is unchanged**. The store is reached only through that port; no provider SDK enters `apps/web`, `services/platform-api`, or any domain or application layer. What this decision drops is a second provider account, not the abstraction.
-- The **schema-versioned UTF-8 JSON chunk and manifest contract is unchanged**. Chunk identity, sequence or partition, schema and producer versions, checksums, byte and record counts, tenant and subject scope, event-time range, and the requirement that readers detect missing, duplicate, corrupt, or incompatible chunks are properties of the format, not of the provider. They carry to any target unchanged, and they are what makes this reversible.
-- `data-identity-observability.md`'s "do not add a second provider or region yet" instruction still holds, and now holds without exception. This record removes the one carve-out the accepted direction had already made.
-- No account, bucket, credential, or dataset is created by accepting this record.
+**Google Cloud Storage would become the platform's single object store.** Scaleway would not be used for any purpose — not object storage, not compute, not registry, not DNS, not secrets, not telemetry. Historical and analytical data would land in Google Cloud Storage buckets in the maintainer-owned account and the Working `us-west1` region.
 
-### What this does not reopen
+- The platform would hold **one provider account, one IAM model, one bill, and one audit scope**. This would resolve the negative consequence ADR-0004 accepted rather than leave it standing.
+- Historical and analytical buckets would be **separate buckets** from the ADR-0006 infrastructure-state buckets, with their own IAM, lifecycle, versioning, and retention. Sharing a provider would not mean sharing a bucket.
+- The **portable object-storage adapter requirement would remain unchanged**. The store would be reached only through that port; no provider SDK would enter `apps/web`, `services/platform-api`, or any domain or application layer. The proposed decision would drop a second provider account, not the abstraction.
+- The **schema-versioned UTF-8 JSON chunk and manifest contract would remain unchanged**. Chunk identity, sequence or partition, schema and producer versions, checksums, byte and record counts, tenant and subject scope, event-time range, and the requirement that readers detect missing, duplicate, corrupt, or incompatible chunks are properties of the format, not of the provider. They would carry to any target unchanged, and they are what would make this reversible.
+- The current direction's restriction against adding another historical object-storage provider or region would remain, but its accepted Scaleway selection would be replaced. This proposal would remove that existing provider boundary only after acceptance.
+- Accepting this record would not itself create an account, bucket, credential, or dataset.
 
-ADR-0004's compute selection stands unchanged. That decision turned on credential posture — Cloud Run's ecosystem was the only one examined in which the delivery pipeline authenticates without a long-lived cloud key at rest — and nothing in this record bears on that finding. This record consolidates onto the provider ADR-0004 already chose; it does not re-argue the choice.
+### What acceptance would not reopen
 
-ADR-0004 itself is not edited. `decisions/README.md` requires that consequential changes supersede a record rather than silently rewriting its accepted decision, so ADR-0004 keeps its "A second provider" consequence as written and this record is where the change is visible.
+ADR-0004's compute selection would stand unchanged. That decision turned on credential posture — Cloud Run's ecosystem was the only one examined in which the delivery pipeline authenticates without a long-lived cloud key at rest — and nothing in this proposal bears on that finding. The proposal would consolidate onto the provider ADR-0004 already chose; it would not re-argue the choice.
+
+ADR-0004 is Working, so the [`decision index`](README.md) permits correcting it in place. If this proposal became Working, ADR-0004's no-longer-current two-provider consequence and other current documents would be corrected as consequential updates; a separate superseding record is required only for a Settled decision, not for ADR-0004.
 
 ## Alternatives considered
 
 ### Keep Scaleway for historical and analytical data as accepted
 
-Rejected. It preserves a two-provider footprint whose only remaining justification is that it was written down first. Nothing has been built on it, so continuity costs nothing to abandon and everything to keep: a second account to own and recover, a second IAM model to reason about at every tenancy boundary, a second bill, a second audit scope, a second credential to store and rotate, and a second place where a data-residency or deletion obligation must be proved. ADR-0004 accepted that price as unavoidable because the object-storage decision was already accepted and considered permanent — `deployment-composition.md` classifies historical object storage as "Already committed" in its exit-cost table. That premise is the one this record retires: an unbuilt decision is not committed.
+Rejected. It preserves a two-provider footprint whose only remaining justification is that it was written down first. Nothing has been built on it, so continuity costs nothing to abandon and everything to keep: a second account to own and recover, a second IAM model to reason about at every tenancy boundary, a second bill, a second audit scope, a second credential to store and rotate, and a second place where a data-residency or deletion obligation must be proved. ADR-0004 accepted that price as unavoidable because the object-storage decision was already accepted and considered permanent — `deployment-composition.md` classifies historical object storage as "Already committed" in its exit-cost table. That premise is the one this proposal would retire if accepted: an unbuilt decision is not committed.
 
 ### Use Scaleway for everything, including compute
 
@@ -52,6 +56,8 @@ Rejected, and deliberately not reopened. Consolidation onto Scaleway would also 
 Rejected. Deferral looks neutral and is not. The accepted text currently names Scaleway, so deciding nothing is deciding to split the platform across two providers by default, and the first person to implement the historical store will implement what the accepted document says. Deferral also ends at precisely the moment the change becomes expensive: the dataset that would trigger the decision is the same dataset that turns a paragraph edit into a data migration with checksums, manifests, and tested restore. A choice that gets strictly more costly the longer it waits, and that commits by silence in the meantime, is not a candidate for deferral.
 
 ## Consequences
+
+These consequences are proposal analysis only. They would apply only after separate acceptance and promotion to Working.
 
 ### Positive
 

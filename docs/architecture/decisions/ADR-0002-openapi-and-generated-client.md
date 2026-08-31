@@ -1,6 +1,6 @@
 # ADR-0002: API-owned OpenAPI contract and generated client
 
-> **Status:** Accepted
+> **Status:** Working
 > **Date accepted:** 2026-08-29
 > **Owners:** Platform API owns the contract; interface projects own presentation mapping
 > **Related architecture:** [`../overview.md`](../overview.md)

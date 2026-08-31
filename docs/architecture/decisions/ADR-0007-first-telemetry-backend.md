@@ -1,6 +1,6 @@
 # ADR-0007: First telemetry backend and cost containment
 
-> **Status:** Accepted
+> **Status:** Working
 > **Date accepted:** 2026-08-29
 > **Owners:** Platform foundation; accepted by maintainer
 > **Related architecture:** [`../data-identity-observability.md`](../data-identity-observability.md)

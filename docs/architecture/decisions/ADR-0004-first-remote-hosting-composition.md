@@ -1,6 +1,6 @@
 # ADR-0004: First remote hosting, registry, and public entry point
 
-> **Status:** Accepted
+> **Status:** Working
 > **Date accepted:** 2026-08-29
 > **Owners:** Platform foundation; accepted by maintainer
 > **Related architecture:** [`../overview.md`](../overview.md)
