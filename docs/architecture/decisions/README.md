@@ -49,6 +49,7 @@ State alternatives with a verdict word and the reasoning that would change your 
 | [`ADR-0007`](ADR-0007-first-telemetry-backend.md) | Working | None — never applied | OpenTelemetry to the hosting provider backend with explicit cost and Pre-GA controls |
 | [`ADR-0008`](ADR-0008-single-object-store.md) | Proposed | None — not accepted | Google Cloud Storage as the platform's single object store, superseding the Scaleway direction |
 | [`ADR-0009`](ADR-0009-administrative-observability-surface.md) | Proposed | None — not accepted | Administrative infrastructure, deployment, and cost observability through an isolated ingestion job and a read model |
+| [`ADR-0011`](ADR-0011-agent-coordination-and-isolation-protocol.md) | Working | Protocol decision only; not implemented | Cross-harness coordination, claim isolation, integration safety, and per-decision durability |
 
 The Evidence column is the point of this table. Every record is Working, because the platform has no production deployment and nothing here has been proven by running. Marking them Accepted said nothing; marking them Working with their real evidence says the useful thing — ADR-0001 through ADR-0003 are exercised by repository checks, and ADR-0004 through ADR-0007 have never been applied to a provider at all.
 
