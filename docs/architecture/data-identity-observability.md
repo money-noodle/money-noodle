@@ -56,7 +56,10 @@ Audit is not application logging. Audit/accounting events are durable, access-co
 Keep these concepts separate until a schema is accepted:
 
 - **Human identity:** authenticates a person and is not owned by an employer.
-- **Actor/principal:** a human session, service account, or workload identity that acts.
+- **Principal:** a person holding authority.
+- **Agent:** an AI session executing bounded work.
+- **Workload identity:** a machine credential something runs as.
+- **Actor:** the event-envelope role identifying the principal, agent, workload identity, or process that acted.
 - **Owning entity:** a person or organization that owns resources but does not gain login capability by existing.
 - **Resource scope:** a hierarchical organization/project/account-like container.
 - **Membership/role binding:** grants a principal a fixed role at a scope.
@@ -70,7 +73,7 @@ Keep these concepts separate until a schema is accepted:
 - Organizations may nest. Ownership edges form a strict cycle-free hierarchy; an entity cannot own itself directly or transitively.
 - Memberships and other non-owning associations form a separate graph. Humans, organizations, and groups may be members of organizations where policy permits. Membership grants scoped access without creating another owner or ownership parent. Derived association and delegation rules must terminate deterministically and reject cycles that could make authority ambiguous.
 - Human identities remain independent. Employers and organizations grant revocable membership rather than owning employee credentials. A person may join multiple organizations and use multiple interfaces concurrently.
-- Owning entities do not authenticate or act merely because they exist. Human principals authorize actions. Workload principals may execute autonomous or background work under an explicit, bounded, revocable human authorization; every effect remains attributable to both the workload principal and originating authorization.
+- Owning entities do not authenticate or act merely because they exist. Principals authorize actions. Workload identities may execute autonomous or background work under an explicit, bounded, revocable human authorization; every effect remains attributable to both the workload identity and originating principal and authorization.
 - Deactivation is the initial response when a person or entity leaves or becomes unavailable. It does not automatically delete or transfer owned resources; transfer is a separate controlled operation. Resources of a deactivated sole owner freeze ordinary activity while protective stops, reconciliation, cleanup, and recovery remain available.
 - Ordinary ownership transfer requires approval from both current and receiving owners. One specifically authorized Money Noodle platform administrator may override the workflow for recovery; a second administrator is not required. The override still requires strong authentication, explicit reason and scope, tamper-evident audit, notification, and subsequent review.
 - Organizations require verification by an owner or authorized delegate before receiving verified capabilities. Verification evidence, renewal, revocation, and delegated-verifier rules remain open.
@@ -79,7 +82,7 @@ Open decisions include the exact portfolio/resource taxonomy, membership and del
 
 ## Authorization and privacy
 
-Authorization defaults to deny and evaluates principal, active tenant/scope, action, resource, bindings, and inheritance boundaries on every server/job/admin path. Record consequential authorization outcomes and policy versions.
+Authorization defaults to deny and evaluates principal, workload identity when present, active tenant/scope, action, resource, bindings, and inheritance boundaries on every server/job/admin path. Record consequential authorization outcomes and policy versions.
 
 ### Accepted role direction
 
@@ -94,6 +97,6 @@ Authorization defaults to deny and evaluates principal, active tenant/scope, act
 
 Self-healing is the primary repair actor. Portfolio owners and explicitly delegated operators may invoke repair within their scope; Money Noodle platform operators may perform cross-tenant recovery; ordinary members may not. Funded repair is a distinct permission. Break-glass recovery is time-bounded and fully audited.
 
-There is no universal second-approver or step-up-authentication rule. A specifically designed sensitive operation may still require reauthentication or MFA when its threat model justifies it.
+There is no universal second-reviewer or step-up-authentication rule. A specifically designed sensitive operation may still require reauthentication or MFA when its threat model justifies it.
 
 Enforce tenant isolation at service/repository boundaries and again in storage where supported, including jobs, caches, telemetry, exports, and backups. Encrypt sensitive data in transit/at rest. Define retention, deletion, export, backup, and restore before storing sensitive tenant data.

@@ -303,7 +303,7 @@ jobs:
   # the credential needed to plan would disclose state to anyone who can open a
   # pull request.
   #
-  # Closing the gap properly needs a second, read-only "planner" principal bound
+  # Closing the gap properly needs a second, read-only planner workload identity bound
   # to same-repository pull requests only. That is a bounded follow-up, listed in
   # `infra/README.md`. Until then pull requests get the full static check suite,
   # which needs no credential at all.

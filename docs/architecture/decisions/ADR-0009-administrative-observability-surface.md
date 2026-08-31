@@ -1,6 +1,6 @@
 # ADR-0009: Administrative infrastructure, deployment, and cost observability
 
-> **Proposal only — not current authority.** No administrative ingestion job, spend read model, fourth principal, provider integration, API operation, or web surface is accepted by this record. The current first-slice exclusion of jobs remains in force. This proposal cannot guide implementation unless the maintainer separately accepts it and changes its status to Working; its Proposed ADR-0008 dependency would also need separate acceptance.
+> **Proposal only — not current authority.** No administrative ingestion job, spend read model, fourth workload identity, provider integration, API operation, or web surface is accepted by this record. The current first-slice exclusion of jobs remains in force. This proposal cannot guide implementation unless the maintainer separately accepts it and changes its status to Working; its Proposed ADR-0008 dependency would also need separate acceptance.
 
 > **Status:** Proposed
 > **Date proposed:** 2026-08-30
@@ -29,7 +29,7 @@ Reading provider cost, deployment, and service state is **provider integration**
 
 The platform API **never calls a provider billing, deployment, or infrastructure API inline on a request path**, and no provider credential exists on a request path or in a browser. The API's dependency is the read model, not the provider.
 
-This unit is the first inhabitant of `jobs/`, which `principles.md` declares as the home of scheduled, event-driven, and batch workloads but which does not yet exist on disk. It carries its own least-privilege reader identity — a **fourth principal**, added to the deployer, web, and API principals separated in [`ADR-0005`](ADR-0005-delivery-trust-and-secret-custody.md), and mechanically distinct from all three. It reads provider cost and deployment state and exports telemetry; it may not deploy, write infrastructure state, push or read the registry, serve requests, or hold any billing administration or payment authority. That distinction is not cosmetic: `infra/README.md` records that the deployer holds `roles/billing.costsManager` on exactly the selected billing account because project IAM cannot create a billing-account budget, and that it grants no billing administration or payment authority. A reader identity is therefore genuinely new work rather than a reuse of an existing grant. Provisioning it would be implementation; accepting that it must be separate and least-privilege would be the decision proposed by this record.
+This unit is the first inhabitant of `jobs/`, which `principles.md` declares as the home of scheduled, event-driven, and batch workloads but which does not yet exist on disk. It carries its own least-privilege reader workload identity — a **fourth workload identity**, added to the deployer, web, and API workload identities separated in [`ADR-0005`](ADR-0005-delivery-trust-and-secret-custody.md), and mechanically distinct from all three. It reads provider cost and deployment state and exports telemetry; it may not deploy, write infrastructure state, push or read the registry, serve requests, or hold any billing administration or payment authority. That distinction is not cosmetic: `infra/README.md` records that the deployer holds `roles/billing.costsManager` on exactly the selected billing account because project IAM cannot create a billing-account budget, and that it grants no billing administration or payment authority. A reader workload identity is therefore genuinely new work rather than a reuse of an existing grant. Provisioning it would be implementation; accepting that it must be separate and least-privilege would be the decision proposed by this record.
 
 ### Cost data source
 
@@ -137,6 +137,6 @@ These consequences are proposal analysis only. They would apply only after separ
 - Budget notifications are event-driven, so between crossings the read model's figure ages, and freshness depends on the ingestion cadence rather than on continuous truth.
 - Free-tier headroom is derived and therefore materially weaker evidence than reported spend, and it will be read as equally authoritative unless the surface labels it clearly and repeatedly.
 - Provider cost data is delayed at source, so a correct, fresh, fully healthy surface still shows a figure that is behind reality.
-- A new reader identity and a new Pub/Sub topic widen the infrastructure surface and the IAM review area for a read-only view.
+- A new reader workload identity and a new Pub/Sub topic widen the infrastructure surface and the IAM review area for a read-only view.
 - Per-SKU attribution is unavailable, so a spend anomaly can be seen but not immediately decomposed without a separate investigation.
 - Anything in this surface that is later needed as an accounting record is not one; like telemetry, it is operational state and satisfies no audit obligation.

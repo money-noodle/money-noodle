@@ -2,7 +2,7 @@
 
 ## Purpose and source of truth
 
-Parallel work should increase throughput without hidden overlap, conflicting authority, or abandoned state. This protocol is harness-neutral: Pi, Claude Code, GitHub Copilot, and other agents coordinate through the same repository and GitHub records.
+Parallel work should increase throughput without hidden overlap, conflicting authority, or abandoned state. This protocol is harness-neutral: Pi, Claude Code, GitHub Copilot, and other agents coordinate through the same repository and GitHub records. Here, a **principal** is a person holding authority, an **agent** is an AI session executing bounded work, and a **workload identity** is a machine credential something runs as.
 
 GitHub Issues are the canonical work registry because they are remote, branch-independent, auditable, and visible across harnesses, worktrees, and machines. A GitHub Project may add views later without replacing issues. Chat history, local session lists, worktrees, and harness-specific storage are supporting evidence, never the shared registry.
 

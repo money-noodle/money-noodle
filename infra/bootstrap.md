@@ -9,7 +9,7 @@
 > **Prepared:** 2026-08-29 by `cc-gcp-delivery-foundation` (harness `claude-code`), GitHub issue #14
 > **Decisions implemented:** [`ADR-0004`](../docs/architecture/decisions/ADR-0004-first-remote-hosting-composition.md), [`ADR-0005`](../docs/architecture/decisions/ADR-0005-delivery-trust-and-secret-custody.md), [`ADR-0006`](../docs/architecture/decisions/ADR-0006-infrastructure-as-code-and-remote-state.md), [`ADR-0007`](../docs/architecture/decisions/ADR-0007-first-telemetry-backend.md)
 
-Bootstrap exists because of one circularity: the deployer principal and the state
+Bootstrap exists because of one circularity: the deployer workload identity and the state
 buckets cannot be created by a pipeline that authenticates as the deployer and
 stores its state in those buckets. Everything else is created by the pipeline.
 

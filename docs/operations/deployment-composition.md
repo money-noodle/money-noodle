@@ -279,8 +279,8 @@ flowchart TB
             tls["Global external load balancer<br/>managed TLS, deferred until cutover"]
         end
 
-        webSvc["Cloud Run web revision<br/>own identity, scale to zero"]
-        apiSvc["Cloud Run API revision<br/>own identity, scale to zero"]
+        webSvc["Cloud Run web revision<br/>own workload identity, scale to zero"]
+        apiSvc["Cloud Run API revision<br/>own workload identity, scale to zero"]
         otel["Google Cloud telemetry<br/>OTLP ingest"]
     end
 
@@ -320,7 +320,7 @@ flowchart LR
 
     subgraph deploy["Deployment authority"]
         exchange["Workload identity exchange<br/>subject and repository constrained"]
-        deployer["Deployer principal<br/>may push images and apply IaC<br/>may not read tenant data"]
+        deployer["Deployer workload identity<br/>may push images and apply IaC<br/>may not read tenant data"]
     end
 
     subgraph runtime["Runtime trust boundaries — accepted shape"]
@@ -347,7 +347,7 @@ flowchart LR
     apiId -->|no request bodies by default| tel
 ```
 
-The deployer principal is deliberately separate from both runtime identities. It may publish artifacts and change infrastructure; it may not serve requests. Neither runtime identity may write the registry or the IaC state. No identity in this diagram holds funded authority, because none exists in v2.
+The deployer workload identity is deliberately separate from both runtime workload identities. It may publish artifacts and change infrastructure; it may not serve requests. Neither runtime workload identity may write the registry or the IaC state. No workload identity in this diagram holds funded authority, because none exists in v2.
 
 ## Accepted deployment and rollback sequence
 

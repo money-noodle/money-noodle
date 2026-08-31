@@ -57,6 +57,73 @@ const currentStatusRoutes = [
 
 const workflowPaths = ['.github/workflows/ci.yml', '.github/workflows/delivery.yml'];
 
+const identityVocabularyPaths = [
+  'AGENTS.md',
+  '.github/workflows/delivery.yml',
+  'docs/architecture/data-identity-observability.md',
+  'docs/architecture/decisions/ADR-0002-openapi-and-generated-client.md',
+  'docs/architecture/decisions/ADR-0005-delivery-trust-and-secret-custody.md',
+  'docs/architecture/decisions/ADR-0006-infrastructure-as-code-and-remote-state.md',
+  'docs/architecture/decisions/ADR-0009-administrative-observability-surface.md',
+  'docs/architecture/decisions/ADR-0011-agent-coordination-and-isolation-protocol.md',
+  'docs/architecture/overview.md',
+  'docs/architecture/principles.md',
+  'docs/development/parallel-work.md',
+  'docs/development/version-control.md',
+  'docs/operations/deployment-composition.md',
+  'infra/README.md',
+  'infra/bootstrap.md',
+];
+
+const collectFiles = (directory) =>
+  readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = `${directory}/${entry.name}`;
+    return entry.isDirectory() ? collectFiles(path) : [path];
+  });
+
+const providerDialectPaths = collectFiles('infra').filter(
+  (path) => path.endsWith('.tf') || path.endsWith('.tftest.hcl'),
+);
+
+const isProviderDialectPath = (path) =>
+  path.startsWith('infra/') && (path.endsWith('.tf') || path.endsWith('.tftest.hcl'));
+
+const vocabularyProse = (path, source) => {
+  if (isProviderDialectPath(path)) return '';
+  if (!path.endsWith('.md')) return source;
+
+  const mermaid = [];
+  const prose = source
+    .replaceAll(/```([^\n]*)\n([\s\S]*?)```/g, (_match, info, body) => {
+      if (info.trim().toLowerCase() === 'mermaid') mermaid.push(body);
+      return '\n';
+    })
+    .replaceAll(/`[^`\n]*`/g, '')
+    .replaceAll(/“[^”\n]*”|"[^"\n]*"/g, '');
+
+  return `${prose}\n${mermaid.join('\n')}`;
+};
+
+const retiredApproverNoun = /\bapprovers?\b/i;
+const machinePrincipalPatterns = [
+  /\b(?:deployer|planner|reader|runtime|workload|ci|api|web|automation|machine)(?:[- ](?:workload|service account|identity)){0,2}[- ]principals?\b/i,
+  /\b(?:service accounts?|workload identit(?:y|ies)|machine credentials?|automation)\s+(?:is|are|acts? as|serves? as|becomes?)\s+(?:an?\s+)?principals?\b/i,
+  /\bprincipals?\s+(?:is|are|includes?|means?|identifies?)\s+[^.!?\n]{0,80}\b(?:service accounts?|workload identit(?:y|ies)|machine credentials?|automation)\b/i,
+  /\bactor\s*\/\s*principal\b[^.!?\n]{0,100}\b(?:service accounts?|workload identit(?:y|ies)|machine credentials?)\b/i,
+];
+
+const assertIdentityVocabulary = (path, source) => {
+  const prose = vocabularyProse(path, source);
+  assert.doesNotMatch(prose, retiredApproverNoun, `${path} must not use the retired approver noun`);
+  for (const pattern of machinePrincipalPatterns) {
+    assert.doesNotMatch(
+      prose,
+      pattern,
+      `${path} must not describe a machine identity as a principal`,
+    );
+  }
+};
+
 const normalizePolicyText = (source) => source.replaceAll(/[`*_]/g, '').replaceAll(/[ \t]+/g, ' ');
 
 const supportedDecisionStatuses = new Set([
@@ -260,6 +327,67 @@ const assertNoExceptionSemanticContradiction = (path, source) => {
     );
   }
 };
+
+test('governed prose enforces principal, agent, and workload-identity vocabulary', () => {
+  for (const path of identityVocabularyPaths) assertIdentityVocabulary(path, read(path));
+
+  assert.throws(
+    () => assertIdentityVocabulary('retired.md', 'A second approver must sign off.'),
+    /must not use the retired approver noun/,
+  );
+  for (const mutation of [
+    'The deployer principal applies the reviewed plan.',
+    'A workload identity is a principal.',
+    'Actor/principal: a human session, service account, or workload identity that acts.',
+  ]) {
+    assert.throws(
+      () => assertIdentityVocabulary('machine-principal.md', mutation),
+      /must not describe a machine identity as a principal/,
+      mutation,
+    );
+  }
+
+  for (const permitted of [
+    'The maintainer acting personally as the human principal may approve the change.',
+    'Approval requires an approving review from an eligible reviewer.',
+    'The event envelope records the actor type and actor ID.',
+  ]) {
+    assert.doesNotThrow(() => assertIdentityVocabulary('permitted.md', permitted), permitted);
+  }
+
+  assert.doesNotThrow(() =>
+    assertIdentityVocabulary(
+      'literal.md',
+      'The literal provider identifier is `principalSet://iam.googleapis.com/example`.',
+    ),
+  );
+  assert.doesNotThrow(() =>
+    assertIdentityVocabulary(
+      'quotation.md',
+      'The provider documentation says "a deployer principal may exchange the token".',
+    ),
+  );
+  assert.ok(providerDialectPaths.length > 0, 'provider-dialect fixtures must exist');
+  const providerDialect = providerDialectPaths.map((path) => read(path)).join('\n');
+  assert.match(providerDialect, /principalSet:\/\/iam\.googleapis\.com/);
+  assert.match(providerDialect, /Federated CI principal/);
+  for (const path of providerDialectPaths) assertIdentityVocabulary(path, read(path));
+  assert.doesNotThrow(() =>
+    assertIdentityVocabulary(
+      'infra/example.tf',
+      'principal = "principalSet://iam.googleapis.com/example" # provider approver dialect',
+    ),
+  );
+
+  assert.match(agents, /principal\*\* for a person holding authority/);
+  assert.match(agents, /agent\*\* for an AI session executing bounded work/);
+  assert.match(agents, /workload identity\*\* for a machine credential something runs as/);
+  assert.match(dataIdentityObservability, /\*\*Actor:\*\* the event-envelope role/i);
+  assert.match(
+    datedComposition,
+    /"eliminates the maintenance and security burden associated with service account keys"/,
+  );
+});
 
 test('authority guards reject explicit widening and stale host truth', () => {
   assert.throws(
