@@ -198,8 +198,8 @@ function readRegistry(local, nowMs) {
     normalizePullRequest,
   );
   const coordination = analyzeCoordination({ issues: issueRecords, commentsByIssue, local, nowMs });
-  const maintainerQuestions = coordination.workItems.flatMap((item) =>
-    item.questions.map((entry) => ({ issueNumber: item.number, ...entry })),
+  const maintainerQuestions = [...coordination.plans, ...coordination.workItems].flatMap(
+    (item) => item.questions.map((entry) => ({ issueNumber: item.number, ...entry })),
   );
 
   return {
@@ -275,7 +275,9 @@ function renderHuman(report) {
   if (registry.plans.length === 0) console.log("none");
   for (const plan of registry.plans) {
     console.log(`#${plan.number} [${plan.planState}] ${plan.title} (${plan.url})`);
-    console.log(`  updated=${plan.updatedAt} integration-owner=${plan.integrationOwner}`);
+    console.log(
+      `  schema=v${plan.registrySchema.version}${plan.registrySchema.explicit ? '' : ' (implicit)'} updated=${plan.updatedAt} integration-owner=${plan.integrationOwner}`,
+    );
   }
 
   section("Open work evidence");
@@ -283,11 +285,31 @@ function renderHuman(report) {
   for (const item of registry.workItems) {
     console.log(`#${item.number} [${item.claimState}; ${item.triage}] ${item.title} (${item.url})`);
     console.log(
-      `  parent=${item.parentPlan} dependencies=${item.dependencies.status} reconciliation=${item.reconciliation}`,
+      `  schema=v${item.registrySchema.version}${item.registrySchema.explicit ? '' : ' (implicit)'} parent=${item.parentPlan} dependencies=${item.dependencies.status} reconciliation=${item.reconciliation}`,
     );
+    const locality =
+      item.registrySchema.version === '2'
+        ? `host=${item.claim['Claim-Host']} waiting-since=${item.waiting.value}`
+        : `worktree=${item.claim['Claim-Worktree']}`;
     console.log(
-      `  branch=${item.claim["Claim-Branch"]} worktree=${item.claim["Claim-Worktree"]} check-in=${item.deadline.value} (${item.deadline.status}) local=${item.localEvidence.status}`,
+      `  branch=${item.claim['Claim-Branch']} ${locality} check-in=${item.deadline.value} (${item.deadline.status}) local=${item.localEvidence.status}`,
     );
+  }
+
+  const malformed = [
+    ...registry.plans.filter(({ registrySchema }) => !registrySchema.valid),
+    ...registry.workItems.filter(({ registrySchema }) => !registrySchema.valid),
+  ];
+  if (malformed.length > 0) {
+    section('Unparseable or unsupported registry records');
+    for (const item of malformed) {
+      console.log(
+        `#${item.number} schema=v${item.registrySchema.version} status=${item.registrySchema.status}`,
+      );
+      for (const error of item.registrySchema.errors) {
+        console.log(`  [${error.code}] ${error.field}: ${error.message}`);
+      }
+    }
   }
 
   section("Ready candidates (evidence only)");

@@ -11,7 +11,10 @@ const security = read('SECURITY.md');
 const contributing = read('CONTRIBUTING.md');
 const versionControl = read('docs/development/version-control.md');
 const parallelWork = read('docs/development/parallel-work.md');
-const parallelWorkTemplate = read('.github/ISSUE_TEMPLATE/parallel-work.md');
+const parallelWorkTemplate = read('.github/ISSUE_TEMPLATE/parallel-work.yml');
+const sharedPlanTemplate = read('.github/ISSUE_TEMPLATE/shared-plan.yml');
+const coordinationSchema = read('tools/coordination-schema.mjs');
+const coordinationWriter = read('tools/coordination-write.mjs');
 const delivery = read('docs/operations/delivery.md');
 const agents = read('AGENTS.md');
 const docsIndex = read('docs/README.md');
@@ -578,8 +581,8 @@ test('scoped branch publication stays claim-bound and checkpoint evidence stays 
   );
 
   assert.ok(
-    parallelWorkTemplate.includes(checkpointEvidenceHeader),
-    'parallel-work issue template must keep the exact evidence header fields and order',
+    parallelWorkTemplate.replaceAll(/^ {8}/gm, '').includes(checkpointEvidenceHeader),
+    'parallel-work issue form must keep the exact evidence header fields and order',
   );
   assert.match(parallelWork, /Checkpoint-State.*equals `Claim-State`/i);
   assert.match(parallelWork, /derived from the actual comparison with the registered base/i);
@@ -598,19 +601,19 @@ test('scoped branch publication stays claim-bound and checkpoint evidence stays 
   );
   assert.match(
     parallelWork,
-    /version 1 header requirement is prospective[^.!?\n]{0,160}only to checkpoint comments created after issue #40 is integrated/i,
+    /version 1 (?:evidence-)?header requirement is prospective[^.!?\n]{0,160}only to checkpoint comments created after issue #40 is integrated/i,
   );
   assert.match(
     parallelWork,
-    /historical checkpoint comments remain immutable, valid evidence[^.!?\n]{0,180}do not edit or backfill them/i,
+    /historical checkpoint comments remain immutable, valid evidence[^.!?\n]{0,180}do not edit[^.!?\n]{0,40}backfill/i,
   );
   assert.match(
     parallelWork,
-    /until issue #41 integrates schema validation[^.!?\n]{0,180}verified manually and independently/i,
+    /integrated schema validation checks every field of a present version 1 evidence header/i,
   );
   assert.match(
     parallelWork,
-    /current coordination status tooling does not validate every version 1 field/i,
+    /syntactic and semantic validity alone does not prove that a run or impact claim is true/i,
   );
   for (const verdict of [
     'passed',
@@ -623,7 +626,9 @@ test('scoped branch publication stays claim-bound and checkpoint evidence stays 
     'mixed',
   ]) {
     assert.ok(
-      checkpointEvidenceHeader.includes(verdict) || parallelWorkTemplate.includes(`\`${verdict}\``),
+      checkpointEvidenceHeader.includes(verdict) ||
+        parallelWorkTemplate.includes(`\`${verdict}\``) ||
+        parallelWork.includes(`\`${verdict}\``),
       `checkpoint evidence must define the ${verdict} verdict`,
     );
   }
@@ -673,6 +678,50 @@ test('scoped branch publication stays claim-bound and checkpoint evidence stays 
       mutation,
     );
   }
+});
+
+test('registry v2 policy preserves mixed-version, non-atomic, and bootstrap boundaries', () => {
+  for (const source of [parallelWorkTemplate, sharedPlanTemplate]) {
+    assert.match(source, /Registry-Schema-Version/);
+    assert.doesNotMatch(source, /Claim-Worktree|Shared-Hotspots|\/Users\//);
+    assert.match(source, /required: true/);
+  }
+  assert.match(parallelWorkTemplate, /Claim-Host/);
+  assert.match(parallelWorkTemplate, /Waiting-Since/);
+  assert.match(parallelWorkTemplate, /Depends-On: none/);
+  assert.match(parallelWorkTemplate, /Dependency-Notes: none/);
+
+  assert.match(parallelWork, /body with no version field is an implicit version 1 record/i);
+  assert.match(parallelWork, /untouched v1 and v2 records together/i);
+  assert.match(parallelWork, /There is no bulk migration/i);
+  assert.match(
+    parallelWork,
+    /historical comments are never migrated, edited, backfilled, or reinterpreted/i,
+  );
+  assert.match(parallelWork, /not[^.!?\n]{0,40}server-side compare-and-swap/i);
+  assert.match(
+    parallelWork,
+    /Body, state-label, and append-only comment updates are separate non-atomic host surfaces/i,
+  );
+  assert.match(parallelWork, /#42 and #44/);
+  assert.match(parallelWork, /#41 itself remains implicit v1/i);
+  assert.match(
+    parallelWork,
+    /unintegrated writer[^.!?\n]{0,100}deterministic fixtures or mocked host ports/i,
+  );
+
+  assert.match(coordinationSchema, /CURRENT_REGISTRY_SCHEMA_VERSION = '2'/);
+  assert.match(coordinationSchema, /unsupported-schema-version/);
+  assert.match(coordinationSchema, /removed-v2-field/);
+  assert.match(coordinationSchema, /missing-principal-liveness/);
+  assert.doesNotMatch(coordinationSchema, /(?:create|delete|update)Ref|ls-remote|git push/);
+
+  assert.match(coordinationWriter, /invalid-proposed-record/);
+  assert.match(coordinationWriter, /updateBody/);
+  assert.match(coordinationWriter, /replaceStateLabel/);
+  assert.match(coordinationWriter, /addComment/);
+  assert.match(coordinationWriter, /status: 'partial'/);
+  assert.doesNotMatch(coordinationWriter, /spawnSync|gh api|gh issue|bulk migrat/i);
 });
 
 test('public entry points route to security, contribution, architecture, and license owners', () => {

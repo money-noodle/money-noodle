@@ -80,6 +80,52 @@ function claimIssue({
 }
 
 const ACTIVE_CLAIM = claimIssue({ number: 9, state: 'active' });
+
+function v2ReadyIssue(number, overrides = {}) {
+  const fields = {
+    'Registry-Schema-Version': '2',
+    'Parent-Plan': '#2',
+    'Scope-Paths': 'tools/**',
+    'Depends-On': 'none',
+    'Dependency-Notes': 'none',
+    'Integration-Owner': 'maintainer',
+    'Reconciled-Claim-Comment-IDs': 'none',
+    'Claim-State': 'ready',
+    'Claim-Harness': 'unclaimed',
+    'Claim-Run-ID': 'unclaimed',
+    'Claim-Agent': 'unclaimed',
+    'Claim-Branch': 'unclaimed',
+    'Claim-Host': 'unclaimed',
+    'Claimed-At': 'unclaimed',
+    'Check-In-By': 'unclaimed',
+    'Waiting-Since': 'unclaimed',
+    'Checkpoint-Evidence-Version': '1',
+    'Checkpoint-State': 'ready',
+    'Checkpoint-At': 'unclaimed',
+    'Checkpoint-Commit': 'uncommitted',
+    'Checkpoint-Changed-Path-Count': '0',
+    'Checkpoint-Checks-Verdict': 'unavailable',
+    'Checkpoint-CI-Run': 'unavailable',
+    'Checkpoint-CI-Commit': 'unavailable',
+    'Checkpoint-Security-Impact': 'unknown',
+    'Checkpoint-Tenant-Impact': 'unknown',
+    'Checkpoint-Provider-Impact': 'unknown',
+    'Checkpoint-Deployment-Impact': 'unknown',
+    'Checkpoint-Residual-Risk-Count': '0',
+    'Next-Action': 'claim after the full protocol',
+    Blockers: 'none',
+    ...overrides,
+  };
+  return restIssue({
+    number,
+    title: `Work: v2 record ${number}`,
+    body: `${Object.entries(fields)
+      .map(([name, value]) => `${name}: ${value}`)
+      .join('\n')}\n`,
+    labels: ['work:ready'],
+  });
+}
+
 const UNRELATED_ISSUE = restIssue({
   number: 42,
   title: 'Not coordinated work',
@@ -232,6 +278,41 @@ test('versioned JSON mode is one parseable document with candidate safety explic
   assert.equal(report.registry.workItems[0].triage, 'candidate');
   assert.equal(report.registry.workItems[0].candidateSafety, 'not-established');
   assert.match(report.advisory, /never proves that claiming is safe/);
+});
+
+test('mixed v1/v2 JSON exposes each record schema without changing candidate ordering', (t) => {
+  const readyV2 = v2ReadyIssue(11);
+  const responses = defaultResponses();
+  responses[`api:${ISSUES_ENDPOINT}`] = {
+    stdout: JSON.stringify([[PLAN_ISSUE, ACTIVE_CLAIM, readyV2]]),
+  };
+  const result = runStatus(t, { responses, args: ['--json'] });
+  const report = JSON.parse(result.stdout);
+  const v1 = report.registry.workItems.find(({ number }) => number === 9);
+  const v2 = report.registry.workItems.find(({ number }) => number === 11);
+
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual([v1.number, v2.number], [9, 11]);
+  assert.equal(v1.registrySchema.version, '1');
+  assert.equal(v1.registrySchema.explicit, false);
+  assert.equal(v2.registrySchema.version, '2');
+  assert.equal(v2.registrySchema.explicit, true);
+  assert.equal(v2.triage, 'candidate');
+  assert.deepEqual(v2.scopePaths, ['tools/**']);
+});
+
+test('unsupported and malformed host edits remain on the human board and fail closed', (t) => {
+  const unsupported = v2ReadyIssue(12, { 'Registry-Schema-Version': 'future' });
+  const responses = defaultResponses();
+  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE, unsupported]]) };
+  const result = runStatus(t, { responses });
+
+  assert.equal(result.exitCode, 2);
+  assert.match(result.stdout, /#12 \[ready; question\]/);
+  assert.match(result.stdout, /## Unparseable or unsupported registry records/);
+  assert.match(result.stdout, /schema=vfuture status=unsupported/);
+  assert.match(result.stdout, /unsupported-schema-version/);
+  assert.doesNotMatch(result.stdout, /#12 dependencies clear; claiming safety not established/);
 });
 
 test('issue and pull request retrieval consumes records beyond the first API page', (t) => {
