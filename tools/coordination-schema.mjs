@@ -737,6 +737,27 @@ export function validatePlanBody(body) {
   };
 }
 
+export function validatePlanComment(body, planRecord) {
+  if (typeof body !== 'string') throw new TypeError('plan comment must be a string');
+  if (planRecord?.version !== '2') {
+    return { applicable: false, valid: false, fields: {}, errors: [] };
+  }
+
+  const record = structuredRecord(body, [...V2_PLAN_FIELDS, 'Coordination-Write-ID']);
+  const errors = [];
+  requireFields(record, V2_PLAN_FIELDS, errors);
+  if (!errors.some(({ code }) => ['missing-field', 'duplicate-field'].includes(code))) {
+    for (const field of V2_PLAN_FIELDS) {
+      if (record.fields[field] !== planRecord.fields[field]) {
+        errors.push(
+          problem('body-comment-mismatch', field, `${field} does not match the proposed body`),
+        );
+      }
+    }
+  }
+  return { applicable: true, valid: errors.length === 0, fields: record.fields, errors };
+}
+
 export function validateCheckpointComment(body, workRecord) {
   if (typeof body !== 'string') throw new TypeError('checkpoint comment must be a string');
   const commentShape = structuredRecord(body, ['Claim-Worktree', 'Claim-Host']);

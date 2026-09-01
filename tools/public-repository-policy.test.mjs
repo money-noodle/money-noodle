@@ -703,6 +703,13 @@ test('registry v2 policy preserves mixed-version, non-atomic, and bootstrap boun
     parallelWork,
     /Body, state-label, and append-only comment updates are separate non-atomic host surfaces/i,
   );
+  assert.match(
+    parallelWork,
+    /final snapshot[^.!?\n]{0,160}body[^.!?\n]{0,80}label[^.!?\n]{0,80}comment/i,
+  );
+  assert.match(parallelWork, /complete` maps to `work:done`/i);
+  assert.match(parallelWork, /single-record and explicitly invoked/i);
+  assert.match(parallelWork, /performs no discovery[^.!?\n]{0,100}automatic migration/i);
   assert.match(parallelWork, /#42 and #44/);
   assert.match(parallelWork, /#41 itself remains implicit v1/i);
   assert.match(
@@ -721,7 +728,11 @@ test('registry v2 policy preserves mixed-version, non-atomic, and bootstrap boun
   assert.match(coordinationWriter, /replaceStateLabel/);
   assert.match(coordinationWriter, /addComment/);
   assert.match(coordinationWriter, /status: 'partial'/);
-  assert.doesNotMatch(coordinationWriter, /spawnSync|gh api|gh issue|bulk migrat/i);
+  assert.match(coordinationWriter, /--dry-run/);
+  assert.match(coordinationWriter, /--apply/);
+  assert.match(coordinationWriter, /createGitHubCliHost/);
+  assert.match(coordinationWriter, /finalVerification/);
+  assert.doesNotMatch(coordinationWriter, /spawnSync|gh issue|bulk migrat/i);
 });
 
 test('public entry points route to security, contribution, architecture, and license owners', () => {

@@ -1,15 +1,29 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { CHECKPOINT_EVIDENCE_FIELDS, V2_PORTABLE_CLAIM_FIELDS } from './coordination-schema.mjs';
+import {
+  CHECKPOINT_EVIDENCE_FIELDS,
+  V2_PLAN_FIELDS,
+  V2_PORTABLE_CLAIM_FIELDS,
+} from './coordination-schema.mjs';
 import {
   CoordinationWriteError,
   executeCoordinationWrite,
   prepareCoordinationWrite,
+  runCoordinationWriteCli,
 } from './coordination-write.mjs';
 
 const COMMIT = 'c'.repeat(40);
 const RUN = 'https://github.com/money-noodle/money-noodle/actions/runs/456';
+const PLAN_V1_BODY = `## Outcome
+
+Preserve the shared-plan narrative.
+
+Plan-State: active
+Integration-Owner: maintainer
+Last-Plan-Update: 2026-09-01T01:00:00Z
+`;
+
 const V1_BODY = `## Parent shared plan
 
 Parent-Plan: #27
@@ -86,11 +100,35 @@ function checkpointComment(fields = values()) {
     .join('\n');
 }
 
+function planValues(overrides = {}) {
+  return {
+    'Registry-Schema-Version': '2',
+    'Plan-State': 'complete',
+    'Integration-Owner': 'maintainer',
+    'Last-Plan-Update': '2026-09-01T04:00:00Z',
+    ...overrides,
+  };
+}
+
+function planComment(fields = planValues()) {
+  return V2_PLAN_FIELDS.map((field) => `${field}: ${fields[field]}`).join('\n');
+}
+
+const TEST_STATE_LABELS = new Set([
+  'work:proposed',
+  'work:ready',
+  'work:active',
+  'work:blocked',
+  'work:review',
+  'work:done',
+  'work:abandoned',
+]);
+
 class MockHost {
-  constructor(body = V1_BODY) {
+  constructor(body = V1_BODY, labels = ['work:ready', 'area:foundation']) {
     this.issue = {
       body,
-      labels: ['work:ready', 'area:foundation'],
+      labels,
       comments: [
         {
           id: 1,
@@ -100,6 +138,7 @@ class MockHost {
     };
     this.calls = [];
     this.fail = {};
+    this.afterComment = undefined;
   }
 
   snapshot() {
@@ -119,13 +158,17 @@ class MockHost {
 
   async replaceStateLabel(_number, label) {
     this.calls.push('label');
-    this.issue.labels = [...this.issue.labels.filter((entry) => !entry.startsWith('work:')), label];
+    this.issue.labels = [
+      ...this.issue.labels.filter((entry) => !TEST_STATE_LABELS.has(entry)),
+      label,
+    ];
     if (this.fail.label) throw new Error(this.fail.label);
   }
 
   async addComment(_number, body) {
     this.calls.push('comment');
     this.issue.comments.push({ id: this.issue.comments.length + 1, body });
+    this.afterComment?.(this.issue);
     if (this.fail.comment) throw new Error(this.fail.comment);
   }
 
@@ -231,6 +274,50 @@ test('a valid write uses exactly one body request and completes separate label a
   assert.equal(host.issue.comments.length, 2);
   assert.match(host.issue.comments[1].body, /^Coordination-Write-ID: write-41\n/);
   assert(host.issue.labels.includes('work:active'));
+});
+
+test('body drift during comment creation fails coherent final verification', async () => {
+  const host = new MockHost();
+  host.afterComment = (issue) => {
+    issue.body = `${issue.body}\nConcurrent-Body-Edit: present\n`;
+  };
+  const result = await executeCoordinationWrite({
+    host,
+    issueNumber: 41,
+    expectedBody: V1_BODY,
+    values: values(),
+    checkpointComment: checkpointComment(),
+    operationId: 'body-drift-41',
+  });
+
+  assert.equal(result.status, 'collision');
+  assert.equal(result.stage, 'final-verification');
+  assert.deepEqual(result.finalVerification, { body: false, label: true, comment: true });
+});
+
+test('label drift after label verification is surfaced and retry repairs only that surface', async () => {
+  const host = new MockHost();
+  host.afterComment = (issue) => {
+    issue.labels = [...issue.labels.filter((label) => !TEST_STATE_LABELS.has(label)), 'work:ready'];
+    host.afterComment = undefined;
+  };
+  const input = {
+    host,
+    issueNumber: 41,
+    expectedBody: V1_BODY,
+    values: values(),
+    checkpointComment: checkpointComment(),
+    operationId: 'label-drift-41',
+  };
+  const first = await executeCoordinationWrite(input);
+
+  assert.equal(first.status, 'partial');
+  assert.equal(first.stage, 'final-verification');
+  assert.deepEqual(first.finalVerification, { body: true, label: false, comment: true });
+  const second = await executeCoordinationWrite(input);
+  assert.equal(second.status, 'complete');
+  assert.deepEqual(second.mutations, { body: 0, label: 1, comment: 0 });
+  assert.deepEqual(second.finalVerification, { body: true, label: true, comment: true });
 });
 
 test('a changed host body is a detected collision with no mutation', async () => {
@@ -353,6 +440,37 @@ test('comment uncertainty resumes by operation marker without duplicating histor
   assert.equal(host.issue.comments.length, 2);
 });
 
+test('shared-plan migration maps complete to work:done and resumes an interrupted write', async () => {
+  const host = new MockHost(PLAN_V1_BODY, ['work:plan', 'work:active', 'area:foundation']);
+  host.fail.label = 'response lost after plan label update';
+  const input = {
+    host,
+    issueNumber: 27,
+    expectedBody: PLAN_V1_BODY,
+    values: planValues(),
+    checkpointComment: planComment(),
+    operationId: 'plan-complete-27',
+    kind: 'plan',
+  };
+  const first = await executeCoordinationWrite(input);
+
+  assert.equal(first.status, 'partial');
+  assert.equal(first.stage, 'label');
+  assert.match(host.issue.body, /Registry-Schema-Version: 2/);
+  assert(host.issue.labels.includes('work:plan'));
+  assert(host.issue.labels.includes('work:done'));
+  delete host.fail.label;
+
+  const second = await executeCoordinationWrite(input);
+  assert.equal(second.status, 'complete');
+  assert.equal(second.migrated, true);
+  assert.equal(second.desiredLabel, 'work:done');
+  assert.deepEqual(second.mutations, { body: 0, label: 0, comment: 1 });
+  assert.deepEqual(second.finalVerification, { body: true, label: true, comment: true });
+  assert.equal(host.calls.filter((entry) => entry === 'body').length, 1);
+  assert.equal(host.issue.comments.length, 2);
+});
+
 test('a repeated completed write is idempotent across every host surface', async () => {
   const host = new MockHost();
   const input = {
@@ -368,5 +486,123 @@ test('a repeated completed write is idempotent across every host surface', async
 
   assert.equal(repeat.status, 'complete');
   assert.deepEqual(repeat.mutations, { body: 0, label: 0, comment: 0 });
+  assert.deepEqual(repeat.finalVerification, { body: true, label: true, comment: true });
   assert.equal(host.issue.comments.length, 2);
+});
+
+function cliArguments(mode = '--dry-run') {
+  return [
+    mode,
+    '--repo',
+    'money-noodle/money-noodle',
+    '--issue',
+    '41',
+    '--kind',
+    'work-item',
+    '--expected-body-file',
+    'body.md',
+    '--values-file',
+    'values.json',
+    '--comment-file',
+    'comment.md',
+    '--operation-id',
+    'cli-write-41',
+  ];
+}
+
+function cliFiles(fieldValues = values()) {
+  return new Map([
+    ['body.md', V1_BODY],
+    ['values.json', JSON.stringify(fieldValues)],
+    ['comment.md', checkpointComment(fieldValues)],
+  ]);
+}
+
+function mockedGhAdapter() {
+  const issue = {
+    body: V1_BODY,
+    labels: ['work:ready', 'area:foundation'],
+    comments: [{ id: 1, body: 'Immutable historical evidence.' }],
+  };
+  const calls = [];
+  const runGh = async (args, input) => {
+    calls.push({ args: [...args], input });
+    const endpoint = args.find((argument) => argument.startsWith('repos/'));
+    const methodIndex = args.indexOf('--method');
+    const method = methodIndex < 0 ? 'GET' : args[methodIndex + 1];
+    if (args.includes('--paginate')) return JSON.stringify([issue.comments]);
+    if (method === 'PATCH') {
+      const payload = JSON.parse(input);
+      if (payload.body !== undefined) issue.body = payload.body;
+      if (payload.labels !== undefined) issue.labels = payload.labels;
+    } else if (method === 'POST' && endpoint.endsWith('/comments')) {
+      issue.comments.push({ id: issue.comments.length + 1, body: JSON.parse(input).body });
+      return JSON.stringify(issue.comments.at(-1));
+    }
+    return JSON.stringify({
+      body: issue.body,
+      labels: issue.labels.map((name) => ({ name })),
+    });
+  };
+  return { issue, calls, runGh };
+}
+
+test('explicit adapter dry-run validates and previews without invoking GitHub', async () => {
+  const files = cliFiles();
+  const outputs = [];
+  let ghCalls = 0;
+  const result = await runCoordinationWriteCli({
+    argv: cliArguments('--dry-run'),
+    readText: async (path) => files.get(path),
+    runGh: async () => {
+      ghCalls += 1;
+      throw new Error('dry-run must not invoke GitHub');
+    },
+    writeOutput: (text) => outputs.push(text),
+  });
+
+  assert.equal(result.status, 'dry-run');
+  assert.equal(result.migrated, true);
+  assert.equal(result.desiredLabel, 'work:active');
+  assert.equal(ghCalls, 0);
+  assert.equal(JSON.parse(outputs.join('')).status, 'dry-run');
+});
+
+test('explicit adapter apply performs one bounded issue write and verifies all surfaces', async () => {
+  const files = cliFiles();
+  const adapter = mockedGhAdapter();
+  const result = await runCoordinationWriteCli({
+    argv: cliArguments('--apply'),
+    readText: async (path) => files.get(path),
+    runGh: adapter.runGh,
+    writeOutput: () => {},
+  });
+
+  assert.equal(result.status, 'complete');
+  assert.deepEqual(result.mutations, { body: 1, label: 1, comment: 1 });
+  assert.deepEqual(result.finalVerification, { body: true, label: true, comment: true });
+  assert.equal(adapter.calls.filter(({ args }) => args.includes('PATCH')).length, 2);
+  assert.equal(adapter.calls.filter(({ args }) => args.includes('POST')).length, 1);
+  assert(adapter.issue.labels.includes('work:active'));
+  assert.equal(adapter.issue.comments.length, 2);
+});
+
+test('explicit adapter apply rejects invalid input before any GitHub call or mutation', async () => {
+  const invalid = values({ 'Check-In-By': 'unclaimed' });
+  const files = cliFiles(invalid);
+  let ghCalls = 0;
+
+  await assert.rejects(
+    runCoordinationWriteCli({
+      argv: cliArguments('--apply'),
+      readText: async (path) => files.get(path),
+      runGh: async () => {
+        ghCalls += 1;
+        return '{}';
+      },
+      writeOutput: () => {},
+    }),
+    (error) => error instanceof CoordinationWriteError && error.code === 'invalid-proposed-record',
+  );
+  assert.equal(ghCalls, 0);
 });
