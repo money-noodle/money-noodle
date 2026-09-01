@@ -2,11 +2,12 @@
 
 import { spawnSync } from "node:child_process";
 
+import { parseReservedClaimRef } from './coordination-claim.mjs';
 import {
   SCHEMA_VERSION,
   analyzeCoordination,
   isoInstantMilliseconds,
-} from "./coordination-lib.mjs";
+} from './coordination-lib.mjs';
 
 const REQUIRED_LABELS = [
   "work:plan",
@@ -46,13 +47,21 @@ function parseJson(text, context) {
 
 function apiPages(endpoint) {
   const pages = parseJson(
-    run("gh", ["api", "--paginate", "--slurp", endpoint]).stdout,
+    run('gh', ['api', '--paginate', '--slurp', endpoint]).stdout,
     `gh api ${endpoint}`,
   );
   if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page))) {
     throw new Error(`gh api ${endpoint} returned an invalid paginated response`);
   }
   return pages.flat();
+}
+
+function apiRecord(endpoint) {
+  const record = parseJson(run('gh', ['api', endpoint]).stdout, `gh api ${endpoint}`);
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    throw new Error(`gh api ${endpoint} returned an invalid record`);
+  }
+  return record;
 }
 
 function requiredString(value, context) {
@@ -102,8 +111,17 @@ function normalizeComment(comment, issueNumber) {
   };
 }
 
+function normalizeRemoteRef(record, index) {
+  const context = `GitHub reserved claim ref ${index + 1}`;
+  return {
+    ref: requiredString(record?.ref, `${context} ref`),
+    objectType: requiredString(record?.object?.type, `${context} object type`),
+    sha: requiredString(record?.object?.sha, `${context} object sha`),
+  };
+}
+
 function normalizePullRequest(pr) {
-  if (!Number.isInteger(pr?.number)) throw new Error("GitHub pull request number must be an integer");
+  if (!Number.isInteger(pr?.number)) throw new Error('GitHub pull request number must be an integer');
   const context = `GitHub pull request #${pr.number}`;
   return {
     number: pr.number,
@@ -183,9 +201,23 @@ function readRegistry(local, nowMs) {
   );
   const missingLabels = REQUIRED_LABELS.filter((label) => !availableLabels.has(label));
 
-  const issueRecords = apiPages(`repos/${repository}/issues?state=all&per_page=100`)
+  let issueRecords = apiPages(`repos/${repository}/issues?state=all&per_page=100`)
     .filter((issue) => !issue?.pull_request)
     .map(normalizeIssue);
+  const reservedRefs = apiPages(
+    `repos/${repository}/git/matching-refs/heads/claim-v?per_page=100`,
+  ).map(normalizeRemoteRef);
+  const issueByNumber = new Map(issueRecords.map((issue) => [issue.number, issue]));
+  for (const remote of reservedRefs) {
+    const mapping = parseReservedClaimRef(remote.ref);
+    if (mapping.status !== 'supported') continue;
+    const listed = issueByNumber.get(mapping.issueNumber);
+    if (!listed || listed.state === 'closed') {
+      const direct = normalizeIssue(apiRecord(`repos/${repository}/issues/${mapping.issueNumber}`));
+      issueByNumber.set(direct.number, direct);
+    }
+  }
+  issueRecords = [...issueByNumber.values()];
   const commentsByIssue = new Map();
   for (const issue of issueRecords.filter(({ state }) => state === "open")) {
     const comments = apiPages(`repos/${repository}/issues/${issue.number}/comments?per_page=100`).map(
@@ -197,16 +229,26 @@ function readRegistry(local, nowMs) {
   const pullRequests = apiPages(`repos/${repository}/pulls?state=open&per_page=100`).map(
     normalizePullRequest,
   );
-  const coordination = analyzeCoordination({ issues: issueRecords, commentsByIssue, local, nowMs });
-  const maintainerQuestions = [...coordination.plans, ...coordination.workItems].flatMap(
-    (item) => item.questions.map((entry) => ({ issueNumber: item.number, ...entry })),
-  );
+  const coordination = analyzeCoordination({
+    issues: issueRecords,
+    commentsByIssue,
+    local,
+    reservedRefs,
+    nowMs,
+  });
+  const maintainerQuestions = [
+    ...[...coordination.plans, ...coordination.workItems].flatMap((item) =>
+      item.questions.map((entry) => ({ issueNumber: item.number, ...entry })),
+    ),
+    ...coordination.remoteClaims.questions,
+  ];
 
   return {
     repository,
     labels: { required: REQUIRED_LABELS, missing: missingLabels },
     plans: coordination.plans,
     workItems: coordination.workItems,
+    remoteClaims: coordination.remoteClaims,
     pullRequests,
     maintainerQuestions,
   };
@@ -312,7 +354,15 @@ function renderHuman(report) {
     }
   }
 
-  section("Ready candidates (evidence only)");
+  section('Reserved claim references');
+  if (registry.remoteClaims.refs.length === 0) console.log('none');
+  for (const remote of registry.remoteClaims.refs) {
+    console.log(
+      `${remote.ref} ${remote.sha} mapping=${remote.mapping.status}${remote.mapping.issueNumber ? ` issue=#${remote.mapping.issueNumber}` : ''}`,
+    );
+  }
+
+  section('Ready candidates (evidence only)');
   const candidates = registry.workItems.filter(({ triage }) => triage === "candidate");
   if (candidates.length === 0) console.log("none");
   for (const item of candidates) {

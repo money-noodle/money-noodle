@@ -41,14 +41,14 @@ Reconciled-Claim-Comment-IDs: none
 
 ## Portable claim
 
-Claim-State: ready
-Claim-Harness: unclaimed
-Claim-Run-ID: unclaimed
-Claim-Agent: unclaimed
-Claim-Branch: unclaimed
-Claim-Worktree: unclaimed
-Claimed-At: unclaimed
-Check-In-By: unclaimed
+Claim-State: active
+Claim-Harness: pi
+Claim-Run-ID: run-41
+Claim-Agent: writer-test
+Claim-Branch: arch/writer-test
+Claim-Worktree: /historical/writer-test
+Claimed-At: 2026-09-01T01:00:00Z
+Check-In-By: 2026-09-01T07:00:00Z
 
 ## Current checkpoint
 
@@ -253,6 +253,80 @@ test('incomplete or semantically invalid writes issue zero host mutations', asyn
   );
   assert.equal(host.mutationCount(), 0);
   assert.deepEqual(host.snapshot(), before);
+});
+
+test('the general writer rejects every parked-to-agent-owned transition before host mutation', async () => {
+  const readyBody = V1_BODY.replace('Claim-State: active', 'Claim-State: ready')
+    .replace('Claim-Harness: pi', 'Claim-Harness: unclaimed')
+    .replace('Claim-Run-ID: run-41', 'Claim-Run-ID: unclaimed')
+    .replace('Claim-Agent: writer-test', 'Claim-Agent: unclaimed')
+    .replace('Claim-Branch: arch/writer-test', 'Claim-Branch: unclaimed')
+    .replace('Claim-Worktree: /historical/writer-test', 'Claim-Worktree: unclaimed')
+    .replace('Claimed-At: 2026-09-01T01:00:00Z', 'Claimed-At: unclaimed')
+    .replace('Check-In-By: 2026-09-01T07:00:00Z', 'Check-In-By: unclaimed');
+  for (const sourceState of ['ready', 'proposed']) {
+    for (const targetState of ['active', 'review']) {
+      const source = readyBody.replace('Claim-State: ready', `Claim-State: ${sourceState}`);
+      const host = new MockHost(source, [`work:${sourceState}`, 'area:foundation']);
+      const target = values({
+        'Claim-State': targetState,
+        'Claim-Branch': 'claim-v1/issue-42',
+        'Checkpoint-State': targetState,
+      });
+      await assert.rejects(
+        executeCoordinationWrite({
+          host,
+          issueNumber: 42,
+          expectedBody: source,
+          values: target,
+          checkpointComment: checkpointComment(target),
+          operationId: `direct-${sourceState}-${targetState}`,
+        }),
+        (error) =>
+          error instanceof CoordinationWriteError &&
+          error.code === 'initial-claim-requires-reference',
+      );
+      assert.equal(host.mutationCount(), 0);
+    }
+  }
+
+  const target = values({ 'Claim-Branch': 'claim-v1/issue-42' });
+  const files = new Map([
+    ['ready.md', readyBody],
+    ['values.json', JSON.stringify(target)],
+    ['comment.md', checkpointComment(target)],
+  ]);
+  let ghCalls = 0;
+  await assert.rejects(
+    runCoordinationWriteCli({
+      argv: [
+        '--dry-run',
+        '--repo',
+        'money-noodle/money-noodle',
+        '--issue',
+        '42',
+        '--kind',
+        'work-item',
+        '--expected-body-file',
+        'ready.md',
+        '--values-file',
+        'values.json',
+        '--comment-file',
+        'comment.md',
+        '--operation-id',
+        'direct-cli-42',
+      ],
+      readText: async (path) => files.get(path),
+      runGh: async () => {
+        ghCalls += 1;
+        throw new Error('rejection must happen before GitHub');
+      },
+      writeOutput: () => {},
+    }),
+    (error) =>
+      error instanceof CoordinationWriteError && error.code === 'initial-claim-requires-reference',
+  );
+  assert.equal(ghCalls, 0);
 });
 
 test('a valid write uses exactly one body request and completes separate label and comment surfaces', async () => {

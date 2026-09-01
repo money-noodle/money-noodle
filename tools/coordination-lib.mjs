@@ -1,4 +1,10 @@
 import {
+  BOOTSTRAP_BRANCH,
+  BOOTSTRAP_ISSUE,
+  parseReservedClaimRef,
+  validateClaimBranch,
+} from './coordination-claim.mjs';
+import {
   CHECKPOINT_EVIDENCE_FIELDS,
   V1_PORTABLE_CLAIM_FIELDS,
   V2_PORTABLE_CLAIM_FIELDS,
@@ -639,7 +645,145 @@ export function isCoordinatedIssue(issue, comments = []) {
   return comments.some((comment) => hasClaimSignal(comment.body));
 }
 
-export function analyzeCoordination({ issues, commentsByIssue, local, nowMs = Date.now() }) {
+function addRemoteQuestion(item, code, message) {
+  item.questions.push(question(code, message));
+  item.reconciliation = 'question';
+  item.triage = 'question';
+}
+
+export function reconcileRemoteClaims({ issues, workItems, reservedRefs = [] }) {
+  const issueByNumber = new Map(issues.map((issue) => [issue.number, issue]));
+  const itemByNumber = new Map(workItems.map((item) => [item.number, item]));
+  const refsByIssue = new Map();
+  const questions = [];
+
+  for (const remote of reservedRefs) {
+    const parsed = parseReservedClaimRef(remote.ref);
+    const evidence = { ...remote, mapping: parsed };
+    if (remote.objectType !== 'commit' || !/^[0-9a-f]{40}$/.test(remote.sha ?? '')) {
+      questions.push(
+        question(
+          'malformed-claim-ref-object',
+          `reserved ref ${remote.ref} must identify one full commit object`,
+        ),
+      );
+      continue;
+    }
+    if (parsed.status !== 'supported') {
+      questions.push(
+        question(
+          parsed.status === 'unsupported'
+            ? 'unsupported-claim-ref-version'
+            : 'malformed-claim-ref',
+          `reserved ref ${remote.ref} is ${parsed.status}`,
+        ),
+      );
+      continue;
+    }
+    evidence.issueNumber = parsed.issueNumber;
+    refsByIssue.set(parsed.issueNumber, [...(refsByIssue.get(parsed.issueNumber) ?? []), evidence]);
+    const issue = issueByNumber.get(parsed.issueNumber);
+    if (!issue) {
+      questions.push(
+        question('claim-ref-issue-missing', `${remote.ref} maps to missing issue #${parsed.issueNumber}`),
+      );
+      continue;
+    }
+    const schema = validateWorkItemBody(issue.body);
+    const fields = schema.fields ?? {};
+    const state = fields['Claim-State'];
+    const branch = fields['Claim-Branch'];
+    if (!schema.valid) {
+      questions.push(
+        question('claim-ref-issue-malformed', `${remote.ref} maps to a malformed issue record`),
+      );
+    } else if (['proposed', 'ready'].includes(state)) {
+      questions.push(
+        question(
+          'orphaned-claim-ref',
+          `${remote.ref} exists while issue #${parsed.issueNumber} is ${state}; do not adopt or release it automatically`,
+        ),
+      );
+    } else if (branch !== parsed.branch) {
+      questions.push(
+        question(
+          'claim-ref-branch-mismatch',
+          `${remote.ref} disagrees with issue #${parsed.issueNumber} Claim-Branch ${branch}`,
+        ),
+      );
+    }
+  }
+
+  for (const item of workItems.filter(
+    ({ claimState, registrySchema }) =>
+      registrySchema?.version === '2' && ['active', 'review'].includes(claimState),
+  )) {
+    const branch = item.claim['Claim-Branch'];
+    const validation = validateClaimBranch({
+      issueNumber: item.number,
+      claimState: item.claimState,
+      branch,
+    });
+    item.remoteClaim = {
+      branchStatus: validation.status,
+      expectedBranch: validation.expected ?? null,
+      matchingRefs: refsByIssue.get(item.number) ?? [],
+    };
+    if (validation.status === 'invalid') {
+      addRemoteQuestion(
+        item,
+        validation.code,
+        `Claim-Branch ${branch} is invalid for #${item.number}; expected ${validation.expected}`,
+      );
+    } else if (validation.status === 'derived' && item.remoteClaim.matchingRefs.length !== 1) {
+      addRemoteQuestion(
+        item,
+        item.remoteClaim.matchingRefs.length === 0
+          ? 'derived-claim-ref-missing'
+          : 'duplicate-derived-claim-ref',
+        `derived claim #${item.number} requires exactly one matching remote ref`,
+      );
+    }
+  }
+
+  const bootstrap = workItems.find(
+    (item) =>
+      item.number === BOOTSTRAP_ISSUE &&
+      item.registrySchema?.version === '2' &&
+      ['active', 'review'].includes(item.claimState) &&
+      item.claim['Claim-Branch'] === BOOTSTRAP_BRANCH,
+  );
+  if (bootstrap) {
+    for (const competing of workItems.filter(
+      (item) =>
+        item.number !== BOOTSTRAP_ISSUE && ['active', 'review'].includes(item.claimState),
+    )) {
+      addRemoteQuestion(
+        competing,
+        'claim-primitive-rollout-blocked',
+        `#${competing.number} is agent-owned while the #42 bootstrap claim is active`,
+      );
+      addRemoteQuestion(
+        bootstrap,
+        'claim-primitive-rollout-blocked',
+        `#42 cannot activate while #${competing.number} is active or in review`,
+      );
+    }
+  }
+
+  return {
+    refs: reservedRefs.map((remote) => ({ ...remote, mapping: parseReservedClaimRef(remote.ref) })),
+    questions,
+  };
+}
+
+export function analyzeCoordination({
+  issues,
+  commentsByIssue,
+  local,
+  reservedRefs = [],
+  nowMs = Date.now(),
+}) {
   const issueByNumber = new Map(issues.map((issue) => [issue.number, issue]));
   const openIssues = issues.filter((issue) => issue.state === "open");
   const coordinated = openIssues.filter((issue) =>
@@ -675,6 +819,8 @@ export function analyzeCoordination({ issues, commentsByIssue, local, nowMs = Da
     .filter((issue) => !issue.labels.includes("work:plan"))
     .map((issue) => analyzeWorkItem(issue, commentsByIssue.get(issue.number) ?? [], issueByNumber, local, nowMs));
 
+  const remoteClaims = reconcileRemoteClaims({ issues, workItems, reservedRefs });
+
   for (const key of ["Claim-Branch", "Claim-Worktree"]) {
     const groups = new Map();
     for (const item of workItems.filter((candidate) => NONTERMINAL_CLAIMED_STATES.has(candidate.claimState))) {
@@ -697,5 +843,5 @@ export function analyzeCoordination({ issues, commentsByIssue, local, nowMs = Da
     }
   }
 
-  return { plans, workItems };
+  return { plans, workItems, remoteClaims };
 }

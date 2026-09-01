@@ -8,6 +8,7 @@ import {
   hasClaimSignal,
   isCoordinatedIssue,
   parseDependencies,
+  reconcileRemoteClaims,
   staleClaimReason,
   structuredFields,
 } from "./coordination-lib.mjs";
@@ -78,6 +79,70 @@ function checkpointComment({
 }
 
 const EMPTY_LOCAL = { branches: [], worktrees: [], status: "" };
+
+function remoteItem(number, branch, state = 'active') {
+  return {
+    number,
+    claimState: state,
+    registrySchema: { version: '2', valid: true },
+    claim: { 'Claim-Branch': branch },
+    questions: [],
+    reconciliation: 'consistent',
+    triage: state === 'active' ? 'claimed' : 'review',
+  };
+}
+
+test('remote claim reconciliation accepts exact derived refs and fails closed on absence', () => {
+  const present = remoteItem(73, 'claim-v1/issue-73');
+  const withRef = reconcileRemoteClaims({
+    issues: [],
+    workItems: [present],
+    reservedRefs: [
+      {
+        ref: 'refs/heads/claim-v1/issue-73',
+        objectType: 'commit',
+        sha: 'a'.repeat(40),
+      },
+    ],
+  });
+  assert.equal(present.remoteClaim.branchStatus, 'derived');
+  assert.equal(present.remoteClaim.matchingRefs.length, 1);
+  assert.equal(present.questions.length, 0);
+  assert.equal(withRef.refs[0].mapping.issueNumber, 73);
+
+  const absent = remoteItem(74, 'claim-v1/issue-74');
+  reconcileRemoteClaims({ issues: [], workItems: [absent], reservedRefs: [] });
+  assert(absent.questions.some(({ code }) => code === 'derived-claim-ref-missing'));
+  assert.equal(absent.reconciliation, 'question');
+});
+
+test('the exact #42 bootstrap is sole and every competing active claim blocks rollout', () => {
+  const bootstrap = remoteItem(42, 'arch/remote-reference-claim-primitive');
+  const competing = remoteItem(73, 'claim-v1/issue-73');
+  const legacyCompeting = remoteItem(74, 'arch/legacy-active');
+  legacyCompeting.registrySchema.version = '1';
+  reconcileRemoteClaims({
+    issues: [],
+    workItems: [bootstrap, competing, legacyCompeting],
+    reservedRefs: [
+      {
+        ref: 'refs/heads/claim-v1/issue-73',
+        objectType: 'commit',
+        sha: 'a'.repeat(40),
+      },
+    ],
+  });
+  assert.equal(bootstrap.remoteClaim.branchStatus, 'bootstrap');
+  assert(bootstrap.questions.some(({ code }) => code === 'claim-primitive-rollout-blocked'));
+  assert(competing.questions.some(({ code }) => code === 'claim-primitive-rollout-blocked'));
+  assert(
+    legacyCompeting.questions.some(({ code }) => code === 'claim-primitive-rollout-blocked'),
+  );
+  assert.equal(
+    bootstrap.questions.filter(({ code }) => code === 'claim-primitive-rollout-blocked').length,
+    2,
+  );
+});
 
 test("structured fields read exact portable names and report duplicates", () => {
   const body = "Claim-State: ready\nClaim-Agent: first\nClaim-Agent: second\n";

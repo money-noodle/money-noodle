@@ -87,7 +87,7 @@ function validatePrepared(kind, body) {
   return kind === 'plan' ? validatePlanBody(body) : validateWorkItemBody(body);
 }
 
-export function prepareCoordinationWrite({ currentBody, values, kind = 'work-item' }) {
+function prepareCoordinationWriteInternal({ currentBody, values, kind = 'work-item' }, authority) {
   if (typeof currentBody !== 'string') {
     throw new CoordinationWriteError('invalid-current-body', 'current body must be a string');
   }
@@ -168,7 +168,7 @@ export function prepareCoordinationWrite({ currentBody, values, kind = 'work-ite
     );
   }
 
-  return {
+  const prepared = {
     kind,
     body,
     fields: canonical,
@@ -177,6 +177,25 @@ export function prepareCoordinationWrite({ currentBody, values, kind = 'work-ite
     sourceVersion: version.version,
     targetVersion: CURRENT_REGISTRY_SCHEMA_VERSION,
   };
+  if (
+    isInitialClaimTransition(currentBody, prepared) &&
+    authority !== CLAIM_ESTABLISHMENT_AUTHORITY
+  ) {
+    throw new CoordinationWriteError(
+      'initial-claim-requires-reference',
+      'parked-to-agent-owned transitions require the dedicated remote-reference claim module',
+    );
+  }
+  return prepared;
+}
+
+export function prepareCoordinationWrite(input) {
+  return prepareCoordinationWriteInternal(input, undefined);
+}
+
+// This preparation entry point is imported only by coordination-claim.mjs.
+export function prepareClaimCoordinationWrite(input) {
+  return prepareCoordinationWriteInternal(input, CLAIM_ESTABLISHMENT_AUTHORITY);
 }
 
 function stateLabels(labels) {
@@ -188,6 +207,16 @@ function desiredStateLabel(prepared) {
     return `work:${prepared.fields['Plan-State'] === 'complete' ? 'done' : prepared.fields['Plan-State']}`;
   }
   return `work:${prepared.fields['Claim-State']}`;
+}
+
+const CLAIM_ESTABLISHMENT_AUTHORITY = Symbol('claim-establishment-authority');
+const PARKED_STATES = new Set(['proposed', 'ready']);
+const AGENT_OWNED_STATES = new Set(['active', 'review']);
+
+function isInitialClaimTransition(expectedBody, prepared) {
+  if (prepared.kind !== 'work-item') return false;
+  const currentState = structuredRecord(expectedBody, ['Claim-State']).fields['Claim-State'];
+  return PARKED_STATES.has(currentState) && AGENT_OWNED_STATES.has(prepared.fields['Claim-State']);
 }
 
 function writeMarker(operationId) {
@@ -248,15 +277,10 @@ function assertHost(host) {
   }
 }
 
-export async function executeCoordinationWrite({
-  host,
-  issueNumber,
-  expectedBody,
-  values,
-  checkpointComment,
-  operationId,
-  kind = 'work-item',
-}) {
+async function executeCoordinationWriteInternal(
+  { host, issueNumber, expectedBody, values, checkpointComment, operationId, kind = 'work-item' },
+  authority,
+) {
   assertHost(host);
   if (!Number.isSafeInteger(issueNumber) || issueNumber < 1) {
     throw new CoordinationWriteError(
@@ -265,7 +289,10 @@ export async function executeCoordinationWrite({
     );
   }
 
-  const prepared = prepareCoordinationWrite({ currentBody: expectedBody, values, kind });
+  const prepared = prepareCoordinationWriteInternal(
+    { currentBody: expectedBody, values, kind },
+    authority,
+  );
   const { marker, comment: proposedComment } = prepareOperationComment(
     prepared,
     checkpointComment,
@@ -283,6 +310,17 @@ export async function executeCoordinationWrite({
     throw new CoordinationWriteError(
       'invalid-host-read',
       'host.readIssue returned an invalid issue snapshot',
+    );
+  }
+
+  if (
+    isInitialClaimTransition(expectedBody, prepared) &&
+    issue.body !== prepared.body &&
+    authority !== CLAIM_ESTABLISHMENT_AUTHORITY
+  ) {
+    throw new CoordinationWriteError(
+      'initial-claim-requires-reference',
+      'parked-to-agent-owned transitions require the dedicated remote-reference claim module',
     );
   }
 
@@ -421,6 +459,16 @@ export async function executeCoordinationWrite({
     desiredLabel,
     finalVerification,
   };
+}
+
+export async function executeCoordinationWrite(input) {
+  return executeCoordinationWriteInternal(input, undefined);
+}
+
+// This narrow entry point is imported only by coordination-claim.mjs. The ordinary writer and
+// its CLI never receive the module-private authority token.
+export async function executeClaimEstablishmentWrite(input) {
+  return executeCoordinationWriteInternal(input, CLAIM_ESTABLISHMENT_AUTHORITY);
 }
 
 function parseJsonOutput(output, description) {
