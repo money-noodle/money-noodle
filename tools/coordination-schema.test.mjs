@@ -5,19 +5,53 @@ import test from 'node:test';
 import prettier from 'prettier';
 
 import {
+  BOOTSTRAP_BRANCH,
   CHECKPOINT_EVIDENCE_FIELDS,
   V2_PORTABLE_CLAIM_FIELDS,
+  claimBranchForIssue,
+  claimRefForIssue,
   normalizeScopePaths,
+  parseReservedClaimBranch,
+  parseReservedClaimRef,
   parseStrictDependencies,
   registryVersion,
   structuredRecord,
   validateCheckpointComment,
+  validateClaimBranch,
   validatePlanBody,
   validateWorkItemBody,
 } from './coordination-schema.mjs';
 
 const COMMIT = 'a'.repeat(40);
 const RUN = 'https://github.com/money-noodle/money-noodle/actions/runs/123';
+
+test('the pure schema boundary owns deterministic claim branch derivation and parsing', () => {
+  assert.equal(claimBranchForIssue(73), 'claim-v1/issue-73');
+  assert.equal(claimRefForIssue(73), 'refs/heads/claim-v1/issue-73');
+  assert.deepEqual(parseReservedClaimBranch('claim-v1/issue-73'), {
+    status: 'supported',
+    branch: 'claim-v1/issue-73',
+    version: 1,
+    issueNumber: 73,
+    ref: 'refs/heads/claim-v1/issue-73',
+  });
+  assert.equal(parseReservedClaimRef('refs/heads/claim-v2/issue-73').status, 'unsupported');
+  assert.equal(
+    validateClaimBranch({ issueNumber: 42, claimState: 'active', branch: BOOTSTRAP_BRANCH }).status,
+    'bootstrap',
+  );
+  assert.equal(
+    validateClaimBranch({
+      issueNumber: 74,
+      claimState: 'review',
+      branch: 'claim-v1/issue-73',
+    }).code,
+    'claim-branch-issue-mismatch',
+  );
+  for (const invalid of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '73']) {
+    assert.throws(() => claimBranchForIssue(invalid), RangeError);
+  }
+});
 
 function proposedFields(overrides = {}) {
   return {

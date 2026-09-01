@@ -2,7 +2,7 @@
 
 import { spawnSync } from "node:child_process";
 
-import { parseReservedClaimRef } from './coordination-claim.mjs';
+import { parseReservedClaimRef } from './coordination-schema.mjs';
 import {
   SCHEMA_VERSION,
   analyzeCoordination,
@@ -218,8 +218,16 @@ function readRegistry(local, nowMs) {
     }
   }
   issueRecords = [...issueByNumber.values()];
+  const reservedIssueNumbers = new Set(
+    reservedRefs
+      .map(({ ref }) => parseReservedClaimRef(ref))
+      .filter(({ status }) => status === 'supported')
+      .map(({ issueNumber }) => issueNumber),
+  );
   const commentsByIssue = new Map();
-  for (const issue of issueRecords.filter(({ state }) => state === "open")) {
+  for (const issue of issueRecords.filter(
+    ({ number, state }) => state === 'open' || reservedIssueNumbers.has(number),
+  )) {
     const comments = apiPages(`repos/${repository}/issues/${issue.number}/comments?per_page=100`).map(
       (comment) => normalizeComment(comment, issue.number),
     );

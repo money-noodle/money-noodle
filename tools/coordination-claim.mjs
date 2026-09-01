@@ -5,26 +5,41 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import {
+  BOOTSTRAP_BRANCH,
+  BOOTSTRAP_ISSUE,
+  CLAIM_BRANCH_VERSION,
+  CHECKPOINT_EVIDENCE_FIELDS,
+  V1_PORTABLE_CLAIM_FIELDS,
   V2_PORTABLE_CLAIM_FIELDS,
+  claimBranchForIssue,
+  claimRefForIssue,
+  parseReservedClaimBranch,
+  parseReservedClaimRef,
   structuredRecord,
   validateCheckpointComment,
+  validateClaimBranch,
   validateWorkItemBody,
+} from './coordination-schema.mjs';
+
+export {
+  BOOTSTRAP_BRANCH,
+  BOOTSTRAP_ISSUE,
+  CLAIM_BRANCH_VERSION,
+  claimBranchForIssue,
+  claimRefForIssue,
+  parseReservedClaimBranch,
+  parseReservedClaimRef,
+  validateClaimBranch,
 } from './coordination-schema.mjs';
 import {
   createGitHubCliHost,
   executeClaimEstablishmentWrite,
-  prepareClaimCoordinationWrite,
+  prepareClaimEstablishmentWrite,
   runGitHubCli,
 } from './coordination-write.mjs';
 
 export const CANONICAL_REPOSITORY = 'money-noodle/money-noodle';
-export const CLAIM_BRANCH_VERSION = 1;
-export const BOOTSTRAP_ISSUE = 42;
-export const BOOTSTRAP_BRANCH = 'arch/remote-reference-claim-primitive';
-
 const FULL_COMMIT = /^[0-9a-f]{40}$/;
-const RESERVED_PREFIX = 'claim-v';
-const RESERVED_BRANCH = /^claim-v([1-9]\d*)\/issue-([1-9]\d*)$/;
 const STATE_LABELS = new Set([
   'work:proposed',
   'work:ready',
@@ -61,75 +76,6 @@ function fullCommit(value, field = 'expected base') {
   return value;
 }
 
-export function claimBranchForIssue(issueNumber) {
-  return `claim-v${CLAIM_BRANCH_VERSION}/issue-${positiveIssueNumber(issueNumber)}`;
-}
-
-export function claimRefForIssue(issueNumber) {
-  return `refs/heads/${claimBranchForIssue(issueNumber)}`;
-}
-
-export function parseReservedClaimBranch(branch) {
-  if (typeof branch !== 'string' || !branch.startsWith(RESERVED_PREFIX)) {
-    return { status: 'not-reserved' };
-  }
-  const match = branch.match(RESERVED_BRANCH);
-  if (!match) return { status: 'malformed', branch };
-  const version = Number(match[1]);
-  const issueNumber = Number(match[2]);
-  if (!Number.isSafeInteger(version) || !Number.isSafeInteger(issueNumber)) {
-    return { status: 'malformed', branch };
-  }
-  if (version !== CLAIM_BRANCH_VERSION) {
-    return { status: 'unsupported', branch, version, issueNumber };
-  }
-  return {
-    status: 'supported',
-    branch,
-    version,
-    issueNumber,
-    ref: `refs/heads/${branch}`,
-  };
-}
-
-export function parseReservedClaimRef(ref) {
-  if (typeof ref !== 'string' || !ref.startsWith('refs/heads/')) {
-    return { status: 'malformed', ref };
-  }
-  return { ...parseReservedClaimBranch(ref.slice('refs/heads/'.length)), ref };
-}
-
-export function validateClaimBranch({ issueNumber, claimState, branch }) {
-  positiveIssueNumber(issueNumber);
-  if (!['active', 'review'].includes(claimState)) return { status: 'not-agent-owned' };
-  if (issueNumber === BOOTSTRAP_ISSUE && branch === BOOTSTRAP_BRANCH) {
-    return { status: 'bootstrap', issueNumber, branch };
-  }
-  if (branch === BOOTSTRAP_BRANCH) {
-    return {
-      status: 'invalid',
-      code: 'bootstrap-branch-wrong-issue',
-      expected: claimBranchForIssue(issueNumber),
-    };
-  }
-  const parsed = parseReservedClaimBranch(branch);
-  if (parsed.status !== 'supported') {
-    return {
-      status: 'invalid',
-      code:
-        parsed.status === 'unsupported'
-          ? 'unsupported-claim-branch-version'
-          : 'non-derived-agent-claim-branch',
-      expected: claimBranchForIssue(issueNumber),
-    };
-  }
-  const expected = claimBranchForIssue(issueNumber);
-  if (branch !== expected) {
-    return { status: 'invalid', code: 'claim-branch-issue-mismatch', expected };
-  }
-  return { status: 'derived', issueNumber, branch, ref: `refs/heads/${branch}` };
-}
-
 function assertClaimHost(host) {
   for (const method of ['readRepository', 'readMainRef', 'readClaimRef', 'createClaimRef']) {
     if (typeof host?.[method] !== 'function') {
@@ -162,35 +108,157 @@ function normalizeRef(record, expectedRef, expectedSha) {
   return { ref: record.ref, sha: record.object.sha, objectType: record.object.type };
 }
 
-function operationMarkers(comments) {
-  return comments.flatMap((comment) =>
-    [...(comment.body ?? '').matchAll(/^Coordination-Write-ID:\s*(\S+)\s*$/gm)].map(
-      (match) => match[1],
-    ),
-  );
-}
-
 function issueStateLabels(labels) {
   return labels.filter((label) => STATE_LABELS.has(label));
 }
 
-function conflictingOwnershipComments(comments, prepared) {
-  const identityFields = V2_PORTABLE_CLAIM_FIELDS.filter(
-    (field) => !['Claim-State', 'Check-In-By', 'Waiting-Since'].includes(field),
+const OPERATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const AGENT_IDENTITY_FIELDS = V2_PORTABLE_CLAIM_FIELDS.filter(
+  (field) => !['Claim-State', 'Check-In-By', 'Waiting-Since'].includes(field),
+);
+
+function hasClaimSignal(body) {
+  return (
+    V1_PORTABLE_CLAIM_FIELDS.some((field) => body.includes(`${field}:`)) ||
+    V2_PORTABLE_CLAIM_FIELDS.some((field) => body.includes(`${field}:`)) ||
+    /\bclaim(?:ed|ing)?\b|\bcheck[- ]?in\b|\bcheckpoint\b|\b(?:take|taking|took|assume|assuming)\s+ownership\b/i.test(
+      body,
+    )
   );
-  return comments.filter((comment) => {
-    const fields = structuredRecord(comment.body ?? '', V2_PORTABLE_CLAIM_FIELDS).fields;
-    if (!['active', 'review'].includes(fields['Claim-State'])) return false;
-    return identityFields.some(
-      (field) =>
-        fields[field] !== undefined &&
-        fields[field] !== 'unclaimed' &&
-        fields[field] !== prepared.fields[field],
-    );
-  });
 }
 
-function preparedClaim({ issueNumber, expectedBody, values }) {
+function inspectClaimComment(comment, prepared, phase) {
+  const body = typeof comment?.body === 'string' ? comment.body : '';
+  const markerRecord = structuredRecord(body, ['Coordination-Write-ID']);
+  const markerOccurrences = markerRecord.occurrences['Coordination-Write-ID'];
+  const mentionsMarker = /(?:^|\n)Coordination-Write-ID\s*:/m.test(body);
+  if (
+    (mentionsMarker && markerOccurrences.length !== 1) ||
+    (markerOccurrences.length === 1 &&
+      !OPERATION_ID.test(markerRecord.fields['Coordination-Write-ID']))
+  ) {
+    return {
+      valid: false,
+      code: 'malformed-operation-evidence',
+      message: `comment ${comment.id ?? 'unknown'} has malformed operation evidence`,
+    };
+  }
+  if (!mentionsMarker && !hasClaimSignal(body)) return { valid: true, kind: 'unrelated' };
+
+  const v2Record = structuredRecord(body, [
+    ...V2_PORTABLE_CLAIM_FIELDS,
+    ...CHECKPOINT_EVIDENCE_FIELDS,
+  ]);
+  const v1Record = structuredRecord(body, V1_PORTABLE_CLAIM_FIELDS);
+  const isV2 =
+    v2Record.fields['Claim-Host'] !== undefined ||
+    v2Record.fields['Checkpoint-Evidence-Version'] !== undefined;
+  let fields;
+  if (isV2) {
+    const self = { version: '2', fields: v2Record.fields };
+    const validation = validateCheckpointComment(body, self);
+    if (!validation.applicable || !validation.valid) {
+      return {
+        valid: false,
+        code:
+          phase === 'recovery' && ['active', 'review'].includes(v2Record.fields['Claim-State'])
+            ? 'competing-agent-ownership'
+            : phase === 'recovery' && mentionsMarker
+              ? 'malformed-operation-evidence'
+              : 'malformed-ownership-evidence',
+        message: `comment ${comment.id ?? 'unknown'} has incomplete or invalid schema-v2 ownership evidence`,
+      };
+    }
+    fields = v2Record.fields;
+  } else {
+    const missing = V1_PORTABLE_CLAIM_FIELDS.filter(
+      (field) => v1Record.occurrences[field]?.length !== 1,
+    );
+    if (missing.length > 0 || v1Record.duplicates.length > 0) {
+      return {
+        valid: false,
+        code:
+          phase === 'recovery' && ['active', 'review'].includes(v1Record.fields['Claim-State'])
+            ? 'competing-agent-ownership'
+            : phase === 'recovery' && mentionsMarker
+              ? 'malformed-operation-evidence'
+              : 'malformed-ownership-evidence',
+        message: `comment ${comment.id ?? 'unknown'} has incomplete or duplicate historical ownership evidence`,
+      };
+    }
+    fields = v1Record.fields;
+  }
+
+  const state = fields['Claim-State'];
+  if (!['proposed', 'ready', 'active', 'blocked', 'review', 'done', 'abandoned'].includes(state)) {
+    return {
+      valid: false,
+      code: 'malformed-ownership-evidence',
+      message: `comment ${comment.id ?? 'unknown'} has an unsupported claim state`,
+    };
+  }
+  if (['proposed', 'ready'].includes(state)) {
+    const ownershipFields = isV2
+      ? AGENT_IDENTITY_FIELDS
+      : V1_PORTABLE_CLAIM_FIELDS.filter(
+          (field) => !['Claim-State', 'Claimed-At', 'Check-In-By'].includes(field),
+        );
+    if (ownershipFields.some((field) => fields[field] !== 'unclaimed')) {
+      return {
+        valid: false,
+        code: 'malformed-ownership-evidence',
+        message: `comment ${comment.id ?? 'unknown'} has ownership attached to parked work`,
+      };
+    }
+    return { valid: true, kind: 'historical-parked', state };
+  }
+  if (['active', 'review'].includes(state)) {
+    const matching =
+      isV2 && AGENT_IDENTITY_FIELDS.every((field) => fields[field] === prepared.fields[field]);
+    if (phase === 'before-create' || !matching) {
+      return {
+        valid: false,
+        code: 'competing-agent-ownership',
+        message: `comment ${comment.id ?? 'unknown'} carries competing agent-owned evidence`,
+      };
+    }
+    return { valid: true, kind: 'matching-agent-history', state };
+  }
+  return { valid: true, kind: 'historical-non-agent', state };
+}
+
+function inspectClaimComments(comments, prepared, phase) {
+  for (const comment of comments) {
+    const inspection = inspectClaimComment(comment, prepared, phase);
+    if (!inspection.valid) return inspection;
+  }
+  return { valid: true };
+}
+
+function inspectIssueBeforeCreate(issue, claim) {
+  if (issue.state !== 'open') {
+    return { valid: false, code: 'claim-issue-not-open', message: 'the claim issue must be open' };
+  }
+  if (issue.body !== claim.expectedBody) {
+    return {
+      valid: false,
+      code: 'pre-create-body-collision',
+      message: 'the issue body changed before ref creation',
+    };
+  }
+  const labels = issueStateLabels(issue.labels);
+  const expectedLabel = `work:${claim.expected.fields['Claim-State']}`;
+  if (labels.length !== 1 || labels[0] !== expectedLabel) {
+    return {
+      valid: false,
+      code: 'pre-create-label-mismatch',
+      message: `the issue must have exactly the parked state label ${expectedLabel}`,
+    };
+  }
+  return inspectClaimComments(issue.comments, claim.prepared, 'before-create');
+}
+
+function preparedClaim({ issueNumber, expectedBody, values, checkpointComment, operationId }) {
   const expected = validateWorkItemBody(expectedBody);
   if (!expected.valid || expected.version !== '2') {
     throw new CoordinationClaimError(
@@ -219,13 +287,17 @@ function preparedClaim({ issueNumber, expectedBody, values }) {
       'a new remote-reference claim enters active state',
     );
   }
-  const prepared = prepareClaimCoordinationWrite({
+  const writePreparation = prepareClaimEstablishmentWrite({
     currentBody: expectedBody,
     values: canonicalValues,
+    checkpointComment,
+    operationId,
   });
   return {
     expected,
-    prepared,
+    prepared: writePreparation.prepared,
+    operation: writePreparation.operation,
+    desiredLabel: writePreparation.desiredLabel,
     canonicalValues,
     branch: derivedBranch,
     ref: `refs/heads/${derivedBranch}`,
@@ -238,6 +310,8 @@ export function prepareCoordinationClaim({
   expectedBase,
   expectedBody,
   values,
+  checkpointComment,
+  operationId,
 }) {
   if (repository !== CANONICAL_REPOSITORY) {
     throw new CoordinationClaimError(
@@ -247,14 +321,20 @@ export function prepareCoordinationClaim({
   }
   positiveIssueNumber(issueNumber);
   fullCommit(expectedBase);
-  const claim = preparedClaim({ issueNumber, expectedBody, values });
+  const claim = preparedClaim({
+    issueNumber,
+    expectedBody,
+    values,
+    checkpointComment,
+    operationId,
+  });
   if (claim.prepared.fields['Checkpoint-Commit'] !== expectedBase) {
     throw new CoordinationClaimError(
       'checkpoint-base-mismatch',
       'the initial checkpoint commit must equal the expected remote main base',
     );
   }
-  return { repository, issueNumber, expectedBase, ...claim };
+  return { repository, issueNumber, expectedBase, expectedBody, ...claim };
 }
 
 async function verifyRepositoryAndBase(claimHost, repository, expectedBase) {
@@ -307,12 +387,15 @@ export async function executeCoordinationClaim({
     expectedBase,
     expectedBody,
     values,
+    checkpointComment,
+    operationId,
   });
   await verifyRepositoryAndBase(claimHost, repository, expectedBase);
 
   const issue = await writerHost.readIssue(issueNumber);
   if (
     !issue ||
+    !['open', 'closed'].includes(issue.state) ||
     typeof issue.body !== 'string' ||
     !Array.isArray(issue.labels) ||
     !Array.isArray(issue.comments)
@@ -335,9 +418,10 @@ export async function executeCoordinationClaim({
         message: 'the ref and issue body do not identify one prepared claim',
       });
     }
-    if (conflictingOwnershipComments(issue.comments, claim.prepared).length > 0) {
-      return result('collision', 'ref-present-identity-collision', {
-        message: 'the prepared claim has conflicting ownership evidence',
+    const commentInspection = inspectClaimComments(issue.comments, claim.prepared, 'recovery');
+    if (!commentInspection.valid) {
+      return result('collision', `ref-present-${commentInspection.code}`, {
+        message: commentInspection.message,
       });
     }
     const matchingCheckpoint = issue.comments.some((comment) => {
@@ -349,12 +433,6 @@ export async function executeCoordinationClaim({
       return result('existing', 'existing-coherent-claim', {
         message:
           'the exact complete claim already exists; continue only after normal reconciliation',
-      });
-    }
-    const markers = operationMarkers(issue.comments);
-    if (markers.some((marker) => marker !== operationId)) {
-      return result('collision', 'ref-present-operation-collision', {
-        message: 'the prepared claim has conflicting operation evidence',
       });
     }
     const write = await executeClaimEstablishmentWrite({
@@ -383,8 +461,14 @@ export async function executeCoordinationClaim({
     });
   }
 
-  // This second read is the final current-repository/base gate immediately before the sole mutation.
+  // These are the final repository/base and complete issue-evidence gates immediately before the
+  // sole mutation. A closed issue, body/label drift, or ambiguous ownership history creates no ref.
   await verifyRepositoryAndBase(claimHost, repository, expectedBase);
+  const finalIssue = await writerHost.readIssue(issueNumber);
+  const finalInspection = inspectIssueBeforeCreate(finalIssue, claim);
+  if (!finalInspection.valid) {
+    return result('collision', finalInspection.code, { message: finalInspection.message });
+  }
   let created;
   try {
     created = await claimHost.createClaimRef({ ref: claim.ref, sha: expectedBase });
@@ -602,6 +686,8 @@ export async function runCoordinationClaimCli({
     expectedBase: options.expectedBase,
     expectedBody,
     values,
+    checkpointComment,
+    operationId: options.operationId,
   });
   if (options.mode === 'dry-run') {
     const preview = {

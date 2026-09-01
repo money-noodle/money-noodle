@@ -15,6 +15,8 @@ const parallelWorkTemplate = read('.github/ISSUE_TEMPLATE/parallel-work.yml');
 const sharedPlanTemplate = read('.github/ISSUE_TEMPLATE/shared-plan.yml');
 const coordinationSchema = read('tools/coordination-schema.mjs');
 const coordinationClaim = read('tools/coordination-claim.mjs');
+const coordinationLib = read('tools/coordination-lib.mjs');
+const coordinationStatus = read('tools/coordination-status.mjs');
 const coordinationWriter = read('tools/coordination-write.mjs');
 const delivery = read('docs/operations/delivery.md');
 const agents = read('AGENTS.md');
@@ -738,10 +740,10 @@ test('registry v2 policy preserves mixed-version, non-atomic, and bootstrap boun
 
 test('remote-reference claim authority is derived, create-only, and isolated from the general writer', () => {
   assert.match(coordinationClaim, /CANONICAL_REPOSITORY = 'money-noodle\/money-noodle'/);
-  assert.match(coordinationClaim, /claim-v\$\{CLAIM_BRANCH_VERSION\}\/issue-/);
-  assert.match(coordinationClaim, /\^claim-v\(\[1-9\]\\d\*\)\\\/issue-/);
-  assert.match(coordinationClaim, /BOOTSTRAP_ISSUE = 42/);
-  assert.match(coordinationClaim, /BOOTSTRAP_BRANCH = 'arch\/remote-reference-claim-primitive'/);
+  assert.match(coordinationSchema, /claim-v\$\{CLAIM_BRANCH_VERSION\}\/issue-/);
+  assert.match(coordinationSchema, /\^claim-v\(\[1-9\]\\d\*\)\\\/issue-/);
+  assert.match(coordinationSchema, /BOOTSTRAP_ISSUE = 42/);
+  assert.match(coordinationSchema, /BOOTSTRAP_BRANCH = 'arch\/remote-reference-claim-primitive'/);
   assert.match(coordinationClaim, /statusCode !== 201/);
   assert.match(coordinationClaim, /error\?\.statusCode === 422/);
   assert.match(coordinationClaim, /create-ambiguous/);
@@ -756,6 +758,8 @@ test('remote-reference claim authority is derived, create-only, and isolated fro
   assert.match(coordinationWriter, /dedicated remote-reference claim module/);
   assert.match(coordinationWriter, /CLAIM_ESTABLISHMENT_AUTHORITY = Symbol/);
   assert.doesNotMatch(coordinationWriter, /\/git\/refs|createClaimRef/);
+  assert.doesNotMatch(coordinationLib, /from ['"]\.\/coordination-claim\.mjs['"]/);
+  assert.doesNotMatch(coordinationStatus, /from ['"]\.\/coordination-claim\.mjs['"]/);
 
   const implementationSources = readdirSync('tools')
     .filter((name) => name.endsWith('.mjs') && !name.endsWith('.test.mjs'))
@@ -768,7 +772,7 @@ test('remote-reference claim authority is derived, create-only, and isolated fro
     'tools/coordination-write.mjs',
   ]);
   const privilegedPreparationCallsites = implementationSources.filter(([, source]) =>
-    source.includes('prepareClaimCoordinationWrite('),
+    source.includes('prepareClaimEstablishmentWrite('),
   );
   assert.deepEqual(privilegedPreparationCallsites.map(([path]) => path).sort(), [
     'tools/coordination-claim.mjs',

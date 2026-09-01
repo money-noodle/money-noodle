@@ -193,9 +193,24 @@ export function prepareCoordinationWrite(input) {
   return prepareCoordinationWriteInternal(input, undefined);
 }
 
-// This preparation entry point is imported only by coordination-claim.mjs.
-export function prepareClaimCoordinationWrite(input) {
-  return prepareCoordinationWriteInternal(input, CLAIM_ESTABLISHMENT_AUTHORITY);
+// This complete preparation entry point is imported only by coordination-claim.mjs. It validates
+// every caller-controlled write artifact before the claim module performs any host read or write.
+export function prepareClaimEstablishmentWrite({
+  currentBody,
+  values,
+  checkpointComment,
+  operationId,
+}) {
+  const prepared = prepareCoordinationWriteInternal(
+    { currentBody, values, kind: 'work-item' },
+    CLAIM_ESTABLISHMENT_AUTHORITY,
+  );
+  const operation = prepareOperationComment(prepared, checkpointComment, operationId);
+  return {
+    prepared,
+    operation,
+    desiredLabel: desiredStateLabel(prepared),
+  };
 }
 
 function stateLabels(labels) {
@@ -227,6 +242,10 @@ function writeMarker(operationId) {
     );
   }
   return `Coordination-Write-ID: ${operationId}`;
+}
+
+function hasExactMarker(body, marker) {
+  return typeof body === 'string' && body.split(/\r?\n/).some((line) => line.trimEnd() === marker);
 }
 
 function partial(stage, error, mutations, detail = {}) {
@@ -335,7 +354,7 @@ async function executeCoordinationWriteInternal(
   }
 
   const initialOperationComments = issue.comments.filter((comment) =>
-    comment.body?.includes(marker),
+    hasExactMarker(comment.body, marker),
   );
   if (
     initialOperationComments.length > 1 ||
@@ -392,7 +411,7 @@ async function executeCoordinationWriteInternal(
     }
   }
 
-  const existing = issue.comments.filter((comment) => comment.body?.includes(marker));
+  const existing = issue.comments.filter((comment) => hasExactMarker(comment.body, marker));
   if (existing.length > 1 || (existing.length === 1 && existing[0].body !== proposedComment)) {
     return {
       status: 'collision',
@@ -419,7 +438,7 @@ async function executeCoordinationWriteInternal(
   }
 
   const finalLabels = stateLabels(issue.labels);
-  const finalComments = issue.comments.filter((comment) => comment.body?.includes(marker));
+  const finalComments = issue.comments.filter((comment) => hasExactMarker(comment.body, marker));
   const finalVerification = {
     body: issue.body === prepared.body,
     label: finalLabels.length === 1 && finalLabels[0] === desiredLabel,
@@ -551,15 +570,17 @@ export function createGitHubCliHost({ repository, runGh = runGitHubCli }) {
           ? issue.labels.map((label) => (typeof label === 'string' ? label : label.name)).sort()
           : issue.labels;
       if (
+        before.state !== after.state ||
         before.body !== after.body ||
         JSON.stringify(labels(before)) !== JSON.stringify(labels(after))
       ) {
         throw new CoordinationWriteError(
           'unstable-host-read',
-          'body or label evidence drifted while comments were being read',
+          'issue state, body, or label evidence drifted while comments were being read',
         );
       }
       return {
+        state: after.state,
         body: after.body,
         labels: labels(after),
         comments: pages.flat().map((comment) => ({ id: comment.id, body: comment.body })),

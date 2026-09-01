@@ -1,15 +1,13 @@
 import {
   BOOTSTRAP_BRANCH,
   BOOTSTRAP_ISSUE,
-  parseReservedClaimRef,
-  validateClaimBranch,
-} from './coordination-claim.mjs';
-import {
   CHECKPOINT_EVIDENCE_FIELDS,
   V1_PORTABLE_CLAIM_FIELDS,
   V2_PORTABLE_CLAIM_FIELDS,
   isoInstantMilliseconds as schemaIsoInstantMilliseconds,
+  parseReservedClaimRef,
   structuredRecord,
+  validateClaimBranch,
   validateCheckpointComment,
   validatePlanBody,
   validateWorkItemBody,
@@ -651,9 +649,17 @@ function addRemoteQuestion(item, code, message) {
   item.triage = 'question';
 }
 
-export function reconcileRemoteClaims({ issues, workItems, reservedRefs = [] }) {
+export function reconcileRemoteClaims({
+  issues,
+  workItems,
+  reservedRefs = [],
+  commentsByIssue = new Map(),
+  local = { branches: [], worktrees: [] },
+  nowMs = Date.now(),
+}) {
   const issueByNumber = new Map(issues.map((issue) => [issue.number, issue]));
-  const itemByNumber = new Map(workItems.map((item) => [item.number, item]));
+  const analyzedByNumber = new Map(workItems.map((item) => [item.number, item]));
+  const openWorkItemNumbers = new Set(workItems.map((item) => item.number));
   const refsByIssue = new Map();
   const questions = [];
 
@@ -714,7 +720,29 @@ export function reconcileRemoteClaims({ issues, workItems, reservedRefs = [] }) 
     }
   }
 
-  for (const item of workItems.filter(
+  for (const [issueNumber] of refsByIssue) {
+    const issue = issueByNumber.get(issueNumber);
+    if (!issue || issue.state !== 'closed') continue;
+    const item = analyzeWorkItem(
+      issue,
+      commentsByIssue.get(issueNumber) ?? [],
+      issueByNumber,
+      local,
+      nowMs,
+    );
+    analyzedByNumber.set(issueNumber, item);
+    if (!['done', 'abandoned'].includes(item.claimState)) {
+      item.questions.push(
+        question(
+          'closed-claim-nonterminal',
+          `closed issue #${issueNumber} mapped by a reserved ref is ${item.claimState}, not terminal`,
+        ),
+      );
+    }
+    for (const entry of item.questions) questions.push({ issueNumber, ...entry });
+  }
+
+  for (const item of [...analyzedByNumber.values()].filter(
     ({ claimState, registrySchema }) =>
       registrySchema?.version === '2' && ['active', 'review'].includes(claimState),
   )) {
@@ -746,27 +774,38 @@ export function reconcileRemoteClaims({ issues, workItems, reservedRefs = [] }) 
     }
   }
 
-  const bootstrap = workItems.find(
-    (item) =>
-      item.number === BOOTSTRAP_ISSUE &&
-      item.registrySchema?.version === '2' &&
-      ['active', 'review'].includes(item.claimState) &&
-      item.claim['Claim-Branch'] === BOOTSTRAP_BRANCH,
-  );
-  if (bootstrap) {
-    for (const competing of workItems.filter(
-      (item) =>
-        item.number !== BOOTSTRAP_ISSUE && ['active', 'review'].includes(item.claimState),
-    )) {
-      addRemoteQuestion(
-        competing,
-        'claim-primitive-rollout-blocked',
-        `#${competing.number} is agent-owned while the #42 bootstrap claim is active`,
-      );
+  const bootstrap = analyzedByNumber.get(BOOTSTRAP_ISSUE);
+  if (
+    bootstrap?.registrySchema?.version === '2' &&
+    ['active', 'review'].includes(bootstrap.claimState) &&
+    bootstrap.claim['Claim-Branch'] === BOOTSTRAP_BRANCH
+  ) {
+    const rolloutStates = new Map(
+      issues.map((issue) => [
+        issue.number,
+        validateWorkItemBody(issue.body).fields?.['Claim-State'],
+      ]),
+    );
+    for (const item of workItems) {
+      if (!rolloutStates.has(item.number)) rolloutStates.set(item.number, item.claimState);
+    }
+    for (const [issueNumber, state] of rolloutStates) {
+      if (issueNumber === BOOTSTRAP_ISSUE || !['active', 'review'].includes(state)) continue;
+      const message = `#${issueNumber} is agent-owned while the #42 bootstrap claim is active`;
+      const competing = analyzedByNumber.get(issueNumber);
+      if (competing) {
+        addRemoteQuestion(competing, 'claim-primitive-rollout-blocked', message);
+      }
+      if (!openWorkItemNumbers.has(issueNumber)) {
+        questions.push({
+          issueNumber,
+          ...question('claim-primitive-rollout-blocked', message),
+        });
+      }
       addRemoteQuestion(
         bootstrap,
         'claim-primitive-rollout-blocked',
-        `#42 cannot activate while #${competing.number} is active or in review`,
+        `#42 cannot activate while #${issueNumber} is active or in review`,
       );
     }
   }
@@ -819,7 +858,14 @@ export function analyzeCoordination({
     .filter((issue) => !issue.labels.includes("work:plan"))
     .map((issue) => analyzeWorkItem(issue, commentsByIssue.get(issue.number) ?? [], issueByNumber, local, nowMs));
 
-  const remoteClaims = reconcileRemoteClaims({ issues, workItems, reservedRefs });
+  const remoteClaims = reconcileRemoteClaims({
+    issues,
+    workItems,
+    reservedRefs,
+    commentsByIssue,
+    local,
+    nowMs,
+  });
 
   for (const key of ["Claim-Branch", "Claim-Worktree"]) {
     const groups = new Map();

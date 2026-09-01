@@ -117,11 +117,13 @@ class MockWriterHost {
   constructor(timeline = []) {
     this.timeline = timeline;
     this.issue = {
+      state: 'open',
       body: PARKED_BODY,
       labels: ['work:ready', 'area:foundation'],
       comments: [],
     };
     this.fail = {};
+    this.failBefore = {};
     this.mutations = [];
   }
 
@@ -144,6 +146,7 @@ class MockWriterHost {
   async replaceStateLabel(_number, label) {
     this.timeline.push('label');
     this.mutations.push('label');
+    if (this.failBefore.label) throw new Error(this.failBefore.label);
     this.issue.labels = [...this.issue.labels.filter((entry) => !STATE_LABELS.has(entry)), label];
     if (this.fail.label) throw new Error(this.fail.label);
   }
@@ -151,6 +154,7 @@ class MockWriterHost {
   async addComment(_number, body) {
     this.timeline.push('comment');
     this.mutations.push('comment');
+    if (this.failBefore.comment) throw new Error(this.failBefore.comment);
     this.issue.comments.push({ id: this.issue.comments.length + 1, body });
     if (this.fail.comment) throw new Error(this.fail.comment);
   }
@@ -208,10 +212,8 @@ class MockClaimHost {
   }
 }
 
-function input(claimHost, writerHost, overrides = {}) {
+function prepareInput(overrides = {}) {
   return {
-    claimHost,
-    writerHost,
     repository: CANONICAL_REPOSITORY,
     issueNumber: ISSUE,
     expectedBase: BASE,
@@ -219,6 +221,15 @@ function input(claimHost, writerHost, overrides = {}) {
     values: activeValues(),
     checkpointComment: checkpointComment(),
     operationId: 'claim-73',
+    ...overrides,
+  };
+}
+
+function input(claimHost, writerHost, overrides = {}) {
+  return {
+    claimHost,
+    writerHost,
+    ...prepareInput(),
     ...overrides,
   };
 }
@@ -239,7 +250,7 @@ test('version-1 branch derivation is canonical and independent of mutable metada
   });
   assert.equal(parseReservedClaimRef(REF).issueNumber, 73);
   for (const invalid of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '73']) {
-    assert.throws(() => claimBranchForIssue(invalid), CoordinationClaimError);
+    assert.throws(() => claimBranchForIssue(invalid), RangeError);
   }
   for (const malformed of [
     'claim-v1/issue-073',
@@ -275,38 +286,47 @@ test('bootstrap and derived branch validation fail closed on every wrong issue o
   );
 });
 
-test('claim preparation derives the branch and rejects repository, branch, state, and base overrides', () => {
-  const prepared = prepareCoordinationClaim({
-    repository: CANONICAL_REPOSITORY,
-    issueNumber: ISSUE,
-    expectedBase: BASE,
-    expectedBody: PARKED_BODY,
-    values: activeValues(),
-  });
+test('claim preparation derives the branch and validates every write artifact without a host', () => {
+  const prepared = prepareCoordinationClaim(prepareInput());
   assert.equal(prepared.branch, BRANCH);
   assert.equal(prepared.ref, REF);
   assert.equal(prepared.prepared.fields['Claim-Branch'], BRANCH);
+  assert.equal(prepared.operation.marker, 'Coordination-Write-ID: claim-73');
+  assert.match(prepared.operation.comment, /^Coordination-Write-ID: claim-73\n/);
 
   const cases = [
     [{ repository: 'other/repository' }, 'repository-mismatch'],
     [{ values: activeValues({ 'Claim-Branch': 'claim-v1/issue-74' }) }, 'caller-selected-branch'],
     [{ values: activeValues({ 'Claim-State': 'review' }) }, 'invalid-initial-claim-state'],
-    [{ values: activeValues({ 'Checkpoint-Commit': OTHER }) }, 'checkpoint-base-mismatch'],
+    [
+      {
+        values: activeValues({ 'Checkpoint-Commit': OTHER }),
+        checkpointComment: checkpointComment(activeValues({ 'Checkpoint-Commit': OTHER })),
+      },
+      'checkpoint-base-mismatch',
+    ],
   ];
   for (const [override, code] of cases) {
     assert.throws(
-      () =>
-        prepareCoordinationClaim({
-          repository: CANONICAL_REPOSITORY,
-          issueNumber: ISSUE,
-          expectedBase: BASE,
-          expectedBody: PARKED_BODY,
-          values: activeValues(),
-          ...override,
-        }),
+      () => prepareCoordinationClaim(prepareInput(override)),
       (error) => error instanceof CoordinationClaimError && error.code === code,
       code,
     );
+  }
+});
+
+test('invalid target comment and operation evidence fail before every host call', async () => {
+  for (const override of [
+    { checkpointComment: 'Claim-State: active' },
+    { operationId: 'invalid operation id' },
+  ]) {
+    const timeline = [];
+    const claimHost = new MockClaimHost(timeline);
+    const writerHost = new MockWriterHost(timeline);
+    await assert.rejects(executeCoordinationClaim(input(claimHost, writerHost, override)));
+    assert.deepEqual(timeline, []);
+    assert.equal(claimHost.createCalls, 0);
+    assert.deepEqual(writerHost.mutations, []);
   }
 });
 
@@ -383,14 +403,61 @@ test('repository mismatch and stale remote main fail before ref or issue mutatio
   }
 });
 
-test('orphaned refs, body collisions, and active-body/ref-absent contradictions stop safely', async () => {
-  const prepared = prepareCoordinationClaim({
-    repository: CANONICAL_REPOSITORY,
-    issueNumber: ISSUE,
-    expectedBase: BASE,
-    expectedBody: PARKED_BODY,
-    values: activeValues(),
+test('closed, mislabeled, malformed, or competing parked issues create no orphan ref', async () => {
+  const cases = [
+    ['closed issue', (writer) => (writer.issue.state = 'closed'), 'claim-issue-not-open'],
+    [
+      'wrong state label',
+      (writer) => (writer.issue.labels = ['work:proposed', 'area:foundation']),
+      'pre-create-label-mismatch',
+    ],
+    [
+      'multiple state labels',
+      (writer) => writer.issue.labels.push('work:proposed'),
+      'pre-create-label-mismatch',
+    ],
+    [
+      'malformed ownership',
+      (writer) => writer.issue.comments.push({ id: 1, body: 'Claim-State: ready\n' }),
+      'malformed-ownership-evidence',
+    ],
+    [
+      'competing ownership',
+      (writer) => {
+        const competing = activeValues({
+          'Claim-Run-ID': 'competing-run',
+          'Claim-Agent': 'competing-agent',
+        });
+        writer.issue.comments.push({ id: 1, body: checkpointComment(competing) });
+      },
+      'competing-agent-ownership',
+    ],
+  ];
+  for (const [name, configure, stage] of cases) {
+    const claimHost = new MockClaimHost();
+    const writerHost = new MockWriterHost();
+    configure(writerHost);
+    const outcome = await executeCoordinationClaim(input(claimHost, writerHost));
+    assert.equal(outcome.stage, stage, name);
+    assert.equal(claimHost.createCalls, 0, name);
+    assert.deepEqual(writerHost.mutations, [], name);
+  }
+});
+
+test('a complete schema-v2 readiness checkpoint with another marker remains valid pre-create history', async () => {
+  const claimHost = new MockClaimHost();
+  const writerHost = new MockWriterHost();
+  writerHost.issue.comments.push({
+    id: 1,
+    body: `Coordination-Write-ID: claim-73-readiness\n${checkpointComment(parkedFields())}`,
   });
+  const outcome = await executeCoordinationClaim(input(claimHost, writerHost));
+  assert.equal(outcome.status, 'complete');
+  assert.equal(claimHost.createCalls, 1);
+});
+
+test('orphaned refs, body collisions, and active-body/ref-absent contradictions stop safely', async () => {
+  const prepared = prepareCoordinationClaim(prepareInput());
   {
     const claimHost = new MockClaimHost();
     claimHost.ref = { ref: REF, object: { type: 'commit', sha: BASE } };
@@ -418,19 +485,31 @@ test('orphaned refs, body collisions, and active-body/ref-absent contradictions 
   }
 });
 
-test('prepared-body partials resume the writer with no second ref mutation', async () => {
-  const claimHost = new MockClaimHost();
-  const writerHost = new MockWriterHost();
-  writerHost.fail.label = 'lost label response';
-  const first = await executeCoordinationClaim(input(claimHost, writerHost));
-  assert.equal(first.stage, 'writer-partial');
-  assert.equal(claimHost.createCalls, 1);
-  delete writerHost.fail.label;
-  const second = await executeCoordinationClaim(input(claimHost, writerHost));
-  assert.equal(second.status, 'complete');
-  assert.equal(second.stage, 'writer-recovery');
-  assert.equal(claimHost.createCalls, 1);
-  assert.deepEqual(second.writerMutations, { body: 0, label: 0, comment: 1 });
+test('body-success label-or-comment failures retry beside a real readiness marker without another ref', async () => {
+  for (const failedSurface of ['label', 'comment']) {
+    const claimHost = new MockClaimHost();
+    const writerHost = new MockWriterHost();
+    writerHost.issue.comments.push({
+      id: 1,
+      body: `Coordination-Write-ID: claim-73-readiness\n${checkpointComment(parkedFields())}`,
+    });
+    writerHost.failBefore[failedSurface] = `${failedSurface} request failed`;
+    const first = await executeCoordinationClaim(input(claimHost, writerHost));
+    assert.equal(first.stage, 'writer-partial', failedSurface);
+    assert.equal(claimHost.createCalls, 1);
+    delete writerHost.failBefore[failedSurface];
+    const second = await executeCoordinationClaim(input(claimHost, writerHost));
+    assert.equal(second.status, 'complete', failedSurface);
+    assert.equal(second.stage, 'writer-recovery', failedSurface);
+    assert.equal(claimHost.createCalls, 1);
+    assert.equal(second.writerMutations.body, 0);
+    assert.equal(
+      writerHost.issue.comments.filter(({ body }) =>
+        body.includes('Coordination-Write-ID: claim-73-readiness'),
+      ).length,
+      1,
+    );
+  }
 });
 
 test('an exact complete matching claim is existing evidence and receives no duplicate comment', async () => {
@@ -447,21 +526,15 @@ test('an exact complete matching claim is existing evidence and receives no dupl
   assert.equal(claimHost.createCalls, 1);
 });
 
-test('a conflicting operation marker blocks prepared-body recovery', async () => {
+test('a malformed operation marker blocks prepared-body recovery', async () => {
   const claimHost = new MockClaimHost();
   claimHost.ref = { ref: REF, object: { type: 'commit', sha: BASE } };
   const writerHost = new MockWriterHost();
-  const prepared = prepareCoordinationClaim({
-    repository: CANONICAL_REPOSITORY,
-    issueNumber: ISSUE,
-    expectedBase: BASE,
-    expectedBody: PARKED_BODY,
-    values: activeValues(),
-  });
+  const prepared = prepareCoordinationClaim(prepareInput());
   writerHost.issue.body = prepared.prepared.body;
   writerHost.issue.comments.push({ id: 1, body: 'Coordination-Write-ID: other-operation\n' });
   const result = await executeCoordinationClaim(input(claimHost, writerHost));
-  assert.equal(result.stage, 'ref-present-operation-collision');
+  assert.equal(result.stage, 'ref-present-malformed-operation-evidence');
   assert.deepEqual(writerHost.mutations, []);
 });
 
@@ -469,20 +542,15 @@ test('conflicting structured ownership blocks recovery even without an operation
   const claimHost = new MockClaimHost();
   claimHost.ref = { ref: REF, object: { type: 'commit', sha: BASE } };
   const writerHost = new MockWriterHost();
-  const prepared = prepareCoordinationClaim({
-    repository: CANONICAL_REPOSITORY,
-    issueNumber: ISSUE,
-    expectedBase: BASE,
-    expectedBody: PARKED_BODY,
-    values: activeValues(),
-  });
+  const prepared = prepareCoordinationClaim(prepareInput());
   writerHost.issue.body = prepared.prepared.body;
-  writerHost.issue.comments.push({
-    id: 1,
-    body: 'Claim-State: active\nClaim-Agent: another-agent\nClaim-Branch: claim-v1/issue-73\n',
+  const competing = activeValues({
+    'Claim-Run-ID': 'other-run',
+    'Claim-Agent': 'another-agent',
   });
+  writerHost.issue.comments.push({ id: 1, body: checkpointComment(competing) });
   const result = await executeCoordinationClaim(input(claimHost, writerHost));
-  assert.equal(result.stage, 'ref-present-identity-collision');
+  assert.equal(result.stage, 'ref-present-competing-agent-ownership');
   assert.deepEqual(writerHost.mutations, []);
 });
 

@@ -157,6 +157,16 @@ function commentEndpoint(number) {
   return `repos/${REPOSITORY}/issues/${number}/comments?per_page=100`;
 }
 
+function restCheckpointComment(issue, id = 7300, body = issue.body) {
+  return {
+    id,
+    user: { login: 'maintainer' },
+    body: `Coordination-Write-ID: checkpoint-${id}\n${body}`,
+    created_at: '2026-09-01T02:00:00Z',
+    updated_at: '2026-09-01T02:00:00Z',
+  };
+}
+
 function defaultResponses() {
   return {
     '--version': { stdout: 'gh version 2.0.0 (test)\n' },
@@ -400,6 +410,9 @@ test('a reserved ref directly fetches its closed terminal issue and preserves it
   responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE]]) };
   responses[`api:${CLAIM_REFS_ENDPOINT}`] = { stdout: JSON.stringify([[remote]]) };
   responses['api:repos/example/registry/issues/73'] = { stdout: JSON.stringify(terminal) };
+  responses[`api:${commentEndpoint(73)}`] = {
+    stdout: JSON.stringify([[restCheckpointComment(terminal)]]),
+  };
   const result = runStatus(t, { responses, args: ['--json'] });
   const report = JSON.parse(result.stdout);
 
@@ -410,6 +423,89 @@ test('a reserved ref directly fetches its closed terminal issue and preserves it
     false,
   );
   assert(result.invocations.includes('gh api repos/example/registry/issues/73'));
+  assert(result.invocations.includes(`gh api --paginate --slurp ${commentEndpoint(73)}`));
+});
+
+test('closed reserved-ref issues fail closed on wrong labels and conflicting comments', (t) => {
+  const remote = {
+    ref: 'refs/heads/claim-v1/issue-73',
+    object: { type: 'commit', sha: 'a'.repeat(40) },
+  };
+  for (const [name, configure, expectedCode] of [
+    [
+      'wrong label',
+      (terminal, responses) => {
+        terminal.labels = [{ name: 'work:active' }];
+        responses[`api:${commentEndpoint(73)}`] = {
+          stdout: JSON.stringify([[restCheckpointComment(terminal)]]),
+        };
+      },
+      'body-label-state-mismatch',
+    ],
+    [
+      'conflicting comment',
+      (terminal, responses) => {
+        const competing = v2ActiveIssue(73, {
+          'Claim-Run-ID': 'competing-run',
+          'Claim-Agent': 'competing-agent',
+        });
+        responses[`api:${commentEndpoint(73)}`] = {
+          stdout: JSON.stringify([[restCheckpointComment(competing, 7301)]]),
+        };
+      },
+      'competing-ownership-comment',
+    ],
+  ]) {
+    const terminal = v2ActiveIssue(73, {
+      'Claim-State': 'done',
+      'Check-In-By': 'unclaimed',
+      'Checkpoint-State': 'done',
+    });
+    terminal.state = 'closed';
+    terminal.labels = [{ name: 'work:done' }];
+    const responses = defaultResponses();
+    responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE]]) };
+    responses[`api:${CLAIM_REFS_ENDPOINT}`] = { stdout: JSON.stringify([[remote]]) };
+    responses['api:repos/example/registry/issues/73'] = { stdout: JSON.stringify(terminal) };
+    configure(terminal, responses);
+    responses['api:repos/example/registry/issues/73'] = { stdout: JSON.stringify(terminal) };
+    const report = JSON.parse(runStatus(t, { responses, args: ['--json'] }).stdout);
+    assert(
+      report.registry.maintainerQuestions.some(
+        ({ issueNumber, code }) => issueNumber === 73 && code === expectedCode,
+      ),
+      name,
+    );
+  }
+});
+
+test('a closed active issue still blocks the #42 rollout invariant', (t) => {
+  const bootstrap = v2ActiveIssue(42, {
+    'Claim-Branch': 'arch/remote-reference-claim-primitive',
+  });
+  const closedActive = v2ActiveIssue(73);
+  closedActive.state = 'closed';
+  const remote = {
+    ref: 'refs/heads/claim-v1/issue-73',
+    object: { type: 'commit', sha: 'a'.repeat(40) },
+  };
+  const responses = defaultResponses();
+  responses[`api:${ISSUES_ENDPOINT}`] = {
+    stdout: JSON.stringify([[PLAN_ISSUE, bootstrap, closedActive]]),
+  };
+  responses[`api:${CLAIM_REFS_ENDPOINT}`] = { stdout: JSON.stringify([[remote]]) };
+  responses['api:repos/example/registry/issues/73'] = { stdout: JSON.stringify(closedActive) };
+  responses[`api:${commentEndpoint(73)}`] = {
+    stdout: JSON.stringify([[restCheckpointComment(closedActive, 7302)]]),
+  };
+  const report = JSON.parse(runStatus(t, { responses, args: ['--json'] }).stdout);
+  assert(
+    report.registry.maintainerQuestions.some(
+      ({ issueNumber, code }) => issueNumber === 73 && code === 'claim-primitive-rollout-blocked',
+    ),
+  );
+  const bootstrapItem = report.registry.workItems.find(({ number }) => number === 42);
+  assert(bootstrapItem.questions.some(({ code }) => code === 'claim-primitive-rollout-blocked'));
 });
 
 test('missing, orphaned, malformed, and unsupported reserved-ref evidence fails closed', (t) => {
