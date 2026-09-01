@@ -103,6 +103,16 @@ function checkpointComment(fields = activeValues()) {
     .join('\n');
 }
 
+function hostedComment({
+  id,
+  body,
+  author = 'maintainer',
+  createdAt = '2026-09-01T00:30:00Z',
+  updatedAt = createdAt,
+}) {
+  return { id, body, author, createdAt, updatedAt };
+}
+
 const STATE_LABELS = new Set([
   'work:proposed',
   'work:ready',
@@ -124,6 +134,8 @@ class MockWriterHost {
     };
     this.fail = {};
     this.failBefore = {};
+    this.readCount = 0;
+    this.onRead = null;
     this.mutations = [];
   }
 
@@ -133,6 +145,8 @@ class MockWriterHost {
 
   async readIssue() {
     this.timeline.push('issue-read');
+    this.readCount += 1;
+    if (this.onRead) await this.onRead(this, this.readCount);
     return this.snapshot();
   }
 
@@ -168,6 +182,7 @@ class MockClaimHost {
     this.ref = null;
     this.createCalls = 0;
     this.mode = 'success';
+    this.afterCreate = null;
   }
 
   async readRepository() {
@@ -205,6 +220,7 @@ class MockClaimHost {
     }
     if (this.mode === 'ambiguous-absent') throw new Error('timeout');
     this.ref = { ref, object: { type: 'commit', sha } };
+    if (this.afterCreate) await this.afterCreate();
     if (this.mode === 'malformed') {
       return { statusCode: 201, body: { ref, object: { type: 'tag', sha } } };
     }
@@ -344,6 +360,48 @@ test('qualifying HTTP 201 creates the ref before any issue mutation and complete
   assert.equal(claimHost.ref.ref, REF);
 });
 
+test('post-ref races preserve one orphan or collision and perform zero issue mutation', async () => {
+  const races = [
+    ['issue closed', (writer) => (writer.issue.state = 'closed'), 'orphaned'],
+    [
+      'state label changed',
+      (writer) => (writer.issue.labels = ['work:proposed', 'area:foundation']),
+      'orphaned',
+    ],
+    [
+      'competing ownership appended',
+      (writer) =>
+        writer.issue.comments.push(
+          hostedComment({
+            id: 20,
+            author: 'racing-agent',
+            body: checkpointComment(
+              activeValues({
+                'Claim-Run-ID': 'racing-run',
+                'Claim-Agent': 'racing-agent',
+              }),
+            ),
+          }),
+        ),
+      'collision',
+    ],
+  ];
+  for (const [name, race, status] of races) {
+    const claimHost = new MockClaimHost();
+    const writerHost = new MockWriterHost();
+    claimHost.afterCreate = () => race(writerHost);
+    const outcome = await executeCoordinationClaim(input(claimHost, writerHost));
+    assert.equal(outcome.status, status, name);
+    assert.equal(outcome.stage, 'post-ref-snapshot-guard', name);
+    assert.equal(outcome.refMutations, 1, name);
+    assert.equal(claimHost.createCalls, 1, name);
+    assert.deepEqual(outcome.writerMutations, { body: 0, label: 0, comment: 0 }, name);
+    assert.deepEqual(writerHost.mutations, [], name);
+    assert.equal(claimHost.ref.ref, REF, name);
+    assert.match(outcome.message, /preserve the ref for principal reconciliation/, name);
+  }
+});
+
 test('two concurrent contenders produce one winner and a zero-registry-mutation loser', async () => {
   const claimHost = new MockClaimHost();
   claimHost.mode = 'atomic';
@@ -400,6 +458,133 @@ test('repository mismatch and stale remote main fail before ref or issue mutatio
     );
     assert.equal(claimHost.createCalls, 0);
     assert.deepEqual(writerHost.mutations, []);
+  }
+});
+
+test('authorized reconciliation of prior ownership permits release-to-ready takeover claiming', async () => {
+  const expectedBody = bodyFrom(parkedFields({ 'Reconciled-Claim-Comment-IDs': '10' }));
+  const claimHost = new MockClaimHost();
+  const writerHost = new MockWriterHost();
+  writerHost.issue.body = expectedBody;
+  writerHost.issue.comments.push(
+    hostedComment({
+      id: 10,
+      author: 'prior-agent',
+      body: checkpointComment(
+        activeValues({
+          'Claim-Run-ID': 'prior-run',
+          'Claim-Agent': 'prior-agent',
+        }),
+      ),
+    }),
+  );
+  const outcome = await executeCoordinationClaim(input(claimHost, writerHost, { expectedBody }));
+  assert.equal(outcome.status, 'complete');
+  assert.equal(claimHost.createCalls, 1);
+});
+
+test('invalid or incomplete reconciliation evidence stops before ref and issue mutation', async () => {
+  const priorOwnership = hostedComment({
+    id: 10,
+    author: 'prior-agent',
+    body: checkpointComment(
+      activeValues({
+        'Claim-Run-ID': 'prior-run',
+        'Claim-Agent': 'prior-agent',
+      }),
+    ),
+  });
+  const cases = [
+    {
+      name: 'unreconciled ownership',
+      body: PARKED_BODY,
+      comments: [priorOwnership],
+    },
+    {
+      name: 'malformed declaration',
+      body: bodyFrom(parkedFields({ 'Reconciled-Claim-Comment-IDs': '10,10' })),
+      comments: [priorOwnership],
+      preparationFailure: true,
+    },
+    {
+      name: 'unknown comment',
+      body: bodyFrom(parkedFields({ 'Reconciled-Claim-Comment-IDs': '99' })),
+      comments: [priorOwnership],
+    },
+    {
+      name: 'non-claim comment',
+      body: bodyFrom(parkedFields({ 'Reconciled-Claim-Comment-IDs': '10' })),
+      comments: [hostedComment({ id: 10, body: 'ordinary implementation discussion' })],
+    },
+    {
+      name: 'edited comment',
+      body: bodyFrom(parkedFields({ 'Reconciled-Claim-Comment-IDs': '10' })),
+      comments: [
+        hostedComment({
+          ...priorOwnership,
+          updatedAt: '2026-09-01T00:31:00Z',
+        }),
+      ],
+    },
+    {
+      name: 'self-authorized reconciliation',
+      body: bodyFrom(
+        parkedFields({
+          'Integration-Owner': 'claim-test',
+          'Reconciled-Claim-Comment-IDs': '10',
+        }),
+      ),
+      comments: [priorOwnership],
+    },
+    {
+      name: 'reconciled ownership with malformed operation evidence',
+      body: bodyFrom(parkedFields({ 'Reconciled-Claim-Comment-IDs': '10' })),
+      comments: [
+        hostedComment({
+          ...priorOwnership,
+          body: `${priorOwnership.body}\nCoordination-Write-ID: bad id\n`,
+        }),
+      ],
+    },
+    {
+      name: 'later unresolved ownership',
+      body: bodyFrom(parkedFields({ 'Reconciled-Claim-Comment-IDs': '10' })),
+      comments: [
+        priorOwnership,
+        hostedComment({
+          id: 11,
+          author: 'later-agent',
+          createdAt: '2026-09-01T00:40:00Z',
+          body: checkpointComment(
+            activeValues({
+              'Claim-Run-ID': 'later-run',
+              'Claim-Agent': 'later-agent',
+            }),
+          ),
+        }),
+      ],
+    },
+  ];
+  for (const fixture of cases) {
+    const timeline = [];
+    const claimHost = new MockClaimHost(timeline);
+    const writerHost = new MockWriterHost(timeline);
+    writerHost.issue.body = fixture.body;
+    writerHost.issue.comments = fixture.comments;
+    if (fixture.preparationFailure) {
+      await assert.rejects(
+        executeCoordinationClaim(input(claimHost, writerHost, { expectedBody: fixture.body })),
+        undefined,
+        fixture.name,
+      );
+    } else {
+      const outcome = await executeCoordinationClaim(
+        input(claimHost, writerHost, { expectedBody: fixture.body }),
+      );
+      assert.notEqual(outcome.status, 'complete', fixture.name);
+    }
+    assert.equal(claimHost.createCalls, 0, fixture.name);
+    assert.deepEqual(writerHost.mutations, [], fixture.name);
   }
 });
 
@@ -510,6 +695,25 @@ test('body-success label-or-comment failures retry beside a real readiness marke
       1,
     );
   }
+});
+
+test('prepared-body recovery rechecks post-ref issue safety before mutation', async () => {
+  const claimHost = new MockClaimHost();
+  claimHost.ref = { ref: REF, object: { type: 'commit', sha: BASE } };
+  const writerHost = new MockWriterHost();
+  const prepared = prepareCoordinationClaim(prepareInput());
+  writerHost.issue.body = prepared.prepared.body;
+  writerHost.issue.labels = ['work:active', 'area:foundation'];
+  writerHost.onRead = (writer, readCount) => {
+    if (readCount === 2) writer.issue.state = 'closed';
+  };
+  const outcome = await executeCoordinationClaim(input(claimHost, writerHost));
+  assert.equal(outcome.status, 'collision');
+  assert.equal(outcome.stage, 'post-ref-snapshot-guard');
+  assert.equal(outcome.refMutations, 0);
+  assert.deepEqual(outcome.writerMutations, { body: 0, label: 0, comment: 0 });
+  assert.deepEqual(writerHost.mutations, []);
+  assert.match(outcome.message, /preserve the ref for principal reconciliation/);
 });
 
 test('an exact complete matching claim is existing evidence and receives no duplicate comment', async () => {

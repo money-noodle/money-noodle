@@ -757,6 +757,11 @@ test('remote-reference claim authority is derived, create-only, and isolated fro
   assert.match(coordinationWriter, /initial-claim-requires-reference/);
   assert.match(coordinationWriter, /dedicated remote-reference claim module/);
   assert.match(coordinationWriter, /CLAIM_ESTABLISHMENT_AUTHORITY = Symbol/);
+  assert.match(coordinationWriter, /missing-claim-snapshot-guard/);
+  assert.match(coordinationWriter, /stage: 'claim-snapshot-guard'/);
+  assert.match(coordinationClaim, /evaluateClaimCommentHistoryForBody/);
+  assert.match(coordinationClaim, /claimSnapshotGuard: claimSnapshotGuard\(claim\)/);
+  assert.match(coordinationLib, /export function evaluateClaimCommentHistoryForBody/);
   assert.doesNotMatch(coordinationWriter, /\/git\/refs|createClaimRef/);
   assert.doesNotMatch(coordinationLib, /from ['"]\.\/coordination-claim\.mjs['"]/);
   assert.doesNotMatch(coordinationStatus, /from ['"]\.\/coordination-claim\.mjs['"]/);

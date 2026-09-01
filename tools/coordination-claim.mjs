@@ -31,6 +31,7 @@ export {
   parseReservedClaimRef,
   validateClaimBranch,
 } from './coordination-schema.mjs';
+import { evaluateClaimCommentHistoryForBody, hasClaimSignal } from './coordination-lib.mjs';
 import {
   createGitHubCliHost,
   executeClaimEstablishmentWrite,
@@ -117,17 +118,7 @@ const AGENT_IDENTITY_FIELDS = V2_PORTABLE_CLAIM_FIELDS.filter(
   (field) => !['Claim-State', 'Check-In-By', 'Waiting-Since'].includes(field),
 );
 
-function hasClaimSignal(body) {
-  return (
-    V1_PORTABLE_CLAIM_FIELDS.some((field) => body.includes(`${field}:`)) ||
-    V2_PORTABLE_CLAIM_FIELDS.some((field) => body.includes(`${field}:`)) ||
-    /\bclaim(?:ed|ing)?\b|\bcheck[- ]?in\b|\bcheckpoint\b|\b(?:take|taking|took|assume|assuming)\s+ownership\b/i.test(
-      body,
-    )
-  );
-}
-
-function inspectClaimComment(comment, prepared, phase) {
+function inspectOperationEvidence(comment) {
   const body = typeof comment?.body === 'string' ? comment.body : '';
   const markerRecord = structuredRecord(body, ['Coordination-Write-ID']);
   const markerOccurrences = markerRecord.occurrences['Coordination-Write-ID'];
@@ -143,6 +134,14 @@ function inspectClaimComment(comment, prepared, phase) {
       message: `comment ${comment.id ?? 'unknown'} has malformed operation evidence`,
     };
   }
+  return { valid: true, mentionsMarker };
+}
+
+function inspectClaimComment(comment, prepared, phase) {
+  const body = typeof comment?.body === 'string' ? comment.body : '';
+  const operation = inspectOperationEvidence(comment);
+  if (!operation.valid) return operation;
+  const { mentionsMarker } = operation;
   if (!mentionsMarker && !hasClaimSignal(body)) return { valid: true, kind: 'unrelated' };
 
   const v2Record = structuredRecord(body, [
@@ -227,12 +226,83 @@ function inspectClaimComment(comment, prepared, phase) {
   return { valid: true, kind: 'historical-non-agent', state };
 }
 
-function inspectClaimComments(comments, prepared, phase) {
-  for (const comment of comments) {
-    const inspection = inspectClaimComment(comment, prepared, phase);
-    if (!inspection.valid) return inspection;
+function inspectClaimComments(comments, prepared, phase, body) {
+  const history = evaluateClaimCommentHistoryForBody(body, comments, {
+    claimAgent: prepared.fields['Claim-Agent'],
+  });
+  const { resolution } = history;
+  if (resolution.status === 'invalid') {
+    return {
+      valid: false,
+      code: 'invalid-claim-comment-reconciliation',
+      message: resolution.problems.map(({ message }) => message).join('; '),
+      resolution,
+    };
   }
-  return { valid: true };
+  for (const comment of comments) {
+    const operation = inspectOperationEvidence(comment);
+    if (!operation.valid) return { ...operation, resolution };
+  }
+  for (const comment of history.unreconciledComments) {
+    const inspection = inspectClaimComment(comment, prepared, phase);
+    if (!inspection.valid) return { ...inspection, resolution };
+  }
+  return { valid: true, resolution };
+}
+
+function inspectPrivilegedWriterSnapshot(issue, claim) {
+  const sourceBody = issue.body === claim.expectedBody;
+  const preparedBody = issue.body === claim.prepared.body;
+  const unsafe = (code, message, status = sourceBody ? 'orphaned' : 'collision') => ({
+    valid: false,
+    status,
+    code,
+    message: `${message}; preserve the ref for principal reconciliation`,
+  });
+  if (issue.state !== 'open') {
+    return unsafe('post-ref-issue-not-open', 'the issue is no longer open');
+  }
+  if (!sourceBody && !preparedBody) {
+    return unsafe(
+      'post-ref-body-collision',
+      'the issue body is neither the exact parked source nor the prepared claim',
+      'collision',
+    );
+  }
+  const labels = issueStateLabels(issue.labels);
+  const sourceLabel = `work:${claim.expected.fields['Claim-State']}`;
+  const allowedLabels = preparedBody
+    ? new Set([sourceLabel, claim.desiredLabel])
+    : new Set([sourceLabel]);
+  if (labels.length !== 1 || !allowedLabels.has(labels[0])) {
+    return unsafe(
+      'post-ref-label-mismatch',
+      `the sole state label ${labels[0] ?? 'missing'} is unsafe for the observed body stage`,
+    );
+  }
+  const comments = inspectClaimComments(
+    issue.comments,
+    claim.prepared,
+    sourceBody ? 'before-create' : 'recovery',
+    issue.body,
+  );
+  if (!comments.valid) {
+    return unsafe(
+      `post-ref-${comments.code}`,
+      comments.message,
+      comments.code === 'competing-agent-ownership' ? 'collision' : undefined,
+    );
+  }
+  return {
+    valid: true,
+    bodyStage: sourceBody ? 'parked-source' : 'prepared-claim',
+    label: labels[0],
+    resolution: comments.resolution,
+  };
+}
+
+function claimSnapshotGuard(claim) {
+  return ({ issue }) => inspectPrivilegedWriterSnapshot(issue, claim);
 }
 
 function inspectIssueBeforeCreate(issue, claim) {
@@ -255,7 +325,7 @@ function inspectIssueBeforeCreate(issue, claim) {
       message: `the issue must have exactly the parked state label ${expectedLabel}`,
     };
   }
-  return inspectClaimComments(issue.comments, claim.prepared, 'before-create');
+  return inspectClaimComments(issue.comments, claim.prepared, 'before-create', issue.body);
 }
 
 function preparedClaim({ issueNumber, expectedBody, values, checkpointComment, operationId }) {
@@ -418,7 +488,12 @@ export async function executeCoordinationClaim({
         message: 'the ref and issue body do not identify one prepared claim',
       });
     }
-    const commentInspection = inspectClaimComments(issue.comments, claim.prepared, 'recovery');
+    const commentInspection = inspectClaimComments(
+      issue.comments,
+      claim.prepared,
+      'recovery',
+      issue.body,
+    );
     if (!commentInspection.valid) {
       return result('collision', `ref-present-${commentInspection.code}`, {
         message: commentInspection.message,
@@ -442,10 +517,16 @@ export async function executeCoordinationClaim({
       values: claim.canonicalValues,
       checkpointComment,
       operationId,
+      claimSnapshotGuard: claimSnapshotGuard(claim),
     });
     return {
-      ...result(write.status, 'writer-recovery'),
+      ...result(
+        write.status,
+        write.stage === 'claim-snapshot-guard' ? 'post-ref-snapshot-guard' : 'writer-recovery',
+      ),
       writerMutations: write.mutations,
+      message: write.message,
+      guard: write.guard,
       writer: write,
     };
   }
@@ -512,12 +593,20 @@ export async function executeCoordinationClaim({
     values: claim.canonicalValues,
     checkpointComment,
     operationId,
+    claimSnapshotGuard: claimSnapshotGuard(claim),
   });
   return {
     status: write.status,
-    stage: write.status === 'complete' ? 'complete' : 'writer-partial',
+    stage:
+      write.stage === 'claim-snapshot-guard'
+        ? 'post-ref-snapshot-guard'
+        : write.status === 'complete'
+          ? 'complete'
+          : 'writer-partial',
     refMutations: 1,
     writerMutations: write.mutations,
+    message: write.message,
+    guard: write.guard,
     writer: write,
   };
 }

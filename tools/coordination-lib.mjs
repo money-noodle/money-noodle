@@ -142,7 +142,12 @@ function meaningful(value) {
   return typeof value === "string" && !UNCLAIMED_VALUES.has(value.trim().toLowerCase());
 }
 
-function evaluateClaimCommentResolution(record, fields, comments) {
+export function evaluateClaimCommentResolution(
+  record,
+  fields,
+  comments,
+  { claimAgent = fields['Claim-Agent'] } = {},
+) {
   const raw = fields[CLAIM_COMMENT_RESOLUTION_FIELD] ?? "missing";
   const parsed = parseReconciledClaimCommentIds(raw);
   const problems = [...parsed.problems];
@@ -160,7 +165,7 @@ function evaluateClaimCommentResolution(record, fields, comments) {
       message: "a declared Integration-Owner is required to authorize reconciliation",
     });
   }
-  if (parsed.ids.length > 0 && integrationOwner === fields["Claim-Agent"]) {
+  if (parsed.ids.length > 0 && integrationOwner === claimAgent) {
     problems.push({
       code: "claimant-self-resolution",
       message: "the current claimant cannot also be the reconciliation authority",
@@ -198,6 +203,33 @@ function evaluateClaimCommentResolution(record, fields, comments) {
     reconciledIds: valid ? parsed.ids : [],
     problems,
   };
+}
+
+export function evaluateClaimCommentHistory(
+  record,
+  fields,
+  comments,
+  { claimAgent } = {},
+) {
+  const resolution = evaluateClaimCommentResolution(record, fields, comments, { claimAgent });
+  const claimComments = comments.filter((comment) => hasClaimSignal(comment.body));
+  const reconciledIds = new Set(resolution.reconciledIds);
+  return {
+    resolution,
+    claimComments,
+    unresolvedClaimComments: claimComments.filter(({ id }) => !reconciledIds.has(id)),
+    unreconciledComments: comments.filter(({ id }) => !reconciledIds.has(id)),
+  };
+}
+
+export function evaluateClaimCommentHistoryForBody(body, comments, { claimAgent } = {}) {
+  const record = structuredFields(body, [
+    ...ALL_PORTABLE_CLAIM_FIELDS,
+    ...CHECKPOINT_EVIDENCE_FIELDS,
+    'Integration-Owner',
+    CLAIM_COMMENT_RESOLUTION_FIELD,
+  ]);
+  return evaluateClaimCommentHistory(record, record.fields, comments, { claimAgent });
 }
 
 function latestComment(comments) {
@@ -442,8 +474,9 @@ function analyzeWorkItem(issue, comments, issueByNumber, local, nowMs) {
   }
 
   const latest = latestComment(comments);
-  const claimComments = comments.filter((comment) => hasClaimSignal(comment.body));
-  const claimCommentResolution = evaluateClaimCommentResolution(record, fields, comments);
+  const claimCommentHistory = evaluateClaimCommentHistory(record, fields, comments);
+  const { claimComments, unresolvedClaimComments } = claimCommentHistory;
+  const claimCommentResolution = claimCommentHistory.resolution;
   if (claimCommentResolution.status === "invalid") {
     questions.push(
       question(
@@ -452,12 +485,11 @@ function analyzeWorkItem(issue, comments, issueByNumber, local, nowMs) {
       ),
     );
   }
-  const reconciledIds = new Set(claimCommentResolution.reconciledIds);
+  const unresolvedIds = new Set(unresolvedClaimComments.map(({ id }) => id));
   const claimCommentEvidence = claimComments.map((comment) => ({
     ...commentEvidence(comment),
-    reconciliation: reconciledIds.has(comment.id) ? "reconciled" : "unresolved",
+    reconciliation: unresolvedIds.has(comment.id) ? "unresolved" : "reconciled",
   }));
-  const unresolvedClaimComments = claimComments.filter((comment) => !reconciledIds.has(comment.id));
   const unresolvedClaimCommentEvidence = claimCommentEvidence.filter(
     ({ reconciliation }) => reconciliation === "unresolved",
   );

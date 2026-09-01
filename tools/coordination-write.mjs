@@ -297,7 +297,16 @@ function assertHost(host) {
 }
 
 async function executeCoordinationWriteInternal(
-  { host, issueNumber, expectedBody, values, checkpointComment, operationId, kind = 'work-item' },
+  {
+    host,
+    issueNumber,
+    expectedBody,
+    values,
+    checkpointComment,
+    operationId,
+    kind = 'work-item',
+    claimSnapshotGuard,
+  },
   authority,
 ) {
   assertHost(host);
@@ -330,6 +339,35 @@ async function executeCoordinationWriteInternal(
       'invalid-host-read',
       'host.readIssue returned an invalid issue snapshot',
     );
+  }
+
+  if (authority === CLAIM_ESTABLISHMENT_AUTHORITY) {
+    if (typeof claimSnapshotGuard !== 'function') {
+      throw new CoordinationWriteError(
+        'missing-claim-snapshot-guard',
+        'the privileged claim writer requires a post-reference snapshot guard',
+      );
+    }
+    const guard = claimSnapshotGuard({
+      issue,
+      expectedBody,
+      prepared,
+      desiredLabel,
+      marker,
+      proposedComment,
+    });
+    if (!guard?.valid) {
+      return {
+        status: guard?.status ?? 'collision',
+        stage: 'claim-snapshot-guard',
+        recoverable: false,
+        mutations,
+        message:
+          guard?.message ??
+          'post-reference claim evidence is unsafe; preserve the ref for reconciliation',
+        guard,
+      };
+    }
   }
 
   if (
@@ -487,6 +525,12 @@ export async function executeCoordinationWrite(input) {
 // This narrow entry point is imported only by coordination-claim.mjs. The ordinary writer and
 // its CLI never receive the module-private authority token.
 export async function executeClaimEstablishmentWrite(input) {
+  if (typeof input?.claimSnapshotGuard !== 'function') {
+    throw new CoordinationWriteError(
+      'missing-claim-snapshot-guard',
+      'the privileged claim writer requires a post-reference snapshot guard',
+    );
+  }
   return executeCoordinationWriteInternal(input, CLAIM_ESTABLISHMENT_AUTHORITY);
 }
 
@@ -583,7 +627,13 @@ export function createGitHubCliHost({ repository, runGh = runGitHubCli }) {
         state: after.state,
         body: after.body,
         labels: labels(after),
-        comments: pages.flat().map((comment) => ({ id: comment.id, body: comment.body })),
+        comments: pages.flat().map((comment) => ({
+          id: comment.id,
+          author: comment.user?.login,
+          body: comment.body,
+          createdAt: comment.created_at,
+          updatedAt: comment.updated_at,
+        })),
       };
     },
 
