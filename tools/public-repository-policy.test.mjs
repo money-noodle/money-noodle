@@ -352,6 +352,42 @@ const assertNoScopedPushAuthorityWidening = (path, source) => {
   }
 };
 
+const scopedPublicationContradictionPatterns = [
+  /\ba permitted (?:owned-)?branch push\b[^.!?\n]{0,100}\b(?:does not|cannot|will not)\s+advance\b[^.!?\n]{0,100}\ban existing pull request(?:'s)? head\b/i,
+  /\b(?:prior|previous)\s+(?:head\s+)?(?:checks? and reviews?|reviews? and checks?)\b[^.!?\n]{0,100}\bremain(?:s)? valid\b[^.!?\n]{0,120}\b(?:pull request head changes?|push advances?)\b/i,
+  /\b(?:permitted\s+)?(?:owned-)?branch push\b[^.!?\n]{0,80}\bauthorizes?\b[^.!?\n]{0,100}\b(?:pull-request creation|pull-request metadata changes?|retargeting|closing|reopening|merging)\b/i,
+];
+
+const assertNoScopedPublicationContradiction = (path, source) => {
+  const normalized = normalizePolicyText(source);
+  for (const pattern of scopedPublicationContradictionPatterns) {
+    assert.doesNotMatch(
+      normalized,
+      pattern,
+      `${path} must preserve existing-pull-request advancement semantics`,
+    );
+  }
+};
+
+const checkpointRolloutContradictionPatterns = [
+  /\bversion 1 header\b[^.!?\n]{0,100}\brequired\b[^.!?\n]{0,120}\bcheckpoint comments? created before (?:issue )?#40 (?:is|was) integrated\b/i,
+  /\bhistorical checkpoint comments?\b[^.!?\n]{0,100}\b(?:must|may|should|are required to)\s+be\s+(?:edited|backfilled)\b/i,
+  /\bhistorical checkpoint comments?\b[^.!?\n]{0,100}\b(?:invalid|not valid)\b[^.!?\n]{0,100}\b(?:without|unless)\b[^.!?\n]{0,60}\b(?:backfill|version 1 header)\b/i,
+  /\bcurrent coordination status tooling\b[^.!?\n]{0,100}\bvalidates? every version 1 field\b/i,
+  /\buntil (?:issue )?#41 integrates schema validation\b[^.!?\n]{0,140}\bmanual(?: and independent| independent)? verification\b[^.!?\n]{0,60}\b(?:is optional|is unnecessary|is not required)\b/i,
+];
+
+const assertNoCheckpointRolloutContradiction = (path, source) => {
+  const normalized = normalizePolicyText(source);
+  for (const pattern of checkpointRolloutContradictionPatterns) {
+    assert.doesNotMatch(
+      normalized,
+      pattern,
+      `${path} must preserve the prospective version 1 checkpoint rollout`,
+    );
+  }
+};
+
 const checkpointEvidenceHeader = `Checkpoint-Evidence-Version: 1
 Checkpoint-State: proposed
 Checkpoint-At: unclaimed
@@ -552,6 +588,28 @@ test('scoped branch publication stays claim-bound and checkpoint evidence stays 
   assert.match(parallelWork, /`Checkpoint-CI-Commit`[^.!?\n]{0,160}equals `Checkpoint-Commit`/);
   assert.match(parallelWork, /branch-head change immediately invalidates the prior CI run/i);
   assert.match(parallelWork, /lists exactly the declared number of residual risks/i);
+  assert.match(parallelWork, /permitted push automatically advances that pull request's head/i);
+  assert.match(parallelWork, /new head immediately invalidates all prior checks and reviews/i);
+  assert.match(
+    parallelWork,
+    /pull-request creation, metadata changes, retargeting, closing, reopening, and merging still require separate explicit authorization/i,
+  );
+  assert.match(
+    parallelWork,
+    /version 1 header requirement is prospective[^.!?\n]{0,160}only to checkpoint comments created after issue #40 is integrated/i,
+  );
+  assert.match(
+    parallelWork,
+    /historical checkpoint comments remain immutable, valid evidence[^.!?\n]{0,180}do not edit or backfill them/i,
+  );
+  assert.match(
+    parallelWork,
+    /until issue #41 integrates schema validation[^.!?\n]{0,180}verified manually and independently/i,
+  );
+  assert.match(
+    parallelWork,
+    /current coordination status tooling does not validate every version 1 field/i,
+  );
   for (const verdict of [
     'passed',
     'pending',
@@ -584,6 +642,32 @@ test('scoped branch publication stays claim-bound and checkpoint evidence stays 
     assert.throws(
       () => assertNoScopedPushAuthorityWidening('scoped-push mutation', mutation),
       /must preserve scoped owned-branch publication authority/,
+      mutation,
+    );
+  }
+
+  for (const mutation of [
+    "A permitted branch push does not advance an existing pull request's head.",
+    'Prior checks and reviews remain valid after the pull request head changes.',
+    'A permitted branch push authorizes pull-request metadata changes.',
+  ]) {
+    assert.throws(
+      () => assertNoScopedPublicationContradiction('pull-request advancement mutation', mutation),
+      /must preserve existing-pull-request advancement semantics/,
+      mutation,
+    );
+  }
+
+  for (const mutation of [
+    'The version 1 header is required for checkpoint comments created before issue #40 is integrated.',
+    'Historical checkpoint comments must be backfilled.',
+    'Historical checkpoint comments are invalid without a version 1 header.',
+    'Current coordination status tooling validates every version 1 field.',
+    'Until issue #41 integrates schema validation, manual and independent verification is optional.',
+  ]) {
+    assert.throws(
+      () => assertNoCheckpointRolloutContradiction('checkpoint rollout mutation', mutation),
+      /must preserve the prospective version 1 checkpoint rollout/,
       mutation,
     );
   }
