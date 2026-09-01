@@ -58,7 +58,7 @@ The coordinator may:
 
 The coordinator must not edit tracked repository files in any checkout, run writing format/fix operations as a substitute for delegation, create ordinary change commits, or implement or repair work in the integration checkout. A version-controlled plan or documentation edit is a repository change, not claim/plan metadata. Authorized integration may apply unchanged reviewed commits and create normal merge metadata; it does not permit hand-editing, conflict resolution, drive-by fixes, or unreviewed amendments in the target checkout. A conflict or needed correction returns to an execution session on its delegated branch.
 
-Every repository change—including documentation, tests, generated artifacts, tooling, configuration, and implementation—must be performed by an execution session. Each delegated change has its own claimed bounded scope, short-lived typed branch based on the current integration target, and dedicated mutable worktree; the execution session edits, validates, and commits only there. Its output is reviewed and integrated into the target branch rather than recreated or edited directly in the integration checkout. Delegation does not grant the execution session permission to push, merge, alter protected refs, or deploy; those operations retain their existing explicit authorization and integration-owner requirements.
+Every repository change—including documentation, tests, generated artifacts, tooling, configuration, and implementation—must be performed by an execution session. Each delegated change has its own claimed bounded scope, short-lived typed branch based on the current integration target, and dedicated mutable worktree; the execution session edits, validates, and commits only there. Its output is reviewed and integrated into the target branch rather than recreated or edited directly in the integration checkout. Delegation grants no publication authority except the normal owned-branch push described in [Scoped owned-branch publication](#scoped-owned-branch-publication). It never grants permission to push another ref, open a pull request, merge, alter protected refs, or deploy; those operations retain their existing explicit authorization and integration-owner requirements.
 
 If the harness cannot create or delegate a subagent, the coordinator stops before changing repository files and asks the maintainer to start or authorize a separate execution session. Tool limitations, urgency, or a change's small size do not allow the coordinator to become the executor.
 
@@ -84,7 +84,31 @@ Use labels `work:proposed`, `work:ready`, `work:active`, `work:blocked`, `work:r
 
 Harness/run identifiers are diagnostic, not identity or authority. This repository and its issue registry are public: issue bodies, comments, checkpoints, branch names, commit metadata, and copied prompt text are externally observable. Do not publish local session-file paths, credentials, full prompts, transcripts, customer or production data, billing/account identifiers, private recovery material, or secrets. Use the issue template at `.github/ISSUE_TEMPLATE/parallel-work.md`; preserve its machine-readable field names so status tooling remains portable.
 
-Use issue comments as an append-only checkpoint trail; editing an ownership comment is ambiguous and becomes a maintainer question. Every ownership or checkpoint comment includes the current exact `Claim-State`, `Claim-Harness`, `Claim-Run-ID`, `Claim-Agent`, `Claim-Branch`, `Claim-Worktree`, and `Check-In-By` field lines so read-only tooling can reconcile it; checkpoint comments also include `Checkpoint-At` and `Checkpoint-Commit`. Explanatory prose may follow those fields. Update the issue body's structured claim fields when ownership, branch, state, or deadline changes. Body edits, labels, comments, branch creation, and worktree creation are not one atomic operation: any plausible ownership wording—including “started work” or “taking ownership”—is retained as intent evidence, and a newer matching comment cannot hide competing structured ownership. An unresolved unstructured claim-bearing comment, edited claim comment, or disagreement becomes a maintainer question; never overwrite or infer away one merely because another record is newer. A session existing inside a harness does not prove its claim is alive; the registry checkpoint does.
+Use issue comments as an append-only checkpoint trail; editing an ownership comment is ambiguous and becomes a maintainer question. Every ownership or checkpoint comment includes the current exact `Claim-State`, `Claim-Harness`, `Claim-Run-ID`, `Claim-Agent`, `Claim-Branch`, `Claim-Worktree`, and `Check-In-By` field lines so read-only tooling can reconcile it. It then includes the complete checkpoint evidence header, in this exact order, before explanatory narrative:
+
+```text
+Checkpoint-Evidence-Version: 1
+Checkpoint-State: <the exact current Claim-State>
+Checkpoint-At: <strict ISO instant>
+Checkpoint-Commit: <full 40-hex commit or uncommitted before one exists>
+Checkpoint-Changed-Path-Count: <base-10 non-negative integer>
+Checkpoint-Checks-Verdict: <passed|pending|failed|cancelled|skipped|missing|unavailable|mixed>
+Checkpoint-CI-Run: <immutable full Actions run URL or unavailable>
+Checkpoint-CI-Commit: <full 40-hex tested commit or unavailable>
+Checkpoint-Security-Impact: <none|present|unknown>
+Checkpoint-Tenant-Impact: <none|present|unknown>
+Checkpoint-Provider-Impact: <none|present|unknown>
+Checkpoint-Deployment-Impact: <none|present|unknown>
+Checkpoint-Residual-Risk-Count: <base-10 non-negative integer>
+Next-Action: <one line>
+Blockers: <one line>
+```
+
+`Checkpoint-State` equals `Claim-State`. The changed-path count is derived from the actual comparison with the registered base, not estimated. The checks verdict summarizes required hosted checks conservatively: `passed` means every required check succeeded for the exact checkpoint commit; `pending`, `failed`, `cancelled`, `skipped`, `missing`, `mixed`, and `unavailable` are never collapsed into passing prose. Use `unavailable` before authorized publication creates a run. `Checkpoint-CI-Run` is either `unavailable` or the immutable full `https://github.com/money-noodle/money-noodle/actions/runs/<positive-integer>` URL. When a run exists, `Checkpoint-CI-Commit` is the exact tested commit and equals `Checkpoint-Commit`; otherwise it is `unavailable`. Each impact flag is exactly `none`, `present`, or `unknown`. The narrative names each required check and actual conclusion or explains unavailable hosted CI, describes every present or unknown impact, and lists exactly the declared number of residual risks. An incomplete or malformed header is not evidence.
+
+The version 1 header requirement is prospective and applies only to checkpoint comments created after issue #40 is integrated. Historical checkpoint comments remain immutable, valid evidence under the checkpoint contract in force when they were created; do not edit or backfill them. Until issue #41 integrates schema validation, each version 1 header is verified manually and independently against its underlying Git and hosted evidence. Current coordination status tooling does not validate every version 1 field, so a warning-free status result is not proof that the complete header is valid.
+
+Any branch-head change immediately invalidates the prior CI run and checks verdict, even when the changed path appears unrelated. A checkpoint for the new head uses that new exact commit and fresh CI evidence; it never copies a run from an earlier commit. Update the issue body's structured claim and checkpoint fields when ownership, branch, state, deadline, or current evidence changes. Body edits, labels, comments, branch creation, and worktree creation are not one atomic operation: any plausible ownership wording—including “started work” or “taking ownership”—is retained as intent evidence, and a newer matching comment cannot hide competing structured ownership. An unresolved unstructured claim-bearing comment, edited claim comment, or disagreement becomes a maintainer question; never overwrite or infer away one merely because another record is newer. A session existing inside a harness does not prove its claim is alive; the registry checkpoint does.
 
 ### Explicit claim-comment reconciliation
 
@@ -113,9 +137,31 @@ Use a meaningful task/session name in any harness that supports naming. Harness-
 
 A claim is an advisory coordination lease, not a repository lock or permission to bypass review. If overlap appears, stop at a clean boundary, checkpoint both records, and ask the integration owner or maintainer to repartition or serialize work.
 
+## Scoped owned-branch publication
+
+A current, fully reconciled claim normally authorizes its named execution agent to make a normal, non-force push only from its registered worktree and local owned typed branch to the remote branch with the identical `Claim-Branch` name. Immediately before pushing, re-fetch the issue body and comments, refs, worktrees, and open pull requests; run coordination status; verify zero warnings; verify the local branch, worktree, commit, and current claim all agree; and inspect the outgoing commit and changed paths for public-source safety. A mismatch, warning, unexpected remote head, scope expansion, or uncertain authority stops the push.
+
+This narrow authority permits checkpoint publication only. When the identically named remote branch is already the source branch of an existing pull request, a permitted push automatically advances that pull request's head. The new head immediately invalidates all prior checks and reviews; the applicable checks and reviews must qualify again for the exact current head. This automatic consequence is branch publication, not authority for any separately controlled pull-request operation.
+
+The authority does **not** authorize any of the following:
+
+- pushing the integration branch or any other protected ref;
+- creating or pushing a tag;
+- pushing another claim's branch or using a differently named remote destination;
+- force push, `--force-with-lease`, non-fast-forward update, amend/rebase of published history, or any other history rewrite;
+- deleting a branch, tag, worktree, or any other ref, or performing automatic cleanup;
+- creating a pull request, changing pull-request metadata, retargeting, closing, reopening, or merging a pull request, or invoking an integration exception;
+- integrating, changing host settings, or causing provider or deployment effects.
+
+Pull requests remain the only integration route. Branch publication, a green check, and a complete evidence header prove conditions only; none grants integration, merge, provider, deployment, recovery, or cleanup authority. Branch/ref deletion and cleanup each require separate explicit authorization and never follow automatically from review, integration, expiry, or stale evidence.
+
+The authority is not self-activating. It begins only after issue #40 is integrated into the governing guidance. The #40 implementation branch cannot use the rule it is introducing and requires separate explicit maintainer authorization before its own first push. A later change that widens this authority likewise cannot rely on the unintegrated widening to publish itself.
+
+The current CI branch matrix intentionally remains unchanged. Routine owned-branch pushes therefore continue to run the existing container jobs at higher short-term CI cost; reducing that matrix is separate work and cannot be coupled to checkpoint publication.
+
 ## Checkpoints, stale work, and cleanup detection
 
-Checkpoint after meaningful milestones, before a known long wait, and before ending a session. Record completed evidence, current branch/commit or uncommitted-state warning, checks, blockers, next action, and next `Check-In-By`. Do not emit empty heartbeat noise.
+Checkpoint after meaningful milestones, before a known long wait, and before ending a session. Record the complete machine-readable evidence header above the retained explanatory narrative, including completed evidence, exact branch commit or uncommitted-state warning, changed-path count, honest required-check verdict and immutable run evidence, impacts, residual risks, blockers, next action, and next `Check-In-By`. Do not emit empty heartbeat noise.
 
 A claim is **suspected stale**, never automatically abandoned, when:
 
@@ -148,7 +194,7 @@ Before releasing a claim, the agent:
 
 1. runs focused and affected checks;
 2. records commits/diff, evidence, unresolved risks, and deployment impact;
-3. pushes or opens a PR only when authorized;
+3. makes only a normal owned-branch push under the scoped publication rule above; pull-request creation, metadata changes, retargeting, closing, reopening, and merging still require separate explicit authorization, although the push may advance an existing pull request's source-branch head as described above;
 4. sets `work:review`, `work:done`, `work:blocked`, or `work:abandoned` accurately;
 5. leaves explicit continuation and cleanup instructions;
 6. removes a worktree only after changes are preserved and removal is authorized/safe.
