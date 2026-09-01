@@ -373,7 +373,7 @@ const checkpointRolloutContradictionPatterns = [
   /\bversion 1 header\b[^.!?\n]{0,100}\brequired\b[^.!?\n]{0,120}\bcheckpoint comments? created before (?:issue )?#40 (?:is|was) integrated\b/i,
   /\bhistorical checkpoint comments?\b[^.!?\n]{0,100}\b(?:must|may|should|are required to)\s+be\s+(?:edited|backfilled)\b/i,
   /\bhistorical checkpoint comments?\b[^.!?\n]{0,100}\b(?:invalid|not valid)\b[^.!?\n]{0,100}\b(?:without|unless)\b[^.!?\n]{0,60}\b(?:backfill|version 1 header)\b/i,
-  /\bcurrent coordination status tooling\b[^.!?\n]{0,100}\bvalidates? every version 1 field\b/i,
+  /\bcurrent coordination status tooling\s+(?:currently\s+)?validates? every version 1 field\b/i,
   /\buntil (?:issue )?#41 integrates schema validation\b[^.!?\n]{0,140}\bmanual(?: and independent| independent)? verification\b[^.!?\n]{0,60}\b(?:is optional|is unnecessary|is not required)\b/i,
 ];
 
@@ -548,6 +548,8 @@ test('scoped branch publication stays claim-bound and checkpoint evidence stays 
 
   for (const [path, source] of governedSources) {
     assertNoScopedPushAuthorityWidening(path, source);
+    assertNoScopedPublicationContradiction(path, source);
+    assertNoCheckpointRolloutContradiction(path, source);
     assert.match(source, /owned typed branch|typed branch it owns|registered typed branch/i, path);
     assert.match(source, /normal(?:, non-force| fast-forward| owned-branch)? push/i, path);
     assert.match(source, /pull requests? remain[^.!?\n]{0,120}(?:only|mandatory)/i, path);
