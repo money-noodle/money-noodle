@@ -1,0 +1,84 @@
+name: Shared parallel plan
+description: Create a schema-v2 canonical plan and current status for a complex outcome.
+title: "Plan: "
+labels:
+  - work:plan
+  - work:proposed
+assignees: []
+body:
+  - type: dropdown
+    id: registry_schema_version
+    attributes:
+      label: Registry-Schema-Version
+      description: Unsupported versions remain visible and fail closed.
+      options:
+        - "2"
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome
+      description: State one independently verifiable end state.
+    validations:
+      required: true
+  - type: textarea
+    id: current_status
+    attributes:
+      label: Current status
+      description: Keep this current and link every active, blocked, review, done, abandoned, and suspected-stale child.
+    validations:
+      required: true
+  - type: dropdown
+    id: plan_state
+    attributes:
+      label: Plan-State
+      description: New plans begin proposed; later transitions use validated repository operations.
+      options:
+        - proposed
+    validations:
+      required: true
+  - type: input
+    id: integration_owner
+    attributes:
+      label: Integration-Owner
+      description: Name the principal responsible for integration sequencing.
+      value: maintainer
+    validations:
+      required: true
+  - type: input
+    id: last_plan_update
+    attributes:
+      label: Last-Plan-Update
+      description: Strict ISO instant with a timezone.
+      placeholder: "YYYY-MM-DDTHH:MM:SSZ"
+    validations:
+      required: true
+  - type: textarea
+    id: architecture_constraints
+    attributes:
+      label: Architecture and constraints
+      description: Link current specifications, accepted records, and diagrams; state non-negotiable boundaries.
+    validations:
+      required: true
+  - type: textarea
+    id: work_graph
+    attributes:
+      label: Work graph
+      description: List child dependencies, parallel waves, and serialized boundaries.
+    validations:
+      required: true
+  - type: textarea
+    id: risks_decisions
+    attributes:
+      label: Risks and decisions needed
+      description: Keep current risks here and move durable settled decisions to their owning records.
+    validations:
+      required: true
+  - type: textarea
+    id: integration_cleanup
+    attributes:
+      label: Integration and cleanup
+      description: Record merge order, recovery ownership, stale work, and separately authorized cleanup.
+    validations:
+      required: true

@@ -1,41 +1,39 @@
-export const SCHEMA_VERSION = "1.0";
+import {
+  CHECKPOINT_EVIDENCE_FIELDS,
+  V1_PORTABLE_CLAIM_FIELDS,
+  V2_PORTABLE_CLAIM_FIELDS,
+  isoInstantMilliseconds as schemaIsoInstantMilliseconds,
+  structuredRecord,
+  validateCheckpointComment,
+  validatePlanBody,
+  validateWorkItemBody,
+} from './coordination-schema.mjs';
 
-export const PORTABLE_CLAIM_FIELDS = [
-  "Claim-State",
-  "Claim-Harness",
-  "Claim-Run-ID",
-  "Claim-Agent",
-  "Claim-Branch",
-  "Claim-Worktree",
-  "Claimed-At",
-  "Check-In-By",
-];
+export const SCHEMA_VERSION = '1.0';
+
+export const PORTABLE_CLAIM_FIELDS = V1_PORTABLE_CLAIM_FIELDS;
 
 export const CHECKPOINT_FIELDS = [
-  "Checkpoint-At",
-  "Checkpoint-Commit",
-  "Next-Action",
-  "Blockers",
+  'Checkpoint-At',
+  'Checkpoint-Commit',
+  'Next-Action',
+  'Blockers',
 ];
 
-const COMMENT_RECORD_FIELDS = [
-  "Claim-State",
-  "Claim-Harness",
-  "Claim-Run-ID",
-  "Claim-Agent",
-  "Claim-Branch",
-  "Claim-Worktree",
-  "Check-In-By",
-  "Checkpoint-At",
-  "Checkpoint-Commit",
+const ALL_PORTABLE_CLAIM_FIELDS = [
+  ...new Set([...V1_PORTABLE_CLAIM_FIELDS, ...V2_PORTABLE_CLAIM_FIELDS]),
 ];
-const OWNERSHIP_FIELDS = [
-  "Claim-Harness",
-  "Claim-Run-ID",
-  "Claim-Agent",
-  "Claim-Branch",
-  "Claim-Worktree",
-];
+const ALL_COMMENT_FIELDS = [...ALL_PORTABLE_CLAIM_FIELDS, ...CHECKPOINT_EVIDENCE_FIELDS];
+
+function claimFieldsForVersion(version) {
+  return version === '2' ? V2_PORTABLE_CLAIM_FIELDS : V1_PORTABLE_CLAIM_FIELDS;
+}
+
+function ownershipFieldsForVersion(version) {
+  return claimFieldsForVersion(version).filter(
+    (name) => !['Claim-State', 'Claimed-At', 'Check-In-By', 'Waiting-Since'].includes(name),
+  );
+}
 export const CLAIM_COMMENT_RESOLUTION_FIELD = "Reconciled-Claim-Comment-IDs";
 
 export const NONTERMINAL_CLAIMED_STATES = new Set(["active", "blocked", "review"]);
@@ -55,15 +53,7 @@ function escapeRegExp(value) {
 }
 
 export function structuredFields(body, names = [...PORTABLE_CLAIM_FIELDS, ...CHECKPOINT_FIELDS]) {
-  if (typeof body !== "string") throw new TypeError("structured record must be a string");
-
-  const fields = {};
-  const duplicates = [];
-  for (const name of names) {
-    const matches = [...body.matchAll(new RegExp(`^${escapeRegExp(name)}:\\s*(.*?)\\s*$`, "gm"))];
-    if (matches.length > 1) duplicates.push(name);
-    if (matches.length > 0) fields[name] = matches.at(-1)[1].trim();
-  }
+  const { fields, duplicates } = structuredRecord(body, names);
   return { fields, duplicates };
 }
 
@@ -72,49 +62,7 @@ export function claimField(body, name) {
 }
 
 export function isoInstantMilliseconds(value) {
-  if (typeof value !== "string") return undefined;
-  const match = value.match(
-    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|([+-])(\d{2}):(\d{2}))$/,
-  );
-  if (!match) return undefined;
-
-  const [, yearText, monthText, dayText, hourText, minuteText, secondText, fraction = "", zone, sign, offsetHourText, offsetMinuteText] = match;
-  const [year, month, day, hour, minute, second] = [
-    yearText,
-    monthText,
-    dayText,
-    hourText,
-    minuteText,
-    secondText,
-  ].map(Number);
-  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  if (
-    month < 1 ||
-    month > 12 ||
-    day < 1 ||
-    day > daysInMonth[month - 1] ||
-    hour > 23 ||
-    minute > 59 ||
-    second > 59
-  ) {
-    return undefined;
-  }
-
-  let offsetMinutes = 0;
-  if (zone !== "Z") {
-    const offsetHour = Number(offsetHourText);
-    const offsetMinute = Number(offsetMinuteText);
-    if (offsetHour > 14 || offsetMinute > 59 || (offsetHour === 14 && offsetMinute !== 0)) {
-      return undefined;
-    }
-    offsetMinutes = (offsetHour * 60 + offsetMinute) * (sign === "+" ? 1 : -1);
-  }
-
-  const date = new Date(0);
-  date.setUTCFullYear(year, month - 1, day);
-  date.setUTCHours(hour, minute, second, Number((fraction + "000").slice(0, 3)));
-  return date.getTime() - offsetMinutes * 60_000;
+  return schemaIsoInstantMilliseconds(value);
 }
 
 export function deadlineStatus(value, nowMs = Date.now()) {
@@ -258,7 +206,7 @@ function latestComment(comments) {
 
 function commentEvidence(comment) {
   if (!comment) return null;
-  const record = structuredFields(comment.body);
+  const record = structuredFields(comment.body, ALL_COMMENT_FIELDS);
   return {
     id: comment.id,
     author: comment.author,
@@ -303,14 +251,16 @@ function evaluateDependencies(value, issueByNumber, issueNumber) {
       result.blocked.push(dependencyNumber);
       continue;
     }
-    const dependencyRecord = structuredFields(dependency.body, ["Claim-State"]);
-    const dependencyState = dependencyRecord.fields["Claim-State"];
-    const dependencyWorkLabels = dependency.labels.filter((label) => label.startsWith("work:"));
+    const dependencySchema = validateWorkItemBody(dependency.body);
+    const dependencyRecord = structuredFields(dependency.body, ['Claim-State']);
+    const dependencyState = dependencyRecord.fields['Claim-State'];
+    const dependencyWorkLabels = dependency.labels.filter((label) => label.startsWith('work:'));
     if (
+      dependencySchema.valid &&
       dependencyRecord.duplicates.length === 0 &&
-      dependencyState === "done" &&
+      dependencyState === 'done' &&
       dependencyWorkLabels.length === 1 &&
-      dependencyWorkLabels[0] === "work:done"
+      dependencyWorkLabels[0] === 'work:done'
     ) {
       result.satisfied.push(dependencyNumber);
     } else {
@@ -323,8 +273,9 @@ function evaluateDependencies(value, issueByNumber, issueNumber) {
   return result;
 }
 
-function evaluateLocalEvidence(fields, local) {
-  const branch = fields["Claim-Branch"];
+function evaluateLocalEvidence(fields, local, version = '1') {
+  if (version === '2') return { status: 'not-applicable', questions: [] };
+  const branch = fields['Claim-Branch'];
   const worktree = fields["Claim-Worktree"];
   if (!meaningful(branch) || !meaningful(worktree)) return { status: "not-applicable", questions: [] };
 
@@ -398,19 +349,44 @@ function classify(item) {
 }
 
 function analyzeWorkItem(issue, comments, issueByNumber, local, nowMs) {
+  const registrySchema = validateWorkItemBody(issue.body);
+  const portableClaimFields = claimFieldsForVersion(registrySchema.version);
+  const ownershipFields = ownershipFieldsForVersion(registrySchema.version);
+  const commentRecordFields =
+    registrySchema.version === '2'
+      ? [...portableClaimFields, ...CHECKPOINT_EVIDENCE_FIELDS]
+      : [
+          ...portableClaimFields.filter((name) => name !== 'Claimed-At'),
+          'Checkpoint-At',
+          'Checkpoint-Commit',
+        ];
   const record = structuredFields(issue.body, [
-    ...PORTABLE_CLAIM_FIELDS,
-    ...CHECKPOINT_FIELDS,
-    "Parent-Plan",
-    "Depends-On",
-    "Integration-Owner",
+    ...ALL_PORTABLE_CLAIM_FIELDS,
+    ...CHECKPOINT_EVIDENCE_FIELDS,
+    'Parent-Plan',
+    'Scope-Paths',
+    'Depends-On',
+    'Dependency-Notes',
+    'Integration-Owner',
     CLAIM_COMMENT_RESOLUTION_FIELD,
   ]);
   const fields = record.fields;
-  const claimState = (fields["Claim-State"] ?? "missing").toLowerCase();
+  const claimState = (fields['Claim-State'] ?? 'missing').toLowerCase();
   const questions = record.duplicates.map((name) =>
-    question("duplicate-body-field", `issue body repeats structured field ${name}`),
+    question('duplicate-body-field', `issue body repeats structured field ${name}`),
   );
+  if (!registrySchema.valid) {
+    questions.push(
+      ...registrySchema.errors.map((error) =>
+        question(
+          error.code === 'unsupported-schema-version'
+            ? 'unsupported-registry-schema'
+            : 'invalid-registry-schema',
+          `${error.field}: ${error.message}`,
+        ),
+      ),
+    );
+  }
   const labels = stateLabels(issue.labels);
 
   if (labels.length !== 1 || labels[0] !== `work:${claimState}`) {
@@ -422,32 +398,39 @@ function analyzeWorkItem(issue, comments, issueByNumber, local, nowMs) {
     );
   }
 
-  const hasOwnershipEvidence = PORTABLE_CLAIM_FIELDS.slice(1, 7).some((name) => meaningful(fields[name]));
-  const claimExpected = ["active", "review"].includes(claimState) ||
-    (claimState === "blocked" && hasOwnershipEvidence);
-  if (claimExpected) {
-    const missingClaimFields = PORTABLE_CLAIM_FIELDS.slice(1).filter((name) => !meaningful(fields[name]));
-    if (missingClaimFields.length > 0) {
-      questions.push(
-        question(
-          "incomplete-claim",
-          `${missingClaimFields.join(", ")} missing or unclaimed for ${claimState} work`,
-        ),
-      );
-    }
-  } else if (["proposed", "ready"].includes(claimState)) {
-    const unexpectedClaimFields = PORTABLE_CLAIM_FIELDS.slice(1).filter((name) => meaningful(fields[name]));
-    if (unexpectedClaimFields.length > 0) {
-      questions.push(
-        question(
-          "unexpected-claim-evidence",
-          `${unexpectedClaimFields.join(", ")} retain claim or deadline evidence while Claim-State is ${claimState}`,
-        ),
-      );
+  const hasOwnershipEvidence = ownershipFields.some((name) => meaningful(fields[name]));
+  const claimExpected =
+    ['active', 'review'].includes(claimState) ||
+    (registrySchema.version === '1' && claimState === 'blocked' && hasOwnershipEvidence);
+  if (registrySchema.version === '1') {
+    if (claimExpected) {
+      const missingClaimFields = portableClaimFields
+        .slice(1)
+        .filter((name) => !meaningful(fields[name]));
+      if (missingClaimFields.length > 0) {
+        questions.push(
+          question(
+            'incomplete-claim',
+            `${missingClaimFields.join(', ')} missing or unclaimed for ${claimState} work`,
+          ),
+        );
+      }
+    } else if (['proposed', 'ready'].includes(claimState)) {
+      const unexpectedClaimFields = portableClaimFields
+        .slice(1)
+        .filter((name) => meaningful(fields[name]));
+      if (unexpectedClaimFields.length > 0) {
+        questions.push(
+          question(
+            'unexpected-claim-evidence',
+            `${unexpectedClaimFields.join(', ')} retain claim or deadline evidence while Claim-State is ${claimState}`,
+          ),
+        );
+      }
     }
   }
 
-  const checkIn = fields["Check-In-By"] ?? "missing";
+  const checkIn = fields['Check-In-By'] ?? 'missing';
   const checkInStatus = deadlineStatus(checkIn, nowMs);
   const staleReason = claimExpected ? staleClaimReason(claimState, checkIn, nowMs) : undefined;
   if (staleReason) {
@@ -505,8 +488,10 @@ function analyzeWorkItem(issue, comments, issueByNumber, local, nowMs) {
   const competingClaimComments = unresolvedClaimCommentEvidence.filter((evidence) => {
     const commentState = evidence.structuredFields["Claim-State"];
     if (["done", "abandoned"].includes(commentState)) return false;
-    return OWNERSHIP_FIELDS.some(
-      (name) => meaningful(evidence.structuredFields[name]) && evidence.structuredFields[name] !== fields[name],
+    return ownershipFields.some(
+      (name) =>
+        meaningful(evidence.structuredFields[name]) &&
+        evidence.structuredFields[name] !== fields[name],
     );
   });
   if (competingClaimComments.length > 0) {
@@ -519,19 +504,38 @@ function analyzeWorkItem(issue, comments, issueByNumber, local, nowMs) {
   }
 
   if (latestUnresolvedClaimEvidence) {
-    const commentRecordFields = Object.entries(latestUnresolvedClaimEvidence.structuredFields).filter(
-      ([name]) => PORTABLE_CLAIM_FIELDS.includes(name) || CHECKPOINT_FIELDS.includes(name),
-    );
+    const comparableCommentFields = Object.entries(
+      latestUnresolvedClaimEvidence.structuredFields,
+    ).filter(([name]) => commentRecordFields.includes(name));
     if (latestUnresolvedClaimEvidence.duplicateFields.length > 0) {
       questions.push(
         question(
-          "duplicate-comment-field",
-          `latest unresolved claim/checkpoint comment repeats ${latestUnresolvedClaimEvidence.duplicateFields.join(", ")}`,
+          'duplicate-comment-field',
+          `latest unresolved claim/checkpoint comment repeats ${latestUnresolvedClaimEvidence.duplicateFields.join(', ')}`,
         ),
       );
     }
-    if (commentRecordFields.length > 0) {
-      const missingCommentFields = COMMENT_RECORD_FIELDS.filter(
+    const checkpointValidation = validateCheckpointComment(
+      latestUnresolvedClaim.body,
+      registrySchema,
+    );
+    if (checkpointValidation.historicalContract) {
+      questions.push(
+        question(
+          'partial-schema-transition',
+          'the body is v2 but its latest checkpoint remains immutable v1 evidence; resume the supported write by appending the matching v2 checkpoint',
+        ),
+      );
+    } else if (checkpointValidation.applicable && !checkpointValidation.valid) {
+      questions.push(
+        question(
+          'invalid-checkpoint-evidence',
+          checkpointValidation.errors.map(({ message }) => message).join('; '),
+        ),
+      );
+    }
+    if (!checkpointValidation.historicalContract && comparableCommentFields.length > 0) {
+      const missingCommentFields = commentRecordFields.filter(
         (name) => latestUnresolvedClaimEvidence.structuredFields[name] === undefined,
       );
       if (missingCommentFields.length > 0) {
@@ -542,7 +546,7 @@ function analyzeWorkItem(issue, comments, issueByNumber, local, nowMs) {
           ),
         );
       }
-      for (const [name, value] of commentRecordFields) {
+      for (const [name, value] of comparableCommentFields) {
         if ((fields[name] ?? "missing") !== value) {
           questions.push(
             question(
@@ -571,7 +575,7 @@ function analyzeWorkItem(issue, comments, issueByNumber, local, nowMs) {
     );
   }
 
-  const localEvidence = evaluateLocalEvidence(fields, local);
+  const localEvidence = evaluateLocalEvidence(fields, local, registrySchema.version);
   questions.push(...localEvidence.questions);
 
   const item = {
@@ -581,12 +585,34 @@ function analyzeWorkItem(issue, comments, issueByNumber, local, nowMs) {
     githubState: issue.state,
     labels: issue.labels,
     updatedAt: issue.updatedAt,
-    parentPlan: fields["Parent-Plan"] ?? "missing",
-    integrationOwner: fields["Integration-Owner"] ?? "missing",
+    parentPlan: fields['Parent-Plan'] ?? 'missing',
+    integrationOwner: fields['Integration-Owner'] ?? 'missing',
+    registrySchema: {
+      version: registrySchema.version,
+      explicit: registrySchema.explicit,
+      status: registrySchema.status,
+      valid: registrySchema.valid,
+      errors: registrySchema.errors,
+    },
+    scopePaths: registrySchema.normalized?.scopePaths ?? [],
+    dependencyNotes: fields['Dependency-Notes'] ?? 'missing',
     claimState,
-    claim: Object.fromEntries(PORTABLE_CLAIM_FIELDS.map((name) => [name, fields[name] ?? "missing"])),
-    checkpoint: Object.fromEntries(CHECKPOINT_FIELDS.map((name) => [name, fields[name] ?? "missing"])),
+    claim: Object.fromEntries(
+      portableClaimFields.map((name) => [name, fields[name] ?? 'missing']),
+    ),
+    checkpoint: Object.fromEntries(
+      (registrySchema.version === '2' ? CHECKPOINT_EVIDENCE_FIELDS : CHECKPOINT_FIELDS).map(
+        (name) => [name, fields[name] ?? 'missing'],
+      ),
+    ),
     deadline: { value: checkIn, status: checkInStatus },
+    waiting: {
+      value: fields['Waiting-Since'] ?? 'missing',
+      since:
+        isoInstantMilliseconds(fields['Waiting-Since']) === undefined
+          ? null
+          : fields['Waiting-Since'],
+    },
     dependencies,
     latestComment: commentEvidence(latest),
     latestClaimComment: latestClaimEvidence,
@@ -620,16 +646,31 @@ export function analyzeCoordination({ issues, commentsByIssue, local, nowMs = Da
     isCoordinatedIssue(issue, commentsByIssue.get(issue.number) ?? []),
   );
   const plans = coordinated
-    .filter((issue) => issue.labels.includes("work:plan"))
-    .map((issue) => ({
-      number: issue.number,
-      title: issue.title,
-      url: issue.url,
-      updatedAt: issue.updatedAt,
-      planState: claimField(issue.body, "Plan-State"),
-      integrationOwner: claimField(issue.body, "Integration-Owner"),
-      latestComment: commentEvidence(latestComment(commentsByIssue.get(issue.number) ?? [])),
-    }));
+    .filter((issue) => issue.labels.includes('work:plan'))
+    .map((issue) => {
+      const schema = validatePlanBody(issue.body);
+      return {
+        number: issue.number,
+        title: issue.title,
+        url: issue.url,
+        updatedAt: issue.updatedAt,
+        planState: claimField(issue.body, 'Plan-State'),
+        integrationOwner: claimField(issue.body, 'Integration-Owner'),
+        registrySchema: {
+          version: schema.version,
+          explicit: schema.explicit,
+          status: schema.status,
+          valid: schema.valid,
+          errors: schema.errors,
+        },
+        questions: schema.valid
+          ? []
+          : schema.errors.map((error) =>
+              question('invalid-plan-registry-schema', `${error.field}: ${error.message}`),
+            ),
+        latestComment: commentEvidence(latestComment(commentsByIssue.get(issue.number) ?? [])),
+      };
+    });
   const workItems = coordinated
     .filter((issue) => !issue.labels.includes("work:plan"))
     .map((issue) => analyzeWorkItem(issue, commentsByIssue.get(issue.number) ?? [], issueByNumber, local, nowMs));

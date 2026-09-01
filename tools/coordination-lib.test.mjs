@@ -671,3 +671,215 @@ test("duplicate branch registration across claims becomes a maintainer question"
   assert(result.workItems.every((item) => item.questions.some(({ code }) => code === "duplicate-claim-locality")));
   assert(result.workItems.every((item) => item.triage === "question"));
 });
+
+function v2Body({ state = 'ready', overrides = {} } = {}) {
+  const agentOwned = ['active', 'review'].includes(state);
+  const blocked = state === 'blocked';
+  const fields = {
+    'Registry-Schema-Version': '2',
+    'Parent-Plan': '#27',
+    'Scope-Paths': 'tools/**',
+    'Depends-On': 'none',
+    'Dependency-Notes': 'none',
+    'Integration-Owner': 'maintainer',
+    'Reconciled-Claim-Comment-IDs': 'none',
+    'Claim-State': state,
+    'Claim-Harness': agentOwned ? 'pi' : 'unclaimed',
+    'Claim-Run-ID': agentOwned ? 'run-v2' : 'unclaimed',
+    'Claim-Agent': agentOwned ? 'agent-v2' : 'unclaimed',
+    'Claim-Branch': agentOwned ? 'arch/v2' : 'unclaimed',
+    'Claim-Host': agentOwned ? 'runner-01' : 'unclaimed',
+    'Claimed-At': agentOwned ? '2026-08-29T18:00:00Z' : 'unclaimed',
+    'Check-In-By': agentOwned ? '2026-08-29T21:00:00Z' : 'unclaimed',
+    'Waiting-Since': blocked ? '2026-08-29T18:00:00Z' : 'unclaimed',
+    'Checkpoint-Evidence-Version': '1',
+    'Checkpoint-State': state,
+    'Checkpoint-At': ['proposed', 'ready'].includes(state)
+      ? 'unclaimed'
+      : '2026-08-29T19:00:00Z',
+    'Checkpoint-Commit': 'uncommitted',
+    'Checkpoint-Changed-Path-Count': '0',
+    'Checkpoint-Checks-Verdict': 'unavailable',
+    'Checkpoint-CI-Run': 'unavailable',
+    'Checkpoint-CI-Commit': 'unavailable',
+    'Checkpoint-Security-Impact': 'unknown',
+    'Checkpoint-Tenant-Impact': 'unknown',
+    'Checkpoint-Provider-Impact': 'unknown',
+    'Checkpoint-Deployment-Impact': 'unknown',
+    'Checkpoint-Residual-Risk-Count': '0',
+    'Next-Action': 'test',
+    Blockers: 'none',
+    ...overrides,
+  };
+  return `${Object.entries(fields).map(([name, value]) => `${name}: ${value}`).join('\n')}\n`;
+}
+
+test('explicit v2 ready records preserve existing candidate behavior without ranking', () => {
+  const candidate = issue({ number: 70, state: 'ready', claimed: false });
+  candidate.body = v2Body();
+  const result = analyzeCoordination({
+    issues: [candidate],
+    commentsByIssue: new Map(),
+    local: EMPTY_LOCAL,
+    nowMs: NOW,
+  });
+  const item = result.workItems[0];
+
+  assert.equal(item.registrySchema.version, '2');
+  assert.equal(item.registrySchema.explicit, true);
+  assert.equal(item.registrySchema.valid, true);
+  assert.equal(item.triage, 'candidate');
+  assert.deepEqual(item.scopePaths, ['tools/**']);
+  assert.equal(item.claim['Claim-Worktree'], undefined);
+  assert.equal(item.claim['Claim-Host'], 'unclaimed');
+});
+
+test('unsupported and unmanaged malformed v2 records stay visible and fail closed', () => {
+  const unsupported = issue({ number: 71, state: 'ready', claimed: false });
+  unsupported.body = v2Body().replace('Registry-Schema-Version: 2', 'Registry-Schema-Version: 44');
+  const unmanaged = issue({ number: 72, state: 'active' });
+  unmanaged.body = v2Body({ state: 'active', overrides: { 'Claim-Host': '/tmp/local' } });
+  const result = analyzeCoordination({
+    issues: [unsupported, unmanaged],
+    commentsByIssue: new Map(),
+    local: EMPTY_LOCAL,
+    nowMs: NOW,
+  });
+
+  assert.equal(result.workItems.length, 2);
+  assert(result.workItems.every(({ triage }) => triage === 'question'));
+  assert(
+    result.workItems
+      .find(({ number }) => number === 71)
+      .questions.some(({ code }) => code === 'unsupported-registry-schema'),
+  );
+  assert(
+    result.workItems
+      .find(({ number }) => number === 72)
+      .questions.some(({ code }) => code === 'invalid-registry-schema'),
+  );
+});
+
+test('v2 principal-waiting records surface Waiting-Since without inventing an agent deadline', () => {
+  const blocked = issue({ number: 73, state: 'blocked', claimed: false });
+  blocked.body = v2Body({ state: 'blocked' });
+  const result = analyzeCoordination({
+    issues: [blocked],
+    commentsByIssue: new Map(),
+    local: EMPTY_LOCAL,
+    nowMs: NOW,
+  });
+  const item = result.workItems[0];
+
+  assert.equal(item.registrySchema.valid, true);
+  assert.equal(item.triage, 'blocked');
+  assert.equal(item.deadline.status, 'unknown');
+  assert.equal(item.waiting.value, '2026-08-29T18:00:00Z');
+  assert(item.questions.every(({ code }) => !code.startsWith('check-in-')));
+});
+
+test('complete evidence headers are semantically validated while pre-header history remains immutable', () => {
+  const active = issue({ number: 74, state: 'active' });
+  active.body = v2Body({ state: 'active' });
+  const currentFields = structuredFields(active.body, [
+    'Claim-State',
+    'Claim-Harness',
+    'Claim-Run-ID',
+    'Claim-Agent',
+    'Claim-Branch',
+    'Claim-Host',
+    'Claimed-At',
+    'Check-In-By',
+    'Waiting-Since',
+    'Checkpoint-Evidence-Version',
+    'Checkpoint-State',
+    'Checkpoint-At',
+    'Checkpoint-Commit',
+    'Checkpoint-Changed-Path-Count',
+    'Checkpoint-Checks-Verdict',
+    'Checkpoint-CI-Run',
+    'Checkpoint-CI-Commit',
+    'Checkpoint-Security-Impact',
+    'Checkpoint-Tenant-Impact',
+    'Checkpoint-Provider-Impact',
+    'Checkpoint-Deployment-Impact',
+    'Checkpoint-Residual-Risk-Count',
+    'Next-Action',
+    'Blockers',
+  ]).fields;
+  const malformed = {
+    id: 2,
+    author: 'agent-v2',
+    body: Object.entries({ ...currentFields, 'Checkpoint-Residual-Risk-Count': 'many' })
+      .map(([name, value]) => `${name}: ${value}`)
+      .join('\n'),
+    createdAt: '2026-08-29T19:30:00Z',
+    updatedAt: '2026-08-29T19:30:00Z',
+  };
+  const result = analyzeCoordination({
+    issues: [active],
+    commentsByIssue: new Map([[74, [malformed]]]),
+    local: EMPTY_LOCAL,
+    nowMs: NOW,
+  });
+
+  assert(
+    result.workItems[0].questions.some(({ code }) => code === 'invalid-checkpoint-evidence'),
+  );
+  assert.equal(result.workItems[0].triage, 'question');
+});
+
+test('an interrupted v1-to-v2 comment transition surfaces recovery without reinterpreting history', () => {
+  const active = issue({ number: 75, state: 'active' });
+  active.body = v2Body({ state: 'active' });
+  const fields = structuredFields(active.body, [
+    'Claim-State',
+    'Claim-Harness',
+    'Claim-Run-ID',
+    'Claim-Agent',
+    'Claim-Branch',
+    'Claim-Host',
+    'Claimed-At',
+    'Check-In-By',
+    'Waiting-Since',
+    'Checkpoint-Evidence-Version',
+    'Checkpoint-State',
+    'Checkpoint-At',
+    'Checkpoint-Commit',
+    'Checkpoint-Changed-Path-Count',
+    'Checkpoint-Checks-Verdict',
+    'Checkpoint-CI-Run',
+    'Checkpoint-CI-Commit',
+    'Checkpoint-Security-Impact',
+    'Checkpoint-Tenant-Impact',
+    'Checkpoint-Provider-Impact',
+    'Checkpoint-Deployment-Impact',
+    'Checkpoint-Residual-Risk-Count',
+    'Next-Action',
+    'Blockers',
+  ]).fields;
+  const historicalBody = Object.entries(fields)
+    .filter(([name]) => name !== 'Waiting-Since')
+    .map(([name, value]) =>
+      name === 'Claim-Host' ? 'Claim-Worktree: /historical/worktree' : `${name}: ${value}`,
+    )
+    .join('\n');
+  const historical = {
+    id: 3,
+    author: 'agent-v2',
+    body: historicalBody,
+    createdAt: '2026-08-29T19:30:00Z',
+    updatedAt: '2026-08-29T19:30:00Z',
+  };
+  const result = analyzeCoordination({
+    issues: [active],
+    commentsByIssue: new Map([[75, [historical]]]),
+    local: EMPTY_LOCAL,
+    nowMs: NOW,
+  });
+  const item = result.workItems[0];
+
+  assert(item.questions.some(({ code }) => code === 'partial-schema-transition'));
+  assert(item.questions.every(({ code }) => code !== 'invalid-checkpoint-evidence'));
+  assert.equal(item.claimComments[0].structuredFields['Claim-Worktree'], '/historical/worktree');
+});
