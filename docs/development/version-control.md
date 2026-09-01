@@ -22,6 +22,16 @@ Keep work single-purpose and commits reviewable with imperative subjects. Incorp
 
 `main` is also the only ref eligible for delivery federation, artifact provenance, and production operations. Deleted migration branches, tags, pull-request refs, forks, other workflows, and sibling repositories must not obtain provider authority.
 
+## Scoped owned-branch publication
+
+A current matching claim normally authorizes its named execution agent to make a normal, non-force push only from the registered typed branch and worktree to the identically named remote branch. The agent follows the pre-push verification and exact checkpoint-evidence contract in [`parallel-work.md`](parallel-work.md#scoped-owned-branch-publication). This is checkpoint-publication authority, not general Git or integration authority.
+
+The agent may never use it to push `main` or another integration/protected branch, create or push a tag, push another claim's branch, select a differently named destination, force push, use `--force-with-lease`, make a non-fast-forward update, rewrite published history, or delete any branch, tag, or ref. Cleanup and deletion remain separate explicitly authorized operations and never happen automatically. Pull requests remain mandatory for all integration; a branch push or successful CI run does not authorize opening a pull request, integration, merge, host-control changes, provider effects, or deployment.
+
+The rule becomes available only after the change introducing it is integrated. It therefore does not authorize publication of the issue #40 implementation branch; that branch requires separate explicit maintainer authorization before any push. A future unintegrated widening cannot authorize its own publication either.
+
+The CI branch matrix remains unchanged. Existing container jobs continue to run on routine owned-branch pushes, accepting the higher short-term CI cost; any matrix reduction requires a separate scoped change.
+
 ## Temporary sole-maintainer integration exception
 
 The following exception exists only while the organization has no second maintainer-designated, eligible, independent, and available reviewer. It belongs exclusively to the maintainer acting personally as the human principal. It cannot be delegated to an agent, integration owner, workload identity, automation, outside collaborator, or another principal. Raw write permission does not establish policy designation or availability.
@@ -65,4 +75,4 @@ Use immutable annotated Semantic Versioning tags (`vMAJOR.MINOR.PATCH`) for acce
 
 A pull-request merge to protected `main` that satisfies the applicable integration policy is production authorization only after delivery is configured. Verify the resulting deployment, migrations, health, smoke checks, and telemetry before tagging a release. A commit or tag may be described as deployed only when [`../current-status.md`](../current-status.md) records dated remote deployment evidence.
 
-Rollback through delivery automation to a known digest and release record, never by moving tags or force-pushing shared history. Do not push, merge, publish, change visibility or Actions settings, release-tag, alter protected refs, invoke provider APIs, or trigger deployment unless explicitly authorized. When authorized, confirm remote CI/CD and hosting controls rather than assuming local success.
+Rollback through delivery automation to a known digest and release record, never by moving tags or force-pushing shared history. Except for a normal owned-branch push that satisfies the scoped publication rule above, do not push, merge, publish, change visibility or Actions settings, release-tag, alter protected refs, invoke provider APIs, or trigger deployment unless explicitly authorized. When authorized, confirm remote CI/CD and hosting controls rather than assuming local success.

@@ -40,9 +40,13 @@ Availability is derived from those issue dependencies rather than asserted with 
 
 ### 3. An agent pushes only its owned typed branch
 
-An agent pushes the typed branch it owns, never the integration branch, never with force, and never to another session's branch. A pull request is not required merely to make checkpoint evidence verifiable because CI runs on every branch push. Checkpoints retain explanatory narrative and gain a machine-readable header that identifies the CI run.
+A current matching claim normally authorizes its agent to make a normal, non-force push only from the registered typed branch and worktree to the identically named remote branch. The authority is limited to checkpoint publication. It never permits a push to the integration branch, a tag, another claim's branch, or a differently named destination; force push, `--force-with-lease`, non-fast-forward update, history rewriting, ref deletion, and automatic cleanup remain forbidden. Pull requests remain the only integration route, and publication grants no pull-request, integration, merge, host-setting, provider, deployment, recovery, or cleanup authority.
 
-This rule does not authorize a push today. Scoped branch-push authority begins only after work item #40 is integrated and the governing guidance grants it. Until then, the existing no-push boundary remains in force. A pull request remains the only route into the integration branch.
+Before a push, the agent re-fetches the registry, refs, worktrees, and pull requests; requires zero coordination warnings and exact claim/branch/worktree/head agreement; and inspects outgoing paths for scope and public-source safety. A mismatch or unexpected remote head is a stop condition.
+
+Checkpoints retain explanatory narrative beneath a versioned machine-readable evidence header. The header carries the checkpoint state, exact full commit, derived changed-path count, conservative hosted-check verdict, immutable Actions run URL and its exact tested commit, security/tenant/provider/deployment impact flags, and residual-risk count. Verdicts distinguish `passed`, `pending`, `failed`, `cancelled`, `skipped`, `missing`, `unavailable`, and `mixed`; only all required checks succeeding for the exact checkpoint commit is `passed`. Before authorized publication creates a run, CI is `unavailable`. When a run exists, its tested commit must equal the checkpoint commit. Any branch-head change immediately invalidates the previous run and verdict and requires fresh evidence for the new exact head.
+
+This authority is not self-activating. It begins only after work item #40 is integrated and the governing guidance grants it. The #40 implementation branch cannot use the rule it introduces and requires separate explicit maintainer authorization before publication. A later unintegrated widening likewise cannot authorize its own push. The existing CI branch matrix remains unchanged, accepting higher short-term cost from container jobs on routine owned-branch pushes; changing that matrix is separate work.
 
 ### 4. Malformed records fail closed on planning, not reporting
 
@@ -125,7 +129,7 @@ The exception never reaches production approval or provider authority. It cannot
 
 ### Negative
 
-- Routine agent pushes publish work in progress to the public repository earlier. Secret-scanning push protection becomes an earlier boundary defense, and branch-triggered container jobs can consume additional CI capacity.
+- Routine agent pushes publish work in progress to the public repository earlier. Secret-scanning push protection becomes an earlier boundary defense. The unchanged branch CI matrix continues to run container jobs on routine owned-branch pushes, consuming additional CI capacity until a separate change is accepted.
 - Reference creation and claim-field updates remain separate operations. Orphaned references and disagreements become registry errors requiring explicit resolution rather than being repaired automatically.
 - Principals must represent their blocking decisions as tickets and keep waiting-since evidence, increasing visible coordination overhead.
 - Strict schemas and required timestamps can stop planning for work that a person could otherwise interpret informally.

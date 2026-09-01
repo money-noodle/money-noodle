@@ -11,6 +11,7 @@ const security = read('SECURITY.md');
 const contributing = read('CONTRIBUTING.md');
 const versionControl = read('docs/development/version-control.md');
 const parallelWork = read('docs/development/parallel-work.md');
+const parallelWorkTemplate = read('.github/ISSUE_TEMPLATE/parallel-work.md');
 const delivery = read('docs/operations/delivery.md');
 const agents = read('AGENTS.md');
 const docsIndex = read('docs/README.md');
@@ -328,6 +329,45 @@ const assertNoExceptionSemanticContradiction = (path, source) => {
   }
 };
 
+const scopedPushAuthorityWideningPatterns = [
+  /\bagents?\b[^.!?\n]{0,80}\bmay\s+(?:normally\s+)?push\s+(?:directly\s+to\s+)?(?:the\s+)?(?:integration branch|main|protected refs?|tags?)\b/i,
+  /\bagents?\b[^.!?\n]{0,80}\bmay\s+push\s+another claim(?:'s)? branch\b/i,
+  /\bagents?\b[^.!?\n]{0,80}\bmay\s+(?:force push|rewrite\s+(?:the\s+)?(?:branch\s+)?history)\b/i,
+  /\bagents?\b[^.!?\n]{0,80}\bmay\s+(?:delete|remove)\s+(?:the\s+)?(?:branch|tag|ref|worktree)\b/i,
+  /\b(?:prior|previous|earlier)\s+(?:CI\s+)?(?:run|evidence|verdict)\b[^.!?\n]{0,100}\bremains? valid\b[^.!?\n]{0,80}\b(?:after|despite)\s+(?:a\s+)?(?:branch[- ]?)?head change\b/i,
+  /\b(?:pending|failed|cancelled|skipped|missing|unavailable)\s+(?:checks?|CI)\b[^.!?\n]{0,100}\b(?:may|can)\s+be\s+(?:reported|recorded|treated)\s+as\s+(?:passed|successful)\b/i,
+  /\bagents?\b[^.!?\n]{0,80}\bmay\s+automatically\s+(?:clean up|delete|remove)\b/i,
+  /\bagents?\b[^.!?\n]{0,100}\bmay\s+integrate\b[^.!?\n]{0,100}\bwithout\s+(?:a\s+)?pull request\b/i,
+  /(?:\bissue\s+)?#40\b[^.!?\n]{0,100}\bauthorizes?\s+(?:publication|a push)\s+of\s+its\s+own\s+(?:implementation\s+)?branch\b/i,
+];
+
+const assertNoScopedPushAuthorityWidening = (path, source) => {
+  const normalized = normalizePolicyText(source);
+  for (const pattern of scopedPushAuthorityWideningPatterns) {
+    assert.doesNotMatch(
+      normalized,
+      pattern,
+      `${path} must preserve scoped owned-branch publication authority`,
+    );
+  }
+};
+
+const checkpointEvidenceHeader = `Checkpoint-Evidence-Version: 1
+Checkpoint-State: proposed
+Checkpoint-At: unclaimed
+Checkpoint-Commit: uncommitted
+Checkpoint-Changed-Path-Count: 0
+Checkpoint-Checks-Verdict: unavailable
+Checkpoint-CI-Run: unavailable
+Checkpoint-CI-Commit: unavailable
+Checkpoint-Security-Impact: unknown
+Checkpoint-Tenant-Impact: unknown
+Checkpoint-Provider-Impact: unknown
+Checkpoint-Deployment-Impact: unknown
+Checkpoint-Residual-Risk-Count: 0
+Next-Action: unclaimed
+Blockers: none`;
+
 test('governed prose enforces principal, agent, and workload-identity vocabulary', () => {
   for (const path of identityVocabularyPaths) assertIdentityVocabulary(path, read(path));
 
@@ -458,6 +498,93 @@ test('authority guards reject explicit widening and stale host truth', () => {
     assert.doesNotThrow(
       () => assertNoExceptionSemanticContradiction('denial or retirement wording', permitted),
       permitted,
+    );
+  }
+});
+
+test('scoped branch publication stays claim-bound and checkpoint evidence stays exact', () => {
+  const governedSources = [
+    ['AGENTS.md', agents],
+    ['ADR-0011', coordinationDecision],
+    ['parallel-work.md', parallelWork],
+    ['version-control.md', versionControl],
+  ];
+
+  for (const [path, source] of governedSources) {
+    assertNoScopedPushAuthorityWidening(path, source);
+    assert.match(source, /owned typed branch|typed branch it owns|registered typed branch/i, path);
+    assert.match(source, /normal(?:, non-force| fast-forward| owned-branch)? push/i, path);
+    assert.match(source, /pull requests? remain[^.!?\n]{0,120}(?:only|mandatory)/i, path);
+    assert.match(source, /provider/i, path);
+    assert.match(source, /deploy/i, path);
+  }
+
+  assert.match(parallelWork, /## Scoped owned-branch publication/);
+  assert.match(parallelWork, /identical `Claim-Branch` name/);
+  assert.match(parallelWork, /force push, `--force-with-lease`/);
+  assert.match(
+    parallelWork,
+    /branch\/ref deletion and cleanup each require separate explicit authorization/i,
+  );
+  assert.match(
+    versionControl,
+    /does not authorize publication of the issue #40 implementation branch/i,
+  );
+  assert.match(
+    coordinationDecision,
+    /#40 implementation branch cannot use the rule it introduces/i,
+  );
+  assert.match(
+    agents,
+    /#40 implementation branch still requires separate explicit maintainer authorization/i,
+  );
+
+  assert.ok(
+    parallelWorkTemplate.includes(checkpointEvidenceHeader),
+    'parallel-work issue template must keep the exact evidence header fields and order',
+  );
+  assert.match(parallelWork, /Checkpoint-State.*equals `Claim-State`/i);
+  assert.match(parallelWork, /derived from the actual comparison with the registered base/i);
+  assert.match(
+    parallelWork,
+    /immutable full `https:\/\/github\.com\/money-noodle\/money-noodle\/actions\/runs\//,
+  );
+  assert.match(parallelWork, /`Checkpoint-CI-Commit`[^.!?\n]{0,160}equals `Checkpoint-Commit`/);
+  assert.match(parallelWork, /branch-head change immediately invalidates the prior CI run/i);
+  assert.match(parallelWork, /lists exactly the declared number of residual risks/i);
+  for (const verdict of [
+    'passed',
+    'pending',
+    'failed',
+    'cancelled',
+    'skipped',
+    'missing',
+    'unavailable',
+    'mixed',
+  ]) {
+    assert.ok(
+      checkpointEvidenceHeader.includes(verdict) || parallelWorkTemplate.includes(`\`${verdict}\``),
+      `checkpoint evidence must define the ${verdict} verdict`,
+    );
+  }
+
+  for (const mutation of [
+    'An agent may push the integration branch.',
+    'An agent may push tags.',
+    'An agent may force push the claimed branch.',
+    'An agent may rewrite the branch history.',
+    'An agent may delete the branch after review.',
+    "An agent may push another claim's branch.",
+    'Previous CI evidence remains valid after a head change.',
+    'Pending checks may be reported as passed.',
+    'An agent may automatically clean up the worktree.',
+    'An agent may integrate directly without a pull request.',
+    '#40 authorizes publication of its own implementation branch.',
+  ]) {
+    assert.throws(
+      () => assertNoScopedPushAuthorityWidening('scoped-push mutation', mutation),
+      /must preserve scoped owned-branch publication authority/,
+      mutation,
     );
   }
 });
