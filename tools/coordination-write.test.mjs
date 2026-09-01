@@ -250,6 +250,28 @@ test('a changed host body is a detected collision with no mutation', async () =>
   assert.deepEqual(host.snapshot(), before);
 });
 
+test('a pre-existing operation marker collision stops before every host mutation', async () => {
+  const host = new MockHost();
+  host.issue.comments.push({
+    id: 2,
+    body: 'Coordination-Write-ID: collision-marker-41\nDifferent-Evidence: present\n',
+  });
+  const before = host.snapshot();
+  const result = await executeCoordinationWrite({
+    host,
+    issueNumber: 41,
+    expectedBody: V1_BODY,
+    values: values(),
+    checkpointComment: checkpointComment(),
+    operationId: 'collision-marker-41',
+  });
+
+  assert.equal(result.status, 'collision');
+  assert.equal(result.stage, 'pre-write-comment');
+  assert.deepEqual(result.mutations, { body: 0, label: 0, comment: 0 });
+  assert.deepEqual(host.snapshot(), before);
+});
+
 test('an uncertain body response is recoverable without issuing a second body request', async () => {
   const host = new MockHost();
   host.fail.body = 'response lost after body update';

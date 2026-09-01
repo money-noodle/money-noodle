@@ -283,6 +283,22 @@ export async function executeCoordinationWrite({
     };
   }
 
+  const initialOperationComments = issue.comments.filter((comment) =>
+    comment.body?.includes(marker),
+  );
+  if (
+    initialOperationComments.length > 1 ||
+    (initialOperationComments.length === 1 && initialOperationComments[0].body !== proposedComment)
+  ) {
+    return {
+      status: 'collision',
+      stage: 'pre-write-comment',
+      recoverable: false,
+      mutations,
+      message: 'the operation marker already identifies different or duplicate evidence',
+    };
+  }
+
   if (issue.body !== prepared.body) {
     try {
       mutations.body += 1;
@@ -327,15 +343,15 @@ export async function executeCoordinationWrite({
 
   const existing = issue.comments.filter((comment) => comment.body?.includes(marker));
   if (existing.length > 1 || (existing.length === 1 && existing[0].body !== proposedComment)) {
-    return partial(
-      'comment-collision',
-      'operation marker is duplicated or attached to different evidence',
+    return {
+      status: 'collision',
+      stage: 'comment-collision',
+      recoverable: false,
       mutations,
-      {
-        bodyWritten: true,
-        labelWritten: true,
-      },
-    );
+      message: 'the operation marker became duplicated or attached to different evidence',
+      bodyWritten: true,
+      labelWritten: true,
+    };
   }
   if (existing.length === 0) {
     try {

@@ -236,7 +236,11 @@ test('scope paths are portable repository paths or explicit none, never local pa
   assert.deepEqual(normalizeScopePaths('none'), { status: 'none', paths: [] });
   for (const invalid of [
     '/Users/example/worktree',
+    'C:/Users/example/worktree',
+    '~/worktree',
     '../secret',
+    './tools',
+    'tools//example.mjs',
     'tools/a, tools/a',
     'path with spaces',
   ]) {

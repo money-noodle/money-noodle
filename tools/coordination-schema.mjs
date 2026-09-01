@@ -291,8 +291,10 @@ export function normalizeScopePaths(value) {
     paths.some(
       (path) =>
         path.startsWith('/') ||
+        path.startsWith('~/') ||
+        /^[A-Za-z]:\//.test(path) ||
         path.includes('\\') ||
-        path.split('/').includes('..') ||
+        path.split('/').some((segment) => ['', '.', '..'].includes(segment)) ||
         /[\0\r\n,]/.test(path) ||
         /\s/.test(path),
     )
