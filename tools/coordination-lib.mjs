@@ -1,9 +1,13 @@
 import {
+  BOOTSTRAP_BRANCH,
+  BOOTSTRAP_ISSUE,
   CHECKPOINT_EVIDENCE_FIELDS,
   V1_PORTABLE_CLAIM_FIELDS,
   V2_PORTABLE_CLAIM_FIELDS,
   isoInstantMilliseconds as schemaIsoInstantMilliseconds,
+  parseReservedClaimRef,
   structuredRecord,
+  validateClaimBranch,
   validateCheckpointComment,
   validatePlanBody,
   validateWorkItemBody,
@@ -138,7 +142,12 @@ function meaningful(value) {
   return typeof value === "string" && !UNCLAIMED_VALUES.has(value.trim().toLowerCase());
 }
 
-function evaluateClaimCommentResolution(record, fields, comments) {
+export function evaluateClaimCommentResolution(
+  record,
+  fields,
+  comments,
+  { claimAgent = fields['Claim-Agent'] } = {},
+) {
   const raw = fields[CLAIM_COMMENT_RESOLUTION_FIELD] ?? "missing";
   const parsed = parseReconciledClaimCommentIds(raw);
   const problems = [...parsed.problems];
@@ -156,7 +165,7 @@ function evaluateClaimCommentResolution(record, fields, comments) {
       message: "a declared Integration-Owner is required to authorize reconciliation",
     });
   }
-  if (parsed.ids.length > 0 && integrationOwner === fields["Claim-Agent"]) {
+  if (parsed.ids.length > 0 && integrationOwner === claimAgent) {
     problems.push({
       code: "claimant-self-resolution",
       message: "the current claimant cannot also be the reconciliation authority",
@@ -194,6 +203,33 @@ function evaluateClaimCommentResolution(record, fields, comments) {
     reconciledIds: valid ? parsed.ids : [],
     problems,
   };
+}
+
+export function evaluateClaimCommentHistory(
+  record,
+  fields,
+  comments,
+  { claimAgent } = {},
+) {
+  const resolution = evaluateClaimCommentResolution(record, fields, comments, { claimAgent });
+  const claimComments = comments.filter((comment) => hasClaimSignal(comment.body));
+  const reconciledIds = new Set(resolution.reconciledIds);
+  return {
+    resolution,
+    claimComments,
+    unresolvedClaimComments: claimComments.filter(({ id }) => !reconciledIds.has(id)),
+    unreconciledComments: comments.filter(({ id }) => !reconciledIds.has(id)),
+  };
+}
+
+export function evaluateClaimCommentHistoryForBody(body, comments, { claimAgent } = {}) {
+  const record = structuredFields(body, [
+    ...ALL_PORTABLE_CLAIM_FIELDS,
+    ...CHECKPOINT_EVIDENCE_FIELDS,
+    'Integration-Owner',
+    CLAIM_COMMENT_RESOLUTION_FIELD,
+  ]);
+  return evaluateClaimCommentHistory(record, record.fields, comments, { claimAgent });
 }
 
 function latestComment(comments) {
@@ -438,8 +474,9 @@ function analyzeWorkItem(issue, comments, issueByNumber, local, nowMs) {
   }
 
   const latest = latestComment(comments);
-  const claimComments = comments.filter((comment) => hasClaimSignal(comment.body));
-  const claimCommentResolution = evaluateClaimCommentResolution(record, fields, comments);
+  const claimCommentHistory = evaluateClaimCommentHistory(record, fields, comments);
+  const { claimComments, unresolvedClaimComments } = claimCommentHistory;
+  const claimCommentResolution = claimCommentHistory.resolution;
   if (claimCommentResolution.status === "invalid") {
     questions.push(
       question(
@@ -448,12 +485,11 @@ function analyzeWorkItem(issue, comments, issueByNumber, local, nowMs) {
       ),
     );
   }
-  const reconciledIds = new Set(claimCommentResolution.reconciledIds);
+  const unresolvedIds = new Set(unresolvedClaimComments.map(({ id }) => id));
   const claimCommentEvidence = claimComments.map((comment) => ({
     ...commentEvidence(comment),
-    reconciliation: reconciledIds.has(comment.id) ? "reconciled" : "unresolved",
+    reconciliation: unresolvedIds.has(comment.id) ? "unresolved" : "reconciled",
   }));
-  const unresolvedClaimComments = claimComments.filter((comment) => !reconciledIds.has(comment.id));
   const unresolvedClaimCommentEvidence = claimCommentEvidence.filter(
     ({ reconciliation }) => reconciliation === "unresolved",
   );
@@ -639,7 +675,186 @@ export function isCoordinatedIssue(issue, comments = []) {
   return comments.some((comment) => hasClaimSignal(comment.body));
 }
 
-export function analyzeCoordination({ issues, commentsByIssue, local, nowMs = Date.now() }) {
+function addRemoteQuestion(item, code, message) {
+  item.questions.push(question(code, message));
+  item.reconciliation = 'question';
+  item.triage = 'question';
+}
+
+export function reconcileRemoteClaims({
+  issues,
+  workItems,
+  reservedRefs = [],
+  commentsByIssue = new Map(),
+  local = { branches: [], worktrees: [] },
+  nowMs = Date.now(),
+}) {
+  const issueByNumber = new Map(issues.map((issue) => [issue.number, issue]));
+  const analyzedByNumber = new Map(workItems.map((item) => [item.number, item]));
+  const openWorkItemNumbers = new Set(workItems.map((item) => item.number));
+  const refsByIssue = new Map();
+  const questions = [];
+
+  for (const remote of reservedRefs) {
+    const parsed = parseReservedClaimRef(remote.ref);
+    const evidence = { ...remote, mapping: parsed };
+    if (remote.objectType !== 'commit' || !/^[0-9a-f]{40}$/.test(remote.sha ?? '')) {
+      questions.push(
+        question(
+          'malformed-claim-ref-object',
+          `reserved ref ${remote.ref} must identify one full commit object`,
+        ),
+      );
+      continue;
+    }
+    if (parsed.status !== 'supported') {
+      questions.push(
+        question(
+          parsed.status === 'unsupported'
+            ? 'unsupported-claim-ref-version'
+            : 'malformed-claim-ref',
+          `reserved ref ${remote.ref} is ${parsed.status}`,
+        ),
+      );
+      continue;
+    }
+    evidence.issueNumber = parsed.issueNumber;
+    refsByIssue.set(parsed.issueNumber, [...(refsByIssue.get(parsed.issueNumber) ?? []), evidence]);
+    const issue = issueByNumber.get(parsed.issueNumber);
+    if (!issue) {
+      questions.push(
+        question('claim-ref-issue-missing', `${remote.ref} maps to missing issue #${parsed.issueNumber}`),
+      );
+      continue;
+    }
+    const schema = validateWorkItemBody(issue.body);
+    const fields = schema.fields ?? {};
+    const state = fields['Claim-State'];
+    const branch = fields['Claim-Branch'];
+    if (!schema.valid) {
+      questions.push(
+        question('claim-ref-issue-malformed', `${remote.ref} maps to a malformed issue record`),
+      );
+    } else if (['proposed', 'ready'].includes(state)) {
+      questions.push(
+        question(
+          'orphaned-claim-ref',
+          `${remote.ref} exists while issue #${parsed.issueNumber} is ${state}; do not adopt or release it automatically`,
+        ),
+      );
+    } else if (branch !== parsed.branch) {
+      questions.push(
+        question(
+          'claim-ref-branch-mismatch',
+          `${remote.ref} disagrees with issue #${parsed.issueNumber} Claim-Branch ${branch}`,
+        ),
+      );
+    }
+  }
+
+  for (const [issueNumber] of refsByIssue) {
+    const issue = issueByNumber.get(issueNumber);
+    if (!issue || issue.state !== 'closed') continue;
+    const item = analyzeWorkItem(
+      issue,
+      commentsByIssue.get(issueNumber) ?? [],
+      issueByNumber,
+      local,
+      nowMs,
+    );
+    analyzedByNumber.set(issueNumber, item);
+    if (!['done', 'abandoned'].includes(item.claimState)) {
+      item.questions.push(
+        question(
+          'closed-claim-nonterminal',
+          `closed issue #${issueNumber} mapped by a reserved ref is ${item.claimState}, not terminal`,
+        ),
+      );
+    }
+    for (const entry of item.questions) questions.push({ issueNumber, ...entry });
+  }
+
+  for (const item of [...analyzedByNumber.values()].filter(
+    ({ claimState, registrySchema }) =>
+      registrySchema?.version === '2' && ['active', 'review'].includes(claimState),
+  )) {
+    const branch = item.claim['Claim-Branch'];
+    const validation = validateClaimBranch({
+      issueNumber: item.number,
+      claimState: item.claimState,
+      branch,
+    });
+    item.remoteClaim = {
+      branchStatus: validation.status,
+      expectedBranch: validation.expected ?? null,
+      matchingRefs: refsByIssue.get(item.number) ?? [],
+    };
+    if (validation.status === 'invalid') {
+      addRemoteQuestion(
+        item,
+        validation.code,
+        `Claim-Branch ${branch} is invalid for #${item.number}; expected ${validation.expected}`,
+      );
+    } else if (validation.status === 'derived' && item.remoteClaim.matchingRefs.length !== 1) {
+      addRemoteQuestion(
+        item,
+        item.remoteClaim.matchingRefs.length === 0
+          ? 'derived-claim-ref-missing'
+          : 'duplicate-derived-claim-ref',
+        `derived claim #${item.number} requires exactly one matching remote ref`,
+      );
+    }
+  }
+
+  const bootstrap = analyzedByNumber.get(BOOTSTRAP_ISSUE);
+  if (
+    bootstrap?.registrySchema?.version === '2' &&
+    ['active', 'review'].includes(bootstrap.claimState) &&
+    bootstrap.claim['Claim-Branch'] === BOOTSTRAP_BRANCH
+  ) {
+    const rolloutStates = new Map(
+      issues.map((issue) => [
+        issue.number,
+        validateWorkItemBody(issue.body).fields?.['Claim-State'],
+      ]),
+    );
+    for (const item of workItems) {
+      if (!rolloutStates.has(item.number)) rolloutStates.set(item.number, item.claimState);
+    }
+    for (const [issueNumber, state] of rolloutStates) {
+      if (issueNumber === BOOTSTRAP_ISSUE || !['active', 'review'].includes(state)) continue;
+      const message = `#${issueNumber} is agent-owned while the #42 bootstrap claim is active`;
+      const competing = analyzedByNumber.get(issueNumber);
+      if (competing) {
+        addRemoteQuestion(competing, 'claim-primitive-rollout-blocked', message);
+      }
+      if (!openWorkItemNumbers.has(issueNumber)) {
+        questions.push({
+          issueNumber,
+          ...question('claim-primitive-rollout-blocked', message),
+        });
+      }
+      addRemoteQuestion(
+        bootstrap,
+        'claim-primitive-rollout-blocked',
+        `#42 cannot activate while #${issueNumber} is active or in review`,
+      );
+    }
+  }
+
+  return {
+    refs: reservedRefs.map((remote) => ({ ...remote, mapping: parseReservedClaimRef(remote.ref) })),
+    questions,
+  };
+}
+
+export function analyzeCoordination({
+  issues,
+  commentsByIssue,
+  local,
+  reservedRefs = [],
+  nowMs = Date.now(),
+}) {
   const issueByNumber = new Map(issues.map((issue) => [issue.number, issue]));
   const openIssues = issues.filter((issue) => issue.state === "open");
   const coordinated = openIssues.filter((issue) =>
@@ -675,6 +890,15 @@ export function analyzeCoordination({ issues, commentsByIssue, local, nowMs = Da
     .filter((issue) => !issue.labels.includes("work:plan"))
     .map((issue) => analyzeWorkItem(issue, commentsByIssue.get(issue.number) ?? [], issueByNumber, local, nowMs));
 
+  const remoteClaims = reconcileRemoteClaims({
+    issues,
+    workItems,
+    reservedRefs,
+    commentsByIssue,
+    local,
+    nowMs,
+  });
+
   for (const key of ["Claim-Branch", "Claim-Worktree"]) {
     const groups = new Map();
     for (const item of workItems.filter((candidate) => NONTERMINAL_CLAIMED_STATES.has(candidate.claimState))) {
@@ -697,5 +921,5 @@ export function analyzeCoordination({ issues, commentsByIssue, local, nowMs = Da
     }
   }
 
-  return { plans, workItems };
+  return { plans, workItems, remoteClaims };
 }

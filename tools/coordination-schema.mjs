@@ -1,5 +1,87 @@
 export const REGISTRY_SCHEMA_VERSION_FIELD = 'Registry-Schema-Version';
 export const CURRENT_REGISTRY_SCHEMA_VERSION = '2';
+export const CLAIM_BRANCH_VERSION = 1;
+export const BOOTSTRAP_ISSUE = 42;
+export const BOOTSTRAP_BRANCH = 'arch/remote-reference-claim-primitive';
+
+const RESERVED_CLAIM_PREFIX = 'claim-v';
+const RESERVED_CLAIM_BRANCH = /^claim-v([1-9]\d*)\/issue-([1-9]\d*)$/;
+
+function positiveClaimIssueNumber(value) {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new RangeError('issue number must be a canonical positive safe integer');
+  }
+  return value;
+}
+
+export function claimBranchForIssue(issueNumber) {
+  return `claim-v${CLAIM_BRANCH_VERSION}/issue-${positiveClaimIssueNumber(issueNumber)}`;
+}
+
+export function claimRefForIssue(issueNumber) {
+  return `refs/heads/${claimBranchForIssue(issueNumber)}`;
+}
+
+export function parseReservedClaimBranch(branch) {
+  if (typeof branch !== 'string' || !branch.startsWith(RESERVED_CLAIM_PREFIX)) {
+    return { status: 'not-reserved' };
+  }
+  const match = branch.match(RESERVED_CLAIM_BRANCH);
+  if (!match) return { status: 'malformed', branch };
+  const version = Number(match[1]);
+  const issueNumber = Number(match[2]);
+  if (!Number.isSafeInteger(version) || !Number.isSafeInteger(issueNumber)) {
+    return { status: 'malformed', branch };
+  }
+  if (version !== CLAIM_BRANCH_VERSION) {
+    return { status: 'unsupported', branch, version, issueNumber };
+  }
+  return {
+    status: 'supported',
+    branch,
+    version,
+    issueNumber,
+    ref: `refs/heads/${branch}`,
+  };
+}
+
+export function parseReservedClaimRef(ref) {
+  if (typeof ref !== 'string' || !ref.startsWith('refs/heads/')) {
+    return { status: 'malformed', ref };
+  }
+  return { ...parseReservedClaimBranch(ref.slice('refs/heads/'.length)), ref };
+}
+
+export function validateClaimBranch({ issueNumber, claimState, branch }) {
+  positiveClaimIssueNumber(issueNumber);
+  if (!['active', 'review'].includes(claimState)) return { status: 'not-agent-owned' };
+  if (issueNumber === BOOTSTRAP_ISSUE && branch === BOOTSTRAP_BRANCH) {
+    return { status: 'bootstrap', issueNumber, branch };
+  }
+  if (branch === BOOTSTRAP_BRANCH) {
+    return {
+      status: 'invalid',
+      code: 'bootstrap-branch-wrong-issue',
+      expected: claimBranchForIssue(issueNumber),
+    };
+  }
+  const parsed = parseReservedClaimBranch(branch);
+  if (parsed.status !== 'supported') {
+    return {
+      status: 'invalid',
+      code:
+        parsed.status === 'unsupported'
+          ? 'unsupported-claim-branch-version'
+          : 'non-derived-agent-claim-branch',
+      expected: claimBranchForIssue(issueNumber),
+    };
+  }
+  const expected = claimBranchForIssue(issueNumber);
+  if (branch !== expected) {
+    return { status: 'invalid', code: 'claim-branch-issue-mismatch', expected };
+  }
+  return { status: 'derived', issueNumber, branch, ref: `refs/heads/${branch}` };
+}
 
 export const CLAIM_STATES = [
   'proposed',

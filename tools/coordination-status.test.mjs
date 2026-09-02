@@ -14,6 +14,7 @@ const REPOSITORY = 'example/registry';
 const ISSUES_ENDPOINT = `repos/${REPOSITORY}/issues?state=all&per_page=100`;
 const LABELS_ENDPOINT = `repos/${REPOSITORY}/labels?per_page=100`;
 const PULLS_ENDPOINT = `repos/${REPOSITORY}/pulls?state=open&per_page=100`;
+const CLAIM_REFS_ENDPOINT = `repos/${REPOSITORY}/git/matching-refs/heads/claim-v?per_page=100`;
 const SHIM_PATH = 'PATH=/usr/bin:/bin';
 
 const COORDINATION_LABELS = [
@@ -126,6 +127,25 @@ function v2ReadyIssue(number, overrides = {}) {
   });
 }
 
+function v2ActiveIssue(number, overrides = {}) {
+  const issue = v2ReadyIssue(number, {
+    'Claim-State': 'active',
+    'Claim-Harness': 'pi',
+    'Claim-Run-ID': `run-${number}`,
+    'Claim-Agent': `agent-${number}`,
+    'Claim-Branch': `claim-v1/issue-${number}`,
+    'Claim-Host': 'runner-01',
+    'Claimed-At': '2026-09-01T01:00:00Z',
+    'Check-In-By': FAR_FUTURE,
+    'Checkpoint-State': 'active',
+    'Checkpoint-At': '2026-09-01T01:00:00Z',
+    'Checkpoint-Commit': 'a'.repeat(40),
+    ...overrides,
+  });
+  issue.labels = [{ name: 'work:active' }];
+  return issue;
+}
+
 const UNRELATED_ISSUE = restIssue({
   number: 42,
   title: 'Not coordinated work',
@@ -137,6 +157,16 @@ function commentEndpoint(number) {
   return `repos/${REPOSITORY}/issues/${number}/comments?per_page=100`;
 }
 
+function restCheckpointComment(issue, id = 7300, body = issue.body) {
+  return {
+    id,
+    user: { login: 'maintainer' },
+    body: `Coordination-Write-ID: checkpoint-${id}\n${body}`,
+    created_at: '2026-09-01T02:00:00Z',
+    updated_at: '2026-09-01T02:00:00Z',
+  };
+}
+
 function defaultResponses() {
   return {
     '--version': { stdout: 'gh version 2.0.0 (test)\n' },
@@ -146,6 +176,7 @@ function defaultResponses() {
     [`api:${ISSUES_ENDPOINT}`]: {
       stdout: JSON.stringify([[PLAN_ISSUE, ACTIVE_CLAIM, UNRELATED_ISSUE]]),
     },
+    [`api:${CLAIM_REFS_ENDPOINT}`]: { stdout: '[[]]' },
     [`api:${PULLS_ENDPOINT}`]: { stdout: '[[]]' },
   };
 }
@@ -341,6 +372,217 @@ test('issue and pull request retrieval consumes records beyond the first API pag
   assert.match(result.stdout, /#88 test\/page-two -> main/);
   assert(result.invocations.includes(`gh api --paginate --slurp ${ISSUES_ENDPOINT}`));
   assert(result.invocations.includes(`gh api --paginate --slurp ${PULLS_ENDPOINT}`));
+});
+
+test('reserved claim-ref enumeration consumes every page and reconciles a derived active claim', (t) => {
+  const active = v2ActiveIssue(73);
+  const remote = {
+    ref: 'refs/heads/claim-v1/issue-73',
+    object: { type: 'commit', sha: 'a'.repeat(40) },
+  };
+  const responses = defaultResponses();
+  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE], [active]]) };
+  responses[`api:${CLAIM_REFS_ENDPOINT}`] = { stdout: JSON.stringify([[], [remote]]) };
+  const result = runStatus(t, { responses, args: ['--json'] });
+  const report = JSON.parse(result.stdout);
+  const item = report.registry.workItems.find(({ number }) => number === 73);
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(item.remoteClaim.branchStatus, 'derived');
+  assert.equal(item.remoteClaim.matchingRefs.length, 1);
+  assert.equal(report.registry.remoteClaims.refs.length, 1);
+  assert(result.invocations.includes(`gh api --paginate --slurp ${CLAIM_REFS_ENDPOINT}`));
+});
+
+test('a reserved ref directly fetches its closed terminal issue and preserves it without migration', (t) => {
+  const terminal = v2ActiveIssue(73, {
+    'Claim-State': 'done',
+    'Check-In-By': 'unclaimed',
+    'Checkpoint-State': 'done',
+  });
+  terminal.state = 'closed';
+  terminal.labels = [{ name: 'work:done' }];
+  const remote = {
+    ref: 'refs/heads/claim-v1/issue-73',
+    object: { type: 'commit', sha: 'a'.repeat(40) },
+  };
+  const responses = defaultResponses();
+  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE]]) };
+  responses[`api:${CLAIM_REFS_ENDPOINT}`] = { stdout: JSON.stringify([[remote]]) };
+  responses['api:repos/example/registry/issues/73'] = { stdout: JSON.stringify(terminal) };
+  responses[`api:${commentEndpoint(73)}`] = {
+    stdout: JSON.stringify([[restCheckpointComment(terminal)]]),
+  };
+  const result = runStatus(t, { responses, args: ['--json'] });
+  const report = JSON.parse(result.stdout);
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(report.registry.remoteClaims.questions.length, 0);
+  assert.equal(
+    report.registry.workItems.some(({ number }) => number === 73),
+    false,
+  );
+  assert(result.invocations.includes('gh api repos/example/registry/issues/73'));
+  assert(result.invocations.includes(`gh api --paginate --slurp ${commentEndpoint(73)}`));
+});
+
+test('closed reserved-ref issues fail closed on wrong labels and conflicting comments', (t) => {
+  const remote = {
+    ref: 'refs/heads/claim-v1/issue-73',
+    object: { type: 'commit', sha: 'a'.repeat(40) },
+  };
+  for (const [name, configure, expectedCode] of [
+    [
+      'wrong label',
+      (terminal, responses) => {
+        terminal.labels = [{ name: 'work:active' }];
+        responses[`api:${commentEndpoint(73)}`] = {
+          stdout: JSON.stringify([[restCheckpointComment(terminal)]]),
+        };
+      },
+      'body-label-state-mismatch',
+    ],
+    [
+      'conflicting comment',
+      (terminal, responses) => {
+        const competing = v2ActiveIssue(73, {
+          'Claim-Run-ID': 'competing-run',
+          'Claim-Agent': 'competing-agent',
+        });
+        responses[`api:${commentEndpoint(73)}`] = {
+          stdout: JSON.stringify([[restCheckpointComment(competing, 7301)]]),
+        };
+      },
+      'competing-ownership-comment',
+    ],
+  ]) {
+    const terminal = v2ActiveIssue(73, {
+      'Claim-State': 'done',
+      'Check-In-By': 'unclaimed',
+      'Checkpoint-State': 'done',
+    });
+    terminal.state = 'closed';
+    terminal.labels = [{ name: 'work:done' }];
+    const responses = defaultResponses();
+    responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE]]) };
+    responses[`api:${CLAIM_REFS_ENDPOINT}`] = { stdout: JSON.stringify([[remote]]) };
+    responses['api:repos/example/registry/issues/73'] = { stdout: JSON.stringify(terminal) };
+    configure(terminal, responses);
+    responses['api:repos/example/registry/issues/73'] = { stdout: JSON.stringify(terminal) };
+    const report = JSON.parse(runStatus(t, { responses, args: ['--json'] }).stdout);
+    assert(
+      report.registry.maintainerQuestions.some(
+        ({ issueNumber, code }) => issueNumber === 73 && code === expectedCode,
+      ),
+      name,
+    );
+  }
+});
+
+test('a closed active issue still blocks the #42 rollout invariant', (t) => {
+  const bootstrap = v2ActiveIssue(42, {
+    'Claim-Branch': 'arch/remote-reference-claim-primitive',
+  });
+  const closedActive = v2ActiveIssue(73);
+  closedActive.state = 'closed';
+  const remote = {
+    ref: 'refs/heads/claim-v1/issue-73',
+    object: { type: 'commit', sha: 'a'.repeat(40) },
+  };
+  const responses = defaultResponses();
+  responses[`api:${ISSUES_ENDPOINT}`] = {
+    stdout: JSON.stringify([[PLAN_ISSUE, bootstrap, closedActive]]),
+  };
+  responses[`api:${CLAIM_REFS_ENDPOINT}`] = { stdout: JSON.stringify([[remote]]) };
+  responses['api:repos/example/registry/issues/73'] = { stdout: JSON.stringify(closedActive) };
+  responses[`api:${commentEndpoint(73)}`] = {
+    stdout: JSON.stringify([[restCheckpointComment(closedActive, 7302)]]),
+  };
+  const report = JSON.parse(runStatus(t, { responses, args: ['--json'] }).stdout);
+  assert(
+    report.registry.maintainerQuestions.some(
+      ({ issueNumber, code }) => issueNumber === 73 && code === 'claim-primitive-rollout-blocked',
+    ),
+  );
+  const bootstrapItem = report.registry.workItems.find(({ number }) => number === 42);
+  assert(bootstrapItem.questions.some(({ code }) => code === 'claim-primitive-rollout-blocked'));
+});
+
+test('missing, orphaned, malformed, and unsupported reserved-ref evidence fails closed', (t) => {
+  const cases = [
+    {
+      issue: v2ActiveIssue(73),
+      refs: [],
+      code: 'derived-claim-ref-missing',
+    },
+    {
+      issue: v2ReadyIssue(73),
+      refs: [
+        { ref: 'refs/heads/claim-v1/issue-73', object: { type: 'commit', sha: 'a'.repeat(40) } },
+      ],
+      code: 'orphaned-claim-ref',
+    },
+    {
+      issue: v2ReadyIssue(73),
+      refs: [
+        { ref: 'refs/heads/claim-v1/issue-073', object: { type: 'commit', sha: 'a'.repeat(40) } },
+      ],
+      code: 'malformed-claim-ref',
+    },
+    {
+      issue: v2ReadyIssue(73),
+      refs: [
+        { ref: 'refs/heads/claim-v2/issue-73', object: { type: 'commit', sha: 'a'.repeat(40) } },
+      ],
+      code: 'unsupported-claim-ref-version',
+    },
+  ];
+  for (const fixture of cases) {
+    const responses = defaultResponses();
+    responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE, fixture.issue]]) };
+    responses[`api:${CLAIM_REFS_ENDPOINT}`] = { stdout: JSON.stringify([fixture.refs]) };
+    const report = JSON.parse(runStatus(t, { responses, args: ['--json'] }).stdout);
+    assert(
+      report.registry.maintainerQuestions.some(({ code }) => code === fixture.code),
+      fixture.code,
+    );
+  }
+});
+
+test('only the exact #42 bootstrap branch bypasses derived-ref checks and competing ownership blocks rollout', (t) => {
+  const bootstrap = v2ActiveIssue(42, { 'Claim-Branch': 'arch/remote-reference-claim-primitive' });
+  {
+    const responses = defaultResponses();
+    responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE, bootstrap]]) };
+    const result = runStatus(t, { responses, args: ['--json'] });
+    const report = JSON.parse(result.stdout);
+    assert.equal(result.exitCode, 0);
+    assert.equal(report.registry.workItems[0].remoteClaim.branchStatus, 'bootstrap');
+  }
+  {
+    const competing = v2ActiveIssue(73);
+    const responses = defaultResponses();
+    responses[`api:${ISSUES_ENDPOINT}`] = {
+      stdout: JSON.stringify([[PLAN_ISSUE, bootstrap, competing]]),
+    };
+    responses[`api:${CLAIM_REFS_ENDPOINT}`] = {
+      stdout: JSON.stringify([
+        [
+          {
+            ref: 'refs/heads/claim-v1/issue-73',
+            object: { type: 'commit', sha: 'a'.repeat(40) },
+          },
+        ],
+      ]),
+    };
+    const report = JSON.parse(runStatus(t, { responses, args: ['--json'] }).stdout);
+    assert.equal(
+      report.registry.maintainerQuestions.filter(
+        ({ code }) => code === 'claim-primitive-rollout-blocked',
+      ).length,
+      2,
+    );
+  }
 });
 
 test('latest structured claim comment disagreements become maintainer questions', (t) => {

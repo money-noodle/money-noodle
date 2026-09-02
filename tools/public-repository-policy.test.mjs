@@ -14,6 +14,9 @@ const parallelWork = read('docs/development/parallel-work.md');
 const parallelWorkTemplate = read('.github/ISSUE_TEMPLATE/parallel-work.yml');
 const sharedPlanTemplate = read('.github/ISSUE_TEMPLATE/shared-plan.yml');
 const coordinationSchema = read('tools/coordination-schema.mjs');
+const coordinationClaim = read('tools/coordination-claim.mjs');
+const coordinationLib = read('tools/coordination-lib.mjs');
+const coordinationStatus = read('tools/coordination-status.mjs');
 const coordinationWriter = read('tools/coordination-write.mjs');
 const delivery = read('docs/operations/delivery.md');
 const agents = read('AGENTS.md');
@@ -711,10 +714,10 @@ test('registry v2 policy preserves mixed-version, non-atomic, and bootstrap boun
   assert.match(parallelWork, /single-record and explicitly invoked/i);
   assert.match(parallelWork, /performs no discovery[^.!?\n]{0,100}automatic migration/i);
   assert.match(parallelWork, /#42 and #44/);
-  assert.match(parallelWork, /#41 itself remains implicit v1/i);
+  assert.match(parallelWork, /#41 bootstrap used deterministic fixtures and mocked host ports/i);
   assert.match(
     parallelWork,
-    /unintegrated writer[^.!?\n]{0,100}deterministic fixtures or mocked host ports/i,
+    /integrated writer is now authoritative[^.!?\n]{0,140}remote-reference primitive/i,
   );
 
   assert.match(coordinationSchema, /CURRENT_REGISTRY_SCHEMA_VERSION = '2'/);
@@ -733,6 +736,65 @@ test('registry v2 policy preserves mixed-version, non-atomic, and bootstrap boun
   assert.match(coordinationWriter, /createGitHubCliHost/);
   assert.match(coordinationWriter, /finalVerification/);
   assert.doesNotMatch(coordinationWriter, /spawnSync|gh issue|bulk migrat/i);
+});
+
+test('remote-reference claim authority is derived, create-only, and isolated from the general writer', () => {
+  assert.match(coordinationClaim, /CANONICAL_REPOSITORY = 'money-noodle\/money-noodle'/);
+  assert.match(coordinationSchema, /claim-v\$\{CLAIM_BRANCH_VERSION\}\/issue-/);
+  assert.match(coordinationSchema, /\^claim-v\(\[1-9\]\\d\*\)\\\/issue-/);
+  assert.match(coordinationSchema, /BOOTSTRAP_ISSUE = 42/);
+  assert.match(coordinationSchema, /BOOTSTRAP_BRANCH = 'arch\/remote-reference-claim-primitive'/);
+  assert.match(coordinationClaim, /statusCode !== 201/);
+  assert.match(coordinationClaim, /error\?\.statusCode === 422/);
+  assert.match(coordinationClaim, /create-ambiguous/);
+  assert.match(coordinationClaim, /ref-present-parked-body/);
+  assert.match(coordinationClaim, /claim-present-ref-absent/);
+  assert.match(coordinationClaim, /writer-recovery/);
+  assert.match(coordinationClaim, /ref-present-operation-mismatch/);
+  assert.match(
+    coordinationClaim,
+    /matchingCheckpoints\.some\(\(\{ operationId: id \}\) => id !== operationId\)/,
+  );
+  assert.match(coordinationClaim, /claimSnapshotGuard\(claim, operationId\)\(\{ issue \}\)/);
+  assert.match(coordinationClaim, /'--method', 'POST', `\$\{root\}\/git\/refs`/);
+  assert.doesNotMatch(coordinationClaim, /'--method',\s*'(?:PATCH|PUT|DELETE)'/);
+  assert.doesNotMatch(coordinationClaim, /git\s+push|force-push|force push|update-ref|delete-ref/i);
+
+  assert.match(coordinationWriter, /initial-claim-requires-reference/);
+  assert.match(coordinationWriter, /dedicated remote-reference claim module/);
+  assert.match(coordinationWriter, /CLAIM_ESTABLISHMENT_AUTHORITY = Symbol/);
+  assert.match(coordinationWriter, /missing-claim-snapshot-guard/);
+  assert.match(coordinationWriter, /stage: 'claim-snapshot-guard'/);
+  assert.match(coordinationClaim, /evaluateClaimCommentHistoryForBody/);
+  assert.match(coordinationClaim, /claimSnapshotGuard: claimSnapshotGuard\(claim, operationId/);
+  assert.match(coordinationLib, /export function evaluateClaimCommentHistoryForBody/);
+  assert.doesNotMatch(coordinationWriter, /\/git\/refs|createClaimRef/);
+  assert.doesNotMatch(coordinationLib, /from ['"]\.\/coordination-claim\.mjs['"]/);
+  assert.doesNotMatch(coordinationStatus, /from ['"]\.\/coordination-claim\.mjs['"]/);
+
+  const implementationSources = readdirSync('tools')
+    .filter((name) => name.endsWith('.mjs') && !name.endsWith('.test.mjs'))
+    .map((name) => [`tools/${name}`, read(`tools/${name}`)]);
+  const privilegedCallsites = implementationSources.filter(([, source]) =>
+    source.includes('executeClaimEstablishmentWrite('),
+  );
+  assert.deepEqual(privilegedCallsites.map(([path]) => path).sort(), [
+    'tools/coordination-claim.mjs',
+    'tools/coordination-write.mjs',
+  ]);
+  const privilegedPreparationCallsites = implementationSources.filter(([, source]) =>
+    source.includes('prepareClaimEstablishmentWrite('),
+  );
+  assert.deepEqual(privilegedPreparationCallsites.map(([path]) => path).sort(), [
+    'tools/coordination-claim.mjs',
+    'tools/coordination-write.mjs',
+  ]);
+
+  for (const source of [parallelWork, versionControl]) {
+    assert.match(source, /claim-v1\/issue-<N>/);
+    assert.match(source, /remote reference/i);
+    assert.match(source, /no automatic (?:adoption|release|cleanup)|never adopt/i);
+  }
 });
 
 test('public entry points route to security, contribution, architecture, and license owners', () => {

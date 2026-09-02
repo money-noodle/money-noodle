@@ -87,7 +87,7 @@ function validatePrepared(kind, body) {
   return kind === 'plan' ? validatePlanBody(body) : validateWorkItemBody(body);
 }
 
-export function prepareCoordinationWrite({ currentBody, values, kind = 'work-item' }) {
+function prepareCoordinationWriteInternal({ currentBody, values, kind = 'work-item' }, authority) {
   if (typeof currentBody !== 'string') {
     throw new CoordinationWriteError('invalid-current-body', 'current body must be a string');
   }
@@ -168,7 +168,7 @@ export function prepareCoordinationWrite({ currentBody, values, kind = 'work-ite
     );
   }
 
-  return {
+  const prepared = {
     kind,
     body,
     fields: canonical,
@@ -176,6 +176,40 @@ export function prepareCoordinationWrite({ currentBody, values, kind = 'work-ite
     migrated: version.version === '1',
     sourceVersion: version.version,
     targetVersion: CURRENT_REGISTRY_SCHEMA_VERSION,
+  };
+  if (
+    isInitialClaimTransition(currentBody, prepared) &&
+    authority !== CLAIM_ESTABLISHMENT_AUTHORITY
+  ) {
+    throw new CoordinationWriteError(
+      'initial-claim-requires-reference',
+      'parked-to-agent-owned transitions require the dedicated remote-reference claim module',
+    );
+  }
+  return prepared;
+}
+
+export function prepareCoordinationWrite(input) {
+  return prepareCoordinationWriteInternal(input, undefined);
+}
+
+// This complete preparation entry point is imported only by coordination-claim.mjs. It validates
+// every caller-controlled write artifact before the claim module performs any host read or write.
+export function prepareClaimEstablishmentWrite({
+  currentBody,
+  values,
+  checkpointComment,
+  operationId,
+}) {
+  const prepared = prepareCoordinationWriteInternal(
+    { currentBody, values, kind: 'work-item' },
+    CLAIM_ESTABLISHMENT_AUTHORITY,
+  );
+  const operation = prepareOperationComment(prepared, checkpointComment, operationId);
+  return {
+    prepared,
+    operation,
+    desiredLabel: desiredStateLabel(prepared),
   };
 }
 
@@ -190,6 +224,16 @@ function desiredStateLabel(prepared) {
   return `work:${prepared.fields['Claim-State']}`;
 }
 
+const CLAIM_ESTABLISHMENT_AUTHORITY = Symbol('claim-establishment-authority');
+const PARKED_STATES = new Set(['proposed', 'ready']);
+const AGENT_OWNED_STATES = new Set(['active', 'review']);
+
+function isInitialClaimTransition(expectedBody, prepared) {
+  if (prepared.kind !== 'work-item') return false;
+  const currentState = structuredRecord(expectedBody, ['Claim-State']).fields['Claim-State'];
+  return PARKED_STATES.has(currentState) && AGENT_OWNED_STATES.has(prepared.fields['Claim-State']);
+}
+
 function writeMarker(operationId) {
   if (typeof operationId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(operationId)) {
     throw new CoordinationWriteError(
@@ -198,6 +242,10 @@ function writeMarker(operationId) {
     );
   }
   return `Coordination-Write-ID: ${operationId}`;
+}
+
+function hasExactMarker(body, marker) {
+  return typeof body === 'string' && body.split(/\r?\n/).some((line) => line.trimEnd() === marker);
 }
 
 function partial(stage, error, mutations, detail = {}) {
@@ -248,15 +296,19 @@ function assertHost(host) {
   }
 }
 
-export async function executeCoordinationWrite({
-  host,
-  issueNumber,
-  expectedBody,
-  values,
-  checkpointComment,
-  operationId,
-  kind = 'work-item',
-}) {
+async function executeCoordinationWriteInternal(
+  {
+    host,
+    issueNumber,
+    expectedBody,
+    values,
+    checkpointComment,
+    operationId,
+    kind = 'work-item',
+    claimSnapshotGuard,
+  },
+  authority,
+) {
   assertHost(host);
   if (!Number.isSafeInteger(issueNumber) || issueNumber < 1) {
     throw new CoordinationWriteError(
@@ -265,7 +317,10 @@ export async function executeCoordinationWrite({
     );
   }
 
-  const prepared = prepareCoordinationWrite({ currentBody: expectedBody, values, kind });
+  const prepared = prepareCoordinationWriteInternal(
+    { currentBody: expectedBody, values, kind },
+    authority,
+  );
   const { marker, comment: proposedComment } = prepareOperationComment(
     prepared,
     checkpointComment,
@@ -286,6 +341,46 @@ export async function executeCoordinationWrite({
     );
   }
 
+  if (authority === CLAIM_ESTABLISHMENT_AUTHORITY) {
+    if (typeof claimSnapshotGuard !== 'function') {
+      throw new CoordinationWriteError(
+        'missing-claim-snapshot-guard',
+        'the privileged claim writer requires a post-reference snapshot guard',
+      );
+    }
+    const guard = claimSnapshotGuard({
+      issue,
+      expectedBody,
+      prepared,
+      desiredLabel,
+      marker,
+      proposedComment,
+    });
+    if (!guard?.valid) {
+      return {
+        status: guard?.status ?? 'collision',
+        stage: 'claim-snapshot-guard',
+        recoverable: false,
+        mutations,
+        message:
+          guard?.message ??
+          'post-reference claim evidence is unsafe; preserve the ref for reconciliation',
+        guard,
+      };
+    }
+  }
+
+  if (
+    isInitialClaimTransition(expectedBody, prepared) &&
+    issue.body !== prepared.body &&
+    authority !== CLAIM_ESTABLISHMENT_AUTHORITY
+  ) {
+    throw new CoordinationWriteError(
+      'initial-claim-requires-reference',
+      'parked-to-agent-owned transitions require the dedicated remote-reference claim module',
+    );
+  }
+
   if (issue.body !== expectedBody && issue.body !== prepared.body) {
     return {
       status: 'collision',
@@ -297,7 +392,7 @@ export async function executeCoordinationWrite({
   }
 
   const initialOperationComments = issue.comments.filter((comment) =>
-    comment.body?.includes(marker),
+    hasExactMarker(comment.body, marker),
   );
   if (
     initialOperationComments.length > 1 ||
@@ -354,7 +449,7 @@ export async function executeCoordinationWrite({
     }
   }
 
-  const existing = issue.comments.filter((comment) => comment.body?.includes(marker));
+  const existing = issue.comments.filter((comment) => hasExactMarker(comment.body, marker));
   if (existing.length > 1 || (existing.length === 1 && existing[0].body !== proposedComment)) {
     return {
       status: 'collision',
@@ -381,7 +476,7 @@ export async function executeCoordinationWrite({
   }
 
   const finalLabels = stateLabels(issue.labels);
-  const finalComments = issue.comments.filter((comment) => comment.body?.includes(marker));
+  const finalComments = issue.comments.filter((comment) => hasExactMarker(comment.body, marker));
   const finalVerification = {
     body: issue.body === prepared.body,
     label: finalLabels.length === 1 && finalLabels[0] === desiredLabel,
@@ -421,6 +516,22 @@ export async function executeCoordinationWrite({
     desiredLabel,
     finalVerification,
   };
+}
+
+export async function executeCoordinationWrite(input) {
+  return executeCoordinationWriteInternal(input, undefined);
+}
+
+// This narrow entry point is imported only by coordination-claim.mjs. The ordinary writer and
+// its CLI never receive the module-private authority token.
+export async function executeClaimEstablishmentWrite(input) {
+  if (typeof input?.claimSnapshotGuard !== 'function') {
+    throw new CoordinationWriteError(
+      'missing-claim-snapshot-guard',
+      'the privileged claim writer requires a post-reference snapshot guard',
+    );
+  }
+  return executeCoordinationWriteInternal(input, CLAIM_ESTABLISHMENT_AUTHORITY);
 }
 
 function parseJsonOutput(output, description) {
@@ -503,18 +614,26 @@ export function createGitHubCliHost({ repository, runGh = runGitHubCli }) {
           ? issue.labels.map((label) => (typeof label === 'string' ? label : label.name)).sort()
           : issue.labels;
       if (
+        before.state !== after.state ||
         before.body !== after.body ||
         JSON.stringify(labels(before)) !== JSON.stringify(labels(after))
       ) {
         throw new CoordinationWriteError(
           'unstable-host-read',
-          'body or label evidence drifted while comments were being read',
+          'issue state, body, or label evidence drifted while comments were being read',
         );
       }
       return {
+        state: after.state,
         body: after.body,
         labels: labels(after),
-        comments: pages.flat().map((comment) => ({ id: comment.id, body: comment.body })),
+        comments: pages.flat().map((comment) => ({
+          id: comment.id,
+          author: comment.user?.login,
+          body: comment.body,
+          createdAt: comment.created_at,
+          updatedAt: comment.updated_at,
+        })),
       };
     },
 
