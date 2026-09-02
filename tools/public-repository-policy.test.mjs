@@ -750,6 +750,8 @@ test('remote-reference claim authority is derived, create-only, and isolated fro
   assert.match(coordinationClaim, /ref-present-parked-body/);
   assert.match(coordinationClaim, /claim-present-ref-absent/);
   assert.match(coordinationClaim, /writer-recovery/);
+  assert.match(coordinationClaim, /ref-present-operation-mismatch/);
+  assert.match(coordinationClaim, /claimSnapshotGuard\(claim, operationId\)\(\{ issue \}\)/);
   assert.match(coordinationClaim, /'--method', 'POST', `\$\{root\}\/git\/refs`/);
   assert.doesNotMatch(coordinationClaim, /'--method',\s*'(?:PATCH|PUT|DELETE)'/);
   assert.doesNotMatch(coordinationClaim, /git\s+push|force-push|force push|update-ref|delete-ref/i);
@@ -760,7 +762,7 @@ test('remote-reference claim authority is derived, create-only, and isolated fro
   assert.match(coordinationWriter, /missing-claim-snapshot-guard/);
   assert.match(coordinationWriter, /stage: 'claim-snapshot-guard'/);
   assert.match(coordinationClaim, /evaluateClaimCommentHistoryForBody/);
-  assert.match(coordinationClaim, /claimSnapshotGuard: claimSnapshotGuard\(claim\)/);
+  assert.match(coordinationClaim, /claimSnapshotGuard: claimSnapshotGuard\(claim, operationId/);
   assert.match(coordinationLib, /export function evaluateClaimCommentHistoryForBody/);
   assert.doesNotMatch(coordinationWriter, /\/git\/refs|createClaimRef/);
   assert.doesNotMatch(coordinationLib, /from ['"]\.\/coordination-claim\.mjs['"]/);

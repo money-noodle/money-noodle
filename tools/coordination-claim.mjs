@@ -134,7 +134,11 @@ function inspectOperationEvidence(comment) {
       message: `comment ${comment.id ?? 'unknown'} has malformed operation evidence`,
     };
   }
-  return { valid: true, mentionsMarker };
+  return {
+    valid: true,
+    mentionsMarker,
+    operationId: mentionsMarker ? markerRecord.fields['Coordination-Write-ID'] : null,
+  };
 }
 
 function inspectClaimComment(comment, prepared, phase) {
@@ -250,14 +254,15 @@ function inspectClaimComments(comments, prepared, phase, body) {
   return { valid: true, resolution };
 }
 
-function inspectPrivilegedWriterSnapshot(issue, claim) {
+function inspectPrivilegedWriterSnapshot(issue, claim, operationId) {
   const sourceBody = issue.body === claim.expectedBody;
   const preparedBody = issue.body === claim.prepared.body;
-  const unsafe = (code, message, status = sourceBody ? 'orphaned' : 'collision') => ({
+  const unsafe = (code, message, status = sourceBody ? 'orphaned' : 'collision', detail = {}) => ({
     valid: false,
     status,
     code,
     message: `${message}; preserve the ref for principal reconciliation`,
+    ...detail,
   });
   if (issue.state !== 'open') {
     return unsafe('post-ref-issue-not-open', 'the issue is no longer open');
@@ -293,16 +298,65 @@ function inspectPrivilegedWriterSnapshot(issue, claim) {
       comments.code === 'competing-agent-ownership' ? 'collision' : undefined,
     );
   }
+  const matchingCheckpoints = matchingCheckpointEvidence(
+    issue.comments,
+    claim,
+    comments.resolution,
+  );
+  const coherent =
+    preparedBody &&
+    matchingCheckpoints.length > 0 &&
+    labels.length === 1 &&
+    labels[0] === claim.desiredLabel;
+  const matchingOperationIds = [
+    ...new Set(matchingCheckpoints.map(({ operationId: id }) => id).filter(Boolean)),
+  ];
+  if (!coherent && matchingOperationIds.length > 0 && !matchingOperationIds.includes(operationId)) {
+    return unsafe(
+      'post-ref-operation-mismatch',
+      `incomplete claim recovery requires its evidenced operation ${matchingOperationIds.join(', ')}; operation ${operationId} may not mutate or append duplicate checkpoint evidence`,
+      'collision',
+      { observedOperations: matchingOperationIds },
+    );
+  }
   return {
     valid: true,
     bodyStage: sourceBody ? 'parked-source' : 'prepared-claim',
     label: labels[0],
     resolution: comments.resolution,
+    matchingCheckpoints,
+    coherent,
   };
 }
 
-function claimSnapshotGuard(claim) {
-  return ({ issue }) => inspectPrivilegedWriterSnapshot(issue, claim);
+function claimSnapshotGuard(claim, operationId, { stopOnCoherent = false } = {}) {
+  return ({ issue }) => {
+    const inspection = inspectPrivilegedWriterSnapshot(issue, claim, operationId);
+    if (!stopOnCoherent || !inspection.valid || !inspection.coherent) return inspection;
+    return {
+      ...inspection,
+      valid: false,
+      status: 'existing',
+      code: 'existing-coherent-claim',
+      message: 'the exact complete claim already exists; no recovery mutation is required',
+    };
+  };
+}
+
+function matchingCheckpointEvidence(comments, claim, resolution) {
+  const reconciledIds = new Set(resolution.reconciledIds);
+  return comments.flatMap((comment) => {
+    if (reconciledIds.has(comment.id)) return [];
+    const validation = validateCheckpointComment(comment.body ?? '', claim.prepared.validation);
+    if (!validation.applicable || !validation.valid) return [];
+    const operation = inspectOperationEvidence(comment);
+    return [
+      {
+        commentId: comment.id,
+        operationId: operation.valid ? operation.operationId : null,
+      },
+    ];
+  });
 }
 
 function inspectIssueBeforeCreate(issue, claim) {
@@ -488,23 +542,21 @@ export async function executeCoordinationClaim({
         message: 'the ref and issue body do not identify one prepared claim',
       });
     }
-    const commentInspection = inspectClaimComments(
-      issue.comments,
-      claim.prepared,
-      'recovery',
-      issue.body,
-    );
-    if (!commentInspection.valid) {
-      return result('collision', `ref-present-${commentInspection.code}`, {
-        message: commentInspection.message,
-      });
+    const snapshotInspection = claimSnapshotGuard(claim, operationId)({ issue });
+    if (!snapshotInspection.valid) {
+      return result(
+        snapshotInspection.status,
+        snapshotInspection.code === 'post-ref-operation-mismatch'
+          ? 'ref-present-operation-mismatch'
+          : 'post-ref-snapshot-guard',
+        {
+          message: snapshotInspection.message,
+          guard: snapshotInspection,
+          observedOperations: snapshotInspection.observedOperations,
+        },
+      );
     }
-    const matchingCheckpoint = issue.comments.some((comment) => {
-      const validation = validateCheckpointComment(comment.body ?? '', claim.prepared.validation);
-      return validation.applicable && validation.valid;
-    });
-    const labels = issueStateLabels(issue.labels);
-    if (matchingCheckpoint && labels.length === 1 && labels[0] === 'work:active') {
+    if (snapshotInspection.coherent) {
       return result('existing', 'existing-coherent-claim', {
         message:
           'the exact complete claim already exists; continue only after normal reconciliation',
@@ -517,12 +569,16 @@ export async function executeCoordinationClaim({
       values: claim.canonicalValues,
       checkpointComment,
       operationId,
-      claimSnapshotGuard: claimSnapshotGuard(claim),
+      claimSnapshotGuard: claimSnapshotGuard(claim, operationId, { stopOnCoherent: true }),
     });
     return {
       ...result(
         write.status,
-        write.stage === 'claim-snapshot-guard' ? 'post-ref-snapshot-guard' : 'writer-recovery',
+        write.guard?.code === 'existing-coherent-claim'
+          ? 'existing-coherent-claim'
+          : write.stage === 'claim-snapshot-guard'
+            ? 'post-ref-snapshot-guard'
+            : 'writer-recovery',
       ),
       writerMutations: write.mutations,
       message: write.message,
@@ -593,16 +649,18 @@ export async function executeCoordinationClaim({
     values: claim.canonicalValues,
     checkpointComment,
     operationId,
-    claimSnapshotGuard: claimSnapshotGuard(claim),
+    claimSnapshotGuard: claimSnapshotGuard(claim, operationId, { stopOnCoherent: true }),
   });
   return {
     status: write.status,
     stage:
-      write.stage === 'claim-snapshot-guard'
-        ? 'post-ref-snapshot-guard'
-        : write.status === 'complete'
-          ? 'complete'
-          : 'writer-partial',
+      write.guard?.code === 'existing-coherent-claim'
+        ? 'existing-coherent-claim'
+        : write.stage === 'claim-snapshot-guard'
+          ? 'post-ref-snapshot-guard'
+          : write.status === 'complete'
+            ? 'complete'
+            : 'writer-partial',
     refMutations: 1,
     writerMutations: write.mutations,
     message: write.message,

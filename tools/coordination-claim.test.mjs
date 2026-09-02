@@ -716,18 +716,102 @@ test('prepared-body recovery rechecks post-ref issue safety before mutation', as
   assert.match(outcome.message, /preserve the ref for principal reconciliation/);
 });
 
-test('an exact complete matching claim is existing evidence and receives no duplicate comment', async () => {
+test('a fully coherent operation A is existing evidence under operation B with zero mutation', async () => {
   const claimHost = new MockClaimHost();
   const writerHost = new MockWriterHost();
   assert.equal((await executeCoordinationClaim(input(claimHost, writerHost))).status, 'complete');
   const commentCount = writerHost.issue.comments.length;
+  writerHost.mutations = [];
+  claimHost.createCalls = 0;
+
   const existing = await executeCoordinationClaim(
     input(claimHost, writerHost, { operationId: 'later-same-claimant' }),
   );
+
   assert.equal(existing.status, 'existing');
   assert.equal(existing.stage, 'existing-coherent-claim');
+  assert.deepEqual(existing.writerMutations, { body: 0, label: 0, comment: 0 });
+  assert.deepEqual(writerHost.mutations, []);
   assert.equal(writerHost.issue.comments.length, commentCount);
-  assert.equal(claimHost.createCalls, 1);
+  assert.equal(claimHost.createCalls, 0);
+});
+
+test('a closed complete prepared claim is never existing coherent evidence', async () => {
+  const claimHost = new MockClaimHost();
+  claimHost.ref = { ref: REF, object: { type: 'commit', sha: BASE } };
+  const writerHost = new MockWriterHost();
+  const prepared = prepareCoordinationClaim(prepareInput());
+  writerHost.issue.state = 'closed';
+  writerHost.issue.body = prepared.prepared.body;
+  writerHost.issue.labels = ['work:active', 'area:foundation'];
+  writerHost.issue.comments = [hostedComment({ id: 1, body: prepared.operation.comment })];
+  const commentCount = writerHost.issue.comments.length;
+
+  const outcome = await executeCoordinationClaim(input(claimHost, writerHost));
+
+  assert.equal(outcome.status, 'collision');
+  assert.notEqual(outcome.status, 'existing');
+  assert.equal(outcome.stage, 'post-ref-snapshot-guard');
+  assert.equal(outcome.guard.code, 'post-ref-issue-not-open');
+  assert.deepEqual(outcome.writerMutations, { body: 0, label: 0, comment: 0 });
+  assert.deepEqual(writerHost.mutations, []);
+  assert.equal(writerHost.issue.comments.length, commentCount);
+  assert.equal(claimHost.createCalls, 0);
+  assert.match(outcome.message, /preserve the ref for principal reconciliation/);
+});
+
+test('incomplete operation A evidence cannot be recovered or duplicated by operation B', async () => {
+  const claimHost = new MockClaimHost();
+  claimHost.ref = { ref: REF, object: { type: 'commit', sha: BASE } };
+  const writerHost = new MockWriterHost();
+  const operationA = prepareCoordinationClaim(prepareInput({ operationId: 'operation-a' }));
+  writerHost.issue.body = operationA.prepared.body;
+  writerHost.issue.labels = ['work:ready', 'area:foundation'];
+  writerHost.issue.comments = [hostedComment({ id: 1, body: operationA.operation.comment })];
+  const originalComments = structuredClone(writerHost.issue.comments);
+
+  const outcome = await executeCoordinationClaim(
+    input(claimHost, writerHost, { operationId: 'operation-b' }),
+  );
+
+  assert.equal(outcome.status, 'collision');
+  assert.equal(outcome.stage, 'ref-present-operation-mismatch');
+  assert.deepEqual(outcome.observedOperations, ['operation-a']);
+  assert.deepEqual(outcome.writerMutations, { body: 0, label: 0, comment: 0 });
+  assert.deepEqual(writerHost.mutations, []);
+  assert.deepEqual(writerHost.issue.comments, originalComments);
+  assert.equal(claimHost.createCalls, 0);
+  assert.match(
+    outcome.message,
+    /operation-b may not mutate or append duplicate checkpoint evidence/,
+  );
+});
+
+test('the fresh privileged guard blocks operation A evidence racing operation B recovery', async () => {
+  const claimHost = new MockClaimHost();
+  claimHost.ref = { ref: REF, object: { type: 'commit', sha: BASE } };
+  const writerHost = new MockWriterHost();
+  const operationA = prepareCoordinationClaim(prepareInput({ operationId: 'racing-operation-a' }));
+  writerHost.issue.body = operationA.prepared.body;
+  writerHost.issue.labels = ['work:ready', 'area:foundation'];
+  writerHost.onRead = (writer, readCount) => {
+    if (readCount === 2) {
+      writer.issue.comments.push(hostedComment({ id: 1, body: operationA.operation.comment }));
+    }
+  };
+
+  const outcome = await executeCoordinationClaim(
+    input(claimHost, writerHost, { operationId: 'racing-operation-b' }),
+  );
+
+  assert.equal(outcome.status, 'collision');
+  assert.equal(outcome.stage, 'post-ref-snapshot-guard');
+  assert.equal(outcome.guard.code, 'post-ref-operation-mismatch');
+  assert.deepEqual(outcome.guard.observedOperations, ['racing-operation-a']);
+  assert.deepEqual(outcome.writerMutations, { body: 0, label: 0, comment: 0 });
+  assert.deepEqual(writerHost.mutations, []);
+  assert.equal(writerHost.issue.comments.length, 1);
+  assert.equal(claimHost.createCalls, 0);
 });
 
 test('a malformed operation marker blocks prepared-body recovery', async () => {
@@ -738,7 +822,8 @@ test('a malformed operation marker blocks prepared-body recovery', async () => {
   writerHost.issue.body = prepared.prepared.body;
   writerHost.issue.comments.push({ id: 1, body: 'Coordination-Write-ID: other-operation\n' });
   const result = await executeCoordinationClaim(input(claimHost, writerHost));
-  assert.equal(result.stage, 'ref-present-malformed-operation-evidence');
+  assert.equal(result.stage, 'post-ref-snapshot-guard');
+  assert.equal(result.guard.code, 'post-ref-malformed-operation-evidence');
   assert.deepEqual(writerHost.mutations, []);
 });
 
@@ -754,7 +839,8 @@ test('conflicting structured ownership blocks recovery even without an operation
   });
   writerHost.issue.comments.push({ id: 1, body: checkpointComment(competing) });
   const result = await executeCoordinationClaim(input(claimHost, writerHost));
-  assert.equal(result.stage, 'ref-present-competing-agent-ownership');
+  assert.equal(result.stage, 'post-ref-snapshot-guard');
+  assert.equal(result.guard.code, 'post-ref-competing-agent-ownership');
   assert.deepEqual(writerHost.mutations, []);
 });
 
