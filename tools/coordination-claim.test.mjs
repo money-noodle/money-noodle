@@ -781,10 +781,153 @@ test('incomplete operation A evidence cannot be recovered or duplicated by opera
   assert.deepEqual(writerHost.mutations, []);
   assert.deepEqual(writerHost.issue.comments, originalComments);
   assert.equal(claimHost.createCalls, 0);
-  assert.match(
-    outcome.message,
-    /operation-b may not mutate or append duplicate checkpoint evidence/,
+  assert.match(outcome.message, /every matching checkpoint.*operation operation-b/);
+});
+
+test('mixed operation A and B checkpoints reject incomplete recovery under either operation', async () => {
+  for (const retryOperation of ['operation-a', 'operation-b']) {
+    const claimHost = new MockClaimHost();
+    claimHost.ref = { ref: REF, object: { type: 'commit', sha: BASE } };
+    const writerHost = new MockWriterHost();
+    const operationA = prepareCoordinationClaim(prepareInput({ operationId: 'operation-a' }));
+    const operationB = prepareCoordinationClaim(prepareInput({ operationId: 'operation-b' }));
+    writerHost.issue.body = operationA.prepared.body;
+    writerHost.issue.labels = ['work:ready', 'area:foundation'];
+    writerHost.issue.comments = [
+      hostedComment({ id: 1, body: operationA.operation.comment }),
+      hostedComment({ id: 2, body: operationB.operation.comment }),
+    ];
+    const originalComments = structuredClone(writerHost.issue.comments);
+
+    const outcome = await executeCoordinationClaim(
+      input(claimHost, writerHost, { operationId: retryOperation }),
+    );
+
+    assert.equal(outcome.status, 'collision', retryOperation);
+    assert.equal(outcome.stage, 'ref-present-operation-mismatch', retryOperation);
+    assert.deepEqual(outcome.observedOperations, ['operation-a', 'operation-b'], retryOperation);
+    assert.deepEqual(outcome.writerMutations, { body: 0, label: 0, comment: 0 }, retryOperation);
+    assert.deepEqual(writerHost.mutations, [], retryOperation);
+    assert.deepEqual(writerHost.issue.comments, originalComments, retryOperation);
+    assert.equal(claimHost.createCalls, 0, retryOperation);
+  }
+});
+
+test('unmarked matching checkpoints make incomplete recovery ambiguous and immutable', async () => {
+  const operationA = prepareCoordinationClaim(prepareInput({ operationId: 'operation-a' }));
+  const fixtures = [
+    {
+      name: 'operation A plus unmarked',
+      comments: [
+        hostedComment({ id: 1, body: operationA.operation.comment }),
+        hostedComment({ id: 2, body: checkpointComment() }),
+      ],
+      observed: ['operation-a', 'missing'],
+    },
+    {
+      name: 'only unmarked',
+      comments: [hostedComment({ id: 1, body: checkpointComment() })],
+      observed: ['missing'],
+    },
+  ];
+  for (const fixture of fixtures) {
+    const claimHost = new MockClaimHost();
+    claimHost.ref = { ref: REF, object: { type: 'commit', sha: BASE } };
+    const writerHost = new MockWriterHost();
+    writerHost.issue.body = operationA.prepared.body;
+    writerHost.issue.labels = ['work:ready', 'area:foundation'];
+    writerHost.issue.comments = fixture.comments;
+    const originalComments = structuredClone(writerHost.issue.comments);
+
+    const outcome = await executeCoordinationClaim(
+      input(claimHost, writerHost, { operationId: 'operation-a' }),
+    );
+
+    assert.equal(outcome.status, 'collision', fixture.name);
+    assert.equal(outcome.stage, 'ref-present-operation-mismatch', fixture.name);
+    assert.deepEqual(outcome.observedOperations, fixture.observed, fixture.name);
+    assert.deepEqual(outcome.writerMutations, { body: 0, label: 0, comment: 0 }, fixture.name);
+    assert.deepEqual(writerHost.mutations, [], fixture.name);
+    assert.deepEqual(writerHost.issue.comments, originalComments, fixture.name);
+    assert.equal(claimHost.createCalls, 0, fixture.name);
+  }
+});
+
+test('incomplete same-operation A recovery repairs only the label without a duplicate comment', async () => {
+  const claimHost = new MockClaimHost();
+  claimHost.ref = { ref: REF, object: { type: 'commit', sha: BASE } };
+  const writerHost = new MockWriterHost();
+  const operationA = prepareCoordinationClaim(prepareInput({ operationId: 'operation-a' }));
+  writerHost.issue.body = operationA.prepared.body;
+  writerHost.issue.labels = ['work:ready', 'area:foundation'];
+  writerHost.issue.comments = [hostedComment({ id: 1, body: operationA.operation.comment })];
+  const originalComments = structuredClone(writerHost.issue.comments);
+
+  const outcome = await executeCoordinationClaim(
+    input(claimHost, writerHost, { operationId: 'operation-a' }),
   );
+
+  assert.equal(outcome.status, 'complete');
+  assert.equal(outcome.stage, 'writer-recovery');
+  assert.deepEqual(outcome.writerMutations, { body: 0, label: 1, comment: 0 });
+  assert.deepEqual(writerHost.mutations, ['label']);
+  assert.deepEqual(writerHost.issue.comments, originalComments);
+  assert.deepEqual(writerHost.issue.labels, ['area:foundation', 'work:active']);
+  assert.equal(claimHost.createCalls, 0);
+});
+
+test('zero matching checkpoints permit body-only recovery beside historical parked evidence', async () => {
+  const claimHost = new MockClaimHost();
+  claimHost.ref = { ref: REF, object: { type: 'commit', sha: BASE } };
+  const writerHost = new MockWriterHost();
+  const operationA = prepareCoordinationClaim(prepareInput({ operationId: 'operation-a' }));
+  writerHost.issue.body = operationA.prepared.body;
+  writerHost.issue.labels = ['work:ready', 'area:foundation'];
+  writerHost.issue.comments = [
+    hostedComment({
+      id: 1,
+      body: `Coordination-Write-ID: readiness-history\n${checkpointComment(parkedFields())}`,
+    }),
+  ];
+
+  const outcome = await executeCoordinationClaim(
+    input(claimHost, writerHost, { operationId: 'operation-a' }),
+  );
+
+  assert.equal(outcome.status, 'complete');
+  assert.equal(outcome.stage, 'writer-recovery');
+  assert.deepEqual(outcome.writerMutations, { body: 0, label: 1, comment: 1 });
+  assert.deepEqual(writerHost.mutations, ['label', 'comment']);
+  assert.equal(writerHost.issue.comments.length, 2);
+  assert.match(writerHost.issue.comments[0].body, /Coordination-Write-ID: readiness-history/);
+  assert.match(writerHost.issue.comments[1].body, /Coordination-Write-ID: operation-a/);
+  assert.equal(claimHost.createCalls, 0);
+});
+
+test('repeated same-operation evidence delegates safely to writer idempotency checks', async () => {
+  const claimHost = new MockClaimHost();
+  claimHost.ref = { ref: REF, object: { type: 'commit', sha: BASE } };
+  const writerHost = new MockWriterHost();
+  const operationA = prepareCoordinationClaim(prepareInput({ operationId: 'operation-a' }));
+  writerHost.issue.body = operationA.prepared.body;
+  writerHost.issue.labels = ['work:ready', 'area:foundation'];
+  writerHost.issue.comments = [
+    hostedComment({ id: 1, body: operationA.operation.comment }),
+    hostedComment({ id: 2, body: operationA.operation.comment }),
+  ];
+  const originalComments = structuredClone(writerHost.issue.comments);
+
+  const outcome = await executeCoordinationClaim(
+    input(claimHost, writerHost, { operationId: 'operation-a' }),
+  );
+
+  assert.equal(outcome.status, 'collision');
+  assert.equal(outcome.stage, 'writer-recovery');
+  assert.equal(outcome.writer.stage, 'pre-write-comment');
+  assert.deepEqual(outcome.writerMutations, { body: 0, label: 0, comment: 0 });
+  assert.deepEqual(writerHost.mutations, []);
+  assert.deepEqual(writerHost.issue.comments, originalComments);
+  assert.equal(claimHost.createCalls, 0);
 });
 
 test('the fresh privileged guard blocks operation A evidence racing operation B recovery', async () => {

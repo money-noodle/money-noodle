@@ -308,15 +308,19 @@ function inspectPrivilegedWriterSnapshot(issue, claim, operationId) {
     matchingCheckpoints.length > 0 &&
     labels.length === 1 &&
     labels[0] === claim.desiredLabel;
-  const matchingOperationIds = [
-    ...new Set(matchingCheckpoints.map(({ operationId: id }) => id).filter(Boolean)),
+  const observedOperations = [
+    ...new Set(matchingCheckpoints.map(({ operationId: id }) => id ?? 'missing')),
   ];
-  if (!coherent && matchingOperationIds.length > 0 && !matchingOperationIds.includes(operationId)) {
+  if (
+    !coherent &&
+    matchingCheckpoints.length > 0 &&
+    matchingCheckpoints.some(({ operationId: id }) => id !== operationId)
+  ) {
     return unsafe(
       'post-ref-operation-mismatch',
-      `incomplete claim recovery requires its evidenced operation ${matchingOperationIds.join(', ')}; operation ${operationId} may not mutate or append duplicate checkpoint evidence`,
+      `every matching checkpoint on an incomplete claim must carry operation ${operationId}; observed ${observedOperations.join(', ')}, so recovery may not mutate or append duplicate checkpoint evidence`,
       'collision',
-      { observedOperations: matchingOperationIds },
+      { observedOperations },
     );
   }
   return {
