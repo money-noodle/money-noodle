@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)
-if [ "$branch" = "main" ]; then
+branch=$(git symbolic-ref --quiet HEAD 2>/dev/null || true)
+if [ "$branch" = "refs/heads/main" ]; then
   printf '%s\n' 'refusing to create an authored commit on the integration branch main' >&2
   printf '%s\n' 'use a claimed execution branch and reviewed pull-request integration' >&2
   exit 1

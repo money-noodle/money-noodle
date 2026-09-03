@@ -806,8 +806,9 @@ test('integration checkout hooks, lifecycle status, bootstrap, and holds remain 
     ['.githooks/pre-merge-commit', preMergeCommitHook],
   ]) {
     assert.match(hook, /^#!\/bin\/sh\n/);
-    assert.match(hook, /symbolic-ref --quiet --short HEAD/);
-    assert.match(hook, /\[ "\$branch" = "main" \]/);
+    assert.match(hook, /symbolic-ref --quiet HEAD/);
+    assert.match(hook, /\[ "\$branch" = "refs\/heads\/main" \]/);
+    assert.doesNotMatch(hook, /--short/);
     assert.equal(statSync(path).mode & 0o111, 0o111, `${path} must be executable`);
   }
   assert.doesNotMatch(integrationHookTests, /--no-verify/);
@@ -837,7 +838,11 @@ test('integration checkout hooks, lifecycle status, bootstrap, and holds remain 
   ])
     assert.match(coordinationLib, new RegExp(`['\"]${state}['\"]`));
   assert.match(coordinationStatus, /--show-origin.*--show-scope.*core\.hooksPath/s);
-  assert.match(coordinationStatus, /git.*ls-remote|\['ls-remote'/s);
+  assert.match(coordinationStatus, /git\/ref\/\$\{fullRef\.slice\('refs\/'.length\)\}/);
+  assert.match(coordinationStatus, /compare\/\$\{left\}\.\.\.\$\{right\}/);
+  assert.match(coordinationStatus, /indexMode/);
+  assert.match(coordinationStatus, /filesystem.*executable/s);
+  assert.doesNotMatch(coordinationStatus, /\['ls-remote'/);
   assert.doesNotMatch(
     coordinationStatus,
     /(?:reset|update-ref|worktree', 'remove|config', '--local', 'core\.hooksPath)/,
@@ -850,14 +855,14 @@ test('integration checkout hooks, lifecycle status, bootstrap, and holds remain 
   assert.match(parallelWork, /five SHA surfaces to agree/i);
   assert.match(
     parallelWork,
-    /direct GitHub claim ref, local remote-tracking ref, local branch, and dedicated worktree HEAD/i,
+    /direct-ref reads, local remote-tracking ref, local branch, and dedicated worktree HEAD/i,
   );
   assert.match(parallelWork, /exactly one clean unlocked non-prunable worktree/i);
   assert.match(parallelWork, /zero push/i);
-  assert.match(parallelWork, /worktree collision[^.!?\n]{0,180}preserved for principal review/i);
+  assert.match(parallelWork, /Every collision[^.!?\n]{0,180}preserved for principal review/i);
   assert.match(
     parallelWork,
-    /never adopts?, resets?, repoints?, force-updates?, removes?, or cleans?/i,
+    /bootstrap never retries, adopts, resets, repoints, force-updates, removes, or cleans/i,
   );
   assert.match(parallelWork, /test\/integration-pr-<PR>-base-<first-12-base-hex>-attempt-<N>/);
   assert.match(parallelWork, /## Integration hold evidence/);
@@ -878,7 +883,10 @@ test('integration checkout hooks, lifecycle status, bootstrap, and holds remain 
     parallelWork,
     /activation followed by successful read-only activation and refusal verification permits `done`/i,
   );
-  assert.match(versionControl, /sole integration checkout is the worktree on symbolic `main`/);
+  assert.match(
+    versionControl,
+    /sole integration checkout is the worktree on full symbolic ref `refs\/heads\/main`/,
+  );
   assert.match(
     versionControl,
     /hooks are inert until separately authorized repository-local activation/i,

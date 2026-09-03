@@ -3,9 +3,11 @@ import test from "node:test";
 
 import {
   analyzeCoordination,
+  authoritativeCommitRelationship,
   claimField,
   classifyCommitRelationship,
   classifyIntegrationCheckout,
+  classifyRemoteClaimEvidence,
   classifyRemoteClaimLifecycle,
   deadlineStatus,
   evaluateIntegrationHolds,
@@ -14,6 +16,7 @@ import {
   parseDependencies,
   reconcileRemoteClaims,
   staleClaimReason,
+  validateClaimBootstrapEvidence,
   structuredFields,
 } from "./coordination-lib.mjs";
 
@@ -126,7 +129,7 @@ test('remote claim reconciliation exposes lag and fails closed on ancestry uncer
   const remote = 'b'.repeat(40);
   for (const [number, relationship, expected, warns] of [
     [80, 'left-ahead', 'local-ahead', false],
-    [81, 'right-ahead', 'remote-ahead', false],
+    [81, 'right-ahead', 'remote-ahead', true],
     [82, 'divergence', 'divergence', true],
     [83, 'unavailable', 'unavailable', true],
   ]) {
@@ -1082,6 +1085,180 @@ test('commit relationships map to all integration and remote lifecycle states', 
   );
 });
 
+function directClaimRef(status = 'found', sha = 'b'.repeat(40)) {
+  return status === 'found'
+    ? {
+        status,
+        ref: 'refs/heads/claim-v1/issue-61',
+        objectType: 'commit',
+        sha,
+      }
+    : { status };
+}
+
+function compareEvidence(relationship, key = relationship) {
+  return { status: 'available', relationship, evidenceKey: key };
+}
+
+test('authoritative lifecycle uses stable compare evidence and contained local fallback', () => {
+  const checkpoint = 'a'.repeat(40);
+  const remote = 'b'.repeat(40);
+  assert.equal(
+    authoritativeCommitRelationship({
+      left: checkpoint,
+      right: remote,
+      compareBefore: compareEvidence('right-ahead', 'stable'),
+      compareAfter: compareEvidence('right-ahead', 'stable'),
+      localRelationship: 'unavailable',
+    }),
+    'right-ahead',
+    'host compare classifies an unseen remote commit without requiring its local object',
+  );
+  assert.equal(
+    authoritativeCommitRelationship({
+      left: checkpoint,
+      right: remote,
+      compareBefore: compareEvidence('right-ahead', 'before'),
+      compareAfter: compareEvidence('right-ahead', 'after'),
+      localRelationship: 'unavailable',
+    }),
+    'unavailable',
+  );
+
+  const common = {
+    checkpointCommit: checkpoint,
+    expectedRef: 'refs/heads/claim-v1/issue-61',
+    enumeratedRemoteHead: remote,
+    directRefBefore: directClaimRef('found', remote),
+    directRefAfter: directClaimRef('found', remote),
+  };
+  assert.equal(
+    classifyRemoteClaimEvidence({
+      ...common,
+      compareBefore: compareEvidence('right-ahead', 'stable'),
+      compareAfter: compareEvidence('right-ahead', 'stable'),
+      localContainment: { status: 'missing', relationship: 'unavailable' },
+    }).status,
+    'remote-ahead',
+  );
+  assert.equal(
+    classifyRemoteClaimEvidence({
+      ...common,
+      compareBefore: { status: 'missing' },
+      compareAfter: { status: 'missing' },
+      localContainment: { status: 'contained', relationship: 'left-ahead' },
+    }).status,
+    'local-ahead',
+  );
+  for (const evidence of [
+    { ...common, directRefBefore: { status: 'malformed' } },
+    { ...common, directRefAfter: { status: 'unavailable' } },
+    {
+      ...common,
+      directRefAfter: directClaimRef('found', 'c'.repeat(40)),
+    },
+    {
+      ...common,
+      compareBefore: { status: 'missing' },
+      compareAfter: { status: 'missing' },
+      localContainment: { status: 'behind', relationship: 'right-ahead' },
+    },
+  ]) {
+    assert.equal(classifyRemoteClaimEvidence(evidence).status, 'unavailable');
+  }
+  assert.equal(
+    classifyRemoteClaimEvidence({
+      ...common,
+      enumeratedRemoteHead: null,
+      directRefBefore: { status: 'missing' },
+      directRefAfter: { status: 'missing' },
+    }).status,
+    'missing-branch',
+  );
+});
+
+function validBootstrapEvidence() {
+  const sha = 'a'.repeat(40);
+  const ref = 'refs/heads/claim-v1/issue-61';
+  const direct = { status: 'found', ref, objectType: 'commit', sha };
+  const integration = {
+    symbolicRef: 'refs/heads/main',
+    head: 'b'.repeat(40),
+    clean: true,
+    inProgress: false,
+  };
+  return {
+    issueNumber: 61,
+    checkpointCommit: sha,
+    directRefBefore: direct,
+    directRefAfter: { ...direct },
+    preexisting: {
+      localBranch: false,
+      worktreePath: false,
+      branchWorktree: false,
+      remoteTracking: 'missing',
+    },
+    fetch: {
+      status: 'succeeded',
+      remote: 'origin',
+      sourceRef: ref,
+      destinationRef: 'refs/remotes/origin/claim-v1/issue-61',
+      tags: false,
+      force: false,
+      writeFetchHead: false,
+      recurseSubmodules: false,
+      autoMaintenance: false,
+    },
+    pushCount: 0,
+    remoteTrackingHead: sha,
+    localBranchHead: sha,
+    branchRemote: 'origin',
+    branchMerge: ref,
+    claimWorktree: {
+      head: sha,
+      branch: ref,
+      symbolicRef: ref,
+      countForBranch: 1,
+      locked: false,
+      prunable: false,
+      clean: true,
+    },
+    integrationBefore: integration,
+    integrationAfter: { ...integration },
+  };
+}
+
+test('pure bootstrap validation accepts only exact complete preserved evidence', () => {
+  assert.deepEqual(validateClaimBootstrapEvidence(validBootstrapEvidence()), {
+    valid: true,
+    status: 'matched',
+    errors: [],
+  });
+  const variants = [
+    { preexisting: { ...validBootstrapEvidence().preexisting, localBranch: true } },
+    { preexisting: { ...validBootstrapEvidence().preexisting, worktreePath: true } },
+    { preexisting: { ...validBootstrapEvidence().preexisting, branchWorktree: true } },
+    { preexisting: { ...validBootstrapEvidence().preexisting, remoteTracking: 'matching' } },
+    { fetch: { ...validBootstrapEvidence().fetch, force: true } },
+    { fetch: { ...validBootstrapEvidence().fetch, tags: true } },
+    { fetch: { ...validBootstrapEvidence().fetch, status: 'non-fast-forward-refused' } },
+    { pushCount: 1 },
+    { directRefBefore: { status: 'missing' } },
+    { directRefAfter: { status: 'malformed' } },
+    { directRefAfter: directClaimRef('found', 'c'.repeat(40)) },
+    { localBranchHead: null },
+    { claimWorktree: null },
+    { claimWorktree: { ...validBootstrapEvidence().claimWorktree, clean: false } },
+    { integrationAfter: { ...validBootstrapEvidence().integrationAfter, head: 'c'.repeat(40) } },
+  ];
+  for (const changes of variants) {
+    const result = validateClaimBootstrapEvidence({ ...validBootstrapEvidence(), ...changes });
+    assert.equal(result.valid, false);
+    assert.equal(result.status, 'question');
+    assert(result.errors.length > 0);
+  }
+});
+
 function integrationHoldComment({
   id,
   action = 'acquire',
@@ -1138,6 +1315,62 @@ test('integration holds are clear, held, or released without expiry', () => {
   assert.equal(clear.status, 'clear');
   assert.equal(clear.active, null);
   assert.equal(clear.questions.length, 0);
+});
+
+test('integration-hold replay rejects overlap and integrated sequence reuse globally', () => {
+  const first = integrationHoldComment({ id: 1 });
+  const second = integrationHoldComment({
+    id: 2,
+    pr: '62',
+    acquiredAt: '2026-09-03T05:30:00.000Z',
+  });
+  const firstRelease = integrationHoldComment({
+    id: 3,
+    action: 'release',
+    eventAt: '2026-09-03T06:00:00.000Z',
+  });
+  const secondRelease = integrationHoldComment({
+    id: 4,
+    action: 'release',
+    pr: '62',
+    acquiredAt: '2026-09-03T05:30:00.000Z',
+    eventAt: '2026-09-03T06:30:00.000Z',
+  });
+  const fullyReleasedOverlap = evaluateIntegrationHolds([
+    first,
+    second,
+    firstRelease,
+    secondRelease,
+  ]);
+  assert.equal(fullyReleasedOverlap.status, 'question');
+  assert(fullyReleasedOverlap.questions.some(({ code }) => code === 'integration-hold-overlap'));
+
+  const abortedRelease = integrationHoldComment({
+    id: 5,
+    action: 'release',
+    eventAt: '2026-09-03T06:00:00.000Z',
+    outcome: 'aborted',
+  });
+  assert.equal(evaluateIntegrationHolds([first, second, abortedRelease]).status, 'question');
+  const afterAbort = integrationHoldComment({
+    id: 6,
+    attempt: '2',
+    acquiredAt: '2026-09-03T06:30:00.000Z',
+  });
+  assert.equal(evaluateIntegrationHolds([first, abortedRelease, afterAbort]).status, 'held');
+  const reusedAttempt = integrationHoldComment({
+    id: 8,
+    head: 'c'.repeat(40),
+    acquiredAt: '2026-09-03T06:30:00.000Z',
+  });
+  assert.equal(evaluateIntegrationHolds([first, abortedRelease, reusedAttempt]).status, 'question');
+
+  const integratedReuse = integrationHoldComment({
+    id: 7,
+    attempt: '2',
+    acquiredAt: '2026-09-03T06:30:00.000Z',
+  });
+  assert.equal(evaluateIntegrationHolds([first, firstRelease, integratedReuse]).status, 'question');
 });
 
 test('integration-hold grammar, author, edit, pairing, and singleton rules fail closed', () => {

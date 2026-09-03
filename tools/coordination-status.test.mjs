@@ -23,6 +23,7 @@ const ISSUES_ENDPOINT = `repos/${REPOSITORY}/issues?state=all&per_page=100`;
 const LABELS_ENDPOINT = `repos/${REPOSITORY}/labels?per_page=100`;
 const PULLS_ENDPOINT = `repos/${REPOSITORY}/pulls?state=open&per_page=100`;
 const CLAIM_REFS_ENDPOINT = `repos/${REPOSITORY}/git/matching-refs/heads/claim-v?per_page=100`;
+const MAIN_REF_ENDPOINT = `repos/${REPOSITORY}/git/ref/heads/main`;
 const SHIM_PATH = 'PATH=/usr/bin:/bin';
 
 const COORDINATION_LABELS = [
@@ -165,6 +166,22 @@ function commentEndpoint(number) {
   return `repos/${REPOSITORY}/issues/${number}/comments?per_page=100`;
 }
 
+function claimRefEndpoint(number) {
+  return `repos/${REPOSITORY}/git/ref/heads/claim-v1/issue-${number}`;
+}
+
+function compareEndpoint(left, right) {
+  return `repos/${REPOSITORY}/compare/${left}...${right}`;
+}
+
+function restRef(ref, sha = 'a'.repeat(40), type = 'commit') {
+  return { ref, object: { type, sha } };
+}
+
+function restCompare(left, status, aheadBy, behindBy) {
+  return { status, ahead_by: aheadBy, behind_by: behindBy, base_commit: { sha: left } };
+}
+
 function restCheckpointComment(issue, id = 7300, body = issue.body) {
   return {
     id,
@@ -222,6 +239,9 @@ function defaultResponses() {
       stdout: JSON.stringify([[PLAN_ISSUE, ACTIVE_CLAIM, UNRELATED_ISSUE]]),
     },
     [`api:${CLAIM_REFS_ENDPOINT}`]: { stdout: '[[]]' },
+    [`api:${MAIN_REF_ENDPOINT}`]: {
+      stdout: JSON.stringify(restRef('refs/heads/main')),
+    },
     [`api:${PULLS_ENDPOINT}`]: { stdout: '[[]]' },
   };
 }
@@ -245,12 +265,15 @@ function writeGitShim(
     '',
   ].join('\n'),
   hooksConfigOutput = '',
+  localBranchesOutput = 'test/sample\tabc1234\n',
 ) {
   const worktreeFile = join(directory, 'git-worktrees.out');
   const hooksConfigFile = join(directory, 'git-hooks-config.out');
+  const localBranchesFile = join(directory, 'git-local-branches.out');
   const integrationGitDirectory = join(directory, 'integration-git');
   writeFileSync(worktreeFile, worktreeOutput);
   writeFileSync(hooksConfigFile, hooksConfigOutput);
+  writeFileSync(localBranchesFile, localBranchesOutput);
   writeExecutable(
     directory,
     'git',
@@ -262,11 +285,12 @@ if [ "$1" = "-C" ]; then
   cwd=$2
   shift 2
   case "$1" in
-    status) printf '# branch.oid ${'a'.repeat(40)}\\n# branch.head main\\n' ;;
-    symbolic-ref) printf 'main\\n' ;;
+    status) case " $* " in *" --branch "*) printf '# branch.oid ${'a'.repeat(40)}\\n# branch.head main\\n' ;; *) : ;; esac ;;
+    symbolic-ref) if [ "$cwd" = "/fake/worktree" ]; then printf 'refs/heads/claim-v1/issue-61\\n'; else printf 'refs/heads/main\\n'; fi ;;
     rev-parse) printf '${integrationGitDirectory}\\n' ;;
     config) if [ -s '${hooksConfigFile}' ]; then cat '${hooksConfigFile}'; else exit 1; fi ;;
-    merge-base) exit 1 ;;
+    ls-files) printf '100755 %s 0\\t%s\\n' '${'b'.repeat(40)}' "$4" ;;
+    merge-base) if [ "$3" = "${'b'.repeat(40)}" ] && [ "$4" = "${'a'.repeat(40)}" ]; then exit 0; else exit 1; fi ;;
     *) printf 'unexpected git -C invocation: %s %s\\n' "$cwd" "$*" >&2; exit 127 ;;
   esac
   exit 0
@@ -274,7 +298,7 @@ fi
 case "$1" in
   status) printf '## test/sample...origin/main\\n' ;;
   worktree) cat '${worktreeFile}' ;;
-  for-each-ref) printf 'test/sample\\tabc1234\\n' ;;
+  for-each-ref) cat '${localBranchesFile}' ;;
   ls-remote) printf '${'a'.repeat(40)}\\trefs/heads/main\\n' ;;
   *) printf 'unexpected git invocation: %s\\n' "$*" >&2; exit 127 ;;
 esac
@@ -284,7 +308,9 @@ esac
 
 function writeGhShim(directory, responses) {
   const responseFile = join(directory, 'responses.json');
+  const countsFile = join(directory, 'gh-counts.json');
   writeFileSync(responseFile, JSON.stringify(responses));
+  writeFileSync(countsFile, '{}');
   writeExecutable(
     directory,
     'gh',
@@ -294,8 +320,17 @@ const args = process.argv.slice(2);
 fs.appendFileSync(process.env.INVOCATION_LOG, "gh " + args.join(" ") + "\\n");
 const responses = JSON.parse(fs.readFileSync(${JSON.stringify(responseFile)}, "utf8"));
 const key = args[0] === "api" ? "api:" + args.at(-1) : args[0];
-const fallback = key.includes("/comments?per_page=100") ? { stdout: "[[]]" } : undefined;
-const response = responses[key] ?? fallback;
+let fallback = key.includes("/comments?per_page=100") ? { stdout: "[[]]" } : undefined;
+if (!fallback && key.includes("/git/ref/heads/claim-v1/issue-")) {
+  const ref = key.slice(key.indexOf("repos/") + 6).split("/git/ref/")[1];
+  fallback = { stdout: JSON.stringify({ ref: "refs/" + ref, object: { type: "commit", sha: "${'a'.repeat(40)}" } }) };
+}
+const configured = responses[key] ?? fallback;
+const counts = JSON.parse(fs.readFileSync(${JSON.stringify(countsFile)}, "utf8"));
+const call = counts[key] ?? 0;
+counts[key] = call + 1;
+fs.writeFileSync(${JSON.stringify(countsFile)}, JSON.stringify(counts));
+const response = configured?.sequence ? configured.sequence[Math.min(call, configured.sequence.length - 1)] : configured;
 if (!response) {
   process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
   process.exit(127);
@@ -309,7 +344,14 @@ process.exit(response.status ?? 0);
 
 function runStatus(
   t,
-  { responses = defaultResponses(), gh = true, args = [], gitWorktrees, gitHooksConfig } = {},
+  {
+    responses = defaultResponses(),
+    gh = true,
+    args = [],
+    gitWorktrees,
+    gitHooksConfig,
+    gitLocalBranches,
+  } = {},
 ) {
   const directory = mkdtempSync(join(tmpdir(), 'mn-coordination-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -319,7 +361,8 @@ function runStatus(
   mkdirSync(join(directory, '.githooks'));
   writeExecutable(directory, '.githooks/pre-commit', '#!/bin/sh\nexit 0\n');
   writeExecutable(directory, '.githooks/pre-merge-commit', '#!/bin/sh\nexit 0\n');
-  writeGitShim(directory, gitWorktrees, gitHooksConfig);
+  writeExecutable(directory, 'hostname', '#!/bin/sh\nprintf "runner-01\\n"\n');
+  writeGitShim(directory, gitWorktrees, gitHooksConfig, gitLocalBranches);
   if (gh) writeGhShim(directory, responses);
   const beforeFiles = readdirSync(directory).sort();
   const beforeSentinel = readFileSync(join(directory, 'sentinel.txt'), 'utf8');
@@ -418,8 +461,12 @@ test('versioned JSON mode is one parseable document with candidate safety explic
   assert.equal(report.local.integrationCheckout.status, 'mirrored');
   assert.equal(report.local.hooks.configuration.status, 'unset');
   assert.equal(report.local.hooks.configuration.effective, null);
-  assert.equal(report.local.hooks.files['pre-commit'].mode, '100755');
-  assert.equal(report.local.hooks.files['pre-merge-commit'].mode, '100755');
+  assert.equal(report.local.hooks.checkoutPath, '/fake/integration');
+  assert.equal(report.local.hooks.files['pre-commit'].indexMode, '100755');
+  assert.equal(report.local.hooks.files['pre-commit'].filesystem.status, 'missing');
+  assert.equal(report.local.hooks.files['pre-merge-commit'].indexMode, '100755');
+  assert.equal(report.local.hooks.files['pre-merge-commit'].filesystem.status, 'missing');
+  assert.equal(report.local.hooks.ready, false);
   assert.match(report.advisory, /never proves that claiming is safe/);
 });
 
@@ -429,12 +476,15 @@ test('hook configuration reports effective value, scope, and origin without chan
     gitHooksConfig: 'local\tfile:/fake/integration/.git/config\t.githooks\n',
   });
   const report = JSON.parse(configured.stdout);
-  assert.equal(configured.exitCode, 0);
+  assert.equal(configured.exitCode, 2);
   assert.deepEqual(report.local.hooks.configuration.effective, {
     scope: 'local',
     origin: 'file:/fake/integration/.git/config',
     value: '.githooks',
   });
+  assert.equal(report.local.hooks.checkoutPath, '/fake/integration');
+  assert.equal(report.local.hooks.ready, false);
+  assert(report.warnings.some(({ code }) => code === 'integration-hooks-not-ready'));
 
   const mismatch = runStatus(t, {
     args: ['--json'],
@@ -651,6 +701,172 @@ test('a closed active issue still blocks the #42 rollout invariant', (t) => {
   );
   const bootstrapItem = report.registry.workItems.find(({ number }) => number === 42);
   assert(bootstrapItem.questions.some(({ code }) => code === 'claim-primitive-rollout-blocked'));
+});
+
+test('integration-main classification requires stable direct-ref and host compare evidence', (t) => {
+  const local = 'a'.repeat(40);
+  const remote = 'b'.repeat(40);
+  const stable = defaultResponses();
+  stable[`api:${MAIN_REF_ENDPOINT}`] = {
+    stdout: JSON.stringify(restRef('refs/heads/main', remote)),
+  };
+  stable[`api:${compareEndpoint(local, remote)}`] = {
+    stdout: JSON.stringify(restCompare(local, 'ahead', 1, 0)),
+  };
+  const stableReport = JSON.parse(runStatus(t, { responses: stable, args: ['--json'] }).stdout);
+  assert.equal(stableReport.local.integrationCheckout.status, 'fast-forward-lag');
+  assert.equal(stableReport.local.integrationCheckout.relationship, 'right-ahead');
+
+  const refRace = defaultResponses();
+  refRace[`api:${MAIN_REF_ENDPOINT}`] = {
+    sequence: [
+      { stdout: JSON.stringify(restRef('refs/heads/main', remote)) },
+      { stdout: JSON.stringify(restRef('refs/heads/main', 'c'.repeat(40))) },
+    ],
+  };
+  refRace[`api:${compareEndpoint(local, remote)}`] =
+    stable[`api:${compareEndpoint(local, remote)}`];
+  const refRaceReport = JSON.parse(runStatus(t, { responses: refRace, args: ['--json'] }).stdout);
+  assert.equal(refRaceReport.local.integrationCheckout.status, 'unavailable');
+
+  const compareRace = defaultResponses();
+  compareRace[`api:${MAIN_REF_ENDPOINT}`] = {
+    stdout: JSON.stringify(restRef('refs/heads/main', remote)),
+  };
+  compareRace[`api:${compareEndpoint(local, remote)}`] = {
+    sequence: [
+      { stdout: JSON.stringify(restCompare(local, 'ahead', 1, 0)) },
+      { stdout: JSON.stringify(restCompare(local, 'diverged', 1, 1)) },
+    ],
+  };
+  const compareRaceReport = JSON.parse(
+    runStatus(t, { responses: compareRace, args: ['--json'] }).stdout,
+  );
+  assert.equal(compareRaceReport.local.integrationCheckout.status, 'unavailable');
+
+  const malformed = defaultResponses();
+  malformed[`api:${MAIN_REF_ENDPOINT}`] = {
+    stdout: JSON.stringify(restRef('refs/heads/main', remote, 'tag')),
+  };
+  const malformedReport = JSON.parse(
+    runStatus(t, { responses: malformed, args: ['--json'] }).stdout,
+  );
+  assert.equal(malformedReport.local.integrationCheckout.status, 'unavailable');
+});
+
+test('status uses stable direct-ref and compare evidence and fails closed on races', (t) => {
+  const issue = v2ActiveIssue(61);
+  const checkpoint = 'a'.repeat(40);
+  const remote = 'b'.repeat(40);
+  const ref = 'refs/heads/claim-v1/issue-61';
+  const baseResponses = () => {
+    const responses = defaultResponses();
+    responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE, issue]]) };
+    responses[`api:${CLAIM_REFS_ENDPOINT}`] = {
+      stdout: JSON.stringify([[{ ref, object: { type: 'commit', sha: remote } }]]),
+    };
+    return responses;
+  };
+
+  const stable = baseResponses();
+  stable[`api:${claimRefEndpoint(61)}`] = { stdout: JSON.stringify(restRef(ref, remote)) };
+  stable[`api:${compareEndpoint(checkpoint, remote)}`] = {
+    stdout: JSON.stringify(restCompare(checkpoint, 'ahead', 1, 0)),
+  };
+  const stableReport = JSON.parse(runStatus(t, { responses: stable, args: ['--json'] }).stdout);
+  const stableItem = stableReport.registry.workItems.find(({ number }) => number === 61);
+  assert.equal(stableItem.remoteClaim.lifecycle.status, 'remote-ahead');
+  assert.equal(stableItem.remoteClaim.lifecycle.source, 'github-compare');
+  assert(
+    stableItem.questions.some(({ code }) => code === 'claim-lifecycle-remote-ahead'),
+    'remote-ahead must be an explicit maintainer question even when the remote commit is absent locally',
+  );
+
+  const refRace = baseResponses();
+  refRace[`api:${claimRefEndpoint(61)}`] = {
+    sequence: [
+      { stdout: JSON.stringify(restRef(ref, remote)) },
+      { stdout: JSON.stringify(restRef(ref, 'c'.repeat(40))) },
+    ],
+  };
+  refRace[`api:${compareEndpoint(checkpoint, remote)}`] =
+    stable[`api:${compareEndpoint(checkpoint, remote)}`];
+  const refRaceReport = JSON.parse(runStatus(t, { responses: refRace, args: ['--json'] }).stdout);
+  assert.equal(
+    refRaceReport.registry.workItems.find(({ number }) => number === 61).remoteClaim.lifecycle
+      .status,
+    'unavailable',
+  );
+
+  const compareRace = baseResponses();
+  compareRace[`api:${claimRefEndpoint(61)}`] = {
+    stdout: JSON.stringify(restRef(ref, remote)),
+  };
+  compareRace[`api:${compareEndpoint(checkpoint, remote)}`] = {
+    sequence: [
+      { stdout: JSON.stringify(restCompare(checkpoint, 'ahead', 1, 0)) },
+      { stdout: JSON.stringify(restCompare(checkpoint, 'diverged', 1, 1)) },
+    ],
+  };
+  const compareRaceReport = JSON.parse(
+    runStatus(t, { responses: compareRace, args: ['--json'] }).stdout,
+  );
+  assert.equal(
+    compareRaceReport.registry.workItems.find(({ number }) => number === 61).remoteClaim.lifecycle
+      .status,
+    'unavailable',
+  );
+
+  const malformed = baseResponses();
+  malformed[`api:${claimRefEndpoint(61)}`] = {
+    stdout: JSON.stringify(restRef(ref, remote, 'tag')),
+  };
+  const malformedReport = JSON.parse(
+    runStatus(t, { responses: malformed, args: ['--json'] }).stdout,
+  );
+  assert.equal(
+    malformedReport.registry.workItems.find(({ number }) => number === 61).remoteClaim.lifecycle
+      .status,
+    'unavailable',
+  );
+});
+
+test('same-host clean claim containment is the only local-ahead fallback', (t) => {
+  const issue = v2ActiveIssue(61);
+  const checkpoint = 'a'.repeat(40);
+  const remote = 'b'.repeat(40);
+  const ref = 'refs/heads/claim-v1/issue-61';
+  const responses = defaultResponses();
+  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE, issue]]) };
+  responses[`api:${CLAIM_REFS_ENDPOINT}`] = {
+    stdout: JSON.stringify([[{ ref, object: { type: 'commit', sha: remote } }]]),
+  };
+  responses[`api:${claimRefEndpoint(61)}`] = { stdout: JSON.stringify(restRef(ref, remote)) };
+  responses[`api:${compareEndpoint(checkpoint, remote)}`] = {
+    status: 1,
+    stderr: 'not found',
+  };
+  const worktrees = [
+    'worktree /fake/integration',
+    `HEAD ${'a'.repeat(40)}`,
+    'branch refs/heads/main',
+    '',
+    'worktree /fake/worktree',
+    `HEAD ${checkpoint}`,
+    'branch refs/heads/claim-v1/issue-61',
+    '',
+  ].join('\n');
+  const report = JSON.parse(
+    runStatus(t, {
+      responses,
+      args: ['--json'],
+      gitWorktrees: worktrees,
+      gitLocalBranches: `claim-v1/issue-61\t${checkpoint}\n`,
+    }).stdout,
+  );
+  const item = report.registry.workItems.find(({ number }) => number === 61);
+  assert.equal(item.remoteClaim.lifecycle.status, 'local-ahead');
+  assert.equal(item.remoteClaim.lifecycle.source, 'same-host-local-containment');
 });
 
 test('missing, orphaned, malformed, and unsupported reserved-ref evidence fails closed', (t) => {
@@ -970,7 +1186,7 @@ test('status uses only read-only commands and does not change local files', (t) 
   assert.deepEqual(result.afterFiles, result.beforeFiles);
   assert.equal(result.afterSentinel, result.beforeSentinel);
   const gitInvocations = result.invocations.filter((entry) => entry.startsWith('git '));
-  assert.equal(gitInvocations.length, 8);
+  assert.equal(gitInvocations.length, 9);
   assert(
     gitInvocations.every((entry) =>
       entry.startsWith('git GIT_OPTIONAL_LOCKS=0 --no-optional-locks '),
@@ -994,17 +1210,20 @@ test('status uses only read-only commands and does not change local files', (t) 
         entry.startsWith(
           'git GIT_OPTIONAL_LOCKS=0 --no-optional-locks -C /fake/integration config ',
         ) ||
-        entry.startsWith('git GIT_OPTIONAL_LOCKS=0 --no-optional-locks ls-remote --refs ') ||
+        entry.startsWith(
+          'git GIT_OPTIONAL_LOCKS=0 --no-optional-locks -C /fake/integration ls-files ',
+        ) ||
         entry === 'gh --version' ||
         entry === 'gh auth status' ||
         entry.startsWith('gh repo view ') ||
-        entry.startsWith('gh api --paginate --slurp repos/'),
+        entry.startsWith('gh api --paginate --slurp repos/') ||
+        entry.startsWith('gh api repos/'),
     ),
   );
   assert(
     result.invocations.every(
-      (entry) =>
-        !/\b(POST|PATCH|PUT|DELETE|create|edit|close|merge|push|remove|prune)\b/i.test(entry),
+      (entry) => !/\b(POST|PATCH|PUT|DELETE|create|edit|close|push|remove|prune)\b/i.test(entry),
     ),
+    result.invocations.join('\n'),
   );
 });

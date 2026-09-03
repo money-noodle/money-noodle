@@ -110,6 +110,182 @@ export function classifyRemoteClaimLifecycle({ checkpointCommit, remoteHead, rel
   if (relationship === 'divergence') return 'divergence';
   return 'unavailable';
 }
+
+export function authoritativeCommitRelationship({
+  left,
+  right,
+  compareBefore,
+  compareAfter,
+  localRelationship = 'unavailable',
+  allowContainedLocalAhead = false,
+}) {
+  if (!FULL_COMMIT.test(left ?? '') || !FULL_COMMIT.test(right ?? '')) return 'unavailable';
+  if (left === right) return 'equal';
+  const stableCompare =
+    compareBefore?.status === 'available' &&
+    compareAfter?.status === 'available' &&
+    compareBefore.relationship === compareAfter.relationship &&
+    compareBefore.evidenceKey === compareAfter.evidenceKey;
+  if (stableCompare) return compareBefore.relationship;
+  if (allowContainedLocalAhead && localRelationship === 'left-ahead') return 'left-ahead';
+  return 'unavailable';
+}
+
+export function classifyRemoteClaimEvidence({
+  checkpointCommit,
+  expectedRef,
+  enumeratedRemoteHead,
+  directRefBefore,
+  directRefAfter,
+  compareBefore,
+  compareAfter,
+  localContainment,
+}) {
+  const unavailable = (reason) => ({
+    status: 'unavailable',
+    checkpointCommit,
+    remoteHead: directRefAfter?.sha ?? directRefBefore?.sha ?? null,
+    reason,
+  });
+  if (!FULL_COMMIT.test(checkpointCommit ?? '')) return unavailable('checkpoint commit is malformed');
+  if (directRefBefore?.status === 'missing' && directRefAfter?.status === 'missing') {
+    return enumeratedRemoteHead === null
+      ? { status: 'missing-branch', checkpointCommit, remoteHead: null, reason: 'exact direct ref is missing' }
+      : unavailable('paginated ref exists while exact direct ref is missing');
+  }
+  for (const [name, direct] of [
+    ['initial', directRefBefore],
+    ['final', directRefAfter],
+  ]) {
+    if (direct?.status !== 'found') return unavailable(`${name} direct-ref evidence is ${direct?.status ?? 'unavailable'}`);
+    if (direct.ref !== expectedRef || direct.objectType !== 'commit' || !FULL_COMMIT.test(direct.sha ?? '')) {
+      return unavailable(`${name} direct-ref evidence is malformed`);
+    }
+  }
+  if (directRefBefore.sha !== directRefAfter.sha) return unavailable('exact direct ref changed during verification');
+  const remoteHead = directRefAfter.sha;
+  if (enumeratedRemoteHead !== remoteHead) {
+    return unavailable('paginated and direct-ref evidence disagree');
+  }
+  if (checkpointCommit === remoteHead) {
+    return { status: 'matched', checkpointCommit, remoteHead, reason: null, source: 'direct-ref' };
+  }
+  const relationship = authoritativeCommitRelationship({
+    left: checkpointCommit,
+    right: remoteHead,
+    compareBefore,
+    compareAfter,
+    localRelationship: localContainment?.relationship,
+    allowContainedLocalAhead: localContainment?.status === 'contained',
+  });
+  if (relationship === 'left-ahead' && localContainment?.status !== 'contained') {
+    return unavailable(`unpublished checkpoint lacks same-host containment: ${localContainment?.status ?? 'missing'}`);
+  }
+  const status = classifyRemoteClaimLifecycle({ checkpointCommit, remoteHead, relationship });
+  return {
+    status,
+    checkpointCommit,
+    remoteHead,
+    reason: status === 'unavailable' ? 'authoritative compare evidence is unstable or unavailable' : null,
+    source:
+      relationship === 'left-ahead' && compareBefore?.status !== 'available'
+        ? 'same-host-local-containment'
+        : 'github-compare',
+  };
+}
+
+export function validateClaimBootstrapEvidence(evidence) {
+  const errors = [];
+  const issueNumber = evidence?.issueNumber;
+  const branch = `claim-v1/issue-${issueNumber}`;
+  const fullRef = `refs/heads/${branch}`;
+  const trackingRef = `refs/remotes/origin/${branch}`;
+  const commit = evidence?.checkpointCommit;
+  if (!Number.isSafeInteger(issueNumber) || issueNumber < 1) errors.push('issue number is invalid');
+  if (!FULL_COMMIT.test(commit ?? '')) errors.push('checkpoint commit is invalid');
+
+  for (const [name, direct] of [
+    ['initial direct ref', evidence?.directRefBefore],
+    ['final direct ref', evidence?.directRefAfter],
+  ]) {
+    if (direct?.status !== 'found') errors.push(`${name} is ${direct?.status ?? 'unavailable'}`);
+    else if (direct.ref !== fullRef || direct.objectType !== 'commit' || !FULL_COMMIT.test(direct.sha ?? '')) {
+      errors.push(`${name} is malformed or mismatched`);
+    }
+  }
+  if (
+    evidence?.directRefBefore?.status === 'found' &&
+    evidence?.directRefAfter?.status === 'found' &&
+    evidence.directRefBefore.sha !== evidence.directRefAfter.sha
+  ) {
+    errors.push('direct ref changed during bootstrap');
+  }
+
+  const preexisting = evidence?.preexisting ?? {};
+  if (preexisting.localBranch) errors.push('local branch collision existed before bootstrap');
+  if (preexisting.worktreePath) errors.push('worktree path collision existed before bootstrap');
+  if (preexisting.branchWorktree) errors.push('claim branch already had a worktree before bootstrap');
+  if (preexisting.remoteTracking !== 'missing') {
+    errors.push('remote-tracking destination collision existed before bootstrap');
+  }
+
+  const fetch = evidence?.fetch ?? {};
+  const exactFetch =
+    fetch.remote === 'origin' &&
+    fetch.sourceRef === fullRef &&
+    fetch.destinationRef === trackingRef &&
+    fetch.tags === false &&
+    fetch.force === false &&
+    fetch.writeFetchHead === false &&
+    fetch.recurseSubmodules === false &&
+    fetch.autoMaintenance === false;
+  if (!exactFetch) errors.push('fetch contract is not the exact no-tag non-force single-ref operation');
+  if (fetch.status !== 'succeeded') errors.push(`fetch result is ${fetch.status ?? 'unavailable'}`);
+  if (evidence?.pushCount !== 0) errors.push('bootstrap must perform zero pushes');
+
+  const directHead = evidence?.directRefAfter?.sha;
+  const surfaces = [
+    commit,
+    directHead,
+    evidence?.remoteTrackingHead,
+    evidence?.localBranchHead,
+    evidence?.claimWorktree?.head,
+  ];
+  if (surfaces.some((sha) => !FULL_COMMIT.test(sha ?? '')) || new Set(surfaces).size !== 1) {
+    errors.push('five SHA surfaces do not agree');
+  }
+  if (evidence?.branchRemote !== 'origin' || evidence?.branchMerge !== fullRef) {
+    errors.push('tracking configuration is not exact');
+  }
+
+  const worktree = evidence?.claimWorktree;
+  if (!worktree) errors.push('claim worktree is missing');
+  else {
+    if (worktree.branch !== fullRef || worktree.symbolicRef !== fullRef) {
+      errors.push('claim worktree is not on the exact symbolic branch');
+    }
+    if (worktree.countForBranch !== 1 || worktree.locked || worktree.prunable) {
+      errors.push('claim branch worktree registration is ambiguous');
+    }
+    if (!worktree.clean) errors.push('claim worktree is dirty');
+  }
+
+  const integrationBefore = evidence?.integrationBefore;
+  const integrationAfter = evidence?.integrationAfter;
+  if (!integrationBefore || !integrationAfter) errors.push('integration checkout evidence is incomplete');
+  else if (JSON.stringify(integrationBefore) !== JSON.stringify(integrationAfter)) {
+    errors.push('integration checkout changed during bootstrap');
+  } else if (
+    integrationAfter.symbolicRef !== 'refs/heads/main' ||
+    !FULL_COMMIT.test(integrationAfter.head ?? '') ||
+    !integrationAfter.clean ||
+    integrationAfter.inProgress
+  ) {
+    errors.push('integration checkout is not a clean symbolic main checkout');
+  }
+
+  return { valid: errors.length === 0, status: errors.length === 0 ? 'matched' : 'question', errors };
+}
 const UNCLAIMED_VALUES = new Set(["", "missing", "none", "unclaimed"]);
 const STATE_LABELS = new Set([
   "work:proposed",
@@ -757,6 +933,7 @@ export function reconcileRemoteClaims({
   commentsByIssue = new Map(),
   local = { branches: [], worktrees: [] },
   claimRelationships = new Map(),
+  claimLifecycles = new Map(),
   nowMs = Date.now(),
 }) {
   const issueByNumber = new Map(issues.map((issue) => [issue.number, issue]));
@@ -883,21 +1060,25 @@ export function reconcileRemoteClaims({
             ? item.remoteClaim.matchingRefs[0].sha
             : undefined;
       const relationship = claimRelationships.get(item.number) ?? 'unavailable';
-      const lifecycle = classifyRemoteClaimLifecycle({
-        checkpointCommit: item.checkpoint['Checkpoint-Commit'],
-        remoteHead,
-        relationship,
-      });
-      item.remoteClaim.lifecycle = {
-        status: lifecycle,
-        checkpointCommit: item.checkpoint['Checkpoint-Commit'],
-        remoteHead: remoteHead ?? null,
-      };
-      if (['divergence', 'unavailable'].includes(lifecycle)) {
+      const suppliedLifecycle = claimLifecycles.get(item.number);
+      const lifecycle =
+        suppliedLifecycle ??
+        {
+          status: classifyRemoteClaimLifecycle({
+            checkpointCommit: item.checkpoint['Checkpoint-Commit'],
+            remoteHead,
+            relationship,
+          }),
+          checkpointCommit: item.checkpoint['Checkpoint-Commit'],
+          remoteHead: remoteHead ?? null,
+          reason: null,
+        };
+      item.remoteClaim.lifecycle = lifecycle;
+      if (['remote-ahead', 'missing-branch', 'divergence', 'unavailable'].includes(lifecycle.status)) {
         addRemoteQuestion(
           item,
-          `claim-lifecycle-${lifecycle}`,
-          `checkpoint versus exact derived remote ref lifecycle is ${lifecycle}; preserve evidence and do not repair automatically`,
+          `claim-lifecycle-${lifecycle.status}`,
+          `checkpoint versus exact derived remote ref lifecycle is ${lifecycle.status}${lifecycle.reason ? ` (${lifecycle.reason})` : ''}; preserve evidence and do not repair automatically`,
         );
       }
     }
@@ -1066,12 +1247,6 @@ export function evaluateIntegrationHolds(comments) {
       isoInstantMilliseconds(left.createdAt) - isoInstantMilliseconds(right.createdAt) ||
       left.commentId - right.commentId,
     );
-  const byId = new Map();
-  for (const entry of validEvidence) {
-    byId.set(entry.holdId, [...(byId.get(entry.holdId) ?? []), entry]);
-  }
-
-  const unmatched = [];
   const identityFields = [
     'Integration-Hold-Evidence-Version',
     'Integration-Hold-ID',
@@ -1083,56 +1258,109 @@ export function evaluateIntegrationHolds(comments) {
     'Integration-Hold-Scratch-Branch',
     'Integration-Hold-Acquired-At',
   ];
-  for (const [holdId, entries] of byId) {
-    const acquisitions = entries.filter(({ action }) => action === 'acquire');
-    const releases = entries.filter(({ action }) => action === 'release');
-    if (acquisitions.length !== 1 || releases.length > 1) {
+  const seenAcquisitions = new Set();
+  const integratedSequences = new Set();
+  const latestAttemptByPr = new Map();
+  const latestReleaseEventByPr = new Map();
+  let active = null;
+  for (const entry of validEvidence) {
+    const sequence = [
+      entry.fields['Integration-Hold-PR'],
+      entry.fields['Integration-Hold-Head'],
+      entry.fields['Integration-Hold-Base'],
+    ].join(':');
+    if (entry.action === 'acquire') {
+      const pr = entry.fields['Integration-Hold-PR'];
+      const attempt = Number(entry.fields['Integration-Hold-Attempt']);
+      const previousAttempt = latestAttemptByPr.get(pr);
+      const previousReleaseEvent = latestReleaseEventByPr.get(pr);
+      if (previousAttempt !== undefined && attempt <= previousAttempt) {
+        questions.push(
+          question(
+            'integration-hold-ambiguous',
+            `${entry.holdId} does not increase the prior attempt ${previousAttempt}`,
+          ),
+        );
+      }
+      if (
+        previousReleaseEvent &&
+        Date.parse(entry.fields['Integration-Hold-Acquired-At']) < Date.parse(previousReleaseEvent)
+      ) {
+        questions.push(
+          question(
+            'integration-hold-ambiguous',
+            `${entry.holdId} acquisition timestamp precedes the prior release event`,
+          ),
+        );
+      }
+      latestAttemptByPr.set(pr, Math.max(previousAttempt ?? 0, attempt));
+      if (seenAcquisitions.has(entry.holdId)) {
+        questions.push(
+          question('integration-hold-ambiguous', `${entry.holdId} acquisition is reused`),
+        );
+      }
+      seenAcquisitions.add(entry.holdId);
+      if (integratedSequences.has(sequence)) {
+        questions.push(
+          question(
+            'integration-hold-ambiguous',
+            `${entry.holdId} reuses a PR/head/base sequence after an integrated release`,
+          ),
+        );
+      }
+      if (active) {
+        questions.push(
+          question(
+            'integration-hold-overlap',
+            `${entry.holdId} was acquired while ${active.holdId} remained unmatched`,
+          ),
+        );
+      } else {
+        active = entry;
+      }
+      continue;
+    }
+
+    if (!active) {
+      questions.push(
+        question('integration-hold-ambiguous', `${entry.holdId} release has no unmatched acquisition`),
+      );
+      continue;
+    }
+    if (entry.holdId !== active.holdId) {
       questions.push(
         question(
           'integration-hold-ambiguous',
-          `${holdId} has ${acquisitions.length} acquisitions and ${releases.length} releases`,
+          `${entry.holdId} release does not match active ${active.holdId}`,
         ),
       );
       continue;
     }
-    const acquisition = acquisitions[0];
-    if (releases.length === 0) {
-      unmatched.push(acquisition);
-      continue;
-    }
-    const release = releases[0];
     const mismatches = identityFields.filter(
-      (field) => acquisition.fields[field] !== release.fields[field],
+      (field) => active.fields[field] !== entry.fields[field],
     );
-    if (entries.indexOf(release) <= entries.indexOf(acquisition)) {
-      questions.push(
-        question(
-          'integration-hold-ambiguous',
-          `${holdId} release does not follow its acquisition in append-only comment order`,
-        ),
-      );
-    }
     if (mismatches.length > 0) {
       questions.push(
         question(
           'integration-hold-ambiguous',
-          `${holdId} release disagrees on ${mismatches.join(', ')}`,
+          `${entry.holdId} release disagrees on ${mismatches.join(', ')}`,
         ),
       );
+      continue;
     }
+    if (entry.fields['Integration-Hold-Outcome'] === 'integrated') {
+      integratedSequences.add(sequence);
+    }
+    latestReleaseEventByPr.set(
+      entry.fields['Integration-Hold-PR'],
+      entry.fields['Integration-Hold-Event-At'],
+    );
+    active = null;
   }
 
-  if (unmatched.length > 1) {
-    questions.push(
-      question(
-        'integration-hold-ambiguous',
-        `multiple unmatched holds remain: ${unmatched.map(({ holdId }) => holdId).join(', ')}`,
-      ),
-    );
-  }
   return {
-    status: questions.length > 0 ? 'question' : unmatched.length === 1 ? 'held' : 'clear',
-    active: questions.length === 0 && unmatched.length === 1 ? unmatched[0] : null,
+    status: questions.length > 0 ? 'question' : active ? 'held' : 'clear',
+    active: questions.length === 0 ? active : null,
     evidence,
     questions,
   };
@@ -1144,6 +1372,7 @@ export function analyzeCoordination({
   local,
   reservedRefs = [],
   claimRelationships = new Map(),
+  claimLifecycles = new Map(),
   nowMs = Date.now(),
 }) {
   const issueByNumber = new Map(issues.map((issue) => [issue.number, issue]));
@@ -1194,6 +1423,7 @@ export function analyzeCoordination({
     commentsByIssue,
     local,
     claimRelationships,
+    claimLifecycles,
     nowMs,
   });
 
