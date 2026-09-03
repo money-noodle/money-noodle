@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import test from 'node:test';
 
 const read = (path) => readFileSync(path, 'utf8');
@@ -18,6 +18,9 @@ const coordinationClaim = read('tools/coordination-claim.mjs');
 const coordinationLib = read('tools/coordination-lib.mjs');
 const coordinationStatus = read('tools/coordination-status.mjs');
 const coordinationWriter = read('tools/coordination-write.mjs');
+const preCommitHook = read('.githooks/pre-commit');
+const preMergeCommitHook = read('.githooks/pre-merge-commit');
+const integrationHookTests = read('tools/integration-checkout-hooks.test.mjs');
 const delivery = read('docs/operations/delivery.md');
 const agents = read('AGENTS.md');
 const docsIndex = read('docs/README.md');
@@ -795,6 +798,91 @@ test('remote-reference claim authority is derived, create-only, and isolated fro
     assert.match(source, /remote reference/i);
     assert.match(source, /no automatic (?:adoption|release|cleanup)|never adopt/i);
   }
+});
+
+test('integration checkout hooks, lifecycle status, bootstrap, and holds remain fail closed', () => {
+  for (const [path, hook] of [
+    ['.githooks/pre-commit', preCommitHook],
+    ['.githooks/pre-merge-commit', preMergeCommitHook],
+  ]) {
+    assert.match(hook, /^#!\/bin\/sh\n/);
+    assert.match(hook, /symbolic-ref --quiet --short HEAD/);
+    assert.match(hook, /\[ "\$branch" = "main" \]/);
+    assert.equal(statSync(path).mode & 0o111, 0o111, `${path} must be executable`);
+  }
+  assert.doesNotMatch(integrationHookTests, /--no-verify/);
+  assert.match(
+    integrationHookTests,
+    /git\(repository, \['config', '--local', 'core\.hooksPath', '\.githooks'\]\)/,
+  );
+  assert.match(integrationHookTests, /\['merge', '--ff-only'/);
+  assert.match(integrationHookTests, /\['merge', '--no-edit'/);
+
+  for (const state of [
+    'mirrored',
+    'fast-forward-lag',
+    'local-ahead',
+    'dirty-or-in-progress',
+    'divergence',
+    'unavailable',
+  ])
+    assert.match(coordinationLib, new RegExp(`['\"]${state}['\"]`));
+  for (const state of [
+    'matched',
+    'local-ahead',
+    'remote-ahead',
+    'missing-branch',
+    'divergence',
+    'unavailable',
+  ])
+    assert.match(coordinationLib, new RegExp(`['\"]${state}['\"]`));
+  assert.match(coordinationStatus, /--show-origin.*--show-scope.*core\.hooksPath/s);
+  assert.match(coordinationStatus, /git.*ls-remote|\['ls-remote'/s);
+  assert.doesNotMatch(
+    coordinationStatus,
+    /(?:reset|update-ref|worktree', 'remove|config', '--local', 'core\.hooksPath)/,
+  );
+
+  assert.match(
+    parallelWork,
+    /git fetch --no-tags --no-write-fetch-head --no-recurse-submodules --no-auto-maintenance origin refs\/heads\/claim-v1\/issue-<N>:refs\/remotes\/origin\/claim-v1\/issue-<N>/,
+  );
+  assert.match(parallelWork, /five SHA surfaces to agree/i);
+  assert.match(
+    parallelWork,
+    /direct GitHub claim ref, local remote-tracking ref, local branch, and dedicated worktree HEAD/i,
+  );
+  assert.match(parallelWork, /exactly one clean unlocked non-prunable worktree/i);
+  assert.match(parallelWork, /zero push/i);
+  assert.match(parallelWork, /worktree collision[^.!?\n]{0,180}preserved for principal review/i);
+  assert.match(
+    parallelWork,
+    /never adopts?, resets?, repoints?, force-updates?, removes?, or cleans?/i,
+  );
+  assert.match(parallelWork, /test\/integration-pr-<PR>-base-<first-12-base-hex>-attempt-<N>/);
+  assert.match(parallelWork, /## Integration hold evidence/);
+  assert.match(
+    parallelWork,
+    /Integration-Hold-ID: pr-<PR>-head-<full-head>-base-<full-base>-attempt-<N>/,
+  );
+  assert.match(
+    parallelWork,
+    /Holds have no expiry, transfer, takeover, cleanup, or automatic release/,
+  );
+  assert.match(parallelWork, /#43 pull-request text must not use a closing keyword/i);
+  assert.match(
+    parallelWork,
+    /#43 becomes principal-owned `work:blocked` with a strict `Waiting-Since` and no agent deadline/i,
+  );
+  assert.match(
+    parallelWork,
+    /activation followed by successful read-only activation and refusal verification permits `done`/i,
+  );
+  assert.match(versionControl, /sole integration checkout is the worktree on symbolic `main`/);
+  assert.match(
+    versionControl,
+    /hooks are inert until separately authorized repository-local activation/i,
+  );
 });
 
 test('public entry points route to security, contribution, architecture, and license owners', () => {

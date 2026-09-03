@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+if [ "$branch" = "main" ]; then
+  printf '%s\n' 'refusing to create a merge commit in the integration checkout on main' >&2
+  printf '%s\n' 'perform integration only through the authorized reviewed workflow' >&2
+  exit 1
+fi

@@ -40,7 +40,76 @@ function ownershipFieldsForVersion(version) {
 }
 export const CLAIM_COMMENT_RESOLUTION_FIELD = "Reconciled-Claim-Comment-IDs";
 
+const FULL_COMMIT = /^[0-9a-f]{40}$/;
+const INTEGRATION_HOLD_HEADING = '## Integration hold evidence';
+const INTEGRATION_HOLD_FIELDS = [
+  'Integration-Hold-Evidence-Version',
+  'Integration-Hold-Action',
+  'Integration-Hold-ID',
+  'Integration-Hold-Principal',
+  'Integration-Hold-PR',
+  'Integration-Hold-Head',
+  'Integration-Hold-Base',
+  'Integration-Hold-Attempt',
+  'Integration-Hold-Scratch-Branch',
+  'Integration-Hold-Acquired-At',
+  'Integration-Hold-Event-At',
+  'Integration-Hold-Outcome',
+];
+
 export const NONTERMINAL_CLAIMED_STATES = new Set(["active", "blocked", "review"]);
+
+export function classifyCommitRelationship({
+  left,
+  right,
+  leftIsAncestor,
+  rightIsAncestor,
+  available = true,
+}) {
+  if (!available || !FULL_COMMIT.test(left ?? '') || !FULL_COMMIT.test(right ?? '')) {
+    return 'unavailable';
+  }
+  if (left === right) return 'equal';
+  if (leftIsAncestor === true && rightIsAncestor === false) return 'right-ahead';
+  if (leftIsAncestor === false && rightIsAncestor === true) return 'left-ahead';
+  if (leftIsAncestor === false && rightIsAncestor === false) return 'divergence';
+  return 'unavailable';
+}
+
+export function classifyIntegrationCheckout({
+  symbolicBranch,
+  clean,
+  inProgress,
+  localHead,
+  remoteHead,
+  relationship,
+  available = true,
+}) {
+  if (!available || !FULL_COMMIT.test(localHead ?? '') || !FULL_COMMIT.test(remoteHead ?? '')) {
+    return 'unavailable';
+  }
+  if (symbolicBranch !== 'main') return 'divergence';
+  if (!clean || inProgress) return 'dirty-or-in-progress';
+  if (localHead === remoteHead) return 'mirrored';
+  if (relationship === 'equal') return 'unavailable';
+  if (relationship === 'right-ahead') return 'fast-forward-lag';
+  if (relationship === 'left-ahead') return 'local-ahead';
+  if (relationship === 'divergence') return 'divergence';
+  return 'unavailable';
+}
+
+export function classifyRemoteClaimLifecycle({ checkpointCommit, remoteHead, relationship }) {
+  if (remoteHead === null) return 'missing-branch';
+  if (!FULL_COMMIT.test(checkpointCommit ?? '') || !FULL_COMMIT.test(remoteHead ?? '')) {
+    return 'unavailable';
+  }
+  if (checkpointCommit === remoteHead) return 'matched';
+  if (relationship === 'equal') return 'unavailable';
+  if (relationship === 'left-ahead') return 'local-ahead';
+  if (relationship === 'right-ahead') return 'remote-ahead';
+  if (relationship === 'divergence') return 'divergence';
+  return 'unavailable';
+}
 const UNCLAIMED_VALUES = new Set(["", "missing", "none", "unclaimed"]);
 const STATE_LABELS = new Set([
   "work:proposed",
@@ -687,6 +756,7 @@ export function reconcileRemoteClaims({
   reservedRefs = [],
   commentsByIssue = new Map(),
   local = { branches: [], worktrees: [] },
+  claimRelationships = new Map(),
   nowMs = Date.now(),
 }) {
   const issueByNumber = new Map(issues.map((issue) => [issue.number, issue]));
@@ -804,6 +874,33 @@ export function reconcileRemoteClaims({
         `derived claim #${item.number} requires exactly one matching remote ref`,
       );
     }
+
+    if (validation.status === 'derived') {
+      const remoteHead =
+        item.remoteClaim.matchingRefs.length === 0
+          ? null
+          : item.remoteClaim.matchingRefs.length === 1
+            ? item.remoteClaim.matchingRefs[0].sha
+            : undefined;
+      const relationship = claimRelationships.get(item.number) ?? 'unavailable';
+      const lifecycle = classifyRemoteClaimLifecycle({
+        checkpointCommit: item.checkpoint['Checkpoint-Commit'],
+        remoteHead,
+        relationship,
+      });
+      item.remoteClaim.lifecycle = {
+        status: lifecycle,
+        checkpointCommit: item.checkpoint['Checkpoint-Commit'],
+        remoteHead: remoteHead ?? null,
+      };
+      if (['divergence', 'unavailable'].includes(lifecycle)) {
+        addRemoteQuestion(
+          item,
+          `claim-lifecycle-${lifecycle}`,
+          `checkpoint versus exact derived remote ref lifecycle is ${lifecycle}; preserve evidence and do not repair automatically`,
+        );
+      }
+    }
   }
 
   const bootstrap = analyzedByNumber.get(BOOTSTRAP_ISSUE);
@@ -848,11 +945,205 @@ export function reconcileRemoteClaims({
   };
 }
 
+function canonicalUtcInstant(value) {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value ?? '')) return false;
+  const milliseconds = isoInstantMilliseconds(value);
+  return milliseconds !== undefined && new Date(milliseconds).toISOString() === value;
+}
+
+function parseIntegrationHoldComment(comment) {
+  const lines = comment.body.split('\n');
+  const headingIndexes = lines
+    .map((line, index) => (line === INTEGRATION_HOLD_HEADING ? index : -1))
+    .filter((index) => index >= 0);
+  const record = structuredFields(comment.body, INTEGRATION_HOLD_FIELDS);
+  const errors = [];
+  if (headingIndexes.length !== 1) errors.push('the exact integration-hold heading must occur once');
+  for (const field of INTEGRATION_HOLD_FIELDS) {
+    if (record.fields[field] === undefined) errors.push(`${field} is required`);
+  }
+  for (const field of record.duplicates) errors.push(`${field} must occur once`);
+  const fieldIndexes = INTEGRATION_HOLD_FIELDS.map((field) =>
+    lines.findIndex((line) => line.startsWith(`${field}:`)),
+  );
+  if (
+    headingIndexes.length === 1 &&
+    fieldIndexes.every((index) => index >= 0) &&
+    (fieldIndexes[0] <= headingIndexes[0] ||
+      fieldIndexes.some((index, position) => position > 0 && index <= fieldIndexes[position - 1]))
+  ) {
+    errors.push('integration-hold fields must follow the heading in exact order');
+  }
+  const unknownFields = lines.filter(
+    (line) =>
+      line.startsWith('Integration-Hold-') &&
+      !INTEGRATION_HOLD_FIELDS.some((field) => line.startsWith(`${field}:`)),
+  );
+  if (unknownFields.length > 0) errors.push('unknown integration-hold fields are not permitted');
+  if (errors.length > 0) return { valid: false, errors };
+
+  const fields = record.fields;
+  const action = fields['Integration-Hold-Action'];
+  const pr = fields['Integration-Hold-PR'];
+  const head = fields['Integration-Hold-Head'];
+  const base = fields['Integration-Hold-Base'];
+  const attempt = fields['Integration-Hold-Attempt'];
+  const principal = fields['Integration-Hold-Principal'];
+  const acquiredAt = fields['Integration-Hold-Acquired-At'];
+  const eventAt = fields['Integration-Hold-Event-At'];
+  const outcome = fields['Integration-Hold-Outcome'];
+  const holdId = fields['Integration-Hold-ID'];
+  const scratchBranch = fields['Integration-Hold-Scratch-Branch'];
+
+  if (fields['Integration-Hold-Evidence-Version'] !== '1') errors.push('evidence version must be 1');
+  if (!['acquire', 'release'].includes(action)) errors.push('action must be acquire or release');
+  if (!/^[1-9]\d*$/.test(pr) || !Number.isSafeInteger(Number(pr))) {
+    errors.push('PR must be a canonical positive safe integer');
+  }
+  if (!FULL_COMMIT.test(head)) errors.push('head must be one lowercase full commit');
+  if (!FULL_COMMIT.test(base)) errors.push('base must be one lowercase full commit');
+  if (!/^[1-9]\d*$/.test(attempt) || !Number.isSafeInteger(Number(attempt))) {
+    errors.push('attempt must be a canonical positive safe integer');
+  }
+  if (!/^[A-Za-z\d](?:[A-Za-z\d-]{0,37}[A-Za-z\d])?$/.test(principal)) {
+    errors.push('principal must be a GitHub login');
+  }
+  if (comment.author !== principal) errors.push('GitHub author must equal the recorded principal');
+  if (isoInstantMilliseconds(comment.updatedAt) !== isoInstantMilliseconds(comment.createdAt)) {
+    errors.push('integration-hold evidence must be unedited');
+  }
+  if (!canonicalUtcInstant(acquiredAt)) errors.push('acquired timestamp must be canonical UTC');
+  if (!canonicalUtcInstant(eventAt)) errors.push('event timestamp must be canonical UTC');
+  if (canonicalUtcInstant(acquiredAt) && canonicalUtcInstant(eventAt) && Date.parse(eventAt) < Date.parse(acquiredAt)) {
+    errors.push('event timestamp cannot precede acquisition');
+  }
+
+  const expectedId = `pr-${pr}-head-${head}-base-${base}-attempt-${attempt}`;
+  if (holdId !== expectedId) errors.push('hold ID must canonically include PR, full head, full base, and attempt');
+  const expectedScratch = `test/integration-pr-${pr}-base-${base.slice(0, 12)}-attempt-${attempt}`;
+  if (scratchBranch !== expectedScratch) errors.push('scratch branch does not match the canonical convention');
+  if (action === 'acquire' && eventAt !== acquiredAt) {
+    errors.push('acquisition event timestamp must equal acquired timestamp');
+  }
+  if (action === 'acquire' && outcome !== 'unclaimed') {
+    errors.push('acquisition outcome must be unclaimed');
+  }
+  if (action === 'release' && !['integrated', 'aborted'].includes(outcome)) {
+    errors.push('release outcome must be integrated or aborted');
+  }
+
+  return { valid: errors.length === 0, errors, fields, action, holdId };
+}
+
+export function evaluateIntegrationHolds(comments) {
+  const evidence = [];
+  const questions = [];
+  for (const comment of comments.filter(({ body }) => {
+    const lines = body.split('\n');
+    return lines.includes(INTEGRATION_HOLD_HEADING) || lines.some((line) => line.startsWith('Integration-Hold-'));
+  })) {
+    const parsed = parseIntegrationHoldComment(comment);
+    evidence.push({
+      commentId: comment.id,
+      author: comment.author,
+      createdAt: comment.createdAt,
+      updatedAt: comment.updatedAt,
+      ...parsed,
+    });
+    if (!parsed.valid) {
+      questions.push(
+        question(
+          'integration-hold-malformed',
+          `comment ${comment.id}: ${parsed.errors.join('; ')}`,
+        ),
+      );
+    }
+  }
+
+  const validEvidence = evidence
+    .filter(({ valid }) => valid)
+    .sort((left, right) =>
+      isoInstantMilliseconds(left.createdAt) - isoInstantMilliseconds(right.createdAt) ||
+      left.commentId - right.commentId,
+    );
+  const byId = new Map();
+  for (const entry of validEvidence) {
+    byId.set(entry.holdId, [...(byId.get(entry.holdId) ?? []), entry]);
+  }
+
+  const unmatched = [];
+  const identityFields = [
+    'Integration-Hold-Evidence-Version',
+    'Integration-Hold-ID',
+    'Integration-Hold-Principal',
+    'Integration-Hold-PR',
+    'Integration-Hold-Head',
+    'Integration-Hold-Base',
+    'Integration-Hold-Attempt',
+    'Integration-Hold-Scratch-Branch',
+    'Integration-Hold-Acquired-At',
+  ];
+  for (const [holdId, entries] of byId) {
+    const acquisitions = entries.filter(({ action }) => action === 'acquire');
+    const releases = entries.filter(({ action }) => action === 'release');
+    if (acquisitions.length !== 1 || releases.length > 1) {
+      questions.push(
+        question(
+          'integration-hold-ambiguous',
+          `${holdId} has ${acquisitions.length} acquisitions and ${releases.length} releases`,
+        ),
+      );
+      continue;
+    }
+    const acquisition = acquisitions[0];
+    if (releases.length === 0) {
+      unmatched.push(acquisition);
+      continue;
+    }
+    const release = releases[0];
+    const mismatches = identityFields.filter(
+      (field) => acquisition.fields[field] !== release.fields[field],
+    );
+    if (entries.indexOf(release) <= entries.indexOf(acquisition)) {
+      questions.push(
+        question(
+          'integration-hold-ambiguous',
+          `${holdId} release does not follow its acquisition in append-only comment order`,
+        ),
+      );
+    }
+    if (mismatches.length > 0) {
+      questions.push(
+        question(
+          'integration-hold-ambiguous',
+          `${holdId} release disagrees on ${mismatches.join(', ')}`,
+        ),
+      );
+    }
+  }
+
+  if (unmatched.length > 1) {
+    questions.push(
+      question(
+        'integration-hold-ambiguous',
+        `multiple unmatched holds remain: ${unmatched.map(({ holdId }) => holdId).join(', ')}`,
+      ),
+    );
+  }
+  return {
+    status: questions.length > 0 ? 'question' : unmatched.length === 1 ? 'held' : 'clear',
+    active: questions.length === 0 && unmatched.length === 1 ? unmatched[0] : null,
+    evidence,
+    questions,
+  };
+}
+
 export function analyzeCoordination({
   issues,
   commentsByIssue,
   local,
   reservedRefs = [],
+  claimRelationships = new Map(),
   nowMs = Date.now(),
 }) {
   const issueByNumber = new Map(issues.map((issue) => [issue.number, issue]));
@@ -864,6 +1155,8 @@ export function analyzeCoordination({
     .filter((issue) => issue.labels.includes('work:plan'))
     .map((issue) => {
       const schema = validatePlanBody(issue.body);
+      const comments = commentsByIssue.get(issue.number) ?? [];
+      const integrationHold = evaluateIntegrationHolds(comments);
       return {
         number: issue.number,
         title: issue.title,
@@ -878,12 +1171,16 @@ export function analyzeCoordination({
           valid: schema.valid,
           errors: schema.errors,
         },
-        questions: schema.valid
-          ? []
-          : schema.errors.map((error) =>
-              question('invalid-plan-registry-schema', `${error.field}: ${error.message}`),
-            ),
-        latestComment: commentEvidence(latestComment(commentsByIssue.get(issue.number) ?? [])),
+        integrationHold,
+        questions: [
+          ...(schema.valid
+            ? []
+            : schema.errors.map((error) =>
+                question('invalid-plan-registry-schema', `${error.field}: ${error.message}`),
+              )),
+          ...integrationHold.questions,
+        ],
+        latestComment: commentEvidence(latestComment(comments)),
       };
     });
   const workItems = coordinated
@@ -896,6 +1193,7 @@ export function analyzeCoordination({
     reservedRefs,
     commentsByIssue,
     local,
+    claimRelationships,
     nowMs,
   });
 

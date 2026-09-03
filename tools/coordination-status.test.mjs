@@ -2,7 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -167,6 +175,43 @@ function restCheckpointComment(issue, id = 7300, body = issue.body) {
   };
 }
 
+function restIntegrationHold({
+  id = 8000,
+  action = 'acquire',
+  pr = '61',
+  head = 'a'.repeat(40),
+  base = 'b'.repeat(40),
+  attempt = '1',
+  principal = 'maintainer',
+  acquiredAt = '2026-09-03T05:00:00.000Z',
+  eventAt = acquiredAt,
+  outcome = action === 'acquire' ? 'unclaimed' : 'integrated',
+  author = principal,
+  updatedAt = eventAt,
+} = {}) {
+  return {
+    id,
+    user: { login: author },
+    body: [
+      '## Integration hold evidence',
+      'Integration-Hold-Evidence-Version: 1',
+      `Integration-Hold-Action: ${action}`,
+      `Integration-Hold-ID: pr-${pr}-head-${head}-base-${base}-attempt-${attempt}`,
+      `Integration-Hold-Principal: ${principal}`,
+      `Integration-Hold-PR: ${pr}`,
+      `Integration-Hold-Head: ${head}`,
+      `Integration-Hold-Base: ${base}`,
+      `Integration-Hold-Attempt: ${attempt}`,
+      `Integration-Hold-Scratch-Branch: test/integration-pr-${pr}-base-${base.slice(0, 12)}-attempt-${attempt}`,
+      `Integration-Hold-Acquired-At: ${acquiredAt}`,
+      `Integration-Hold-Event-At: ${eventAt}`,
+      `Integration-Hold-Outcome: ${outcome}`,
+    ].join('\n'),
+    created_at: eventAt,
+    updated_at: updatedAt,
+  };
+}
+
 function defaultResponses() {
   return {
     '--version': { stdout: 'gh version 2.0.0 (test)\n' },
@@ -189,10 +234,23 @@ function writeExecutable(directory, name, body) {
 
 function writeGitShim(
   directory,
-  worktreeOutput = 'worktree /fake/worktree\nHEAD abc1234\nbranch refs/heads/test/sample\n\n',
+  worktreeOutput = [
+    'worktree /fake/integration',
+    `HEAD ${'a'.repeat(40)}`,
+    'branch refs/heads/main',
+    '',
+    'worktree /fake/worktree',
+    'HEAD abc1234',
+    'branch refs/heads/test/sample',
+    '',
+  ].join('\n'),
+  hooksConfigOutput = '',
 ) {
   const worktreeFile = join(directory, 'git-worktrees.out');
+  const hooksConfigFile = join(directory, 'git-hooks-config.out');
+  const integrationGitDirectory = join(directory, 'integration-git');
   writeFileSync(worktreeFile, worktreeOutput);
+  writeFileSync(hooksConfigFile, hooksConfigOutput);
   writeExecutable(
     directory,
     'git',
@@ -200,10 +258,24 @@ function writeGitShim(
 ${SHIM_PATH}
 printf 'git GIT_OPTIONAL_LOCKS=%s %s\\n' "$GIT_OPTIONAL_LOCKS" "$*" >> "$INVOCATION_LOG"
 if [ "$1" = "--no-optional-locks" ]; then shift; else exit 126; fi
+if [ "$1" = "-C" ]; then
+  cwd=$2
+  shift 2
+  case "$1" in
+    status) printf '# branch.oid ${'a'.repeat(40)}\\n# branch.head main\\n' ;;
+    symbolic-ref) printf 'main\\n' ;;
+    rev-parse) printf '${integrationGitDirectory}\\n' ;;
+    config) if [ -s '${hooksConfigFile}' ]; then cat '${hooksConfigFile}'; else exit 1; fi ;;
+    merge-base) exit 1 ;;
+    *) printf 'unexpected git -C invocation: %s %s\\n' "$cwd" "$*" >&2; exit 127 ;;
+  esac
+  exit 0
+fi
 case "$1" in
   status) printf '## test/sample...origin/main\\n' ;;
   worktree) cat '${worktreeFile}' ;;
   for-each-ref) printf 'test/sample\\tabc1234\\n' ;;
+  ls-remote) printf '${'a'.repeat(40)}\\trefs/heads/main\\n' ;;
   *) printf 'unexpected git invocation: %s\\n' "$*" >&2; exit 127 ;;
 esac
 `,
@@ -235,13 +307,19 @@ process.exit(response.status ?? 0);
   );
 }
 
-function runStatus(t, { responses = defaultResponses(), gh = true, args = [], gitWorktrees } = {}) {
+function runStatus(
+  t,
+  { responses = defaultResponses(), gh = true, args = [], gitWorktrees, gitHooksConfig } = {},
+) {
   const directory = mkdtempSync(join(tmpdir(), 'mn-coordination-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const invocationLog = join(directory, 'invocations.log');
   writeFileSync(invocationLog, '');
   writeFileSync(join(directory, 'sentinel.txt'), 'unchanged\n');
-  writeGitShim(directory, gitWorktrees);
+  mkdirSync(join(directory, '.githooks'));
+  writeExecutable(directory, '.githooks/pre-commit', '#!/bin/sh\nexit 0\n');
+  writeExecutable(directory, '.githooks/pre-merge-commit', '#!/bin/sh\nexit 0\n');
+  writeGitShim(directory, gitWorktrees, gitHooksConfig);
   if (gh) writeGhShim(directory, responses);
   const beforeFiles = readdirSync(directory).sort();
   const beforeSentinel = readFileSync(join(directory, 'sentinel.txt'), 'utf8');
@@ -287,6 +365,35 @@ test('healthy human output reports reconciled claims and advisory candidate sema
   assert.doesNotMatch(result.stdout, /#42/);
 });
 
+test('plan integration holds are visible, paired deterministically, and malformed evidence warns', (t) => {
+  {
+    const responses = defaultResponses();
+    responses[`api:${commentEndpoint(2)}`] = {
+      stdout: JSON.stringify([[restIntegrationHold()]]),
+    };
+    const result = runStatus(t, { responses, args: ['--json'] });
+    const report = JSON.parse(result.stdout);
+    assert.equal(result.exitCode, 0);
+    assert.equal(report.registry.plans[0].integrationHold.status, 'held');
+    assert.match(report.registry.plans[0].integrationHold.active.holdId, /^pr-61-head-/);
+  }
+  {
+    const responses = defaultResponses();
+    responses[`api:${commentEndpoint(2)}`] = {
+      stdout: JSON.stringify([[restIntegrationHold({ author: 'other-principal' })]]),
+    };
+    const result = runStatus(t, { responses, args: ['--json'] });
+    const report = JSON.parse(result.stdout);
+    assert.equal(result.exitCode, 2);
+    assert.equal(report.registry.plans[0].integrationHold.status, 'question');
+    assert(
+      report.registry.maintainerQuestions.some(
+        ({ issueNumber, code }) => issueNumber === 2 && code === 'integration-hold-malformed',
+      ),
+    );
+  }
+});
+
 test('versioned JSON mode is one parseable document with candidate safety explicit', (t) => {
   const ready = claimIssue({ number: 10, state: 'ready', label: 'work:ready' });
   ready.body = ready.body
@@ -308,7 +415,42 @@ test('versioned JSON mode is one parseable document with candidate safety explic
   assert.equal(report.coordinationKnown, true);
   assert.equal(report.registry.workItems[0].triage, 'candidate');
   assert.equal(report.registry.workItems[0].candidateSafety, 'not-established');
+  assert.equal(report.local.integrationCheckout.status, 'mirrored');
+  assert.equal(report.local.hooks.configuration.status, 'unset');
+  assert.equal(report.local.hooks.configuration.effective, null);
+  assert.equal(report.local.hooks.files['pre-commit'].mode, '100755');
+  assert.equal(report.local.hooks.files['pre-merge-commit'].mode, '100755');
   assert.match(report.advisory, /never proves that claiming is safe/);
+});
+
+test('hook configuration reports effective value, scope, and origin without changing it', (t) => {
+  const configured = runStatus(t, {
+    args: ['--json'],
+    gitHooksConfig: 'local\tfile:/fake/integration/.git/config\t.githooks\n',
+  });
+  const report = JSON.parse(configured.stdout);
+  assert.equal(configured.exitCode, 0);
+  assert.deepEqual(report.local.hooks.configuration.effective, {
+    scope: 'local',
+    origin: 'file:/fake/integration/.git/config',
+    value: '.githooks',
+  });
+
+  const mismatch = runStatus(t, {
+    args: ['--json'],
+    gitHooksConfig: 'global\tfile:/fake/home/.gitconfig\t/unsafe/hooks\n',
+  });
+  const mismatchReport = JSON.parse(mismatch.stdout);
+  assert.equal(mismatch.exitCode, 2);
+  assert(mismatchReport.warnings.some(({ code }) => code === 'integration-hooks-path-mismatch'));
+
+  const wrongScope = runStatus(t, {
+    args: ['--json'],
+    gitHooksConfig: 'global\tfile:/fake/home/.gitconfig\t.githooks\n',
+  });
+  const wrongScopeReport = JSON.parse(wrongScope.stdout);
+  assert.equal(wrongScope.exitCode, 2);
+  assert(wrongScopeReport.warnings.some(({ code }) => code === 'integration-hooks-path-mismatch'));
 });
 
 test('mixed v1/v2 JSON exposes each record schema without changing candidate ordering', (t) => {
@@ -390,6 +532,9 @@ test('reserved claim-ref enumeration consumes every page and reconciles a derive
   assert.equal(result.exitCode, 0);
   assert.equal(item.remoteClaim.branchStatus, 'derived');
   assert.equal(item.remoteClaim.matchingRefs.length, 1);
+  assert.equal(item.remoteClaim.lifecycle.status, 'matched');
+  assert.equal(item.remoteClaim.lifecycle.checkpointCommit, 'a'.repeat(40));
+  assert.equal(item.remoteClaim.lifecycle.remoteHead, 'a'.repeat(40));
   assert.equal(report.registry.remoteClaims.refs.length, 1);
   assert(result.invocations.includes(`gh api --paginate --slurp ${CLAIM_REFS_ENDPOINT}`));
 });
@@ -825,7 +970,7 @@ test('status uses only read-only commands and does not change local files', (t) 
   assert.deepEqual(result.afterFiles, result.beforeFiles);
   assert.equal(result.afterSentinel, result.beforeSentinel);
   const gitInvocations = result.invocations.filter((entry) => entry.startsWith('git '));
-  assert.equal(gitInvocations.length, 3);
+  assert.equal(gitInvocations.length, 8);
   assert(
     gitInvocations.every((entry) =>
       entry.startsWith('git GIT_OPTIONAL_LOCKS=0 --no-optional-locks '),
@@ -837,6 +982,19 @@ test('status uses only read-only commands and does not change local files', (t) 
         entry === 'git GIT_OPTIONAL_LOCKS=0 --no-optional-locks status --short --branch' ||
         entry === 'git GIT_OPTIONAL_LOCKS=0 --no-optional-locks worktree list --porcelain' ||
         entry.startsWith('git GIT_OPTIONAL_LOCKS=0 --no-optional-locks for-each-ref --format=') ||
+        entry.startsWith(
+          'git GIT_OPTIONAL_LOCKS=0 --no-optional-locks -C /fake/integration status ',
+        ) ||
+        entry.startsWith(
+          'git GIT_OPTIONAL_LOCKS=0 --no-optional-locks -C /fake/integration symbolic-ref ',
+        ) ||
+        entry.startsWith(
+          'git GIT_OPTIONAL_LOCKS=0 --no-optional-locks -C /fake/integration rev-parse ',
+        ) ||
+        entry.startsWith(
+          'git GIT_OPTIONAL_LOCKS=0 --no-optional-locks -C /fake/integration config ',
+        ) ||
+        entry.startsWith('git GIT_OPTIONAL_LOCKS=0 --no-optional-locks ls-remote --refs ') ||
         entry === 'gh --version' ||
         entry === 'gh auth status' ||
         entry.startsWith('gh repo view ') ||
