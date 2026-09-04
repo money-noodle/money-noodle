@@ -22,6 +22,12 @@ Keep work single-purpose and commits reviewable with imperative subjects. Initia
 
 `main` is also the only ref eligible for delivery federation, artifact provenance, and production operations. Deleted migration branches, tags, pull-request refs, forks, other workflows, and sibling repositories must not obtain provider authority.
 
+## Integration checkout and test integration
+
+The sole integration checkout is the worktree on full symbolic ref `refs/heads/main`; authored work, merge commits, rebases, resets, conflict resolution, and history rewriting there are forbidden. Its normal state is a clean exact mirror of the stable directly verified GitHub REST ref; a clean ancestor established by stable host compare evidence is explicit fast-forward lag, not permission to update it. Only a separately authorized clean conflict-free fast-forward to the exact verified remote head may change local `main`. [`parallel-work.md`](parallel-work.md#integration-checkout-remote-lifecycle-and-integration-holds) owns the exact-ref executable hook, integration-checkout-specific read-only status, remote-lifecycle, exact bootstrap, scratch-worktree, and globally replayed integration-hold contracts.
+
+Committed hooks are inert until separately authorized repository-local activation and remain bypassable defense in depth. Integration testing uses the separately authorized principal-owned preserved `test/integration-pr-<PR>-base-<12hex>-attempt-<N>` branch and dedicated worktree; fixes and conflict resolution return to the execution branch. Neither hooks, a mirrored checkout, nor a clear integration hold grant pull-request, merge, push, cleanup, provider, or deployment authority.
+
 ## Scoped owned-branch publication
 
 A current matching claim normally authorizes its named execution agent to make a normal, non-force push only from the registered typed branch and worktree to the identically named remote branch. For a derived claim, the remote branch was created atomically at claim time; publication may only fast-forward that same ref after the complete pre-push checks. The agent follows the pre-push verification and exact checkpoint-evidence contract in [`parallel-work.md`](parallel-work.md#scoped-owned-branch-publication). This is checkpoint-publication authority, not general Git or integration authority.

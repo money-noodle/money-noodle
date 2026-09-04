@@ -1,11 +1,18 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
+import { existsSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { parseReservedClaimRef } from './coordination-schema.mjs';
 import {
   SCHEMA_VERSION,
   analyzeCoordination,
+  authoritativeCommitRelationship,
+  claimField,
+  classifyCommitRelationship,
+  classifyIntegrationCheckout,
+  classifyRemoteClaimEvidence,
   isoInstantMilliseconds,
 } from './coordination-lib.mjs';
 
@@ -26,6 +33,8 @@ function run(command, args, { allowFailure = false, env = {} } = {}) {
   const result = spawnSync(command, args, {
     encoding: "utf8",
     env: { ...process.env, ...env },
+    timeout: 30_000,
+    killSignal: 'SIGTERM',
   });
   if (result.error || (!allowFailure && result.status !== 0)) {
     const detail =
@@ -151,8 +160,316 @@ function parseWorktrees(output) {
   return entries;
 }
 
-function runGit(args) {
-  return run("git", ["--no-optional-locks", ...args], { env: { GIT_OPTIONAL_LOCKS: "0" } });
+function runGit(args, { allowFailure = false } = {}) {
+  return run("git", ["--no-optional-locks", ...args], {
+    allowFailure,
+    env: { GIT_OPTIONAL_LOCKS: "0" },
+  });
+}
+
+function readHookConfiguration(cwd) {
+  const result = runGit(
+    ['-C', cwd, 'config', '--show-origin', '--show-scope', '--get-all', 'core.hooksPath'],
+    { allowFailure: true },
+  );
+  if (result.status === 1 && result.stdout === '') {
+    return { status: 'unset', entries: [], effective: null };
+  }
+  if (result.status !== 0) {
+    return { status: 'unavailable', entries: [], effective: null };
+  }
+  const entries = result.stdout
+    .trimEnd()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const [scope, origin, ...value] = line.split('\t');
+      if (!scope || !origin || value.length === 0) throw new Error('git config returned malformed hooksPath evidence');
+      return { scope, origin, value: value.join('\t') };
+    });
+  return {
+    status: entries.length > 0 ? 'configured' : 'unset',
+    entries,
+    effective: entries.at(-1) ?? null,
+  };
+}
+
+function readHookFiles(checkoutPath) {
+  return Object.fromEntries(
+    ['pre-commit', 'pre-merge-commit'].map((name) => {
+      const path = `.githooks/${name}`;
+      const index = runGit(['-C', checkoutPath, 'ls-files', '--stage', '--', path], {
+        allowFailure: true,
+      });
+      let indexMode = 'unavailable';
+      if (index.status === 0 && index.stdout === '') indexMode = 'missing';
+      else if (index.status === 0) {
+        const lines = index.stdout.trimEnd().split('\n');
+        const match =
+          lines.length === 1 ? /^(100644|100755) [0-9a-f]{40} 0\t(.+)$/.exec(lines[0]) : null;
+        indexMode = match?.[2] === path ? match[1] : 'malformed';
+      }
+      try {
+        const stat = statSync(join(checkoutPath, path));
+        const permissions = stat.mode & 0o777;
+        return [
+          name,
+          {
+            path,
+            indexMode,
+            filesystem: {
+              status: 'present',
+              permissions: permissions.toString(8).padStart(3, '0'),
+              executable: Boolean(permissions & 0o111),
+            },
+          },
+        ];
+      } catch (error) {
+        return [
+          name,
+          {
+            path,
+            indexMode,
+            filesystem: {
+              status: error?.code === 'ENOENT' ? 'missing' : 'unavailable',
+              permissions: null,
+              executable: false,
+            },
+          },
+        ];
+      }
+    }),
+  );
+}
+
+function readIntegrationCheckout(worktrees) {
+  const matches = worktrees.filter(({ branch }) => branch === 'main');
+  if (matches.length !== 1 || matches[0].locked || matches[0].prunable) {
+    return {
+      status: 'unavailable',
+      reason: matches.length === 1 ? 'integration worktree is locked or prunable' : `expected one main worktree, found ${matches.length}`,
+      path: matches.length === 1 ? matches[0].path : null,
+      localHead: matches.length === 1 ? matches[0].head : null,
+      remoteHead: null,
+      symbolicBranch: matches.length === 1 ? matches[0].branch : null,
+      clean: false,
+      inProgress: false,
+      relationship: 'unavailable',
+    };
+  }
+
+  const worktree = matches[0];
+  const status = runGit(
+    ['-C', worktree.path, 'status', '--porcelain=v2', '--branch', '--untracked-files=all'],
+    { allowFailure: true },
+  );
+  const symbolic = runGit(['-C', worktree.path, 'symbolic-ref', '--quiet', 'HEAD'], {
+    allowFailure: true,
+  });
+  const gitDirectory = runGit(['-C', worktree.path, 'rev-parse', '--absolute-git-dir'], {
+    allowFailure: true,
+  });
+  if (status.status !== 0 || symbolic.status !== 0 || gitDirectory.status !== 0) {
+    return {
+      status: 'unavailable',
+      reason: 'integration checkout evidence could not be read',
+      path: worktree.path,
+      localHead: worktree.head,
+      remoteHead: null,
+      symbolicBranch: null,
+      clean: false,
+      inProgress: false,
+      relationship: 'unavailable',
+    };
+  }
+  const clean = status.stdout.split('\n').every((line) => line === '' || line.startsWith('#'));
+  const operationMarkers = [
+    'MERGE_HEAD',
+    'CHERRY_PICK_HEAD',
+    'REVERT_HEAD',
+    'REBASE_HEAD',
+    'rebase-merge',
+    'rebase-apply',
+    'sequencer',
+    'BISECT_LOG',
+  ];
+  const gitDir = gitDirectory.stdout.trim();
+  const inProgress = operationMarkers.some((marker) => existsSync(join(gitDir, marker)));
+  return {
+    status: 'unavailable',
+    reason: 'direct remote main has not been read',
+    path: worktree.path,
+    localHead: worktree.head,
+    remoteHead: null,
+    symbolicRef: symbolic.stdout.trim(),
+    symbolicBranch:
+      symbolic.stdout.trim() === 'refs/heads/main' ? 'main' : symbolic.stdout.trim(),
+    clean,
+    inProgress,
+    relationship: 'unavailable',
+  };
+}
+
+function readCommitRelationship(left, right, cwd = process.cwd()) {
+  if (left === right) return 'equal';
+  const leftAncestor = runGit(['-C', cwd, 'merge-base', '--is-ancestor', left, right], {
+    allowFailure: true,
+  });
+  const rightAncestor = runGit(['-C', cwd, 'merge-base', '--is-ancestor', right, left], {
+    allowFailure: true,
+  });
+  const statuses = [leftAncestor.status, rightAncestor.status];
+  const available = statuses.every((status) => status === 0 || status === 1);
+  return classifyCommitRelationship({
+    left,
+    right,
+    leftIsAncestor: leftAncestor.status === 0,
+    rightIsAncestor: rightAncestor.status === 0,
+    available,
+  });
+}
+
+function directApiResult(endpoint) {
+  const result = run('gh', ['api', endpoint], { allowFailure: true });
+  if (result.status !== 0) {
+    return /(?:HTTP|status) 404|Not Found/i.test(result.stderr)
+      ? { status: 'missing' }
+      : { status: 'unavailable' };
+  }
+  try {
+    return { status: 'available', value: parseJson(result.stdout, `gh api ${endpoint}`) };
+  } catch {
+    return { status: 'malformed' };
+  }
+}
+
+function readExactDirectRef(repository, fullRef) {
+  const endpoint = `repos/${repository}/git/ref/${fullRef.slice('refs/'.length)}`;
+  const result = directApiResult(endpoint);
+  if (result.status !== 'available') return { status: result.status, endpoint };
+  const record = result.value;
+  if (
+    !record ||
+    Array.isArray(record) ||
+    record.ref !== fullRef ||
+    record.object?.type !== 'commit' ||
+    !/^[0-9a-f]{40}$/.test(record.object?.sha ?? '')
+  ) {
+    return { status: 'malformed', endpoint };
+  }
+  return {
+    status: 'found',
+    endpoint,
+    ref: record.ref,
+    objectType: record.object.type,
+    sha: record.object.sha,
+  };
+}
+
+function readAuthoritativeCompare(repository, left, right) {
+  const endpoint = `repos/${repository}/compare/${left}...${right}`;
+  const result = directApiResult(endpoint);
+  if (result.status !== 'available') return { status: result.status, endpoint };
+  const record = result.value;
+  const relationships = {
+    identical: 'equal',
+    ahead: 'right-ahead',
+    behind: 'left-ahead',
+    diverged: 'divergence',
+  };
+  const relationship = relationships[record?.status];
+  const aheadBy = record?.ahead_by;
+  const behindBy = record?.behind_by;
+  const baseSha = record?.base_commit?.sha;
+  const countsValid =
+    Number.isSafeInteger(aheadBy) &&
+    aheadBy >= 0 &&
+    Number.isSafeInteger(behindBy) &&
+    behindBy >= 0 &&
+    ((record.status === 'identical' && aheadBy === 0 && behindBy === 0) ||
+      (record.status === 'ahead' && aheadBy > 0 && behindBy === 0) ||
+      (record.status === 'behind' && aheadBy === 0 && behindBy > 0) ||
+      (record.status === 'diverged' && aheadBy > 0 && behindBy > 0));
+  if (!relationship || !countsValid || baseSha !== left) return { status: 'malformed', endpoint };
+  return {
+    status: 'available',
+    endpoint,
+    relationship,
+    evidenceKey: `${left}:${right}:${record.status}:${aheadBy}:${behindBy}:${baseSha}`,
+    aheadBy,
+    behindBy,
+  };
+}
+
+function readRemoteCommitEvidence(repository, fullRef, left) {
+  const directRefBefore = readExactDirectRef(repository, fullRef);
+  const remote = directRefBefore.status === 'found' ? directRefBefore.sha : null;
+  const comparable = /^[0-9a-f]{40}$/.test(left ?? '') && remote && left !== remote;
+  const compareBefore = comparable
+    ? readAuthoritativeCompare(repository, left, remote)
+    : {
+        status: left === remote ? 'available' : 'unavailable',
+        relationship: 'equal',
+        evidenceKey: `${left}:equal`,
+      };
+  const compareAfter = comparable
+    ? readAuthoritativeCompare(repository, left, remote)
+    : { ...compareBefore };
+  const directRefAfter = readExactDirectRef(repository, fullRef);
+  return { directRefBefore, compareBefore, compareAfter, directRefAfter };
+}
+
+function readLocalHostLabels() {
+  const result = run('hostname', [], { allowFailure: true });
+  if (result.status !== 0) return new Set();
+  const hostname = result.stdout.trim();
+  return new Set([hostname, hostname.replace(/\.local$/i, '')].filter(Boolean));
+}
+
+function readClaimContainment(issue, local, checkpointCommit, remoteHead, localHostLabels) {
+  const branch = claimField(issue.body, 'Claim-Branch');
+  const fullRef = `refs/heads/${branch}`;
+  const claimHost = claimField(issue.body, 'Claim-Host');
+  if (!localHostLabels.has(claimHost)) return { status: 'wrong-host', relationship: 'unavailable' };
+  const branches = local.branches.filter(({ name }) => name === branch);
+  const worktrees = local.worktrees.filter(({ branch: candidate }) => candidate === branch);
+  if (branches.length !== 1 || worktrees.length !== 1) {
+    return { status: branches.length === 0 || worktrees.length === 0 ? 'missing' : 'ambiguous', relationship: 'unavailable' };
+  }
+  const [localBranch] = branches;
+  const [worktree] = worktrees;
+  if (worktree.locked || worktree.prunable) return { status: 'ambiguous', relationship: 'unavailable' };
+  const branchToCheckpoint = readCommitRelationship(localBranch.head, checkpointCommit, worktree.path);
+  if (localBranch.head !== checkpointCommit) {
+    return {
+      status:
+        branchToCheckpoint === 'right-ahead'
+          ? 'behind'
+          : branchToCheckpoint === 'divergence'
+            ? 'diverged'
+            : 'mismatched',
+      relationship: 'unavailable',
+      localBranchHead: localBranch.head,
+    };
+  }
+  const status = runGit(['-C', worktree.path, 'status', '--porcelain=v2', '--untracked-files=all'], {
+    allowFailure: true,
+  });
+  const symbolic = runGit(['-C', worktree.path, 'symbolic-ref', '--quiet', 'HEAD'], {
+    allowFailure: true,
+  });
+  if (status.status !== 0 || symbolic.status !== 0) return { status: 'unavailable', relationship: 'unavailable' };
+  if (status.stdout !== '') return { status: 'dirty', relationship: 'unavailable' };
+  if (symbolic.stdout.trim() !== fullRef || worktree.head !== localBranch.head) {
+    return { status: 'mismatched', relationship: 'unavailable' };
+  }
+  const relationship = readCommitRelationship(checkpointCommit, remoteHead, worktree.path);
+  return {
+    status: relationship === 'left-ahead' ? 'contained' : relationship === 'divergence' ? 'diverged' : relationship === 'right-ahead' ? 'behind' : 'unavailable',
+    relationship,
+    localBranchHead: localBranch.head,
+    worktreePath: worktree.path,
+  };
 }
 
 function readLocalGit() {
@@ -171,7 +488,31 @@ function readLocalGit() {
       if (!name || !head) throw new Error("git for-each-ref returned malformed branch evidence");
       return { name, head };
     });
-  return { status, worktrees, branches };
+  const integrationCheckout = readIntegrationCheckout(worktrees);
+  const hookCheckout = integrationCheckout.path;
+  const configuration = hookCheckout
+    ? readHookConfiguration(hookCheckout)
+    : { status: 'unavailable', entries: [], effective: null };
+  const files = hookCheckout ? readHookFiles(hookCheckout) : {};
+  const ready =
+    configuration.effective?.scope === 'local' &&
+    configuration.effective?.value === '.githooks' &&
+    Object.values(files).length === 2 &&
+    Object.values(files).every(
+      (hook) => hook.indexMode === '100755' && hook.filesystem.status === 'present' && hook.filesystem.executable,
+    );
+  return {
+    status,
+    worktrees,
+    branches,
+    hooks: {
+      checkoutPath: hookCheckout ?? null,
+      configuration,
+      files,
+      ready,
+    },
+    integrationCheckout,
+  };
 }
 
 function readRegistry(local, nowMs) {
@@ -194,6 +535,42 @@ function readRegistry(local, nowMs) {
     ".nameWithOwner",
   ]).stdout.trim();
   if (!/^[^/\s]+\/[^/\s]+$/.test(repository)) throw new Error("GitHub repository identity is malformed");
+
+  const integration = local.integrationCheckout;
+  const mainRemoteEvidence = readRemoteCommitEvidence(
+    repository,
+    'refs/heads/main',
+    integration.localHead,
+  );
+  const stableMainRef =
+    mainRemoteEvidence.directRefBefore.status === 'found' &&
+    mainRemoteEvidence.directRefAfter.status === 'found' &&
+    mainRemoteEvidence.directRefBefore.sha === mainRemoteEvidence.directRefAfter.sha;
+  const remoteMain = stableMainRef ? mainRemoteEvidence.directRefAfter.sha : null;
+  const integrationRelationship = stableMainRef
+    ? authoritativeCommitRelationship({
+        left: integration.localHead,
+        right: remoteMain,
+        compareBefore: mainRemoteEvidence.compareBefore,
+        compareAfter: mainRemoteEvidence.compareAfter,
+      })
+    : 'unavailable';
+  integration.remoteHead = remoteMain;
+  integration.relationship = integrationRelationship;
+  integration.remoteEvidence = mainRemoteEvidence;
+  integration.status = classifyIntegrationCheckout({
+    symbolicBranch: integration.symbolicBranch,
+    clean: integration.clean,
+    inProgress: integration.inProgress,
+    localHead: integration.localHead,
+    remoteHead: remoteMain,
+    relationship: integrationRelationship,
+    available: Boolean(integration.path && stableMainRef),
+  });
+  integration.reason =
+    integration.status === 'unavailable'
+      ? 'direct-ref or authoritative compare evidence is missing, malformed, unavailable, or unstable'
+      : null;
 
   const labelRecords = apiPages(`repos/${repository}/labels?per_page=100`);
   const availableLabels = new Set(
@@ -224,6 +601,44 @@ function readRegistry(local, nowMs) {
       .filter(({ status }) => status === 'supported')
       .map(({ issueNumber }) => issueNumber),
   );
+  const claimLifecycles = new Map();
+  const localHostLabels = readLocalHostLabels();
+  for (const issue of issueRecords) {
+    const state = claimField(issue.body, 'Claim-State');
+    if (!['active', 'review'].includes(state)) continue;
+    const expectedRef = `refs/heads/${claimField(issue.body, 'Claim-Branch')}`;
+    const parsed = parseReservedClaimRef(expectedRef);
+    if (parsed.status !== 'supported' || parsed.issueNumber !== issue.number) continue;
+    const matches = reservedRefs.filter(({ ref }) => ref === expectedRef);
+    const enumeratedRemoteHead =
+      matches.length === 0 ? null : matches.length === 1 ? matches[0].sha : undefined;
+    const checkpointCommit = claimField(issue.body, 'Checkpoint-Commit');
+    const remoteEvidence = readRemoteCommitEvidence(repository, expectedRef, checkpointCommit);
+    const candidateRemoteHead =
+      remoteEvidence.directRefBefore.status === 'found'
+        ? remoteEvidence.directRefBefore.sha
+        : null;
+    const localContainment = candidateRemoteHead
+      ? readClaimContainment(
+          issue,
+          local,
+          checkpointCommit,
+          candidateRemoteHead,
+          localHostLabels,
+        )
+      : { status: 'unavailable', relationship: 'unavailable' };
+    claimLifecycles.set(
+      issue.number,
+      classifyRemoteClaimEvidence({
+        checkpointCommit,
+        expectedRef,
+        enumeratedRemoteHead,
+        ...remoteEvidence,
+        localContainment,
+      }),
+    );
+  }
+
   const commentsByIssue = new Map();
   for (const issue of issueRecords.filter(
     ({ number, state }) => state === 'open' || reservedIssueNumbers.has(number),
@@ -242,6 +657,7 @@ function readRegistry(local, nowMs) {
     commentsByIssue,
     local,
     reservedRefs,
+    claimLifecycles,
     nowMs,
   });
   const maintainerQuestions = [
@@ -279,6 +695,30 @@ function buildReport() {
     report.local = readLocalGit();
     report.registry = readRegistry(report.local, isoInstantMilliseconds(generatedAt));
     report.coordinationKnown = true;
+    if (['local-ahead', 'dirty-or-in-progress', 'divergence', 'unavailable'].includes(report.local.integrationCheckout.status)) {
+      report.warnings.push({
+        code: 'integration-checkout-not-safe',
+        message: `integration checkout status is ${report.local.integrationCheckout.status}; preserve evidence and do not repair automatically`,
+      });
+    }
+    const hookConfiguration = report.local.hooks.configuration;
+    const effectiveHooks = hookConfiguration.effective;
+    if (hookConfiguration.status === 'unavailable') {
+      report.warnings.push({
+        code: 'integration-hooks-configuration-unavailable',
+        message: 'effective core.hooksPath could not be read; do not configure or repair automatically',
+      });
+    } else if (effectiveHooks && (effectiveHooks.value !== '.githooks' || effectiveHooks.scope !== 'local')) {
+      report.warnings.push({
+        code: 'integration-hooks-path-mismatch',
+        message: `effective core.hooksPath is ${effectiveHooks.value} at ${effectiveHooks.scope} scope, not repository-local .githooks; do not configure or repair automatically`,
+      });
+    } else if (effectiveHooks && !report.local.hooks.ready) {
+      report.warnings.push({
+        code: 'integration-hooks-not-ready',
+        message: `repository-local hooks are configured but committed/index or filesystem executable evidence is not ready in ${report.local.hooks.checkoutPath}; do not repair automatically`,
+      });
+    }
     if (report.registry.labels.missing.length > 0) {
       report.warnings.push({
         code: "missing-coordination-labels",
@@ -306,6 +746,22 @@ function renderHuman(report) {
       const detail = worktree.branch ? `[${worktree.branch}]` : "[detached]";
       console.log(`${worktree.path} ${worktree.head ?? "unknown"} ${detail}`);
     }
+    section('Integration checkout');
+    const integration = report.local.integrationCheckout;
+    console.log(
+      `status=${integration.status} branch=${integration.symbolicBranch ?? 'unknown'} local=${integration.localHead ?? 'unavailable'} direct-remote=${integration.remoteHead ?? 'unavailable'} clean=${integration.clean} in-progress=${integration.inProgress}`,
+    );
+    section('Integration hooks');
+    const configuration = report.local.hooks.configuration;
+    const effective = configuration.effective;
+    console.log(
+      `checkout=${report.local.hooks.checkoutPath ?? 'unavailable'} hooksPath=${effective?.value ?? 'unset'} scope=${effective?.scope ?? 'unset'} origin=${effective?.origin ?? 'unset'} status=${configuration.status} ready=${report.local.hooks.ready}`,
+    );
+    for (const hook of Object.values(report.local.hooks.files)) {
+      console.log(
+        `${hook.path} index-mode=${hook.indexMode} filesystem=${hook.filesystem.status} permissions=${hook.filesystem.permissions ?? 'unavailable'} executable=${hook.filesystem.executable}`,
+      );
+    }
   }
 
   if (!report.coordinationKnown) {
@@ -326,8 +782,11 @@ function renderHuman(report) {
   for (const plan of registry.plans) {
     console.log(`#${plan.number} [${plan.planState}] ${plan.title} (${plan.url})`);
     console.log(
-      `  schema=v${plan.registrySchema.version}${plan.registrySchema.explicit ? '' : ' (implicit)'} updated=${plan.updatedAt} integration-owner=${plan.integrationOwner}`,
+      `  schema=v${plan.registrySchema.version}${plan.registrySchema.explicit ? '' : ' (implicit)'} updated=${plan.updatedAt} integration-owner=${plan.integrationOwner} integration-hold=${plan.integrationHold.status}`,
     );
+    if (plan.integrationHold.status === 'held') {
+      console.log(`  hold=${plan.integrationHold.active.holdId}`);
+    }
   }
 
   section("Open work evidence");
@@ -341,8 +800,9 @@ function renderHuman(report) {
       item.registrySchema.version === '2'
         ? `host=${item.claim['Claim-Host']} waiting-since=${item.waiting.value}`
         : `worktree=${item.claim['Claim-Worktree']}`;
+    const lifecycle = item.remoteClaim?.lifecycle?.status ?? 'not-applicable';
     console.log(
-      `  branch=${item.claim['Claim-Branch']} ${locality} check-in=${item.deadline.value} (${item.deadline.status}) local=${item.localEvidence.status}`,
+      `  branch=${item.claim['Claim-Branch']} ${locality} check-in=${item.deadline.value} (${item.deadline.status}) local=${item.localEvidence.status} remote-lifecycle=${lifecycle}`,
     );
   }
 
