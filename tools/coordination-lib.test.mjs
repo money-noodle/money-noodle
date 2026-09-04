@@ -200,6 +200,41 @@ test('schema-v2 blocked and unowned terminal refs are preserved without claim au
   );
 });
 
+test('implicit-v1 blocked and unowned terminal refs retain fail-closed branch mismatch semantics', () => {
+  const records = ['blocked', 'done', 'abandoned'].map((state, index) => {
+    const record = issue({ number: 78 + index, state, claimed: false });
+    if (state !== 'blocked') record.state = 'closed';
+    return record;
+  });
+  const reservedRefs = records.map(({ number }) => ({
+    ref: `refs/heads/claim-v1/issue-${number}`,
+    objectType: 'commit',
+    sha: 'd'.repeat(40),
+  }));
+
+  const result = analyzeCoordination({
+    issues: records,
+    commentsByIssue: new Map(),
+    local: EMPTY_LOCAL,
+    reservedRefs,
+    nowMs: NOW,
+  });
+  const blocked = result.workItems.find(({ number }) => number === 78);
+
+  assert.equal(blocked.registrySchema.version, '1');
+  assert.equal(blocked.remoteClaim, undefined);
+  assert.equal(blocked.triage, 'blocked');
+  assert.deepEqual(
+    result.remoteClaims.questions.map(({ code }) => code),
+    records.map(() => 'claim-ref-branch-mismatch'),
+  );
+  assert(
+    result.remoteClaims.refs.every(
+      ({ disposition }) => disposition === 'question' && disposition !== 'preserved-non-ownership',
+    ),
+  );
+});
+
 test('remote claim reconciliation exposes lag and fails closed on ancestry uncertainty', () => {
   const remote = 'b'.repeat(40);
   for (const [number, relationship, expected, warns] of [

@@ -1005,9 +1005,10 @@ export function reconcileRemoteClaims({
         ),
       );
     } else if (
-      (state === 'blocked' && branch === 'unclaimed') ||
-      (['done', 'abandoned'].includes(state) &&
-        (branch === 'unclaimed' || branch === parsed.branch))
+      schema.version === '2' &&
+      ((state === 'blocked' && branch === 'unclaimed') ||
+        (['done', 'abandoned'].includes(state) &&
+          (branch === 'unclaimed' || branch === parsed.branch)))
     ) {
       Object.assign(evidence, {
         disposition: 'preserved-non-ownership',
