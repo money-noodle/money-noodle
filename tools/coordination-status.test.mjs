@@ -621,6 +621,104 @@ test('a reserved ref directly fetches its closed terminal issue and preserves it
   assert(result.invocations.includes(`gh api --paginate --slurp ${commentEndpoint(73)}`));
 });
 
+test('an exact derived ref remains visible when schema-v2 blocked work has no agent owner', (t) => {
+  const blocked = v2ReadyIssue(74, {
+    'Claim-State': 'blocked',
+    'Waiting-Since': '2026-09-01T03:00:00Z',
+    'Checkpoint-State': 'blocked',
+    'Checkpoint-At': '2026-09-01T03:00:00Z',
+  });
+  blocked.labels = [{ name: 'work:blocked' }];
+  const ref = 'refs/heads/claim-v1/issue-74';
+  const responses = defaultResponses();
+  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE, blocked]]) };
+  responses[`api:${CLAIM_REFS_ENDPOINT}`] = {
+    stdout: JSON.stringify([[restRef(ref, 'b'.repeat(40))]]),
+  };
+
+  const result = runStatus(t, { responses, args: ['--json'] });
+  const report = JSON.parse(result.stdout);
+  const item = report.registry.workItems.find(({ number }) => number === 74);
+  const remote = report.registry.remoteClaims.refs[0];
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(item.triage, 'blocked');
+  assert.equal(item.reconciliation, 'consistent');
+  for (const field of [
+    'Claim-Harness',
+    'Claim-Run-ID',
+    'Claim-Agent',
+    'Claim-Branch',
+    'Claim-Host',
+    'Claimed-At',
+    'Check-In-By',
+  ]) {
+    assert.equal(item.claim[field], 'unclaimed', field);
+  }
+  assert.equal(item.remoteClaim.disposition, 'preserved-non-ownership');
+  assert.equal(item.remoteClaim.currentOwnership, false);
+  assert.deepEqual(item.remoteClaim.lifecycle, { status: 'not-applicable', monitoring: false });
+  assert.equal(remote.ref, ref);
+  assert.equal(remote.disposition, 'preserved-non-ownership');
+  assert.equal(remote.currentOwnership, false);
+  assert.equal(remote.lifecycleMonitoring, false);
+  assert.equal(report.registry.maintainerQuestions.length, 0);
+  assert(!result.invocations.includes(`gh api ${claimRefEndpoint(74)}`));
+});
+
+test('closed done and abandoned records preserve derived refs with no retained ownership', (t) => {
+  const terminals = ['done', 'abandoned'].map((state, index) => {
+    const number = 74 + index;
+    const terminal = v2ReadyIssue(number, {
+      'Claim-State': state,
+      'Checkpoint-State': state,
+      'Checkpoint-At': '2026-09-01T03:00:00Z',
+    });
+    terminal.state = 'closed';
+    terminal.labels = [{ name: `work:${state}` }];
+    return terminal;
+  });
+  const refs = terminals.map((terminal, index) =>
+    restRef(`refs/heads/claim-v1/issue-${terminal.number}`, `${index + 2}`.repeat(40)),
+  );
+  const responses = defaultResponses();
+  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE]]) };
+  responses[`api:${CLAIM_REFS_ENDPOINT}`] = { stdout: JSON.stringify([refs]) };
+  for (const terminal of terminals) {
+    responses[`api:repos/example/registry/issues/${terminal.number}`] = {
+      stdout: JSON.stringify(terminal),
+    };
+    responses[`api:${commentEndpoint(terminal.number)}`] = {
+      stdout: JSON.stringify([[restCheckpointComment(terminal, 7400 + terminal.number)]]),
+    };
+  }
+
+  const result = runStatus(t, { responses, args: ['--json'] });
+  const report = JSON.parse(result.stdout);
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(report.registry.maintainerQuestions.length, 0);
+  assert.deepEqual(
+    report.registry.remoteClaims.refs.map((remote) => ({
+      issueNumber: remote.mapping.issueNumber,
+      disposition: remote.disposition,
+      currentOwnership: remote.currentOwnership,
+      lifecycleMonitoring: remote.lifecycleMonitoring,
+    })),
+    terminals.map(({ number }) => ({
+      issueNumber: number,
+      disposition: 'preserved-non-ownership',
+      currentOwnership: false,
+      lifecycleMonitoring: false,
+    })),
+  );
+  assert(
+    terminals.every(
+      ({ number }) => !report.registry.workItems.some((item) => item.number === number),
+    ),
+  );
+});
+
 test('closed reserved-ref issues fail closed on wrong labels and conflicting comments', (t) => {
   const remote = {
     ref: 'refs/heads/claim-v1/issue-73',

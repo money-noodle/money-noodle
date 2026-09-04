@@ -125,6 +125,81 @@ test('remote claim reconciliation accepts exact derived refs and fails closed on
   assert.equal(absent.reconciliation, 'question');
 });
 
+test('schema-v2 blocked and unowned terminal refs are preserved without claim authority', () => {
+  const blocked = issue({ number: 75, state: 'blocked', claimed: false });
+  blocked.body = v2Body({ state: 'blocked' });
+  const done = issue({ number: 76, state: 'done', claimed: false });
+  done.body = v2Body({ state: 'done' });
+  done.state = 'closed';
+  const abandoned = issue({ number: 77, state: 'abandoned', claimed: false });
+  abandoned.body = v2Body({ state: 'abandoned' });
+  abandoned.state = 'closed';
+  const reservedRefs = [75, 76, 77].map((number) => ({
+    ref: `refs/heads/claim-v1/issue-${number}`,
+    objectType: 'commit',
+    sha: `${number - 74}`.repeat(40),
+  }));
+
+  const result = analyzeCoordination({
+    issues: [blocked, done, abandoned],
+    commentsByIssue: new Map(),
+    local: EMPTY_LOCAL,
+    reservedRefs,
+    nowMs: NOW,
+  });
+  const blockedItem = result.workItems.find(({ number }) => number === 75);
+
+  assert.equal(blockedItem.reconciliation, 'consistent');
+  assert.equal(blockedItem.triage, 'blocked');
+  for (const field of [
+    'Claim-Harness',
+    'Claim-Run-ID',
+    'Claim-Agent',
+    'Claim-Branch',
+    'Claim-Host',
+    'Claimed-At',
+    'Check-In-By',
+  ]) {
+    assert.equal(blockedItem.claim[field], 'unclaimed', field);
+  }
+  assert.deepEqual(blockedItem.remoteClaim, {
+    disposition: 'preserved-non-ownership',
+    expectedBranch: 'claim-v1/issue-75',
+    matchingRefs: [
+      {
+        ref: 'refs/heads/claim-v1/issue-75',
+        objectType: 'commit',
+        sha: '1'.repeat(40),
+        mapping: {
+          status: 'supported',
+          version: 1,
+          issueNumber: 75,
+          branch: 'claim-v1/issue-75',
+          ref: 'refs/heads/claim-v1/issue-75',
+        },
+        issueNumber: 75,
+        disposition: 'preserved-non-ownership',
+        currentOwnership: false,
+        lifecycleMonitoring: false,
+      },
+    ],
+    currentOwnership: false,
+    lifecycle: { status: 'not-applicable', monitoring: false },
+  });
+  assert.equal(result.remoteClaims.questions.length, 0);
+  assert.deepEqual(
+    result.remoteClaims.refs.map(({ mapping, ...remote }) => ({ ...remote, mapping: mapping.status })),
+    reservedRefs.map((remote) => ({
+      ...remote,
+      issueNumber: Number(remote.ref.split('-').at(-1)),
+      disposition: 'preserved-non-ownership',
+      currentOwnership: false,
+      lifecycleMonitoring: false,
+      mapping: 'supported',
+    })),
+  );
+});
+
 test('remote claim reconciliation exposes lag and fails closed on ancestry uncertainty', () => {
   const remote = 'b'.repeat(40);
   for (const [number, relationship, expected, warns] of [

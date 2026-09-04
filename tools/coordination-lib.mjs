@@ -3,6 +3,7 @@ import {
   BOOTSTRAP_ISSUE,
   CHECKPOINT_EVIDENCE_FIELDS,
   V1_PORTABLE_CLAIM_FIELDS,
+  claimBranchForIssue,
   V2_PORTABLE_CLAIM_FIELDS,
   isoInstantMilliseconds as schemaIsoInstantMilliseconds,
   parseReservedClaimRef,
@@ -940,11 +941,19 @@ export function reconcileRemoteClaims({
   const analyzedByNumber = new Map(workItems.map((item) => [item.number, item]));
   const openWorkItemNumbers = new Set(workItems.map((item) => item.number));
   const refsByIssue = new Map();
+  const remoteRefEvidence = [];
   const questions = [];
 
   for (const remote of reservedRefs) {
     const parsed = parseReservedClaimRef(remote.ref);
-    const evidence = { ...remote, mapping: parsed };
+    const evidence = {
+      ...remote,
+      mapping: parsed,
+      disposition: 'question',
+      currentOwnership: false,
+      lifecycleMonitoring: false,
+    };
+    remoteRefEvidence.push(evidence);
     if (remote.objectType !== 'commit' || !/^[0-9a-f]{40}$/.test(remote.sha ?? '')) {
       questions.push(
         question(
@@ -979,23 +988,46 @@ export function reconcileRemoteClaims({
     const state = fields['Claim-State'];
     const branch = fields['Claim-Branch'];
     if (!schema.valid) {
+      evidence.disposition = 'question';
       questions.push(
         question('claim-ref-issue-malformed', `${remote.ref} maps to a malformed issue record`),
       );
     } else if (['proposed', 'ready'].includes(state)) {
+      Object.assign(evidence, {
+        disposition: 'orphaned',
+        currentOwnership: false,
+        lifecycleMonitoring: false,
+      });
       questions.push(
         question(
           'orphaned-claim-ref',
           `${remote.ref} exists while issue #${parsed.issueNumber} is ${state}; do not adopt or release it automatically`,
         ),
       );
+    } else if (
+      (state === 'blocked' && branch === 'unclaimed') ||
+      (['done', 'abandoned'].includes(state) &&
+        (branch === 'unclaimed' || branch === parsed.branch))
+    ) {
+      Object.assign(evidence, {
+        disposition: 'preserved-non-ownership',
+        currentOwnership: false,
+        lifecycleMonitoring: false,
+      });
     } else if (branch !== parsed.branch) {
+      evidence.disposition = 'question';
       questions.push(
         question(
           'claim-ref-branch-mismatch',
           `${remote.ref} disagrees with issue #${parsed.issueNumber} Claim-Branch ${branch}`,
         ),
       );
+    } else {
+      Object.assign(evidence, {
+        disposition: 'current-agent-claim-evidence',
+        currentOwnership: true,
+        lifecycleMonitoring: true,
+      });
     }
   }
 
@@ -1019,6 +1051,29 @@ export function reconcileRemoteClaims({
       );
     }
     for (const entry of item.questions) questions.push({ issueNumber, ...entry });
+  }
+
+  for (const item of [...analyzedByNumber.values()].filter(
+    ({ claimState, registrySchema }) =>
+      registrySchema?.version === '2' && ['blocked', 'done', 'abandoned'].includes(claimState),
+  )) {
+    const matchingRefs = (refsByIssue.get(item.number) ?? []).filter(
+      ({ disposition }) => disposition === 'preserved-non-ownership',
+    );
+    if (matchingRefs.length === 1) {
+      item.remoteClaim = {
+        disposition: 'preserved-non-ownership',
+        expectedBranch: claimBranchForIssue(item.number),
+        matchingRefs,
+        currentOwnership: false,
+        lifecycle: { status: 'not-applicable', monitoring: false },
+      };
+    } else if (matchingRefs.length > 1) {
+      const code = 'duplicate-derived-claim-ref';
+      const message = `preserved claim evidence for #${item.number} requires at most one exact derived remote ref`;
+      addRemoteQuestion(item, code, message);
+      if (!openWorkItemNumbers.has(item.number)) questions.push({ issueNumber: item.number, ...question(code, message) });
+    }
   }
 
   for (const item of [...analyzedByNumber.values()].filter(
@@ -1121,7 +1176,7 @@ export function reconcileRemoteClaims({
   }
 
   return {
-    refs: reservedRefs.map((remote) => ({ ...remote, mapping: parseReservedClaimRef(remote.ref) })),
+    refs: remoteRefEvidence,
     questions,
   };
 }
