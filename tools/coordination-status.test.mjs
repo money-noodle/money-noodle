@@ -621,6 +621,160 @@ test('a reserved ref directly fetches its closed terminal issue and preserves it
   assert(result.invocations.includes(`gh api --paginate --slurp ${commentEndpoint(73)}`));
 });
 
+test('an exact derived ref remains visible when schema-v2 blocked work has no agent owner', (t) => {
+  const blocked = v2ReadyIssue(74, {
+    'Claim-State': 'blocked',
+    'Waiting-Since': '2026-09-01T03:00:00Z',
+    'Checkpoint-State': 'blocked',
+    'Checkpoint-At': '2026-09-01T03:00:00Z',
+  });
+  blocked.labels = [{ name: 'work:blocked' }];
+  const ref = 'refs/heads/claim-v1/issue-74';
+  const responses = defaultResponses();
+  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE, blocked]]) };
+  responses[`api:${CLAIM_REFS_ENDPOINT}`] = {
+    stdout: JSON.stringify([[restRef(ref, 'b'.repeat(40))]]),
+  };
+
+  const result = runStatus(t, { responses, args: ['--json'] });
+  const report = JSON.parse(result.stdout);
+  const item = report.registry.workItems.find(({ number }) => number === 74);
+  const remote = report.registry.remoteClaims.refs[0];
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(item.triage, 'blocked');
+  assert.equal(item.reconciliation, 'consistent');
+  for (const field of [
+    'Claim-Harness',
+    'Claim-Run-ID',
+    'Claim-Agent',
+    'Claim-Branch',
+    'Claim-Host',
+    'Claimed-At',
+    'Check-In-By',
+  ]) {
+    assert.equal(item.claim[field], 'unclaimed', field);
+  }
+  assert.equal(item.remoteClaim.disposition, 'preserved-non-ownership');
+  assert.equal(item.remoteClaim.currentOwnership, false);
+  assert.deepEqual(item.remoteClaim.lifecycle, { status: 'not-applicable', monitoring: false });
+  assert.equal(remote.ref, ref);
+  assert.equal(remote.disposition, 'preserved-non-ownership');
+  assert.equal(remote.currentOwnership, false);
+  assert.equal(remote.lifecycleMonitoring, false);
+  assert.equal(report.registry.maintainerQuestions.length, 0);
+  assert(!result.invocations.includes(`gh api ${claimRefEndpoint(74)}`));
+});
+
+test('closed done and abandoned records preserve derived refs with no retained ownership', (t) => {
+  const terminals = ['done', 'abandoned'].map((state, index) => {
+    const number = 74 + index;
+    const terminal = v2ReadyIssue(number, {
+      'Claim-State': state,
+      'Checkpoint-State': state,
+      'Checkpoint-At': '2026-09-01T03:00:00Z',
+    });
+    terminal.state = 'closed';
+    terminal.labels = [{ name: `work:${state}` }];
+    return terminal;
+  });
+  const refs = terminals.map((terminal, index) =>
+    restRef(`refs/heads/claim-v1/issue-${terminal.number}`, `${index + 2}`.repeat(40)),
+  );
+  const responses = defaultResponses();
+  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE]]) };
+  responses[`api:${CLAIM_REFS_ENDPOINT}`] = { stdout: JSON.stringify([refs]) };
+  for (const terminal of terminals) {
+    responses[`api:repos/example/registry/issues/${terminal.number}`] = {
+      stdout: JSON.stringify(terminal),
+    };
+    responses[`api:${commentEndpoint(terminal.number)}`] = {
+      stdout: JSON.stringify([[restCheckpointComment(terminal, 7400 + terminal.number)]]),
+    };
+  }
+
+  const result = runStatus(t, { responses, args: ['--json'] });
+  const report = JSON.parse(result.stdout);
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(report.registry.maintainerQuestions.length, 0);
+  assert.deepEqual(
+    report.registry.remoteClaims.refs.map((remote) => ({
+      issueNumber: remote.mapping.issueNumber,
+      disposition: remote.disposition,
+      currentOwnership: remote.currentOwnership,
+      lifecycleMonitoring: remote.lifecycleMonitoring,
+    })),
+    terminals.map(({ number }) => ({
+      issueNumber: number,
+      disposition: 'preserved-non-ownership',
+      currentOwnership: false,
+      lifecycleMonitoring: false,
+    })),
+  );
+  assert(
+    terminals.every(
+      ({ number }) => !report.registry.workItems.some((item) => item.number === number),
+    ),
+  );
+});
+
+test('implicit-v1 blocked and unowned terminal derived refs remain fail-closed mismatches', (t) => {
+  const records = ['blocked', 'done', 'abandoned'].map((state, index) => {
+    const record = claimIssue({ number: 76 + index, state });
+    record.body = record.body
+      .replace('Claim-Harness: pi', 'Claim-Harness: unclaimed')
+      .replace('Claim-Run-ID: run-123', 'Claim-Run-ID: unclaimed')
+      .replace('Claim-Agent: pi-sample', 'Claim-Agent: unclaimed')
+      .replace('Claim-Branch: test/sample', 'Claim-Branch: unclaimed')
+      .replace('Claim-Worktree: /fake/worktree', 'Claim-Worktree: unclaimed')
+      .replace('Claimed-At: 2026-08-29T18:00:00Z', 'Claimed-At: unclaimed')
+      .replace(`Check-In-By: ${FAR_FUTURE}`, 'Check-In-By: unclaimed');
+    if (state !== 'blocked') record.state = 'closed';
+    return record;
+  });
+  const refs = records.map(({ number }) =>
+    restRef(`refs/heads/claim-v1/issue-${number}`, 'd'.repeat(40)),
+  );
+  const responses = defaultResponses();
+  responses[`api:${ISSUES_ENDPOINT}`] = {
+    stdout: JSON.stringify([[PLAN_ISSUE, records[0]]]),
+  };
+  responses[`api:${CLAIM_REFS_ENDPOINT}`] = { stdout: JSON.stringify([refs]) };
+  for (const record of records.slice(1)) {
+    responses[`api:repos/example/registry/issues/${record.number}`] = {
+      stdout: JSON.stringify(record),
+    };
+    responses[`api:${commentEndpoint(record.number)}`] = {
+      stdout: JSON.stringify([[restCheckpointComment(record, 7600 + record.number)]]),
+    };
+  }
+
+  const result = runStatus(t, { responses, args: ['--json'] });
+  const report = JSON.parse(result.stdout);
+  const blocked = report.registry.workItems.find(({ number }) => number === 76);
+
+  assert.equal(result.exitCode, 2);
+  assert.equal(blocked.registrySchema.version, '1');
+  assert.equal(blocked.remoteClaim, undefined);
+  assert.deepEqual(
+    report.registry.maintainerQuestions
+      .filter(({ code }) => code === 'claim-ref-branch-mismatch')
+      .map(({ code }) => code),
+    records.map(() => 'claim-ref-branch-mismatch'),
+  );
+  assert(
+    report.registry.remoteClaims.refs.every(
+      ({ disposition }) => disposition === 'question' && disposition !== 'preserved-non-ownership',
+    ),
+  );
+  assert(
+    records.every(
+      ({ number }) => !result.invocations.includes(`gh api ${claimRefEndpoint(number)}`),
+    ),
+  );
+});
+
 test('closed reserved-ref issues fail closed on wrong labels and conflicting comments', (t) => {
   const remote = {
     ref: 'refs/heads/claim-v1/issue-73',

@@ -826,7 +826,7 @@ function renderHuman(report) {
   if (registry.remoteClaims.refs.length === 0) console.log('none');
   for (const remote of registry.remoteClaims.refs) {
     console.log(
-      `${remote.ref} ${remote.sha} mapping=${remote.mapping.status}${remote.mapping.issueNumber ? ` issue=#${remote.mapping.issueNumber}` : ''}`,
+      `${remote.ref} ${remote.sha} mapping=${remote.mapping.status}${remote.mapping.issueNumber ? ` issue=#${remote.mapping.issueNumber}` : ''} disposition=${remote.disposition ?? 'unresolved'}`,
     );
   }
 
