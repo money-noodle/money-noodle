@@ -4,6 +4,12 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import test from 'node:test';
 
+import {
+  parseJsonWithUniqueKeys,
+  parseScopePath,
+  parseSerializingConfiguration,
+} from './coordination-scope.mjs';
+
 const read = (path) => readFileSync(path, 'utf8');
 
 const readme = read('README.md');
@@ -14,10 +20,12 @@ const parallelWork = read('docs/development/parallel-work.md');
 const parallelWorkTemplate = read('.github/ISSUE_TEMPLATE/parallel-work.yml');
 const sharedPlanTemplate = read('.github/ISSUE_TEMPLATE/shared-plan.yml');
 const coordinationSchema = read('tools/coordination-schema.mjs');
+const coordinationScope = read('tools/coordination-scope.mjs');
 const coordinationClaim = read('tools/coordination-claim.mjs');
 const coordinationLib = read('tools/coordination-lib.mjs');
 const coordinationStatus = read('tools/coordination-status.mjs');
 const coordinationWriter = read('tools/coordination-write.mjs');
+const serializingConfiguration = read('.github/coordination/serializing-paths.v1.json');
 const preCommitHook = read('.githooks/pre-commit');
 const preMergeCommitHook = read('.githooks/pre-merge-commit');
 const integrationHookTests = read('tools/integration-checkout-hooks.test.mjs');
@@ -64,6 +72,43 @@ const currentStatusRoutes = [
     '../../current-status.md',
   ],
 ];
+
+test('issue 44 scope controls are pinned as non-self-activating', () => {
+  assert.match(parallelWork, /These controls are non-self-activating\./);
+  assert.match(
+    parallelWork,
+    /Every issue #44 bootstrap, implementation publication, pull-request, and integration step remains governed only by the protocol already integrated on its current `main`/,
+  );
+  assert.match(parallelWork, /only prospectively after #44 is integrated, exact-main CI succeeds/);
+  assert.doesNotMatch(parallelWork, /--gate(?:=|\s+)claim:44/);
+  assert.match(coordinationClaim, /if \(issueNumber === 44\)/);
+  assert.match(coordinationScope, /provisional-empty-before-ref/);
+});
+
+test('Nx shared globals remain within strict versioned serializing authority', () => {
+  const serializing = parseSerializingConfiguration(serializingConfiguration);
+  assert.equal(serializing.status, 'valid', serializing.message);
+  assert(serializing.paths.includes('nx.json'));
+
+  const parsedNx = parseJsonWithUniqueKeys(read('nx.json'));
+  assert.equal(parsedNx.status, 'valid');
+  const nx = parsedNx.value;
+  assert(Array.isArray(nx?.namedInputs?.sharedGlobals));
+  assert(nx.namedInputs.sharedGlobals.length > 0);
+  assert.equal(
+    new Set(nx.namedInputs.sharedGlobals).size,
+    nx.namedInputs.sharedGlobals.length,
+    'Nx shared globals must be unique',
+  );
+  for (const value of nx.namedInputs.sharedGlobals) {
+    assert.equal(typeof value, 'string');
+    assert(value.startsWith('{workspaceRoot}/'), value);
+    const path = value.slice('{workspaceRoot}/'.length);
+    assert.equal(value, `{workspaceRoot}/${path}`);
+    assert.equal(parseScopePath(path, { exactOnly: true }).status, 'valid', value);
+    assert(serializing.paths.includes(path), `${path} is absent from serializing authority`);
+  }
+});
 
 const workflowPaths = ['.github/workflows/ci.yml', '.github/workflows/delivery.yml'];
 
@@ -737,6 +782,11 @@ test('registry v2 policy preserves mixed-version, non-atomic, and bootstrap boun
   assert.match(coordinationWriter, /--dry-run/);
   assert.match(coordinationWriter, /--apply/);
   assert.match(coordinationWriter, /createGitHubCliHost/);
+  assert.match(coordinationWriter, /production-dependency-injection-forbidden/);
+  assert.doesNotMatch(
+    coordinationWriter,
+    /export\s+(?:async\s+)?function\s+(?:executeClaimEstablishmentWrite|executeCoordinationWriteWithDependencies|runCoordinationWriteCliWithDependencies|createGitHubCliHost|runGitHubCli)\b/,
+  );
   assert.match(coordinationWriter, /finalVerification/);
   assert.doesNotMatch(coordinationWriter, /spawnSync|gh issue|bulk migrat/i);
 });
@@ -756,24 +806,41 @@ test('remote-reference claim authority is derived, create-only, and isolated fro
   assert.match(coordinationClaim, /ref-present-operation-mismatch/);
   assert.match(
     coordinationClaim,
-    /matchingCheckpoints\.some\(\(\{ operationId: id \}\) => id !== operationId\)/,
+    /matchingCheckpoints\.length !== 1 \|\| matchingCheckpoints\[0\]\.operationId !== operationId/,
   );
+  assert.match(coordinationClaim, /scope-guard-required/);
+  assert.match(coordinationClaim, /scope-self-activation-forbidden/);
+  assert.match(coordinationClaim, /production-dependency-injection-forbidden/);
+  assert.doesNotMatch(
+    coordinationClaim,
+    /(?:executeCoordinationClaimForTest|runCoordinationClaimCliForTest|createCoordinationScopeGuardForTest|createGitHubClaimHostForTest)/,
+  );
+  assert.doesNotMatch(
+    coordinationClaim,
+    /export\s+(?:async\s+)?function\s+(?:executeCoordinationClaimWithDependencies|runCoordinationClaimCliWithDependencies|createScopeAuthority|createGitHubClaimHost)\b/,
+  );
+  assert.match(coordinationClaim, /scopeGuard: createProductionScopeAuthority\(\)/);
+  assert.match(coordinationClaim, /buildCoordinationStatusReport/);
+  assert.match(coordinationClaim, /refCreatedByOperation: true/);
   assert.match(coordinationClaim, /claimSnapshotGuard\(claim, operationId\)\(\{ issue \}\)/);
   assert.match(coordinationClaim, /'--method', 'POST', `\$\{root\}\/git\/refs`/);
-  assert.doesNotMatch(coordinationClaim, /'--method',\s*'(?:PATCH|PUT|DELETE)'/);
+  assert.doesNotMatch(coordinationClaim, /'--method',\s*'(?:PUT|DELETE)'/);
   assert.doesNotMatch(coordinationClaim, /git\s+push|force-push|force push|update-ref|delete-ref/i);
 
   assert.match(coordinationWriter, /initial-claim-requires-reference/);
   assert.match(coordinationWriter, /dedicated remote-reference claim module/);
   assert.match(coordinationWriter, /CLAIM_ESTABLISHMENT_AUTHORITY = Symbol/);
-  assert.match(coordinationWriter, /missing-claim-snapshot-guard/);
-  assert.match(coordinationWriter, /stage: 'claim-snapshot-guard'/);
+  assert.doesNotMatch(coordinationWriter, /executeClaimEstablishmentWrite/);
+  assert.match(coordinationClaim, /stage: 'claim-snapshot-guard'/);
   assert.match(coordinationClaim, /evaluateClaimCommentHistoryForBody/);
   assert.match(coordinationClaim, /claimSnapshotGuard: claimSnapshotGuard\(claim, operationId/);
   assert.match(coordinationLib, /export function evaluateClaimCommentHistoryForBody/);
   assert.doesNotMatch(coordinationWriter, /\/git\/refs|createClaimRef/);
   assert.doesNotMatch(coordinationLib, /from ['"]\.\/coordination-claim\.mjs['"]/);
   assert.doesNotMatch(coordinationStatus, /from ['"]\.\/coordination-claim\.mjs['"]/);
+  assert.match(coordinationScope, /requires one complete operation binding/);
+  assert.match(coordinationScope, /COMPLETE_SCOPE_BINDING_FIELDS\.some/);
+  assert.match(coordinationStatus, /isExactSameOperationTransitionQuestion/);
 
   const implementationSources = readdirSync('tools')
     .filter((name) => name.endsWith('.mjs') && !name.endsWith('.test.mjs'))
@@ -783,7 +850,6 @@ test('remote-reference claim authority is derived, create-only, and isolated fro
   );
   assert.deepEqual(privilegedCallsites.map(([path]) => path).sort(), [
     'tools/coordination-claim.mjs',
-    'tools/coordination-write.mjs',
   ]);
   const privilegedPreparationCallsites = implementationSources.filter(([, source]) =>
     source.includes('prepareClaimEstablishmentWrite('),

@@ -1,17 +1,46 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
   CHECKPOINT_EVIDENCE_FIELDS,
   V2_PLAN_FIELDS,
   V2_PORTABLE_CLAIM_FIELDS,
 } from './coordination-schema.mjs';
-import {
+import * as productionClaimModule from './coordination-claim.mjs';
+import * as productionWriteModule from './coordination-write.mjs';
+
+const instrumentedDirectory = mkdtempSync(join(tmpdir(), 'mn-writer-private-test-'));
+const writerSourcePath = fileURLToPath(new URL('./coordination-write.mjs', import.meta.url));
+let instrumentedSource = readFileSync(writerSourcePath, 'utf8').replaceAll(
+  "'./coordination-schema.mjs'",
+  JSON.stringify(new URL('./coordination-schema.mjs', import.meta.url).href),
+);
+instrumentedSource += `
+export {
+  executeCoordinationWriteWithDependencies as __testExecuteCoordinationWrite,
+  runCoordinationWriteCliWithDependencies as __testRunCoordinationWriteCli,
+};
+`;
+const instrumentedPath = join(instrumentedDirectory, 'coordination-write.instrumented.mjs');
+writeFileSync(instrumentedPath, instrumentedSource);
+process.once('exit', () => rmSync(instrumentedDirectory, { recursive: true, force: true }));
+const instrumentedWriteModule = await import(pathToFileURL(instrumentedPath).href);
+const {
   CoordinationWriteError,
-  executeCoordinationWrite,
   prepareCoordinationWrite,
-  runCoordinationWriteCli,
-} from './coordination-write.mjs';
+  __testExecuteCoordinationWrite: executeCoordinationWrite,
+  __testRunCoordinationWriteCli: runCoordinationWriteCli,
+} = instrumentedWriteModule;
+const {
+  executeCoordinationWrite: executeProductionCoordinationWrite,
+  runCoordinationWriteCli: runProductionCoordinationWriteCli,
+} = productionWriteModule;
+const WRITER_TOOL = fileURLToPath(new URL('./coordination-write.mjs', import.meta.url));
 
 const COMMIT = 'c'.repeat(40);
 const RUN = 'https://github.com/money-noodle/money-noodle/actions/runs/456';
@@ -61,7 +90,7 @@ Blockers: none
 function values(overrides = {}) {
   return {
     'Parent-Plan': '#27',
-    'Scope-Paths': 'tools/**\ndocs/example.md',
+    'Scope-Paths': 'docs/example.md\ntools/**',
     'Depends-On': 'none',
     'Dependency-Notes': 'none',
     'Integration-Owner': 'maintainer',
@@ -189,7 +218,7 @@ test('implicit-v1 migration is deterministic, complete, and preserves narrative 
   assert.equal(second.body, first.body);
   assert.match(first.body, /Preserve this narrative exactly\./);
   assert.match(first.body, /Registry-Schema-Version: 2/);
-  assert.match(first.body, /Scope-Paths: tools\/\*\*, docs\/example\.md/);
+  assert.match(first.body, /Scope-Paths: docs\/example\.md, tools\/\*\*/);
   assert.doesNotMatch(first.body, /Claim-Worktree|Shared-Hotspots/);
 });
 
@@ -234,6 +263,73 @@ test('migration collisions and unsupported versions stop before construction', (
     (error) =>
       error instanceof CoordinationWriteError && error.code === 'unsupported-schema-version',
   );
+});
+
+test('writer and claim public exports expose no caller-injected mutation path', async () => {
+  assert.deepEqual(Object.keys(productionWriteModule).sort(), [
+    'CoordinationWriteError',
+    'executeCoordinationWrite',
+    'prepareClaimEstablishmentWrite',
+    'prepareCoordinationWrite',
+    'runCoordinationWriteCli',
+  ]);
+  assert.deepEqual(Object.keys(productionClaimModule).sort(), [
+    'BOOTSTRAP_BRANCH',
+    'BOOTSTRAP_ISSUE',
+    'CANONICAL_REPOSITORY',
+    'CLAIM_BRANCH_VERSION',
+    'CoordinationClaimError',
+    'claimBranchForIssue',
+    'claimRefForIssue',
+    'executeCoordinationClaim',
+    'parseReservedClaimBranch',
+    'parseReservedClaimRef',
+    'prepareCoordinationClaim',
+    'runCoordinationClaimCli',
+    'validateClaimBranch',
+  ]);
+  assert.equal(
+    [...Object.keys(productionWriteModule), ...Object.keys(productionClaimModule)].some((name) =>
+      /ForTest|GitHub.*Host|ScopeGuard|SnapshotGuard/.test(name),
+    ),
+    false,
+  );
+
+  const fakeHost = new MockHost();
+  const fakeAuthority = () => ({ valid: true, status: 'clear' });
+  const injected = [
+    { host: fakeHost },
+    { writerHost: fakeHost },
+    { claimHost: fakeHost },
+    { scopeGuard: fakeAuthority },
+    { claimSnapshotGuard: fakeAuthority },
+    { buildReport: fakeAuthority },
+    { runGh: fakeAuthority },
+    { readText: fakeAuthority },
+    { writeOutput: fakeAuthority },
+    { dependencies: { host: fakeHost, scopeGuard: fakeAuthority } },
+  ];
+  for (const dependency of injected) {
+    await assert.rejects(
+      executeProductionCoordinationWrite({
+        repository: 'money-noodle/money-noodle',
+        issueNumber: 41,
+        expectedBody: V1_BODY,
+        values: values(),
+        checkpointComment: checkpointComment(),
+        operationId: 'production-writer-injection',
+        ...dependency,
+      }),
+      (error) => error.code === 'production-dependency-injection-forbidden',
+      Object.keys(dependency)[0],
+    );
+    await assert.rejects(
+      runProductionCoordinationWriteCli({ argv: ['--apply'], ...dependency }),
+      (error) => error.code === 'production-dependency-injection-forbidden',
+      Object.keys(dependency)[0],
+    );
+  }
+  assert.equal(fakeHost.mutationCount(), 0);
 });
 
 test('incomplete or semantically invalid writes issue zero host mutations', async () => {
@@ -659,6 +755,87 @@ test('explicit adapter apply performs one bounded issue write and verifies all s
   assert.equal(adapter.calls.filter(({ args }) => args.includes('POST')).length, 1);
   assert(adapter.issue.labels.includes('work:active'));
   assert.equal(adapter.issue.comments.length, 2);
+});
+
+test('production writer boundary constructs its host and completes through the gh executable', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'mn-writer-production-boundary-'));
+  try {
+    const bodyPath = join(directory, 'body.md');
+    const valuesPath = join(directory, 'values.json');
+    const commentPath = join(directory, 'comment.md');
+    const statePath = join(directory, 'state.json');
+    const invocationPath = join(directory, 'invocations.log');
+    writeFileSync(bodyPath, V1_BODY);
+    writeFileSync(valuesPath, JSON.stringify(values()));
+    writeFileSync(commentPath, checkpointComment());
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        issue: {
+          state: 'open',
+          body: V1_BODY,
+          labels: [{ name: 'work:ready' }, { name: 'area:foundation' }],
+        },
+        comments: [{ id: 1, user: { login: 'maintainer' }, body: 'Historical evidence.' }],
+      }),
+    );
+    writeFileSync(invocationPath, '');
+    const ghPath = join(directory, 'gh');
+    writeFileSync(
+      ghPath,
+      `#!${process.execPath}
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const input = fs.readFileSync(0, 'utf8');
+const statePath = ${JSON.stringify(statePath)};
+const logPath = ${JSON.stringify(invocationPath)};
+const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+fs.appendFileSync(logPath, args.join(' ') + '\\n');
+const endpoint = args.find((arg) => arg.startsWith('repos/'));
+const methodIndex = args.indexOf('--method');
+const method = methodIndex < 0 ? 'GET' : args[methodIndex + 1];
+const save = () => fs.writeFileSync(statePath, JSON.stringify(state));
+if (args.includes('--paginate')) process.stdout.write(JSON.stringify([state.comments]));
+else if (method === 'PATCH') {
+  const value = JSON.parse(input);
+  if (value.body !== undefined) state.issue.body = value.body;
+  if (value.labels !== undefined) state.issue.labels = value.labels.map((name) => ({ name }));
+  save();
+  process.stdout.write(JSON.stringify(state.issue));
+} else if (method === 'POST' && endpoint.endsWith('/comments')) {
+  const comment = { id: 2, user: { login: 'maintainer' }, body: JSON.parse(input).body };
+  state.comments.push(comment);
+  save();
+  process.stdout.write(JSON.stringify(comment));
+} else process.stdout.write(JSON.stringify(state.issue));
+`,
+    );
+    chmodSync(ghPath, 0o755);
+    const args = cliArguments('--apply').map((value) => {
+      if (value === 'body.md') return bodyPath;
+      if (value === 'values.json') return valuesPath;
+      if (value === 'comment.md') return commentPath;
+      return value;
+    });
+    const result = spawnSync(process.execPath, [WRITER_TOOL, ...args], {
+      cwd: directory,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: directory },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, '');
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.status, 'complete');
+    assert.deepEqual(output.mutations, { body: 1, label: 1, comment: 1 });
+    assert.deepEqual(output.finalVerification, { body: true, label: true, comment: true });
+    const finalState = JSON.parse(readFileSync(statePath, 'utf8'));
+    assert(finalState.issue.labels.some(({ name }) => name === 'work:active'));
+    assert.equal(finalState.comments.length, 2);
+    assert.match(readFileSync(invocationPath, 'utf8'), /--method PATCH/);
+    assert.match(readFileSync(invocationPath, 'utf8'), /--method POST/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('explicit adapter apply rejects invalid input before any GitHub call or mutation', async () => {

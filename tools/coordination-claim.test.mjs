@@ -1,22 +1,60 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { CHECKPOINT_EVIDENCE_FIELDS, V2_PORTABLE_CLAIM_FIELDS } from './coordination-schema.mjs';
-import {
+import * as productionClaimModule from './coordination-claim.mjs';
+
+const instrumentedDirectory = mkdtempSync(join(tmpdir(), 'mn-claim-private-test-'));
+const claimSourcePath = fileURLToPath(new URL('./coordination-claim.mjs', import.meta.url));
+let instrumentedSource = readFileSync(claimSourcePath, 'utf8');
+for (const dependency of [
+  'coordination-schema.mjs',
+  'coordination-lib.mjs',
+  'coordination-scope.mjs',
+  'coordination-status.mjs',
+  'coordination-write.mjs',
+]) {
+  instrumentedSource = instrumentedSource.replaceAll(
+    `'./${dependency}'`,
+    JSON.stringify(new URL(`./${dependency}`, import.meta.url).href),
+  );
+}
+instrumentedSource += `
+export {
+  createScopeAuthority as __testCreateScopeAuthority,
+  executeCoordinationClaimWithDependencies as __testExecuteCoordinationClaim,
+};
+`;
+const instrumentedPath = join(instrumentedDirectory, 'coordination-claim.instrumented.mjs');
+writeFileSync(instrumentedPath, instrumentedSource);
+process.once('exit', () => rmSync(instrumentedDirectory, { recursive: true, force: true }));
+const instrumentedClaimModule = await import(pathToFileURL(instrumentedPath).href);
+
+const {
   BOOTSTRAP_BRANCH,
   CANONICAL_REPOSITORY,
   CoordinationClaimError,
   claimBranchForIssue,
   claimRefForIssue,
-  createGitHubClaimHost,
-  executeCoordinationClaim,
   parseReservedClaimBranch,
   parseReservedClaimRef,
   prepareCoordinationClaim,
-  runCoordinationClaimCli,
   validateClaimBranch,
-} from './coordination-claim.mjs';
+  __testCreateScopeAuthority: createCoordinationScopeGuard,
+  __testExecuteCoordinationClaim: executeCoordinationClaim,
+} = instrumentedClaimModule;
+const {
+  executeCoordinationClaim: executeProductionCoordinationClaim,
+  runCoordinationClaimCli: runProductionCoordinationClaimCli,
+} = productionClaimModule;
 
+const CLAIM_TOOL = fileURLToPath(new URL('./coordination-claim.mjs', import.meta.url));
 const BASE = 'a'.repeat(40);
 const OTHER = 'b'.repeat(40);
 const ISSUE = 73;
@@ -241,10 +279,49 @@ function prepareInput(overrides = {}) {
   };
 }
 
+let scopeEvidenceSequence = 0;
+
+function scopeGateFor(request, overrides = {}) {
+  scopeEvidenceSequence += 1;
+  return {
+    requested: request.requested,
+    status: 'clear',
+    blockingFindingIds: [],
+    evidence: {
+      version: 1,
+      evidenceId: `test-scope-${scopeEvidenceSequence}`,
+      issuedAt: new Date().toISOString(),
+      target: request.requested,
+      phase: request.phase,
+      transition: request.transition,
+      operationId: request.operationId,
+      issueNumber: request.issueNumber,
+      branch: request.branch,
+      ref: request.ref,
+      expectedBase: request.expectedBase,
+      sourceIssueBodySha256: createHash('sha256').update(request.sourceIssueBody).digest('hex'),
+      expectedIssueBodySha256: createHash('sha256').update(request.expectedIssueBody).digest('hex'),
+      preparedIssueBodySha256: createHash('sha256').update(request.preparedIssueBody).digest('hex'),
+      claimHarness: request.claimHarness,
+      claimRunId: request.claimRunId,
+      claimAgent: request.claimAgent,
+      claimHost: request.claimHost,
+      claimedAt: request.claimedAt,
+      ...overrides.evidence,
+    },
+    ...Object.fromEntries(Object.entries(overrides).filter(([key]) => key !== 'evidence')),
+  };
+}
+
+function freshScopeGuard() {
+  return async (request) => scopeGateFor(request);
+}
+
 function input(claimHost, writerHost, overrides = {}) {
   return {
     claimHost,
     writerHost,
+    scopeGuard: freshScopeGuard(),
     ...prepareInput(),
     ...overrides,
   };
@@ -629,6 +706,301 @@ test('closed, mislabeled, malformed, or competing parked issues create no orphan
   }
 });
 
+test('the production guard cannot self-activate for issue 44', async () => {
+  const guard = createCoordinationScopeGuard(() => {
+    throw new Error('self-activation must fail before status evaluation');
+  });
+  await assert.rejects(
+    guard({
+      phase: 'before-ref',
+      requested: 'claim:44',
+      issueNumber: 44,
+      branch: 'claim-v1/issue-44',
+      expectedBase: BASE,
+    }),
+    (error) =>
+      error instanceof CoordinationClaimError && error.code === 'scope-self-activation-forbidden',
+  );
+});
+
+test('claim execution rejects omitted and incorrectly bound scope evidence before mutation', async () => {
+  {
+    const claimHost = new MockClaimHost();
+    const writerHost = new MockWriterHost();
+    await assert.rejects(
+      executeCoordinationClaim(input(claimHost, writerHost, { scopeGuard: null })),
+      (error) => error instanceof CoordinationClaimError && error.code === 'scope-guard-required',
+    );
+    assert.equal(claimHost.createCalls, 0);
+    assert.deepEqual(writerHost.mutations, []);
+  }
+  for (const [name, scopeGuard] of [
+    ['target', async (request) => scopeGateFor(request, { requested: 'claim:74' })],
+    ['phase', async (request) => scopeGateFor(request, { evidence: { phase: 'after-ref' } })],
+    [
+      'transition',
+      async (request) => scopeGateFor(request, { evidence: { transition: 'writer-recovery' } }),
+    ],
+    [
+      'operation',
+      async (request) => scopeGateFor(request, { evidence: { operationId: 'other-operation' } }),
+    ],
+    ['issue', async (request) => scopeGateFor(request, { evidence: { issueNumber: 74 } })],
+    [
+      'branch',
+      async (request) => scopeGateFor(request, { evidence: { branch: 'claim-v1/issue-74' } }),
+    ],
+    [
+      'ref',
+      async (request) =>
+        scopeGateFor(request, { evidence: { ref: 'refs/heads/claim-v1/issue-74' } }),
+    ],
+    ['base', async (request) => scopeGateFor(request, { evidence: { expectedBase: OTHER } })],
+    [
+      'source-body',
+      async (request) =>
+        scopeGateFor(request, { evidence: { sourceIssueBodySha256: 'b'.repeat(64) } }),
+    ],
+    [
+      'expected-body',
+      async (request) =>
+        scopeGateFor(request, { evidence: { expectedIssueBodySha256: 'b'.repeat(64) } }),
+    ],
+    [
+      'prepared-body',
+      async (request) =>
+        scopeGateFor(request, { evidence: { preparedIssueBodySha256: 'b'.repeat(64) } }),
+    ],
+    ['harness', async (request) => scopeGateFor(request, { evidence: { claimHarness: 'other' } })],
+    ['run', async (request) => scopeGateFor(request, { evidence: { claimRunId: 'other' } })],
+    ['agent', async (request) => scopeGateFor(request, { evidence: { claimAgent: 'other' } })],
+    ['host', async (request) => scopeGateFor(request, { evidence: { claimHost: 'other' } })],
+    ['claimed-at', async (request) => scopeGateFor(request, { evidence: { claimedAt: 'other' } })],
+    [
+      'cached',
+      async (request) =>
+        scopeGateFor(request, { evidence: { issuedAt: '2000-01-01T00:00:00.000Z' } }),
+    ],
+  ]) {
+    const claimHost = new MockClaimHost();
+    const writerHost = new MockWriterHost();
+    await assert.rejects(
+      executeCoordinationClaim(input(claimHost, writerHost, { scopeGuard })),
+      (error) => error instanceof CoordinationClaimError && error.code === 'scope-gate-not-clear',
+      name,
+    );
+    assert.equal(claimHost.createCalls, 0, name);
+    assert.deepEqual(writerHost.mutations, [], name);
+  }
+});
+
+test('the public module has no alternate mutation export and production boundaries reject injection', async () => {
+  assert.deepEqual(Object.keys(productionClaimModule).sort(), [
+    'BOOTSTRAP_BRANCH',
+    'BOOTSTRAP_ISSUE',
+    'CANONICAL_REPOSITORY',
+    'CLAIM_BRANCH_VERSION',
+    'CoordinationClaimError',
+    'claimBranchForIssue',
+    'claimRefForIssue',
+    'executeCoordinationClaim',
+    'parseReservedClaimBranch',
+    'parseReservedClaimRef',
+    'prepareCoordinationClaim',
+    'runCoordinationClaimCli',
+    'validateClaimBranch',
+  ]);
+  assert.equal(
+    Object.keys(productionClaimModule).some((name) => /ForTest|Host|Guard/.test(name)),
+    false,
+  );
+
+  const fabricatedScopeGuard = async (request) => scopeGateFor(request);
+  const fabricatedReportBuilder = async () => ({
+    scopeGate: { requested: `claim:${ISSUE}`, status: 'clear', blockingFindingIds: [] },
+  });
+  const injectedDependencies = [
+    { scopeGuard: fabricatedScopeGuard },
+    { claimHost: new MockClaimHost() },
+    { writerHost: new MockWriterHost() },
+    { buildReport: fabricatedReportBuilder },
+    { runGh: async () => ({ status: 0, stdout: '{}', stderr: '' }) },
+    { dependencies: { scopeGuard: fabricatedScopeGuard } },
+  ];
+  for (const injected of injectedDependencies) {
+    await assert.rejects(
+      executeProductionCoordinationClaim({ ...prepareInput(), ...injected }),
+      (error) => error.code === 'production-dependency-injection-forbidden',
+      Object.keys(injected)[0],
+    );
+    await assert.rejects(
+      runProductionCoordinationClaimCli({ argv: ['--apply'], ...injected }),
+      (error) => error.code === 'production-dependency-injection-forbidden',
+      Object.keys(injected)[0],
+    );
+  }
+});
+
+test('incomplete authority evidence cannot authorize the first mutation', async () => {
+  for (const field of [
+    'target',
+    'phase',
+    'transition',
+    'operationId',
+    'issueNumber',
+    'branch',
+    'ref',
+    'expectedBase',
+    'sourceIssueBodySha256',
+    'expectedIssueBodySha256',
+    'preparedIssueBodySha256',
+    'claimHarness',
+    'claimRunId',
+    'claimAgent',
+    'claimHost',
+    'claimedAt',
+  ]) {
+    const claimHost = new MockClaimHost();
+    const writerHost = new MockWriterHost();
+    const scopeGuard = async (request) =>
+      scopeGateFor(request, { evidence: { [field]: undefined } });
+    await assert.rejects(
+      executeCoordinationClaim(input(claimHost, writerHost, { scopeGuard })),
+      (error) => error instanceof CoordinationClaimError && error.code === 'scope-gate-not-clear',
+      field,
+    );
+    assert.equal(claimHost.createCalls, 0, field);
+    assert.deepEqual(writerHost.mutations, [], field);
+  }
+});
+
+test('a reused clear evidence identity cannot authorize a later claim phase', async () => {
+  const claimHost = new MockClaimHost();
+  const writerHost = new MockWriterHost();
+  const scopeGuard = async (request) =>
+    scopeGateFor(request, { evidence: { evidenceId: 'cached-clear-evidence' } });
+  const outcome = await executeCoordinationClaim(input(claimHost, writerHost, { scopeGuard }));
+  assert.equal(outcome.status, 'blocked');
+  assert.equal(outcome.stage, 'post-ref-scope-guard');
+  assert.equal(outcome.refMutations, 1);
+  assert.deepEqual(writerHost.mutations, []);
+});
+
+test('the production scope-guard adapter binds cross-module status evidence to every phase', async () => {
+  const provisionalClaims = [];
+  const scopeGuard = createCoordinationScopeGuard((requested, { provisionalClaim }) => {
+    provisionalClaims.push(structuredClone(provisionalClaim));
+    return { scopeGate: { requested, status: 'clear', blockingFindingIds: [] } };
+  });
+  const claimHost = new MockClaimHost();
+  const writerHost = new MockWriterHost();
+  const outcome = await executeCoordinationClaim(input(claimHost, writerHost, { scopeGuard }));
+  assert.equal(outcome.status, 'complete');
+  assert.deepEqual(
+    provisionalClaims.map(({ phase, transition, operationId, refCreatedByOperation }) => ({
+      phase,
+      transition,
+      operationId,
+      refCreatedByOperation,
+    })),
+    [
+      {
+        phase: 'before-ref',
+        transition: 'before-ref',
+        operationId: 'claim-73',
+        refCreatedByOperation: false,
+      },
+      {
+        phase: 'after-ref',
+        transition: 'ref-created-parked',
+        operationId: 'claim-73',
+        refCreatedByOperation: true,
+      },
+      {
+        phase: 'after-write',
+        transition: 'after-write',
+        operationId: 'claim-73',
+        refCreatedByOperation: false,
+      },
+    ],
+  );
+});
+
+test('fresh scope guards bracket the sole ref mutation and block all later issue writes on drift', async () => {
+  {
+    const claimHost = new MockClaimHost();
+    const writerHost = new MockWriterHost();
+    const calls = [];
+    const scopeGuard = async (request) => {
+      calls.push(request.phase);
+      assert.equal(request.expectedIssueBody, PARKED_BODY);
+      return scopeGateFor(request, {
+        status: request.phase === 'before-ref' ? 'clear' : 'blocked',
+        blockingFindingIds: request.phase === 'before-ref' ? [] : ['scope-v1:test'],
+      });
+    };
+    const outcome = await executeCoordinationClaim(input(claimHost, writerHost, { scopeGuard }));
+    assert.deepEqual(calls, ['before-ref', 'after-ref']);
+    assert.equal(outcome.status, 'blocked');
+    assert.equal(outcome.stage, 'post-ref-scope-guard');
+    assert.equal(outcome.refMutations, 1);
+    assert.deepEqual(writerHost.mutations, []);
+  }
+  {
+    const claimHost = new MockClaimHost();
+    const writerHost = new MockWriterHost();
+    const scopeGuard = async (request) => scopeGateFor(request, { status: 'unknown' });
+    await assert.rejects(
+      executeCoordinationClaim(input(claimHost, writerHost, { scopeGuard })),
+      (error) => error instanceof CoordinationClaimError && error.code === 'scope-gate-not-clear',
+    );
+    assert.equal(claimHost.createCalls, 0);
+    assert.deepEqual(writerHost.mutations, []);
+  }
+  {
+    const claimHost = new MockClaimHost();
+    const writerHost = new MockWriterHost();
+    const calls = [];
+    const scopeGuard = async (request) => {
+      calls.push(request.phase);
+      assert.equal(
+        request.expectedIssueBody,
+        request.phase === 'after-write'
+          ? prepareCoordinationClaim(prepareInput()).prepared.body
+          : PARKED_BODY,
+      );
+      return scopeGateFor(request, {
+        status: request.phase === 'after-write' ? 'blocked' : 'clear',
+        blockingFindingIds: request.phase === 'after-write' ? ['scope-v1:late-race'] : [],
+      });
+    };
+    const outcome = await executeCoordinationClaim(input(claimHost, writerHost, { scopeGuard }));
+    assert.deepEqual(calls, ['before-ref', 'after-ref', 'after-write']);
+    assert.equal(outcome.status, 'blocked');
+    assert.equal(outcome.stage, 'post-write-scope-reconciliation');
+    assert.equal(outcome.refMutations, 1);
+    assert.deepEqual(writerHost.mutations, ['body', 'label', 'comment']);
+  }
+});
+
+test('an exact parked-body ref is preserved as an orphan with zero guard or issue mutation', async () => {
+  const claimHost = new MockClaimHost();
+  claimHost.ref = { ref: REF, object: { type: 'commit', sha: BASE } };
+  const writerHost = new MockWriterHost();
+  let guardCalls = 0;
+  const scopeGuard = async (request) => {
+    guardCalls += 1;
+    return scopeGateFor(request);
+  };
+  const outcome = await executeCoordinationClaim(input(claimHost, writerHost, { scopeGuard }));
+  assert.equal(outcome.status, 'orphaned');
+  assert.equal(outcome.stage, 'ref-present-parked-body');
+  assert.equal(claimHost.createCalls, 0);
+  assert.equal(guardCalls, 0);
+  assert.deepEqual(writerHost.mutations, []);
+  assert.equal(writerHost.issue.body, PARKED_BODY);
+});
+
 test('a complete schema-v2 readiness checkpoint with another marker remains valid pre-create history', async () => {
   const claimHost = new MockClaimHost();
   const writerHost = new MockWriterHost();
@@ -670,7 +1042,7 @@ test('orphaned refs, body collisions, and active-body/ref-absent contradictions 
   }
 });
 
-test('body-success label-or-comment failures retry beside a real readiness marker without another ref', async () => {
+test('partial writes without exact operation evidence remain immutable orphans on retry', async () => {
   for (const failedSurface of ['label', 'comment']) {
     const claimHost = new MockClaimHost();
     const writerHost = new MockWriterHost();
@@ -683,17 +1055,13 @@ test('body-success label-or-comment failures retry beside a real readiness marke
     assert.equal(first.stage, 'writer-partial', failedSurface);
     assert.equal(claimHost.createCalls, 1);
     delete writerHost.failBefore[failedSurface];
+    const mutationsAfterFirst = [...writerHost.mutations];
     const second = await executeCoordinationClaim(input(claimHost, writerHost));
-    assert.equal(second.status, 'complete', failedSurface);
-    assert.equal(second.stage, 'writer-recovery', failedSurface);
+    assert.equal(second.status, 'collision', failedSurface);
+    assert.equal(second.stage, 'ref-present-operation-mismatch', failedSurface);
+    assert.deepEqual(second.observedOperations, [], failedSurface);
     assert.equal(claimHost.createCalls, 1);
-    assert.equal(second.writerMutations.body, 0);
-    assert.equal(
-      writerHost.issue.comments.filter(({ body }) =>
-        body.includes('Coordination-Write-ID: claim-73-readiness'),
-      ).length,
-      1,
-    );
+    assert.deepEqual(writerHost.mutations, mutationsAfterFirst, failedSurface);
   }
 });
 
@@ -703,7 +1071,8 @@ test('prepared-body recovery rechecks post-ref issue safety before mutation', as
   const writerHost = new MockWriterHost();
   const prepared = prepareCoordinationClaim(prepareInput());
   writerHost.issue.body = prepared.prepared.body;
-  writerHost.issue.labels = ['work:active', 'area:foundation'];
+  writerHost.issue.labels = ['work:ready', 'area:foundation'];
+  writerHost.issue.comments = [hostedComment({ id: 1, body: prepared.operation.comment })];
   writerHost.onRead = (writer, readCount) => {
     if (readCount === 2) writer.issue.state = 'closed';
   };
@@ -781,7 +1150,7 @@ test('incomplete operation A evidence cannot be recovered or duplicated by opera
   assert.deepEqual(writerHost.mutations, []);
   assert.deepEqual(writerHost.issue.comments, originalComments);
   assert.equal(claimHost.createCalls, 0);
-  assert.match(outcome.message, /every matching checkpoint.*operation operation-b/);
+  assert.match(outcome.message, /one exact checkpoint carrying operation operation-b/);
 });
 
 test('mixed operation A and B checkpoints reject incomplete recovery under either operation', async () => {
@@ -876,7 +1245,7 @@ test('incomplete same-operation A recovery repairs only the label without a dupl
   assert.equal(claimHost.createCalls, 0);
 });
 
-test('zero matching checkpoints permit body-only recovery beside historical parked evidence', async () => {
+test('zero matching operation checkpoints forbid body-only recovery beside parked history', async () => {
   const claimHost = new MockClaimHost();
   claimHost.ref = { ref: REF, object: { type: 'commit', sha: BASE } };
   const writerHost = new MockWriterHost();
@@ -894,17 +1263,17 @@ test('zero matching checkpoints permit body-only recovery beside historical park
     input(claimHost, writerHost, { operationId: 'operation-a' }),
   );
 
-  assert.equal(outcome.status, 'complete');
-  assert.equal(outcome.stage, 'writer-recovery');
-  assert.deepEqual(outcome.writerMutations, { body: 0, label: 1, comment: 1 });
-  assert.deepEqual(writerHost.mutations, ['label', 'comment']);
-  assert.equal(writerHost.issue.comments.length, 2);
+  assert.equal(outcome.status, 'collision');
+  assert.equal(outcome.stage, 'ref-present-operation-mismatch');
+  assert.deepEqual(outcome.observedOperations, []);
+  assert.deepEqual(outcome.writerMutations, { body: 0, label: 0, comment: 0 });
+  assert.deepEqual(writerHost.mutations, []);
+  assert.equal(writerHost.issue.comments.length, 1);
   assert.match(writerHost.issue.comments[0].body, /Coordination-Write-ID: readiness-history/);
-  assert.match(writerHost.issue.comments[1].body, /Coordination-Write-ID: operation-a/);
   assert.equal(claimHost.createCalls, 0);
 });
 
-test('repeated same-operation evidence delegates safely to writer idempotency checks', async () => {
+test('duplicate same-operation evidence blocks before writer recovery', async () => {
   const claimHost = new MockClaimHost();
   claimHost.ref = { ref: REF, object: { type: 'commit', sha: BASE } };
   const writerHost = new MockWriterHost();
@@ -922,8 +1291,8 @@ test('repeated same-operation evidence delegates safely to writer idempotency ch
   );
 
   assert.equal(outcome.status, 'collision');
-  assert.equal(outcome.stage, 'writer-recovery');
-  assert.equal(outcome.writer.stage, 'pre-write-comment');
+  assert.equal(outcome.stage, 'ref-present-operation-mismatch');
+  assert.deepEqual(outcome.observedOperations, ['operation-a']);
   assert.deepEqual(outcome.writerMutations, { body: 0, label: 0, comment: 0 });
   assert.deepEqual(writerHost.mutations, []);
   assert.deepEqual(writerHost.issue.comments, originalComments);
@@ -935,11 +1304,13 @@ test('the fresh privileged guard blocks operation A evidence racing operation B 
   claimHost.ref = { ref: REF, object: { type: 'commit', sha: BASE } };
   const writerHost = new MockWriterHost();
   const operationA = prepareCoordinationClaim(prepareInput({ operationId: 'racing-operation-a' }));
+  const operationB = prepareCoordinationClaim(prepareInput({ operationId: 'racing-operation-b' }));
   writerHost.issue.body = operationA.prepared.body;
   writerHost.issue.labels = ['work:ready', 'area:foundation'];
+  writerHost.issue.comments = [hostedComment({ id: 1, body: operationB.operation.comment })];
   writerHost.onRead = (writer, readCount) => {
     if (readCount === 2) {
-      writer.issue.comments.push(hostedComment({ id: 1, body: operationA.operation.comment }));
+      writer.issue.comments.push(hostedComment({ id: 2, body: operationA.operation.comment }));
     }
   };
 
@@ -950,10 +1321,10 @@ test('the fresh privileged guard blocks operation A evidence racing operation B 
   assert.equal(outcome.status, 'collision');
   assert.equal(outcome.stage, 'post-ref-snapshot-guard');
   assert.equal(outcome.guard.code, 'post-ref-operation-mismatch');
-  assert.deepEqual(outcome.guard.observedOperations, ['racing-operation-a']);
+  assert.deepEqual(outcome.guard.observedOperations, ['racing-operation-b', 'racing-operation-a']);
   assert.deepEqual(outcome.writerMutations, { body: 0, label: 0, comment: 0 });
   assert.deepEqual(writerHost.mutations, []);
-  assert.equal(writerHost.issue.comments.length, 1);
+  assert.equal(writerHost.issue.comments.length, 2);
   assert.equal(claimHost.createCalls, 0);
 });
 
@@ -987,16 +1358,16 @@ test('conflicting structured ownership blocks recovery even without an operation
   assert.deepEqual(writerHost.mutations, []);
 });
 
-test('claim CLI dry-run validates derivation without invoking GitHub', async () => {
-  const files = new Map([
-    ['body.md', PARKED_BODY],
-    ['values.json', JSON.stringify(activeValues())],
-    ['comment.md', checkpointComment()],
-  ]);
-  let calls = 0;
-  const output = [];
-  const result = await runCoordinationClaimCli({
-    argv: [
+test('production CLI dry-run validates derivation without invoking GitHub', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'mn-claim-cli-dry-run-'));
+  try {
+    const bodyPath = join(directory, 'body.md');
+    const valuesPath = join(directory, 'values.json');
+    const commentPath = join(directory, 'comment.md');
+    writeFileSync(bodyPath, PARKED_BODY);
+    writeFileSync(valuesPath, JSON.stringify(activeValues()));
+    writeFileSync(commentPath, checkpointComment());
+    const args = [
       '--dry-run',
       '--repo',
       CANONICAL_REPOSITORY,
@@ -1005,118 +1376,35 @@ test('claim CLI dry-run validates derivation without invoking GitHub', async () 
       '--expected-base',
       BASE,
       '--expected-body-file',
-      'body.md',
+      bodyPath,
       '--values-file',
-      'values.json',
+      valuesPath,
       '--comment-file',
-      'comment.md',
+      commentPath,
       '--operation-id',
       'dry-73',
-    ],
-    readText: async (path) => files.get(path),
-    claimRunGh: async () => {
-      calls += 1;
-      throw new Error('dry-run must not call GitHub');
-    },
-    writerRunGh: async () => {
-      calls += 1;
-      throw new Error('dry-run must not call GitHub');
-    },
-    writeOutput: (text) => output.push(text),
-  });
-  assert.equal(result.status, 'dry-run');
-  assert.equal(result.ref, REF);
-  assert.equal(calls, 0);
-  assert.equal(JSON.parse(output.join('')).branch, BRANCH);
+    ];
+    const result = spawnSync(process.execPath, [CLAIM_TOOL, ...args], {
+      cwd: directory,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: directory },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, '');
+    assert.equal(JSON.parse(result.stdout).status, 'dry-run');
+    assert.equal(JSON.parse(result.stdout).ref, REF);
+    assert.equal(JSON.parse(result.stdout).branch, BRANCH);
 
-  await assert.rejects(
-    runCoordinationClaimCli({
-      argv: [
-        '--dry-run',
-        '--repo',
-        CANONICAL_REPOSITORY,
-        '--issue',
-        '073',
-        '--expected-base',
-        BASE,
-        '--expected-body-file',
-        'body.md',
-        '--values-file',
-        'values.json',
-        '--comment-file',
-        'comment.md',
-        '--operation-id',
-        'dry-73',
-      ],
-      readText: async (path) => files.get(path),
-      claimRunGh: async () => {
-        calls += 1;
-        throw new Error('canonical parsing must fail before GitHub');
-      },
-      writerRunGh: async () => {
-        calls += 1;
-        throw new Error('canonical parsing must fail before GitHub');
-      },
-      writeOutput: () => {},
-    }),
-    (error) => error instanceof CoordinationClaimError && error.code === 'invalid-issue-number',
-  );
-  assert.equal(calls, 0);
-});
-
-test('GitHub claim adapter exposes only current reads and one create-only POST', async () => {
-  const calls = [];
-  const runGh = async (args, input) => {
-    calls.push({ args, input });
-    if (args[0] === 'repo') {
-      return {
-        status: 0,
-        stdout: JSON.stringify({
-          nameWithOwner: CANONICAL_REPOSITORY,
-          defaultBranchRef: { name: 'main' },
-        }),
-        stderr: '',
-      };
-    }
-    if (args.includes('--method')) {
-      return {
-        status: 0,
-        stdout: `HTTP/2 201 Created\ncontent-type: application/json\n\n${JSON.stringify({ ref: REF, object: { type: 'commit', sha: BASE } })}`,
-        stderr: '',
-      };
-    }
-    return {
-      status: 0,
-      stdout: JSON.stringify({
-        ref: args.at(-1).endsWith('heads/main') ? 'refs/heads/main' : REF,
-        object: { type: 'commit', sha: BASE },
-      }),
-      stderr: '',
-    };
-  };
-  const host = createGitHubClaimHost({ runGh });
-  await host.readRepository();
-  await host.readMainRef();
-  await host.readClaimRef(REF);
-  await host.createClaimRef({ ref: REF, sha: BASE });
-
-  const mutations = calls.filter(({ args }) => args.includes('--method'));
-  assert.equal(mutations.length, 1);
-  assert.deepEqual(mutations[0].args, [
-    'api',
-    '--include',
-    '--method',
-    'POST',
-    `repos/${CANONICAL_REPOSITORY}/git/refs`,
-    '--input',
-    '-',
-  ]);
-  assert.deepEqual(JSON.parse(mutations[0].input), { ref: REF, sha: BASE });
-  assert(
-    calls.every(({ args }) => {
-      const methodIndex = args.indexOf('--method');
-      const method = methodIndex < 0 ? 'GET' : args[methodIndex + 1];
-      return !['DELETE', 'PATCH', 'PUT'].includes(method);
-    }),
-  );
+    args[args.indexOf(String(ISSUE))] = '073';
+    const invalid = spawnSync(process.execPath, [CLAIM_TOOL, ...args], {
+      cwd: directory,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: directory },
+    });
+    assert.equal(invalid.status, 1);
+    assert.equal(invalid.stdout, '');
+    assert.match(invalid.stderr, /invalid-issue-number/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

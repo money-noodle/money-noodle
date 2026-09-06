@@ -1,10 +1,28 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
+import { createHash } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { parseReservedClaimRef } from './coordination-schema.mjs';
+import {
+  normalizeScopePaths,
+  parseReservedClaimRef,
+  validateCheckpointComment,
+  validateStandaloneCheckpointEvidence,
+  validateWorkItemBody,
+} from './coordination-schema.mjs';
+import {
+  buildScopeRouting,
+  changedPathsFromTrees,
+  compareUtf8,
+  evaluateScopeGate,
+  parseScopeGate,
+  parseSerializingConfiguration,
+  provisionalEmptyObservedEvidence,
+  recoverInitialClaimBase,
+} from './coordination-scope.mjs';
 import {
   SCHEMA_VERSION,
   analyzeCoordination,
@@ -135,11 +153,146 @@ function normalizePullRequest(pr) {
   return {
     number: pr.number,
     title: requiredString(pr.title, `${context} title`),
+    state: typeof pr.state === 'string' ? pr.state : null,
     headRefName: requiredString(pr.head?.ref, `${context} head ref`),
+    headRef: requiredString(pr.head?.ref, `${context} head ref`),
+    headSha: typeof pr.head?.sha === 'string' ? pr.head.sha : null,
+    headRepository: typeof pr.head?.repo?.full_name === 'string' ? pr.head.repo.full_name : null,
     baseRefName: requiredString(pr.base?.ref, `${context} base ref`),
+    baseRef: requiredString(pr.base?.ref, `${context} base ref`),
+    baseSha: typeof pr.base?.sha === 'string' ? pr.base.sha : null,
+    baseRepository: typeof pr.base?.repo?.full_name === 'string' ? pr.base.repo.full_name : null,
     updatedAt: requiredTimestamp(pr.updated_at, `${context} updated_at`),
     url: requiredString(pr.html_url, `${context} html_url`),
-    draft: Boolean(pr.draft),
+    draft: typeof pr.draft === 'boolean' ? pr.draft : null,
+  };
+}
+
+function requireUnique(records, key, context) {
+  const values = records.map((record) => record[key]);
+  if (new Set(values).size !== values.length) {
+    throw new Error(`${context} contains duplicate ${key} identities`);
+  }
+  return records;
+}
+
+function stableRecordSet(records, key) {
+  return [...records].sort((left, right) =>
+    typeof left[key] === 'number' ? left[key] - right[key] : compareUtf8(left[key], right[key]),
+  );
+}
+
+function stableIssueSet(issues) {
+  return stableRecordSet(
+    issues.map((issue) => {
+      if (new Set(issue.labels).size !== issue.labels.length) {
+        throw new Error(`GitHub issue #${issue.number} contains duplicate label identities`);
+      }
+      return { ...issue, labels: [...issue.labels].sort(compareUtf8) };
+    }),
+    'number',
+  );
+}
+
+function registrySurfaceIdentity({ labels, issues, commentsByIssue, reservedRefs, pullRequests, main }) {
+  const refIdentity = ({ ref, objectType, sha }) => ({ ref, objectType, sha });
+  const pullIdentity = ({
+    number,
+    title,
+    state,
+    headRefName,
+    headRef,
+    headSha,
+    headRepository,
+    baseRefName,
+    baseRef,
+    baseSha,
+    baseRepository,
+    updatedAt,
+    url,
+    draft,
+  }) => ({
+    number,
+    title,
+    state,
+    headRefName,
+    headRef,
+    headSha,
+    headRepository,
+    baseRefName,
+    baseRef,
+    baseSha,
+    baseRepository,
+    updatedAt,
+    url,
+    draft,
+  });
+  return JSON.stringify({
+    labels: [...labels].sort(compareUtf8),
+    issues: stableIssueSet(issues),
+    comments: [...commentsByIssue.entries()]
+      .sort(([left], [right]) => left - right)
+      .map(([issueNumber, comments]) => [issueNumber, stableRecordSet(comments, 'id')]),
+    reservedRefs: stableRecordSet(reservedRefs.map(refIdentity), 'ref'),
+    pullRequests: stableRecordSet(pullRequests.map(pullIdentity), 'number'),
+    main,
+  });
+}
+
+function rereadRegistrySurfaces(repository) {
+  const labels = apiPages(`repos/${repository}/labels?per_page=100`).map((label, index) =>
+    requiredString(label?.name, `GitHub label ${index + 1} name`),
+  );
+  requireUnique(labels.map((name) => ({ name })), 'name', 'GitHub labels');
+  let issues = apiPages(`repos/${repository}/issues?state=all&per_page=100`)
+    .filter((issue) => !issue?.pull_request)
+    .map(normalizeIssue);
+  requireUnique(issues, 'number', 'GitHub issues');
+  const reservedRefs = apiPages(
+    `repos/${repository}/git/matching-refs/heads/claim-v?per_page=100`,
+  ).map(normalizeRemoteRef);
+  requireUnique(reservedRefs, 'ref', 'GitHub reserved claim refs');
+  const issueByNumber = new Map(issues.map((issue) => [issue.number, issue]));
+  for (const remote of reservedRefs) {
+    const mapping = parseReservedClaimRef(remote.ref);
+    if (mapping.status !== 'supported') continue;
+    const listed = issueByNumber.get(mapping.issueNumber);
+    if (!listed || listed.state === 'closed') {
+      const direct = normalizeIssue(apiRecord(`repos/${repository}/issues/${mapping.issueNumber}`));
+      if (direct.number !== mapping.issueNumber) {
+        throw new Error(`direct GitHub issue #${mapping.issueNumber} returned a different identity`);
+      }
+      issueByNumber.set(direct.number, direct);
+    }
+  }
+  issues = [...issueByNumber.values()];
+  const reservedIssueNumbers = new Set(
+    reservedRefs
+      .map(({ ref }) => parseReservedClaimRef(ref))
+      .filter(({ status }) => status === 'supported')
+      .map(({ issueNumber }) => issueNumber),
+  );
+  const commentsByIssue = new Map();
+  for (const issue of issues.filter(
+    ({ number, state }) => state === 'open' || reservedIssueNumbers.has(number),
+  )) {
+    const comments = apiPages(
+      `repos/${repository}/issues/${issue.number}/comments?per_page=100`,
+    ).map((comment) => normalizeComment(comment, issue.number));
+    requireUnique(comments, 'id', `GitHub issue #${issue.number} comments`);
+    commentsByIssue.set(issue.number, comments);
+  }
+  const pullRequests = apiPages(`repos/${repository}/pulls?state=open&per_page=100`).map(
+    normalizePullRequest,
+  );
+  requireUnique(pullRequests, 'number', 'GitHub open pull requests');
+  return {
+    labels,
+    issues,
+    commentsByIssue,
+    reservedRefs,
+    pullRequests,
+    main: readExactDirectRef(repository, 'refs/heads/main'),
   };
 }
 
@@ -165,6 +318,16 @@ function runGit(args, { allowFailure = false } = {}) {
     allowFailure,
     env: { GIT_OPTIONAL_LOCKS: "0" },
   });
+}
+
+function runGitBytes(args) {
+  const result = spawnSync('git', ['--no-optional-locks', ...args], {
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
+    timeout: 30_000,
+    killSignal: 'SIGTERM',
+  });
+  if (result.error) return { status: null, stdout: null };
+  return { status: result.status, stdout: result.stdout };
 }
 
 function readHookConfiguration(cwd) {
@@ -515,7 +678,647 @@ function readLocalGit() {
   };
 }
 
-function readRegistry(local, nowMs) {
+function readImmutableTree(repository, commitSha) {
+  if (!/^[0-9a-f]{40}$/.test(commitSha ?? '')) {
+    return { status: 'unavailable', reason: 'commit identity is malformed' };
+  }
+  const commitEndpoint = `repos/${repository}/git/commits/${commitSha}`;
+  const commit = directApiResult(commitEndpoint);
+  if (
+    commit.status !== 'available' ||
+    commit.value?.sha !== commitSha ||
+    !/^[0-9a-f]{40}$/.test(commit.value?.tree?.sha ?? '')
+  ) {
+    return { status: 'unavailable', reason: `immutable commit ${commitSha} is unavailable or malformed` };
+  }
+  const treeSha = commit.value.tree.sha;
+  const treeEndpoint = `repos/${repository}/git/trees/${treeSha}?recursive=1`;
+  const tree = directApiResult(treeEndpoint);
+  if (
+    tree.status !== 'available' ||
+    tree.value?.sha !== treeSha ||
+    tree.value?.truncated !== false ||
+    !Array.isArray(tree.value?.tree)
+  ) {
+    return { status: 'unavailable', reason: `recursive tree ${treeSha} is unavailable, malformed, or truncated` };
+  }
+  return {
+    status: 'complete',
+    commitSha,
+    treeSha,
+    truncated: false,
+    entries: tree.value.tree.map(({ path, mode, type, sha }) => ({ path, mode, type, sha })),
+  };
+}
+
+function readSerializingActivation(repository, mainSha) {
+  const mainTree = readImmutableTree(repository, mainSha);
+  // A complete main tree without the configuration is the required non-self-activation state.
+  // Once this implementation is running, unavailable current-main evidence always fails closed.
+  if (mainTree.status !== 'complete') {
+    return { status: 'unavailable', reason: mainTree.reason, mainTree };
+  }
+  const validatedMainTree = changedPathsFromTrees(mainTree, mainTree);
+  if (validatedMainTree.status !== 'complete') {
+    return { status: 'unavailable', reason: validatedMainTree.reason, mainTree };
+  }
+  const path = '.github/coordination/serializing-paths.v1.json';
+  const candidates = mainTree.entries.filter((entry) => entry.path === path);
+  if (candidates.length === 0) return { status: 'inactive', mainTree };
+  if (candidates.length !== 1 || candidates[0].type !== 'blob' || !/^[0-9a-f]{40}$/.test(candidates[0].sha ?? '')) {
+    return { status: 'unavailable', reason: 'serializing configuration tree entry is ambiguous or malformed' };
+  }
+  const result = directApiResult(`repos/${repository}/git/blobs/${candidates[0].sha}`);
+  if (
+    result.status !== 'available' ||
+    result.value?.sha !== candidates[0].sha ||
+    result.value?.encoding !== 'base64' ||
+    typeof result.value?.content !== 'string'
+  ) {
+    return { status: 'unavailable', reason: 'serializing configuration blob is unavailable or malformed' };
+  }
+  let source;
+  try {
+    const encoded = result.value.content.replace(/\n/g, '');
+    const bytes = Buffer.from(encoded, 'base64');
+    if (bytes.toString('base64') !== encoded.replace(/=+$/, (padding) => padding)) {
+      return { status: 'unavailable', reason: 'serializing configuration blob is not canonical base64' };
+    }
+    source = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    if (result.value.size !== undefined && result.value.size !== bytes.length) {
+      return { status: 'unavailable', reason: 'serializing configuration blob size disagrees' };
+    }
+  } catch {
+    return { status: 'unavailable', reason: 'serializing configuration blob is not valid base64 UTF-8' };
+  }
+  const configuration = parseSerializingConfiguration(source);
+  return configuration.status === 'valid'
+    ? { status: 'active', configuration, mainTree }
+    : { status: 'unavailable', reason: configuration.message, configuration, mainTree };
+}
+
+function validCompareRecord(record, left) {
+  const counts =
+    Number.isSafeInteger(record?.ahead_by) &&
+    record.ahead_by >= 0 &&
+    Number.isSafeInteger(record?.behind_by) &&
+    record.behind_by >= 0;
+  const statusCounts =
+    (record?.status === 'identical' && record.ahead_by === 0 && record.behind_by === 0) ||
+    (record?.status === 'ahead' && record.ahead_by > 0 && record.behind_by === 0) ||
+    (record?.status === 'behind' && record.ahead_by === 0 && record.behind_by > 0) ||
+    (record?.status === 'diverged' && record.ahead_by > 0 && record.behind_by > 0);
+  return counts && statusCounts && record?.base_commit?.sha === left;
+}
+
+function readMergeBase(repository, left, right) {
+  if (left === right && /^[0-9a-f]{40}$/.test(left ?? '')) return { status: 'available', sha: left };
+  const endpoint = `repos/${repository}/compare/${left}...${right}`;
+  const result = directApiResult(endpoint);
+  const sha = result.value?.merge_base_commit?.sha;
+  return result.status === 'available' &&
+    validCompareRecord(result.value, left) &&
+    /^[0-9a-f]{40}$/.test(sha ?? '')
+    ? { status: 'available', sha }
+    : { status: 'unavailable', reason: `merge-base evidence for ${left}...${right} is unavailable or malformed` };
+}
+
+function readAncestorEvidence(repository, ancestor, descendant) {
+  if (ancestor === descendant) return { status: 'ancestor' };
+  const result = directApiResult(`repos/${repository}/compare/${ancestor}...${descendant}`);
+  return result.status === 'available' &&
+    validCompareRecord(result.value, ancestor) &&
+    result.value.status === 'ahead'
+    ? { status: 'ancestor' }
+    : { status: 'unavailable' };
+}
+
+function pullRequestIdentity(pr) {
+  return [
+    pr.number,
+    pr.state,
+    pr.draft,
+    pr.headRepository,
+    pr.headRef,
+    pr.headSha,
+    pr.baseRepository,
+    pr.baseRef,
+    pr.baseSha,
+    pr.updatedAt,
+  ];
+}
+
+function stablePullRequestSet(before, after) {
+  const canonical = (values) =>
+    values
+      .map(pullRequestIdentity)
+      .sort((left, right) => left[0] - right[0])
+      .map((identity) => JSON.stringify(identity));
+  return JSON.stringify(canonical(before)) === JSON.stringify(canonical(after));
+}
+
+function readRemoteObservedAgainstMain(repository, mainCommit, headCommit, initialBase = null) {
+  const mergeBaseBefore = readMergeBase(repository, mainCommit, headCommit);
+  if (mergeBaseBefore.status !== 'available') {
+    return { status: 'unavailable', paths: [], count: null, reason: mergeBaseBefore.reason };
+  }
+  const ancestryPoints = [
+    ...(initialBase ? [[initialBase, mergeBaseBefore.sha]] : []),
+    [mergeBaseBefore.sha, mainCommit],
+    [mergeBaseBefore.sha, headCommit],
+  ];
+  if (
+    ancestryPoints.some(
+      ([ancestor, descendant]) =>
+        readAncestorEvidence(repository, ancestor, descendant).status !== 'ancestor',
+    )
+  ) {
+    return {
+      status: 'unavailable',
+      paths: [],
+      count: null,
+      reason: 'initial-base or merge-base ancestry evidence is unavailable',
+    };
+  }
+  const baseTreeBefore = readImmutableTree(repository, mergeBaseBefore.sha);
+  const headTree = readImmutableTree(repository, headCommit);
+  const observed = changedPathsFromTrees(baseTreeBefore, headTree);
+  const mergeBaseAfter = readMergeBase(repository, mainCommit, headCommit);
+  const baseTreeAfter = mergeBaseAfter.status === 'available'
+    ? readImmutableTree(repository, mergeBaseAfter.sha)
+    : { status: 'unavailable' };
+  if (
+    mergeBaseAfter.status !== 'available' ||
+    mergeBaseBefore.sha !== mergeBaseAfter.sha ||
+    baseTreeBefore.status !== 'complete' ||
+    baseTreeAfter.status !== 'complete' ||
+    baseTreeBefore.treeSha !== baseTreeAfter.treeSha
+  ) {
+    return {
+      status: 'unavailable',
+      paths: [],
+      count: null,
+      reason: 'merge-base commit/tree identity changed or became unavailable during tree observation',
+    };
+  }
+  return observed;
+}
+
+function readLocalImmutableTree(cwd, commitSha) {
+  if (!/^[0-9a-f]{40}$/.test(commitSha ?? '')) {
+    return { status: 'unavailable', reason: 'local commit identity is malformed' };
+  }
+  const object = runGit(['-C', cwd, 'cat-file', '-t', commitSha], { allowFailure: true });
+  const tree = runGit(['-C', cwd, 'rev-parse', `${commitSha}^{tree}`], { allowFailure: true });
+  const listing = runGitBytes([
+    '-C',
+    cwd,
+    'ls-tree',
+    '-r',
+    '-t',
+    '-z',
+    '--full-tree',
+    commitSha,
+  ]);
+  const treeSha = tree.stdout.trim();
+  if (
+    object.status !== 0 ||
+    object.stdout !== 'commit\n' ||
+    tree.status !== 0 ||
+    !/^[0-9a-f]{40}$/.test(treeSha) ||
+    listing.status !== 0 ||
+    !Buffer.isBuffer(listing.stdout)
+  ) {
+    return { status: 'unavailable', reason: 'local immutable commit or recursive tree is unavailable' };
+  }
+  let listingText;
+  try {
+    listingText = new TextDecoder('utf-8', { fatal: true }).decode(listing.stdout);
+  } catch {
+    return { status: 'unavailable', reason: 'local recursive tree contains a non-UTF-8 path' };
+  }
+  if (listingText !== '' && !listingText.endsWith('\0')) {
+    return { status: 'unavailable', reason: 'local recursive tree framing is malformed' };
+  }
+  const entries = listingText === ''
+    ? []
+    : listingText.slice(0, -1).split('\0').map((line) => {
+        const match = line.match(/^([0-7]{6}) (blob|tree|commit) ([0-9a-f]{40})\t([\s\S]+)$/);
+        return match
+          ? { mode: match[1], type: match[2], sha: match[3], path: match[4] }
+          : { path: null, mode: null, type: null, sha: null };
+      });
+  return { status: 'complete', commitSha, treeSha, truncated: false, entries };
+}
+
+export function readLocalObservedAgainstMain(cwd, mainCommit, headCommit, initialBase) {
+  const mergeBaseBefore = runGit(
+    ['-C', cwd, 'merge-base', mainCommit, headCommit],
+    { allowFailure: true },
+  );
+  const mergeBase = mergeBaseBefore.stdout.trim();
+  const ancestryPairs = [
+    [initialBase, mergeBase],
+    [mergeBase, mainCommit],
+    [mergeBase, headCommit],
+  ];
+  if (
+    mergeBaseBefore.status !== 0 ||
+    !/^[0-9a-f]{40}$/.test(mergeBase) ||
+    ancestryPairs.some(
+      ([ancestor, descendant]) =>
+        runGit(
+          ['-C', cwd, 'merge-base', '--is-ancestor', ancestor, descendant],
+          { allowFailure: true },
+        ).status !== 0,
+    )
+  ) {
+    return { status: 'unavailable', paths: [], count: null, reason: 'guarded local merge-base or ancestry evidence is unavailable' };
+  }
+  const baseTreeBefore = readLocalImmutableTree(cwd, mergeBase);
+  const observed = changedPathsFromTrees(
+    baseTreeBefore,
+    readLocalImmutableTree(cwd, headCommit),
+  );
+  const mergeBaseAfter = runGit(
+    ['-C', cwd, 'merge-base', mainCommit, headCommit],
+    { allowFailure: true },
+  );
+  const baseTreeAfter = readLocalImmutableTree(cwd, mergeBase);
+  if (
+    mergeBaseAfter.status !== 0 ||
+    mergeBaseAfter.stdout.trim() !== mergeBase ||
+    baseTreeBefore.status !== 'complete' ||
+    baseTreeAfter.status !== 'complete' ||
+    baseTreeBefore.treeSha !== baseTreeAfter.treeSha
+  ) {
+    return { status: 'unavailable', paths: [], count: null, reason: 'guarded local merge-base commit/tree changed during observation' };
+  }
+  return observed.status === 'complete' ? { ...observed, source: 'same-host-local-immutable-tree' } : observed;
+}
+
+function guardedLocalObserved({ local, item, remoteMain, initialBase }) {
+  if (item.remoteClaim?.lifecycle?.status !== 'local-ahead') {
+    return { status: 'unavailable', paths: [], count: null, reason: 'claim is not a qualified local-ahead lifecycle' };
+  }
+  const branch = item.claim['Claim-Branch'];
+  const checkpoint = item.checkpoint['Checkpoint-Commit'];
+  const worktrees = local.worktrees.filter(({ branch: candidate }) => candidate === branch);
+  const branches = local.branches.filter(({ name }) => name === branch);
+  if (
+    worktrees.length !== 1 ||
+    branches.length !== 1 ||
+    worktrees[0].locked ||
+    worktrees[0].prunable ||
+    worktrees[0].head !== checkpoint ||
+    branches[0].head !== checkpoint
+  ) {
+    return { status: 'unavailable', paths: [], count: null, reason: 'same-host branch/worktree immutable identity is missing or ambiguous' };
+  }
+  const cwd = worktrees[0].path;
+  const remoteHead = item.remoteClaim.lifecycle.remoteHead;
+  if (
+    !/^[0-9a-f]{40}$/.test(remoteHead ?? '') ||
+    runGit(
+      ['-C', cwd, 'merge-base', '--is-ancestor', initialBase, remoteHead],
+      { allowFailure: true },
+    ).status !== 0 ||
+    runGit(
+      ['-C', cwd, 'merge-base', '--is-ancestor', remoteHead, checkpoint],
+      { allowFailure: true },
+    ).status !== 0
+  ) {
+    return { status: 'unavailable', paths: [], count: null, reason: 'same-host B <= R <= L ancestry is unavailable' };
+  }
+  const symbolic = runGit(['-C', cwd, 'symbolic-ref', '--quiet', 'HEAD'], { allowFailure: true });
+  const branchBefore = runGit(
+    ['-C', cwd, 'rev-parse', `refs/heads/${branch}`],
+    { allowFailure: true },
+  );
+  const headBefore = runGit(['-C', cwd, 'rev-parse', 'HEAD'], { allowFailure: true });
+  const clean = runGit(
+    ['-C', cwd, 'status', '--porcelain=v2', '--untracked-files=all'],
+    { allowFailure: true },
+  );
+  if (
+    symbolic.status !== 0 ||
+    symbolic.stdout.trim() !== `refs/heads/${branch}` ||
+    branchBefore.status !== 0 ||
+    headBefore.status !== 0 ||
+    branchBefore.stdout.trim() !== checkpoint ||
+    headBefore.stdout.trim() !== checkpoint ||
+    clean.status !== 0 ||
+    clean.stdout !== ''
+  ) {
+    return { status: 'unavailable', paths: [], count: null, reason: 'same-host worktree is not exact and clean' };
+  }
+  const observed = readLocalObservedAgainstMain(cwd, remoteMain, checkpoint, initialBase);
+  const branchAfter = runGit(
+    ['-C', cwd, 'rev-parse', `refs/heads/${branch}`],
+    { allowFailure: true },
+  );
+  const headAfter = runGit(['-C', cwd, 'rev-parse', 'HEAD'], { allowFailure: true });
+  if (
+    branchAfter.status !== 0 ||
+    headAfter.status !== 0 ||
+    branchAfter.stdout.trim() !== checkpoint ||
+    headAfter.stdout.trim() !== checkpoint
+  ) {
+    return { status: 'unavailable', paths: [], count: null, reason: 'same-host branch or HEAD changed during observation' };
+  }
+  return observed;
+}
+
+function applyScopeEvidence({
+  repository,
+  coordination,
+  local,
+  issues,
+  commentsByIssue,
+  pullRequests,
+  remoteMain,
+  provisionalClaim = null,
+}) {
+  const activation = readSerializingActivation(repository, remoteMain);
+  const emptyClaimScope = () => ({
+    findingIds: [],
+    claimBlockerIds: [],
+    publicationBlockerIds: [],
+    checkpointBlockerIds: [],
+    advisoryIds: [],
+    status: 'unavailable',
+  });
+  const emptyPullRequestScope = () => ({ findingIds: [], integrationBlockerIds: [], status: 'unavailable' });
+  for (const item of coordination.workItems) item.scope = emptyClaimScope();
+  for (const pr of pullRequests) pr.scope = emptyPullRequestScope();
+  if (activation.status !== 'active') {
+    return { status: activation.status, findings: [], activation };
+  }
+
+  const issueByNumber = new Map(issues.map((issue) => [issue.number, issue]));
+  const claimItems = coordination.workItems.filter(
+    (item) =>
+      item.registrySchema.version === '2' &&
+      item.registrySchema.valid &&
+      (['active', 'review'].includes(item.claimState) || item.number === provisionalClaim?.issueNumber),
+  );
+  const claims = claimItems.map((item) => {
+      const issue = issueByNumber.get(item.number);
+      const declaration = normalizeScopePaths(claimField(issue?.body ?? '', 'Scope-Paths'));
+      const recovered = recoverInitialClaimBase(issue, commentsByIssue.get(item.number) ?? [], {
+        validateCheckpointEvidence: validateStandaloneCheckpointEvidence,
+      });
+      const remoteHead = item.remoteClaim?.matchingRefs?.length === 1 ? item.remoteClaim.matchingRefs[0].sha : null;
+      const isProvisional = item.number === provisionalClaim?.issueNumber;
+      const effectiveBranch = isProvisional ? provisionalClaim.branch : item.claim['Claim-Branch'];
+      const exactRef = `refs/heads/${effectiveBranch}`;
+      const directRefBefore = readExactDirectRef(repository, exactRef);
+      const preRefPhase = isProvisional && provisionalClaim.phase === 'before-ref';
+      const preRefAbsent = preRefPhase && directRefBefore.status === 'missing';
+      const effectiveRemoteHead = isProvisional
+        ? provisionalClaim.phase === 'before-ref'
+          ? provisionalClaim.expectedBase
+          : directRefBefore?.status === 'found'
+            ? directRefBefore.sha
+            : null
+        : remoteHead;
+      const effectiveBase = isProvisional ? provisionalClaim.expectedBase : recovered.baseCommit;
+      let observed = preRefAbsent
+        ? provisionalEmptyObservedEvidence()
+        : { status: 'unavailable', paths: [], count: null, reason: 'claim identity or establishment base is unavailable' };
+      if (
+        !preRefPhase &&
+        ['declared', 'none'].includes(declaration.status) &&
+        (isProvisional || recovered.status === 'recovered') &&
+        /^[0-9a-f]{40}$/.test(effectiveRemoteHead ?? '')
+      ) {
+        observed = !isProvisional && item.remoteClaim?.lifecycle?.status === 'local-ahead'
+          ? guardedLocalObserved({ local, item, remoteMain, initialBase: effectiveBase })
+          : readRemoteObservedAgainstMain(
+              repository,
+              remoteMain,
+              effectiveRemoteHead,
+              effectiveBase,
+            );
+      }
+      const directRefAfter = readExactDirectRef(repository, exactRef);
+      const enumeratedRefs = coordination.remoteClaims.refs.filter(({ ref }) => ref === exactRef);
+      const enumeratedStable = preRefPhase
+        ? enumeratedRefs.length === 0
+        : enumeratedRefs.length === 1 && enumeratedRefs[0].sha === effectiveRemoteHead;
+      const stableClaimRef = enumeratedStable && (preRefPhase
+        ? preRefAbsent && directRefAfter.status === 'missing'
+        : directRefBefore.status === 'found' &&
+          directRefAfter.status === 'found' &&
+          directRefBefore.sha === effectiveRemoteHead &&
+          directRefAfter.sha === effectiveRemoteHead);
+      if (!stableClaimRef) {
+        observed = { status: 'unavailable', paths: [], count: null, reason: 'exact claim ref is missing, malformed, or unstable around scope observation' };
+      }
+      if (
+        isProvisional &&
+        (typeof provisionalClaim.expectedIssueBody !== 'string' ||
+          issue?.body !== provisionalClaim.expectedIssueBody)
+      ) {
+        observed = {
+          status: 'unavailable',
+          paths: [],
+          count: null,
+          reason: 'candidate issue body changed from the exact invoking claim snapshot',
+        };
+      }
+      return {
+        number: item.number,
+        branch: effectiveBranch,
+        remoteHead: effectiveRemoteHead,
+        declaredEntries: declaration.entries ?? [],
+        observed,
+        checkpointChangedPathCount: isProvisional
+          ? 0
+          : /^\d+$/.test(item.checkpoint['Checkpoint-Changed-Path-Count'] ?? '')
+            ? Number(item.checkpoint['Checkpoint-Changed-Path-Count'])
+            : Number.NaN,
+        provisional: preRefAbsent,
+      };
+    });
+
+  const participatingPullRequests = pullRequests.filter(
+    (pr) => pr.baseRepository === repository && pr.baseRef === 'main',
+  );
+  for (const pr of pullRequests) {
+    if (!participatingPullRequests.includes(pr)) pr.scope.status = 'clear';
+  }
+  const observedPullRequests = participatingPullRequests.map((pr) => {
+    let observed = { status: 'unavailable', paths: [], count: null, reason: 'pull-request identity is incomplete' };
+    if (
+      pr.state === 'open' &&
+      typeof pr.draft === 'boolean' &&
+      /^[0-9a-f]{40}$/.test(pr.headSha ?? '') &&
+      /^[0-9a-f]{40}$/.test(pr.baseSha ?? '')
+    ) {
+      observed = readRemoteObservedAgainstMain(repository, remoteMain, pr.headSha);
+    }
+    return { ...pr, observed };
+  });
+
+  const after = apiPages(`repos/${repository}/pulls?state=open&per_page=100`).map(normalizePullRequest);
+  const stable = stablePullRequestSet(pullRequests, after);
+  const mainAfter = readExactDirectRef(repository, 'refs/heads/main');
+  const stableMain = mainAfter.status === 'found' && mainAfter.sha === remoteMain;
+  const unexpectedClaimTarget = claims.some((claim) =>
+    pullRequests.some(
+      (pr) =>
+        pr.headRepository === repository &&
+        pr.headRef === claim.branch &&
+        (pr.baseRepository !== repository || pr.baseRef !== 'main'),
+    ),
+  );
+  const routed = buildScopeRouting({
+    repository,
+    claims,
+    pullRequests: observedPullRequests,
+    serializingEntries: activation.configuration.entries,
+  });
+  for (const item of coordination.workItems) {
+    if (routed.claimScopes.has(item.number)) item.scope = routed.claimScopes.get(item.number);
+  }
+  for (const pr of pullRequests) {
+    if (routed.pullRequestScopes.has(pr.number)) pr.scope = routed.pullRequestScopes.get(pr.number);
+  }
+  const evidenceComplete =
+    stable &&
+    stableMain &&
+    !unexpectedClaimTarget &&
+    claims.every(
+      ({ observed, provisional }) =>
+        observed.status === 'complete' ||
+        (provisional && observed.status === 'provisional-empty-before-ref'),
+    ) &&
+    observedPullRequests.every(({ observed }) => observed.status === 'complete') &&
+    [...routed.claimScopes.values(), ...routed.pullRequestScopes.values()].every(
+      ({ status }) => status !== 'unavailable',
+    );
+  return {
+    status: evidenceComplete ? 'complete' : 'unavailable',
+    findings: evidenceComplete ? routed.findings : [],
+    activation,
+    stablePullRequests: stable,
+    stableMain,
+  };
+}
+
+const TRANSITION_IDENTITY_FIELDS = [
+  ['Claim-Harness', 'claimHarness'],
+  ['Claim-Run-ID', 'claimRunId'],
+  ['Claim-Agent', 'claimAgent'],
+  ['Claim-Host', 'claimHost'],
+  ['Claimed-At', 'claimedAt'],
+];
+const TRANSITION_STATE_LABELS = new Set(REQUIRED_LABELS.filter((label) => label !== 'work:plan'));
+const sha256 = (value) => createHash('sha256').update(value).digest('hex');
+
+export function isExactSameOperationTransitionQuestion({
+  provisionalClaim,
+  issue,
+  comments,
+  reservedRefs,
+  entry,
+}) {
+  const candidate = provisionalClaim ?? {};
+  const ref = `refs/heads/${candidate.branch ?? ''}`;
+  const sourceValidation = validateWorkItemBody(candidate.sourceIssueBody ?? '');
+  const preparedValidation = validateWorkItemBody(candidate.preparedIssueBody ?? '');
+  const preparedIdentityMatches = TRANSITION_IDENTITY_FIELDS.every(
+    ([field, key]) =>
+      typeof candidate[key] === 'string' &&
+      candidate[key].length > 0 &&
+      claimField(candidate.preparedIssueBody ?? '', field) === candidate[key],
+  );
+  const operationMarkers =
+    typeof candidate.expectedOperationComment === 'string'
+      ? candidate.expectedOperationComment
+          .split('\n')
+          .filter((line) => line.startsWith('Coordination-Write-ID:'))
+      : [];
+  const common =
+    candidate.phase === 'after-ref' &&
+    ['ref-created-parked', 'writer-recovery'].includes(candidate.transition) &&
+    /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(candidate.operationId ?? '') &&
+    Number.isSafeInteger(candidate.issueNumber) &&
+    issue?.number === candidate.issueNumber &&
+    candidate.ref === ref &&
+    /^[0-9a-f]{40}$/.test(candidate.expectedBase ?? '') &&
+    typeof candidate.sourceIssueBody === 'string' &&
+    candidate.sourceIssueBodySha256 === sha256(candidate.sourceIssueBody) &&
+    sourceValidation.valid &&
+    sourceValidation.version === '2' &&
+    ['proposed', 'ready'].includes(claimField(candidate.sourceIssueBody, 'Claim-State')) &&
+    candidate.expectedSourceStateLabel ===
+      `work:${claimField(candidate.sourceIssueBody, 'Claim-State')}` &&
+    typeof candidate.expectedIssueBody === 'string' &&
+    candidate.expectedIssueBodySha256 === sha256(candidate.expectedIssueBody) &&
+    typeof candidate.preparedIssueBody === 'string' &&
+    candidate.preparedIssueBodySha256 === sha256(candidate.preparedIssueBody) &&
+    preparedValidation.valid &&
+    preparedValidation.version === '2' &&
+    typeof candidate.expectedOperationComment === 'string' &&
+    candidate.expectedOperationCommentSha256 === sha256(candidate.expectedOperationComment) &&
+    operationMarkers.length === 1 &&
+    operationMarkers[0] === `Coordination-Write-ID: ${candidate.operationId}` &&
+    ['work:proposed', 'work:ready'].includes(candidate.expectedSourceStateLabel) &&
+    candidate.desiredStateLabel === 'work:active' &&
+    claimField(candidate.preparedIssueBody, 'Claim-State') === 'active' &&
+    claimField(candidate.preparedIssueBody, 'Claim-Branch') === candidate.branch &&
+    preparedIdentityMatches &&
+    issue.body === candidate.expectedIssueBody &&
+    Array.isArray(comments) &&
+    reservedRefs.filter((remote) => remote.ref === ref).length === 1 &&
+    reservedRefs.find((remote) => remote.ref === ref)?.sha === candidate.expectedBase;
+  if (!common) return false;
+
+  const stateLabels = issue.labels.filter((label) => TRANSITION_STATE_LABELS.has(label));
+  const reconciledValue = claimField(issue.body, 'Reconciled-Claim-Comment-IDs');
+  const reconciledIds = new Set(
+    reconciledValue && reconciledValue !== 'none' ? reconciledValue.split(', ').map(Number) : [],
+  );
+  const matchingCheckpoints = comments.filter((comment) => {
+    if (reconciledIds.has(comment.id)) return false;
+    const validation = validateCheckpointComment(comment.body ?? '', preparedValidation);
+    return validation.applicable && validation.valid;
+  });
+  const operationComments = matchingCheckpoints.filter(
+    (comment) => comment.body === candidate.expectedOperationComment,
+  );
+  if (candidate.transition === 'ref-created-parked') {
+    return (
+      candidate.refCreatedByOperation === true &&
+      stateLabels.length === 1 &&
+      stateLabels[0] === candidate.expectedSourceStateLabel &&
+      candidate.expectedSourceStateLabel ===
+        `work:${claimField(candidate.expectedIssueBody, 'Claim-State')}` &&
+      matchingCheckpoints.length === 0 &&
+      operationComments.length === 0 &&
+      entry?.code === 'orphaned-claim-ref' &&
+      entry.message ===
+        `${ref} exists while issue #${candidate.issueNumber} is ${claimField(issue.body, 'Claim-State')}; do not adopt or release it automatically`
+    );
+  }
+  return (
+    candidate.refCreatedByOperation === false &&
+    candidate.expectedIssueBodySha256 === candidate.preparedIssueBodySha256 &&
+    stateLabels.length === 1 &&
+    stateLabels[0] === candidate.expectedSourceStateLabel &&
+    candidate.expectedSourceStateLabel !== candidate.desiredStateLabel &&
+    matchingCheckpoints.length === 1 &&
+    operationComments.length === 1 &&
+    operationComments[0].createdAt === operationComments[0].updatedAt &&
+    entry?.code === 'body-label-state-mismatch' &&
+    entry.message ===
+      `Claim-State active does not match exactly one state label (found ${candidate.expectedSourceStateLabel})`
+  );
+}
+
+function readRegistry(local, nowMs, { provisionalClaim = null } = {}) {
   let ghVersion;
   try {
     ghVersion = run("gh", ["--version"], { allowFailure: true });
@@ -573,17 +1376,21 @@ function readRegistry(local, nowMs) {
       : null;
 
   const labelRecords = apiPages(`repos/${repository}/labels?per_page=100`);
-  const availableLabels = new Set(
-    labelRecords.map((label, index) => requiredString(label?.name, `GitHub label ${index + 1} name`)),
+  const labelNames = labelRecords.map((label, index) =>
+    requiredString(label?.name, `GitHub label ${index + 1} name`),
   );
+  requireUnique(labelNames.map((name) => ({ name })), 'name', 'GitHub labels');
+  const availableLabels = new Set(labelNames);
   const missingLabels = REQUIRED_LABELS.filter((label) => !availableLabels.has(label));
 
   let issueRecords = apiPages(`repos/${repository}/issues?state=all&per_page=100`)
     .filter((issue) => !issue?.pull_request)
     .map(normalizeIssue);
+  requireUnique(issueRecords, 'number', 'GitHub issues');
   const reservedRefs = apiPages(
     `repos/${repository}/git/matching-refs/heads/claim-v?per_page=100`,
   ).map(normalizeRemoteRef);
+  requireUnique(reservedRefs, 'ref', 'GitHub reserved claim refs');
   const issueByNumber = new Map(issueRecords.map((issue) => [issue.number, issue]));
   for (const remote of reservedRefs) {
     const mapping = parseReservedClaimRef(remote.ref);
@@ -646,12 +1453,14 @@ function readRegistry(local, nowMs) {
     const comments = apiPages(`repos/${repository}/issues/${issue.number}/comments?per_page=100`).map(
       (comment) => normalizeComment(comment, issue.number),
     );
+    requireUnique(comments, 'id', `GitHub issue #${issue.number} comments`);
     commentsByIssue.set(issue.number, comments);
   }
 
   const pullRequests = apiPages(`repos/${repository}/pulls?state=open&per_page=100`).map(
     normalizePullRequest,
   );
+  requireUnique(pullRequests, 'number', 'GitHub open pull requests');
   const coordination = analyzeCoordination({
     issues: issueRecords,
     commentsByIssue,
@@ -660,11 +1469,77 @@ function readRegistry(local, nowMs) {
     claimLifecycles,
     nowMs,
   });
+  const scopeMainBefore = readExactDirectRef(repository, 'refs/heads/main');
+  const scope = applyScopeEvidence({
+    repository,
+    coordination,
+    local,
+    issues: issueRecords,
+    commentsByIssue,
+    pullRequests,
+    remoteMain,
+    provisionalClaim,
+  });
+  if (scope.activation.status === 'active') {
+    const beforeIdentity = registrySurfaceIdentity({
+      labels: labelNames,
+      issues: issueRecords,
+      commentsByIssue,
+      reservedRefs,
+      pullRequests,
+      main: scopeMainBefore,
+    });
+    const afterSurfaces = rereadRegistrySurfaces(repository);
+    const stable =
+      scopeMainBefore.status === 'found' &&
+      scopeMainBefore.sha === remoteMain &&
+      afterSurfaces.main.status === 'found' &&
+      afterSurfaces.main.sha === remoteMain &&
+      beforeIdentity === registrySurfaceIdentity(afterSurfaces);
+    scope.surroundingRegistryStable = stable;
+    if (!stable) {
+      scope.status = 'unavailable';
+      scope.findings = [];
+      for (const item of coordination.workItems) item.scope = {
+        findingIds: [],
+        claimBlockerIds: [],
+        publicationBlockerIds: [],
+        checkpointBlockerIds: [],
+        advisoryIds: [],
+        status: 'unavailable',
+      };
+      for (const pr of pullRequests) pr.scope = {
+        findingIds: [],
+        integrationBlockerIds: [],
+        status: 'unavailable',
+      };
+    }
+  }
+  const transitionalIssue = provisionalClaim
+    ? issueRecords.find(({ number }) => number === provisionalClaim.issueNumber)
+    : null;
+  const transitionalComments = provisionalClaim
+    ? commentsByIssue.get(provisionalClaim.issueNumber) ?? []
+    : [];
+  const expectedTransitionQuestion = (issueNumber, entry) =>
+    scope.status === 'complete' &&
+    issueNumber === provisionalClaim?.issueNumber &&
+    isExactSameOperationTransitionQuestion({
+      provisionalClaim,
+      issue: transitionalIssue,
+      comments: transitionalComments,
+      reservedRefs,
+      entry,
+    });
   const maintainerQuestions = [
     ...[...coordination.plans, ...coordination.workItems].flatMap((item) =>
-      item.questions.map((entry) => ({ issueNumber: item.number, ...entry })),
+      item.questions
+        .filter((entry) => !expectedTransitionQuestion(item.number, entry))
+        .map((entry) => ({ issueNumber: item.number, ...entry })),
     ),
-    ...coordination.remoteClaims.questions,
+    ...coordination.remoteClaims.questions.filter(
+      (entry) => !expectedTransitionQuestion(provisionalClaim?.issueNumber, entry),
+    ),
   ];
 
   return {
@@ -674,11 +1549,18 @@ function readRegistry(local, nowMs) {
     workItems: coordination.workItems,
     remoteClaims: coordination.remoteClaims,
     pullRequests,
+    scopeFindings: scope.findings,
+    scopeStatus: scope.status,
+    serializingConfiguration: {
+      status: scope.activation.status,
+      version: scope.activation.configuration?.version ?? null,
+      paths: scope.activation.configuration?.paths ?? [],
+    },
     maintainerQuestions,
   };
 }
 
-function buildReport() {
+export function buildReport(scopeSelector = 'board', { provisionalClaim = null } = {}) {
   const generatedAt = new Date().toISOString();
   const report = {
     schemaVersion: SCHEMA_VERSION,
@@ -689,11 +1571,12 @@ function buildReport() {
     registry: null,
     warnings: [],
     errors: [],
+    scopeGate: { requested: scopeSelector, status: 'unknown', blockingFindingIds: [] },
   };
 
   try {
     report.local = readLocalGit();
-    report.registry = readRegistry(report.local, isoInstantMilliseconds(generatedAt));
+    report.registry = readRegistry(report.local, isoInstantMilliseconds(generatedAt), { provisionalClaim });
     report.coordinationKnown = true;
     if (['local-ahead', 'dirty-or-in-progress', 'divergence', 'unavailable'].includes(report.local.integrationCheckout.status)) {
       report.warnings.push({
@@ -719,6 +1602,12 @@ function buildReport() {
         message: `repository-local hooks are configured but committed/index or filesystem executable evidence is not ready in ${report.local.hooks.checkoutPath}; do not repair automatically`,
       });
     }
+    if (report.registry.scopeStatus === 'unavailable') {
+      report.warnings.push({
+        code: 'scope-evidence-unavailable',
+        message: 'three-layer scope evidence is incomplete, malformed, or unstable; selected operations fail closed',
+      });
+    }
     if (report.registry.labels.missing.length > 0) {
       report.warnings.push({
         code: "missing-coordination-labels",
@@ -728,6 +1617,42 @@ function buildReport() {
     report.warnings.push(...report.registry.maintainerQuestions);
   } catch (error) {
     report.errors.push({ code: "coordination-unknown", message: error.message });
+  }
+  if (report.coordinationKnown) {
+    const selector = parseScopeGate(scopeSelector);
+    const claimTarget = ['claim', 'publication', 'checkpoint'].includes(selector.kind)
+      ? report.registry.workItems.find(({ number }) => number === selector.target)
+      : null;
+    const pullRequestTarget = selector.kind === 'integration-pr'
+      ? report.registry.pullRequests.find(({ number }) => number === selector.target)
+      : null;
+    const targetExists =
+      selector.kind === 'board' || Boolean(claimTarget) || Boolean(pullRequestTarget);
+    const targetScope = claimTarget?.scope ?? pullRequestTarget?.scope;
+    const known =
+      selector.status === 'valid' &&
+      (report.registry.scopeStatus === 'complete' ||
+        (report.registry.scopeStatus === 'inactive' && selector.kind === 'board')) &&
+      report.warnings.length === 0 &&
+      (!targetScope || targetScope.status !== 'unavailable');
+    report.scopeGate = evaluateScopeGate(scopeSelector, report.registry.scopeFindings, {
+      known,
+      targetExists,
+    });
+    if (known && targetScope) {
+      const blockerField = {
+        claim: 'claimBlockerIds',
+        publication: 'publicationBlockerIds',
+        checkpoint: 'checkpointBlockerIds',
+        'integration-pr': 'integrationBlockerIds',
+      }[selector.kind];
+      const ids = [...new Set(targetScope[blockerField] ?? [])].sort(compareUtf8);
+      report.scopeGate = {
+        requested: scopeSelector,
+        status: ids.length > 0 ? 'blocked' : 'clear',
+        blockingFindingIds: ids,
+      };
+    }
   }
   return report;
 }
@@ -802,7 +1727,7 @@ function renderHuman(report) {
         : `worktree=${item.claim['Claim-Worktree']}`;
     const lifecycle = item.remoteClaim?.lifecycle?.status ?? 'not-applicable';
     console.log(
-      `  branch=${item.claim['Claim-Branch']} ${locality} check-in=${item.deadline.value} (${item.deadline.status}) local=${item.localEvidence.status} remote-lifecycle=${lifecycle}`,
+      `  branch=${item.claim['Claim-Branch']} ${locality} check-in=${item.deadline.value} (${item.deadline.status}) local=${item.localEvidence.status} remote-lifecycle=${lifecycle} scope=${item.scope.status}`,
     );
   }
 
@@ -830,6 +1755,31 @@ function renderHuman(report) {
     );
   }
 
+  section('Routed scope findings');
+  if (registry.scopeFindings.length === 0) console.log('none');
+  for (const finding of registry.scopeFindings) {
+    if (finding.kind === 'claim-pr') {
+      const issue = finding.claimNumbers[0];
+      const pr = finding.pullRequestNumbers[0];
+      console.log(
+        `[BLOCK claim-pr] claim #${issue} <-> PR #${pr} paths=${finding.paths.join(', ')} routes=claim:#${issue},publication:#${issue},checkpoint:#${issue},integration-pr:#${pr}`,
+      );
+    } else {
+      const [lower, higher] = finding.pullRequestNumbers;
+      console.log(
+        `[BLOCK pr-pr] PR #${lower} <-> PR #${higher} paths=${finding.paths.join(', ')} routes=integration-pr:#${lower},integration-pr:#${higher} global-publication=false`,
+      );
+    }
+  }
+
+  section('Scope gate');
+  const gateExit = report.scopeGate.requested === 'board'
+    ? report.warnings.length === 0 ? 0 : 2
+    : report.scopeGate.status === 'clear' ? 0 : 2;
+  console.log(
+    `requested=${report.scopeGate.requested} status=${report.scopeGate.status} blockers=${report.scopeGate.blockingFindingIds.join(', ') || 'none'} exit=${gateExit}`,
+  );
+
   section('Ready candidates (evidence only)');
   const candidates = registry.workItems.filter(({ triage }) => triage === "candidate");
   if (candidates.length === 0) console.log("none");
@@ -842,7 +1792,7 @@ function renderHuman(report) {
   if (registry.pullRequests.length === 0) console.log("none");
   for (const pr of registry.pullRequests) {
     console.log(
-      `#${pr.number} ${pr.headRefName} -> ${pr.baseRefName}: ${pr.title} (${pr.url}) updated=${pr.updatedAt}`,
+      `#${pr.number} ${pr.headRefName} -> ${pr.baseRefName}: ${pr.title} (${pr.url}) updated=${pr.updatedAt} scope=${pr.scope.status}`,
     );
   }
 
@@ -858,18 +1808,37 @@ function renderHuman(report) {
   }
 }
 
-const arguments_ = process.argv.slice(2);
-if (arguments_.includes("--help")) {
-  console.log("Usage: node tools/coordination-status.mjs [--json]");
-  console.log(ADVISORY);
-  process.exit(0);
-}
-if (arguments_.length > 1 || (arguments_.length === 1 && arguments_[0] !== "--json")) {
-  console.error("Usage: node tools/coordination-status.mjs [--json]");
-  process.exit(2);
+function parseArguments(arguments_) {
+  let json = false;
+  let gate = 'board';
+  for (let index = 0; index < arguments_.length; index += 1) {
+    const argument = arguments_[index];
+    if (argument === '--json' && !json) json = true;
+    else if (argument === '--gate' && gate === 'board' && index + 1 < arguments_.length) gate = arguments_[++index];
+    else return { status: 'invalid' };
+  }
+  if (parseScopeGate(gate).status !== 'valid') return { status: 'invalid' };
+  return { status: 'valid', json, gate };
 }
 
-const report = buildReport();
-if (arguments_[0] === "--json") console.log(JSON.stringify(report, null, 2));
-else renderHuman(report);
-process.exitCode = report.coordinationKnown && report.warnings.length === 0 ? 0 : 2;
+function main(arguments_) {
+  if (arguments_.includes('--help')) {
+    console.log('Usage: node tools/coordination-status.mjs [--json] [--gate <claim:N|publication:N|checkpoint:N|integration-pr:N>]');
+    console.log(ADVISORY);
+    return 0;
+  }
+  const parsed = parseArguments(arguments_);
+  if (parsed.status !== 'valid') {
+    console.error('Usage: node tools/coordination-status.mjs [--json] [--gate <claim:N|publication:N|checkpoint:N|integration-pr:N>]');
+    return 2;
+  }
+  const report = buildReport(parsed.gate);
+  if (parsed.json) console.log(JSON.stringify(report, null, 2));
+  else renderHuman(report);
+  if (parsed.gate !== 'board') return report.scopeGate.status === 'clear' ? 0 : 2;
+  return report.coordinationKnown && report.warnings.length === 0 ? 0 : 2;
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  process.exitCode = main(process.argv.slice(2));
+}

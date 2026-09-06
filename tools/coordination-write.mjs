@@ -296,19 +296,15 @@ function assertHost(host) {
   }
 }
 
-async function executeCoordinationWriteInternal(
-  {
-    host,
-    issueNumber,
-    expectedBody,
-    values,
-    checkpointComment,
-    operationId,
-    kind = 'work-item',
-    claimSnapshotGuard,
-  },
-  authority,
-) {
+async function executeCoordinationWriteInternal({
+  host,
+  issueNumber,
+  expectedBody,
+  values,
+  checkpointComment,
+  operationId,
+  kind = 'work-item',
+}) {
   assertHost(host);
   if (!Number.isSafeInteger(issueNumber) || issueNumber < 1) {
     throw new CoordinationWriteError(
@@ -319,7 +315,7 @@ async function executeCoordinationWriteInternal(
 
   const prepared = prepareCoordinationWriteInternal(
     { currentBody: expectedBody, values, kind },
-    authority,
+    undefined,
   );
   const { marker, comment: proposedComment } = prepareOperationComment(
     prepared,
@@ -341,40 +337,7 @@ async function executeCoordinationWriteInternal(
     );
   }
 
-  if (authority === CLAIM_ESTABLISHMENT_AUTHORITY) {
-    if (typeof claimSnapshotGuard !== 'function') {
-      throw new CoordinationWriteError(
-        'missing-claim-snapshot-guard',
-        'the privileged claim writer requires a post-reference snapshot guard',
-      );
-    }
-    const guard = claimSnapshotGuard({
-      issue,
-      expectedBody,
-      prepared,
-      desiredLabel,
-      marker,
-      proposedComment,
-    });
-    if (!guard?.valid) {
-      return {
-        status: guard?.status ?? 'collision',
-        stage: 'claim-snapshot-guard',
-        recoverable: false,
-        mutations,
-        message:
-          guard?.message ??
-          'post-reference claim evidence is unsafe; preserve the ref for reconciliation',
-        guard,
-      };
-    }
-  }
-
-  if (
-    isInitialClaimTransition(expectedBody, prepared) &&
-    issue.body !== prepared.body &&
-    authority !== CLAIM_ESTABLISHMENT_AUTHORITY
-  ) {
+  if (isInitialClaimTransition(expectedBody, prepared) && issue.body !== prepared.body) {
     throw new CoordinationWriteError(
       'initial-claim-requires-reference',
       'parked-to-agent-owned transitions require the dedicated remote-reference claim module',
@@ -518,20 +481,37 @@ async function executeCoordinationWriteInternal(
   };
 }
 
-export async function executeCoordinationWrite(input) {
-  return executeCoordinationWriteInternal(input, undefined);
+async function executeCoordinationWriteWithDependencies(input) {
+  return executeCoordinationWriteInternal(input);
 }
 
-// This narrow entry point is imported only by coordination-claim.mjs. The ordinary writer and
-// its CLI never receive the module-private authority token.
-export async function executeClaimEstablishmentWrite(input) {
-  if (typeof input?.claimSnapshotGuard !== 'function') {
+const PRODUCTION_WRITE_FIELDS = new Set([
+  'repository',
+  'issueNumber',
+  'expectedBody',
+  'values',
+  'checkpointComment',
+  'operationId',
+  'kind',
+]);
+
+function rejectProductionDependencyInjection(options, allowed, boundary) {
+  const injected = Object.keys(options ?? {}).filter((key) => !allowed.has(key));
+  if (injected.length > 0) {
     throw new CoordinationWriteError(
-      'missing-claim-snapshot-guard',
-      'the privileged claim writer requires a post-reference snapshot guard',
+      'production-dependency-injection-forbidden',
+      `${boundary} does not accept caller-selected dependencies: ${injected.join(', ')}`,
     );
   }
-  return executeCoordinationWriteInternal(input, CLAIM_ESTABLISHMENT_AUTHORITY);
+}
+
+export async function executeCoordinationWrite(options) {
+  rejectProductionDependencyInjection(options, PRODUCTION_WRITE_FIELDS, 'executeCoordinationWrite');
+  const { repository, ...input } = options;
+  return executeCoordinationWriteWithDependencies({
+    ...input,
+    host: createGitHubCliHost({ repository }),
+  });
 }
 
 function parseJsonOutput(output, description) {
@@ -549,7 +529,7 @@ function parseJsonOutput(output, description) {
   }
 }
 
-export async function runGitHubCli(args, input) {
+async function runGitHubCli(args, input) {
   return await new Promise((resolve, reject) => {
     const child = spawn('gh', args, { stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '';
@@ -580,7 +560,7 @@ function repositoryPath(repository) {
   return `repos/${repository}`;
 }
 
-export function createGitHubCliHost({ repository, runGh = runGitHubCli }) {
+function createGitHubCliHost({ repository, runGh = runGitHubCli }) {
   const root = repositoryPath(repository);
   if (typeof runGh !== 'function') {
     throw new CoordinationWriteError('invalid-gh-runner', 'runGh must be a function');
@@ -733,12 +713,7 @@ function parseCliArguments(argv) {
   };
 }
 
-export async function runCoordinationWriteCli({
-  argv,
-  readText = (path) => readFile(path, 'utf8'),
-  runGh = runGitHubCli,
-  writeOutput = (text) => process.stdout.write(text),
-}) {
+async function runCoordinationWriteCliWithDependencies({ argv, readText, runGh, writeOutput }) {
   const options = parseCliArguments(argv);
   const [expectedBody, valuesText, checkpointComment] = await Promise.all([
     readText(options.expectedBodyFile),
@@ -779,7 +754,7 @@ export async function runCoordinationWriteCli({
   }
 
   const host = createGitHubCliHost({ repository: options.repository, runGh });
-  const result = await executeCoordinationWrite({
+  const result = await executeCoordinationWriteWithDependencies({
     host,
     issueNumber: options.issueNumber,
     expectedBody,
@@ -790,6 +765,18 @@ export async function runCoordinationWriteCli({
   });
   writeOutput(`${JSON.stringify(result, null, 2)}\n`);
   return result;
+}
+
+const PRODUCTION_CLI_FIELDS = new Set(['argv']);
+
+export async function runCoordinationWriteCli(options) {
+  rejectProductionDependencyInjection(options, PRODUCTION_CLI_FIELDS, 'runCoordinationWriteCli');
+  return runCoordinationWriteCliWithDependencies({
+    argv: options.argv,
+    readText: (path) => readFile(path, 'utf8'),
+    runGh: runGitHubCli,
+    writeOutput: (text) => process.stdout.write(text),
+  });
 }
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];

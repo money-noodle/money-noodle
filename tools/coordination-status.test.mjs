@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 
 import { spawnSync } from 'node:child_process';
@@ -15,7 +16,22 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import {
+  buildReport,
+  isExactSameOperationTransitionQuestion,
+  readLocalObservedAgainstMain,
+} from './coordination-status.mjs';
+import {
+  CANONICAL_REPOSITORY,
+  executeCoordinationClaim,
+  prepareCoordinationClaim,
+} from './coordination-claim.mjs';
+
 const STATUS_TOOL = fileURLToPath(new URL('./coordination-status.mjs', import.meta.url));
+const SERIALIZING_SOURCE = readFileSync(
+  fileURLToPath(new URL('../.github/coordination/serializing-paths.v1.json', import.meta.url)),
+  'utf8',
+);
 const FAR_FUTURE = '2999-01-01T00:00:00Z';
 const LONG_PAST = '2000-01-01T00:00:00Z';
 const REPOSITORY = 'example/registry';
@@ -325,6 +341,13 @@ if (!fallback && key.includes("/git/ref/heads/claim-v1/issue-")) {
   const ref = key.slice(key.indexOf("repos/") + 6).split("/git/ref/")[1];
   fallback = { stdout: JSON.stringify({ ref: "refs/" + ref, object: { type: "commit", sha: "${'a'.repeat(40)}" } }) };
 }
+if (!fallback && key.includes("/git/commits/") && /^[0-9a-f]{40}$/.test(key.slice(-40))) {
+  const sha = key.slice(-40);
+  fallback = { stdout: JSON.stringify({ sha, tree: { sha: "${'d'.repeat(40)}" } }) };
+}
+if (!fallback && key.endsWith("/git/trees/${'d'.repeat(40)}?recursive=1")) {
+  fallback = { stdout: JSON.stringify({ sha: "${'d'.repeat(40)}", truncated: false, tree: [] }) };
+}
 const configured = responses[key] ?? fallback;
 const counts = JSON.parse(fs.readFileSync(${JSON.stringify(countsFile)}, "utf8"));
 const call = counts[key] ?? 0;
@@ -458,6 +481,13 @@ test('versioned JSON mode is one parseable document with candidate safety explic
   assert.equal(report.coordinationKnown, true);
   assert.equal(report.registry.workItems[0].triage, 'candidate');
   assert.equal(report.registry.workItems[0].candidateSafety, 'not-established');
+  assert.equal(report.registry.scopeStatus, 'inactive');
+  assert.equal(report.registry.workItems[0].scope.status, 'unavailable');
+  assert.deepEqual(report.scopeGate, {
+    requested: 'board',
+    status: 'clear',
+    blockingFindingIds: [],
+  });
   assert.equal(report.local.integrationCheckout.status, 'mirrored');
   assert.equal(report.local.hooks.configuration.status, 'unset');
   assert.equal(report.local.hooks.configuration.effective, null);
@@ -564,6 +594,710 @@ test('issue and pull request retrieval consumes records beyond the first API pag
   assert.match(result.stdout, /#88 test\/page-two -> main/);
   assert(result.invocations.includes(`gh api --paginate --slurp ${ISSUES_ENDPOINT}`));
   assert(result.invocations.includes(`gh api --paginate --slurp ${PULLS_ENDPOINT}`));
+});
+
+test('only exact same-operation transitional state suppresses its one expected mismatch', () => {
+  const parked = { ...v2ReadyIssue(73), labels: ['work:ready'] };
+  const prepared = { ...v2ActiveIssue(73), labels: ['work:active'] };
+  const expectedBase = 'a'.repeat(40);
+  const operationComment = {
+    id: 73,
+    author: 'maintainer',
+    body: `Coordination-Write-ID: claim-73-operation\n${prepared.body}`,
+    createdAt: '2026-09-01T02:00:00Z',
+    updatedAt: '2026-09-01T02:00:00Z',
+  };
+  const digest = (value) => createHash('sha256').update(value).digest('hex');
+  const common = {
+    phase: 'after-ref',
+    operationId: 'claim-73-operation',
+    issueNumber: 73,
+    branch: 'claim-v1/issue-73',
+    ref: 'refs/heads/claim-v1/issue-73',
+    expectedBase,
+    sourceIssueBody: parked.body,
+    sourceIssueBodySha256: digest(parked.body),
+    preparedIssueBody: prepared.body,
+    preparedIssueBodySha256: digest(prepared.body),
+    expectedOperationComment: operationComment.body,
+    expectedOperationCommentSha256: digest(operationComment.body),
+    expectedSourceStateLabel: 'work:ready',
+    desiredStateLabel: 'work:active',
+    claimHarness: 'pi',
+    claimRunId: 'run-73',
+    claimAgent: 'agent-73',
+    claimHost: 'runner-01',
+    claimedAt: '2026-09-01T01:00:00Z',
+  };
+  const reservedRefs = [
+    {
+      ref: 'refs/heads/claim-v1/issue-73',
+      objectType: 'commit',
+      sha: expectedBase,
+    },
+  ];
+  const orphanEntry = {
+    code: 'orphaned-claim-ref',
+    message:
+      'refs/heads/claim-v1/issue-73 exists while issue #73 is ready; do not adopt or release it automatically',
+  };
+  const refCreated = {
+    ...common,
+    transition: 'ref-created-parked',
+    refCreatedByOperation: true,
+    expectedIssueBody: parked.body,
+    expectedIssueBodySha256: digest(parked.body),
+  };
+  assert.equal(
+    isExactSameOperationTransitionQuestion({
+      provisionalClaim: refCreated,
+      issue: parked,
+      comments: [],
+      reservedRefs,
+      entry: orphanEntry,
+    }),
+    true,
+  );
+
+  const recoveryIssue = { ...prepared, labels: ['work:ready'] };
+  const recoveryEntry = {
+    code: 'body-label-state-mismatch',
+    message: 'Claim-State active does not match exactly one state label (found work:ready)',
+  };
+  const recovery = {
+    ...common,
+    transition: 'writer-recovery',
+    refCreatedByOperation: false,
+    expectedIssueBody: prepared.body,
+    expectedIssueBodySha256: digest(prepared.body),
+  };
+  const exactRecovery = {
+    provisionalClaim: recovery,
+    issue: recoveryIssue,
+    comments: [operationComment],
+    reservedRefs,
+    entry: recoveryEntry,
+  };
+  assert.equal(isExactSameOperationTransitionQuestion(exactRecovery), true);
+  for (const candidate of [
+    { ...exactRecovery, provisionalClaim: { ...recovery, phase: 'before-ref' } },
+    { ...exactRecovery, provisionalClaim: { ...recovery, operationId: 'claim/73' } },
+    { ...exactRecovery, provisionalClaim: { ...recovery, claimRunId: 'other-run' } },
+    { ...exactRecovery, provisionalClaim: { ...recovery, expectedBase: 'b'.repeat(40) } },
+    { ...exactRecovery, issue: { ...recoveryIssue, body: `${recoveryIssue.body}drift\n` } },
+    { ...exactRecovery, comments: [] },
+    { ...exactRecovery, comments: [operationComment, { ...operationComment, id: 74 }] },
+    {
+      ...exactRecovery,
+      comments: [{ ...operationComment, updatedAt: '2026-09-01T03:00:00Z' }],
+    },
+    { ...exactRecovery, reservedRefs: [] },
+    { ...exactRecovery, entry: { code: 'other-warning', message: recoveryEntry.message } },
+    { ...exactRecovery, entry: { ...recoveryEntry, message: `${recoveryEntry.message} drift` } },
+  ]) {
+    assert.equal(isExactSameOperationTransitionQuestion(candidate), false);
+  }
+});
+
+test('real production status/report/guard path authorizes only exact same-operation recovery', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'mn-coordination-recovery-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const invocationLog = join(directory, 'invocations.log');
+  writeFileSync(invocationLog, '');
+  mkdirSync(join(directory, '.githooks'));
+  writeExecutable(directory, '.githooks/pre-commit', '#!/bin/sh\nexit 0\n');
+  writeExecutable(directory, '.githooks/pre-merge-commit', '#!/bin/sh\nexit 0\n');
+  writeExecutable(directory, 'hostname', '#!/bin/sh\nprintf "runner-01\\n"\n');
+  writeGitShim(directory);
+
+  const issueNumber = 73;
+  const base = 'a'.repeat(40);
+  const branch = `claim-v1/issue-${issueNumber}`;
+  const ref = `refs/heads/${branch}`;
+  const parked = v2ReadyIssue(issueNumber, { 'Checkpoint-Commit': base });
+  const active = v2ActiveIssue(issueNumber);
+  const values = {
+    'Claim-State': 'active',
+    'Claim-Harness': 'pi',
+    'Claim-Run-ID': 'run-73',
+    'Claim-Agent': 'agent-73',
+    'Claim-Branch': branch,
+    'Claim-Host': 'runner-01',
+    'Claimed-At': '2026-09-01T01:00:00Z',
+    'Check-In-By': FAR_FUTURE,
+    'Waiting-Since': 'unclaimed',
+    'Checkpoint-State': 'active',
+    'Checkpoint-At': '2026-09-01T01:00:00Z',
+    'Checkpoint-Commit': base,
+    'Checkpoint-Changed-Path-Count': '0',
+    'Checkpoint-Checks-Verdict': 'unavailable',
+    'Checkpoint-CI-Run': 'unavailable',
+    'Checkpoint-CI-Commit': 'unavailable',
+    'Checkpoint-Security-Impact': 'unknown',
+    'Checkpoint-Tenant-Impact': 'unknown',
+    'Checkpoint-Provider-Impact': 'unknown',
+    'Checkpoint-Deployment-Impact': 'unknown',
+    'Checkpoint-Residual-Risk-Count': '0',
+    'Next-Action': 'claim after the full protocol',
+    Blockers: 'none',
+  };
+  const operationId = 'claim-73-production-recovery';
+  const claimInput = {
+    repository: CANONICAL_REPOSITORY,
+    issueNumber,
+    expectedBase: base,
+    expectedBody: parked.body,
+    values,
+    checkpointComment: active.body,
+    operationId,
+  };
+  const prepared = prepareCoordinationClaim(claimInput);
+  const operationComment = {
+    id: 7300,
+    user: { login: 'maintainer' },
+    body: prepared.operation.comment,
+    created_at: '2026-09-01T02:00:00Z',
+    updated_at: '2026-09-01T02:00:00Z',
+  };
+  const transitionIssue = restIssue({
+    number: issueNumber,
+    title: active.title,
+    body: prepared.prepared.body,
+    labels: ['work:ready'],
+  });
+  const treeSha = 'b'.repeat(40);
+  const blobSha = 'c'.repeat(40);
+  const canonicalIssues = `repos/${CANONICAL_REPOSITORY}/issues?state=all&per_page=100`;
+  const canonicalLabels = `repos/${CANONICAL_REPOSITORY}/labels?per_page=100`;
+  const canonicalRefs = `repos/${CANONICAL_REPOSITORY}/git/matching-refs/heads/claim-v?per_page=100`;
+  const canonicalMain = `repos/${CANONICAL_REPOSITORY}/git/ref/heads/main`;
+  const canonicalPulls = `repos/${CANONICAL_REPOSITORY}/pulls?state=open&per_page=100`;
+  const canonicalComments = `repos/${CANONICAL_REPOSITORY}/issues/${issueNumber}/comments?per_page=100`;
+  const responses = {
+    '--version': { stdout: 'gh version 2.0.0 (test)\n' },
+    auth: { stdout: 'Logged in to github.com as test-agent\n' },
+    repo: { stdout: `${CANONICAL_REPOSITORY}\n` },
+    [`api:${canonicalLabels}`]: { stdout: JSON.stringify([COORDINATION_LABELS]) },
+    [`api:${canonicalIssues}`]: { stdout: JSON.stringify([[PLAN_ISSUE, transitionIssue]]) },
+    [`api:${canonicalRefs}`]: { stdout: JSON.stringify([[restRef(ref)]]) },
+    [`api:${canonicalMain}`]: { stdout: JSON.stringify(restRef('refs/heads/main')) },
+    [`api:${canonicalPulls}`]: { stdout: '[[]]' },
+    [`api:${canonicalComments}`]: { stdout: JSON.stringify([[operationComment]]) },
+    [`api:repos/${CANONICAL_REPOSITORY}/git/commits/${base}`]: {
+      stdout: JSON.stringify({ sha: base, tree: { sha: treeSha } }),
+    },
+    [`api:repos/${CANONICAL_REPOSITORY}/git/trees/${treeSha}?recursive=1`]: {
+      stdout: JSON.stringify({
+        sha: treeSha,
+        truncated: false,
+        tree: [
+          { path: '.github', mode: '040000', type: 'tree', sha: '6'.repeat(40) },
+          {
+            path: '.github/coordination',
+            mode: '040000',
+            type: 'tree',
+            sha: '7'.repeat(40),
+          },
+          {
+            path: '.github/coordination/serializing-paths.v1.json',
+            mode: '100644',
+            type: 'blob',
+            sha: blobSha,
+          },
+        ],
+      }),
+    },
+    [`api:repos/${CANONICAL_REPOSITORY}/git/blobs/${blobSha}`]: {
+      stdout: JSON.stringify({
+        sha: blobSha,
+        encoding: 'base64',
+        content: Buffer.from(SERIALIZING_SOURCE).toString('base64'),
+      }),
+    },
+  };
+  writeGhShim(directory, responses);
+  const responseFile = join(directory, 'responses.json');
+  const mutableStateFile = join(directory, 'mutable-issue-state.json');
+  writeFileSync(
+    mutableStateFile,
+    JSON.stringify({ issue: transitionIssue, comments: [operationComment], mutations: [] }),
+  );
+  writeExecutable(
+    directory,
+    'gh',
+    `#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const inputText = fs.readFileSync(0, "utf8");
+fs.appendFileSync(process.env.INVOCATION_LOG, "gh " + args.join(" ") + "\\n");
+const responseFile = ${JSON.stringify(responseFile)};
+const stateFile = ${JSON.stringify(mutableStateFile)};
+const issueEndpoint = ${JSON.stringify(`repos/${CANONICAL_REPOSITORY}/issues/${issueNumber}`)};
+const commentsEndpoint = issueEndpoint + "/comments";
+const canonicalIssues = ${JSON.stringify(canonicalIssues)};
+const responses = JSON.parse(fs.readFileSync(responseFile, "utf8"));
+const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+const methodIndex = args.indexOf("--method");
+const method = methodIndex < 0 ? "GET" : args[methodIndex + 1];
+const endpoint = args[0] === "api" ? args.find((arg) => arg.startsWith("repos/")) : undefined;
+function output(value) { process.stdout.write(JSON.stringify(value)); }
+if (args[0] === "repo" && args.includes("nameWithOwner,defaultBranchRef")) {
+  output({ nameWithOwner: ${JSON.stringify(CANONICAL_REPOSITORY)}, defaultBranchRef: { name: "main" } });
+  process.exit(0);
+}
+if (endpoint === issueEndpoint && method === "GET") {
+  output(state.issue);
+  process.exit(0);
+}
+if (endpoint === commentsEndpoint && method === "GET") {
+  output([state.comments]);
+  process.exit(0);
+}
+if (endpoint === issueEndpoint && method === "PATCH") {
+  const input = JSON.parse(inputText);
+  if (Object.hasOwn(input, "body")) {
+    state.issue.body = input.body;
+    state.mutations.push("body");
+  }
+  if (Object.hasOwn(input, "labels")) {
+    state.issue.labels = input.labels.map((name) => ({ name }));
+    state.mutations.push("label");
+    responses["api:" + canonicalIssues] = {
+      stdout: JSON.stringify([[${JSON.stringify(PLAN_ISSUE)}, state.issue]]),
+    };
+    fs.writeFileSync(responseFile, JSON.stringify(responses));
+  }
+  fs.writeFileSync(stateFile, JSON.stringify(state));
+  output(state.issue);
+  process.exit(0);
+}
+if (endpoint === commentsEndpoint && method === "POST") {
+  const input = JSON.parse(inputText);
+  state.mutations.push("comment");
+  const comment = { id: 7301, user: { login: "test-agent" }, body: input.body, created_at: "2026-09-01T03:00:00Z", updated_at: "2026-09-01T03:00:00Z" };
+  state.comments.push(comment);
+  fs.writeFileSync(stateFile, JSON.stringify(state));
+  output(comment);
+  process.exit(0);
+}
+const key = args[0] === "api" ? "api:" + args.at(-1) : args[0];
+let fallback = key.includes("/comments?per_page=100") ? { stdout: "[[]]" } : undefined;
+if (!fallback && key.includes("/git/ref/heads/claim-v1/issue-")) {
+  fallback = { stdout: JSON.stringify({ ref: ${JSON.stringify(ref)}, object: { type: "commit", sha: ${JSON.stringify(base)} } }) };
+}
+const response = responses[key] ?? fallback;
+if (!response) {
+  process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
+  process.exit(127);
+}
+if (response.stdout) process.stdout.write(response.stdout);
+if (response.stderr) process.stderr.write(response.stderr);
+process.exit(response.status ?? 0);
+`,
+  );
+
+  const previous = {
+    cwd: process.cwd(),
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    INVOCATION_LOG: process.env.INVOCATION_LOG,
+  };
+  process.chdir(directory);
+  process.env.PATH = directory;
+  process.env.HOME = directory;
+  process.env.INVOCATION_LOG = invocationLog;
+  try {
+    const outcome = await executeCoordinationClaim(claimInput);
+    assert.equal(outcome.status, 'complete', JSON.stringify(outcome, null, 2));
+    assert.equal(outcome.stage, 'writer-recovery');
+    assert.deepEqual(outcome.writerMutations, { body: 0, label: 1, comment: 0 });
+    assert.deepEqual(JSON.parse(readFileSync(mutableStateFile, 'utf8')).mutations, ['label']);
+    const invocations = readFileSync(invocationLog, 'utf8');
+    assert.match(invocations, /gh api --paginate --slurp/);
+    assert.match(
+      invocations,
+      new RegExp(`gh api --method PATCH repos/${CANONICAL_REPOSITORY}/issues/${issueNumber}`),
+    );
+  } finally {
+    process.chdir(previous.cwd);
+    process.env.PATH = previous.PATH;
+    process.env.HOME = previous.HOME;
+    if (previous.INVOCATION_LOG === undefined) delete process.env.INVOCATION_LOG;
+    else process.env.INVOCATION_LOG = previous.INVOCATION_LOG;
+  }
+});
+
+test('activated immutable scope evidence emits exact gates and preserves non-self-activation', (t) => {
+  const active = v2ActiveIssue(73);
+  const remote = restRef('refs/heads/claim-v1/issue-73');
+  const treeSha = 'b'.repeat(40);
+  const blobSha = 'c'.repeat(40);
+  const responses = defaultResponses();
+  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE, active]]) };
+  responses[`api:${CLAIM_REFS_ENDPOINT}`] = { stdout: JSON.stringify([[remote]]) };
+  responses[`api:${commentEndpoint(73)}`] = {
+    stdout: JSON.stringify([[restCheckpointComment(active)]]),
+  };
+  responses[`api:repos/${REPOSITORY}/git/commits/${'a'.repeat(40)}`] = {
+    stdout: JSON.stringify({ sha: 'a'.repeat(40), tree: { sha: treeSha } }),
+  };
+  responses[`api:repos/${REPOSITORY}/git/trees/${treeSha}?recursive=1`] = {
+    stdout: JSON.stringify({
+      sha: treeSha,
+      truncated: false,
+      tree: [
+        { path: '.github', mode: '040000', type: 'tree', sha: '6'.repeat(40) },
+        {
+          path: '.github/coordination',
+          mode: '040000',
+          type: 'tree',
+          sha: '7'.repeat(40),
+        },
+        {
+          path: '.github/coordination/serializing-paths.v1.json',
+          mode: '100644',
+          type: 'blob',
+          sha: blobSha,
+        },
+      ],
+    }),
+  };
+  responses[`api:repos/${REPOSITORY}/git/blobs/${blobSha}`] = {
+    stdout: JSON.stringify({
+      sha: blobSha,
+      encoding: 'base64',
+      content: Buffer.from(SERIALIZING_SOURCE).toString('base64'),
+    }),
+  };
+
+  const result = runStatus(t, { responses, args: ['--json', '--gate', 'claim:73'] });
+  const report = JSON.parse(result.stdout);
+  assert.equal(result.exitCode, 0, JSON.stringify(report, null, 2));
+  assert.deepEqual(report.scopeGate, {
+    requested: 'claim:73',
+    status: 'clear',
+    blockingFindingIds: [],
+  });
+  assert.equal(report.registry.scopeStatus, 'complete');
+  assert.deepEqual(report.registry.scopeFindings, []);
+  assert.equal(report.registry.workItems.find(({ number }) => number === 73).scope.status, 'clear');
+  assert.equal(
+    result.invocations.filter(
+      (invocation) => invocation === `gh api --paginate --slurp ${PULLS_ENDPOINT}`,
+    ).length,
+    3,
+  );
+
+  const raced = structuredClone(responses);
+  raced[`api:${PULLS_ENDPOINT}`] = {
+    sequence: [
+      { stdout: '[[]]' },
+      {
+        stdout: JSON.stringify([
+          [
+            {
+              number: 80,
+              title: 'late PR',
+              state: 'open',
+              draft: false,
+              head: { ref: 'late', sha: 'e'.repeat(40), repo: { full_name: REPOSITORY } },
+              base: { ref: 'main', sha: 'a'.repeat(40), repo: { full_name: REPOSITORY } },
+              updated_at: '2026-09-03T01:00:00Z',
+              html_url: 'https://example.invalid/pull/80',
+            },
+          ],
+        ]),
+      },
+    ],
+  };
+  const racedResult = runStatus(t, { responses: raced, args: ['--json', '--gate', 'claim:73'] });
+  const racedReport = JSON.parse(racedResult.stdout);
+  assert.equal(racedResult.exitCode, 2);
+  assert.equal(racedReport.registry.scopeStatus, 'unavailable');
+  assert.equal(racedReport.scopeGate.status, 'unknown');
+  assert(racedReport.warnings.some(({ code }) => code === 'scope-evidence-unavailable'));
+
+  const malformed = structuredClone(responses);
+  malformed[`api:repos/${REPOSITORY}/git/blobs/${blobSha}`].stdout = JSON.stringify({
+    sha: blobSha,
+    encoding: 'base64',
+    content: Buffer.from(`${SERIALIZING_SOURCE}\n`).toString('base64'),
+  });
+  const malformedResult = runStatus(t, {
+    responses: malformed,
+    args: ['--json', '--gate', 'claim:73'],
+  });
+  assert.equal(malformedResult.exitCode, 2);
+  assert.equal(JSON.parse(malformedResult.stdout).scopeGate.status, 'unknown');
+
+  const surfaceRaces = [];
+  const issueRace = structuredClone(responses);
+  issueRace[`api:${ISSUES_ENDPOINT}`] = {
+    sequence: [
+      { stdout: JSON.stringify([[PLAN_ISSUE, active]]) },
+      { stdout: JSON.stringify([[PLAN_ISSUE, { ...active, body: `${active.body}drift\n` }]]) },
+    ],
+  };
+  surfaceRaces.push(['issue-body', issueRace]);
+
+  const issueLabelRace = structuredClone(responses);
+  issueLabelRace[`api:${ISSUES_ENDPOINT}`] = {
+    sequence: [
+      { stdout: JSON.stringify([[PLAN_ISSUE, active]]) },
+      {
+        stdout: JSON.stringify([
+          [PLAN_ISSUE, { ...active, labels: [{ name: 'work:active' }, { name: 'late-label' }] }],
+        ]),
+      },
+    ],
+  };
+  surfaceRaces.push(['issue-labels', issueLabelRace]);
+
+  const labelRace = structuredClone(responses);
+  labelRace[`api:${LABELS_ENDPOINT}`] = {
+    sequence: [
+      { stdout: JSON.stringify([COORDINATION_LABELS]) },
+      { stdout: JSON.stringify([COORDINATION_LABELS.slice(0, -1)]) },
+    ],
+  };
+  surfaceRaces.push(['labels', labelRace]);
+
+  const commentRace = structuredClone(responses);
+  const checkpoint = restCheckpointComment(active);
+  commentRace[`api:${commentEndpoint(73)}`] = {
+    sequence: [
+      { stdout: JSON.stringify([[checkpoint]]) },
+      {
+        stdout: JSON.stringify([
+          [
+            checkpoint,
+            {
+              ...checkpoint,
+              id: 7400,
+              body: 'unrelated late comment',
+              created_at: '2026-09-01T03:00:00Z',
+              updated_at: '2026-09-01T03:00:00Z',
+            },
+          ],
+        ]),
+      },
+    ],
+  };
+  surfaceRaces.push(['comments', commentRace]);
+
+  const refRace = structuredClone(responses);
+  refRace[`api:${CLAIM_REFS_ENDPOINT}`] = {
+    sequence: [{ stdout: JSON.stringify([[remote]]) }, { stdout: '[[]]' }],
+  };
+  surfaceRaces.push(['reserved-ref-count', refRace]);
+
+  const mainRace = structuredClone(responses);
+  mainRace[`api:${MAIN_REF_ENDPOINT}`] = {
+    sequence: [
+      ...Array.from({ length: 4 }, () => ({
+        stdout: JSON.stringify(restRef('refs/heads/main')),
+      })),
+      { stdout: JSON.stringify(restRef('refs/heads/main', 'f'.repeat(40))) },
+    ],
+  };
+  surfaceRaces.push(['main', mainRace]);
+
+  for (const [name, racedResponses] of surfaceRaces) {
+    const raceResult = runStatus(t, {
+      responses: racedResponses,
+      args: ['--json', '--gate', 'claim:73'],
+    });
+    const raceReport = JSON.parse(raceResult.stdout);
+    assert.equal(raceResult.exitCode, 2, name);
+    assert.equal(raceReport.registry.scopeStatus, 'unavailable', name);
+    assert.equal(raceReport.scopeGate.status, 'unknown', name);
+    assert(
+      raceReport.warnings.some(({ code }) => code === 'scope-evidence-unavailable'),
+      name,
+    );
+  }
+
+  for (const [name, secondComments] of [
+    ['incomplete-comment-reread', [[]]],
+    ['duplicate-comment-count', [[checkpoint, { ...checkpoint }]]],
+  ]) {
+    const incomplete = structuredClone(responses);
+    incomplete[`api:${commentEndpoint(73)}`] = {
+      sequence: [
+        { stdout: JSON.stringify([[checkpoint]]) },
+        { stdout: JSON.stringify(secondComments) },
+      ],
+    };
+    const incompleteResult = runStatus(t, {
+      responses: incomplete,
+      args: ['--json', '--gate', 'claim:73'],
+    });
+    const incompleteReport = JSON.parse(incompleteResult.stdout);
+    assert.equal(incompleteResult.exitCode, 2, name);
+    assert.equal(incompleteReport.scopeGate.status, 'unknown', name);
+  }
+});
+
+test('routed PR findings block only selected integration gates while board and disjoint claim gates stay clear', (t) => {
+  const active = v2ActiveIssue(44);
+  const main = 'a'.repeat(40);
+  const heads = { 31: 'b'.repeat(40), 32: 'c'.repeat(40), 33: 'e'.repeat(40) };
+  const trees = {
+    main: '1'.repeat(40),
+    31: '2'.repeat(40),
+    32: '3'.repeat(40),
+    33: '4'.repeat(40),
+  };
+  const blob = '5'.repeat(40);
+  const unchanged = '6'.repeat(40);
+  const historicalBase = 'f'.repeat(40);
+  const changed = '7'.repeat(40);
+  const pathEntry = (path, sha) => ({ path, mode: '100644', type: 'blob', sha });
+  const pulls = [31, 32, 33].map((number) => ({
+    number,
+    title: `PR ${number}`,
+    state: 'open',
+    draft: false,
+    head: {
+      ref: `feature/${number}`,
+      sha: heads[number],
+      repo: { full_name: REPOSITORY },
+    },
+    base: { ref: 'main', sha: historicalBase, repo: { full_name: REPOSITORY } },
+    updated_at: '2026-09-03T01:00:00Z',
+    html_url: `https://example.invalid/pull/${number}`,
+  }));
+  const responses = defaultResponses();
+  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE, active]]) };
+  responses[`api:${CLAIM_REFS_ENDPOINT}`] = {
+    stdout: JSON.stringify([[restRef('refs/heads/claim-v1/issue-44')]]),
+  };
+  responses[`api:${commentEndpoint(44)}`] = {
+    stdout: JSON.stringify([[restCheckpointComment(active)]]),
+  };
+  responses[`api:${PULLS_ENDPOINT}`] = { stdout: JSON.stringify([pulls]) };
+  for (const [commit, tree] of [
+    [main, trees.main],
+    ...[31, 32, 33].map((number) => [heads[number], trees[number]]),
+  ]) {
+    responses[`api:repos/${REPOSITORY}/git/commits/${commit}`] = {
+      stdout: JSON.stringify({ sha: commit, tree: { sha: tree } }),
+    };
+  }
+  const directoryEntry = (path, sha) => ({ path, mode: '040000', type: 'tree', sha });
+  const directories = [
+    directoryEntry('.github', 'a'.repeat(40)),
+    directoryEntry('.github/coordination', 'b'.repeat(40)),
+    directoryEntry('.github/workflows', 'c'.repeat(40)),
+  ];
+  const baseEntries = [
+    ...directories,
+    pathEntry('.github/coordination/serializing-paths.v1.json', blob),
+    pathEntry('.github/workflows/ci.yml', unchanged),
+    pathEntry('.github/workflows/delivery.yml', unchanged),
+  ];
+  const treeEntries = {
+    [trees.main]: baseEntries,
+    [trees[31]]: [
+      ...directories,
+      pathEntry('.github/coordination/serializing-paths.v1.json', blob),
+      pathEntry('.github/workflows/ci.yml', changed),
+      pathEntry('.github/workflows/delivery.yml', changed),
+    ],
+    [trees[32]]: [
+      ...directories,
+      pathEntry('.github/coordination/serializing-paths.v1.json', blob),
+      pathEntry('.github/workflows/ci.yml', '8'.repeat(40)),
+      pathEntry('.github/workflows/delivery.yml', '8'.repeat(40)),
+    ],
+    [trees[33]]: [
+      ...directories,
+      pathEntry('.github/coordination/serializing-paths.v1.json', blob),
+      pathEntry('.github/workflows/ci.yml', '9'.repeat(40)),
+      pathEntry('.github/workflows/delivery.yml', '9'.repeat(40)),
+    ],
+  };
+  for (const [tree, entries] of Object.entries(treeEntries)) {
+    responses[`api:repos/${REPOSITORY}/git/trees/${tree}?recursive=1`] = {
+      stdout: JSON.stringify({ sha: tree, truncated: false, tree: entries }),
+    };
+  }
+  responses[`api:repos/${REPOSITORY}/git/blobs/${blob}`] = {
+    stdout: JSON.stringify({
+      sha: blob,
+      size: Buffer.byteLength(SERIALIZING_SOURCE),
+      encoding: 'base64',
+      content: Buffer.from(SERIALIZING_SOURCE).toString('base64'),
+    }),
+  };
+  for (const number of [31, 32, 33]) {
+    responses[`api:${compareEndpoint(main, heads[number])}`] = {
+      stdout: JSON.stringify({
+        status: 'ahead',
+        ahead_by: 1,
+        behind_by: 0,
+        base_commit: { sha: main },
+        merge_base_commit: { sha: main },
+      }),
+    };
+  }
+
+  const cases = [
+    [[], 0, 'board', 'clear'],
+    [['--gate', 'integration-pr:31'], 2, 'integration-pr:31', 'blocked'],
+    [['--gate', 'integration-pr:32'], 2, 'integration-pr:32', 'blocked'],
+    [['--gate', 'integration-pr:33'], 2, 'integration-pr:33', 'blocked'],
+    [['--gate', 'claim:44'], 0, 'claim:44', 'clear'],
+  ];
+  for (const [args, exitCode, requested, status] of cases) {
+    const result = runStatus(t, { responses, args: ['--json', ...args] });
+    const report = JSON.parse(result.stdout);
+    assert.equal(result.exitCode, exitCode, `${requested}: ${JSON.stringify(report, null, 2)}`);
+    assert.equal(report.scopeGate.requested, requested);
+    assert.equal(report.scopeGate.status, status);
+    assert.equal(report.warnings.length, 0, requested);
+    assert.deepEqual(
+      report.registry.scopeFindings.map(({ id }) => id),
+      ['scope-v1:pr-pr:31:32', 'scope-v1:pr-pr:31:33', 'scope-v1:pr-pr:32:33'],
+    );
+    assert.equal(report.registry.scopeFindings[0].globalPublicationBlock, false);
+  }
+  const human = runStatus(t, { responses });
+  assert.equal(human.exitCode, 0);
+  assert.match(
+    human.stdout,
+    /\[BLOCK pr-pr\] PR #31 <-> PR #32 paths=\.github\/workflows\/ci\.yml, \.github\/workflows\/delivery\.yml routes=integration-pr:#31,integration-pr:#32 global-publication=false/,
+  );
+  assert.match(human.stdout, /## Scope gate\nrequested=board status=clear blockers=none exit=0/);
+  assert(
+    human.stdout.indexOf('## Routed scope findings') < human.stdout.indexOf('## Ready candidates'),
+  );
+
+  const baseDrift = structuredClone(responses);
+  const driftedPulls = structuredClone(pulls);
+  driftedPulls[0].base.sha = '0'.repeat(40);
+  baseDrift[`api:${PULLS_ENDPOINT}`] = {
+    sequence: [{ stdout: JSON.stringify([pulls]) }, { stdout: JSON.stringify([driftedPulls]) }],
+  };
+  const baseDriftResult = runStatus(t, {
+    responses: baseDrift,
+    args: ['--json', '--gate', 'claim:44'],
+  });
+  const baseDriftReport = JSON.parse(baseDriftResult.stdout);
+  assert.equal(baseDriftResult.exitCode, 2);
+  assert.equal(baseDriftReport.registry.scopeStatus, 'unavailable');
+  assert.equal(baseDriftReport.scopeGate.status, 'unknown');
+  assert(baseDriftReport.warnings.some(({ code }) => code === 'scope-evidence-unavailable'));
+});
+
+test('scope selector syntax and missing targets fail closed with exit 2', (t) => {
+  const malformed = runStatus(t, { args: ['--gate', 'claim:01'] });
+  assert.equal(malformed.exitCode, 2);
+  assert.match(malformed.stderr, /Usage:/);
+
+  const missing = runStatus(t, { args: ['--json', '--gate', 'claim:999'] });
+  assert.equal(missing.exitCode, 2);
+  assert.equal(JSON.parse(missing.stdout).scopeGate.status, 'unknown');
 });
 
 test('reserved claim-ref enumeration consumes every page and reconciles a derived active claim', (t) => {
@@ -1021,6 +1755,45 @@ test('same-host clean claim containment is the only local-ahead fallback', (t) =
   const item = report.registry.workItems.find(({ number }) => number === 61);
   assert.equal(item.remoteClaim.lifecycle.status, 'local-ahead');
   assert.equal(item.remoteClaim.lifecycle.source, 'same-host-local-containment');
+});
+
+test('same-host scope fallback reads only stable committed immutable trees', (t) => {
+  const repository = mkdtempSync(join(tmpdir(), 'mn-scope-local-'));
+  t.after(() => rmSync(repository, { recursive: true, force: true }));
+  const git = (...args) => {
+    const result = spawnSync('git', ['-C', repository, ...args], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git('init', '-q');
+  git('config', 'user.name', 'Scope Test');
+  git('config', 'user.email', 'scope@example.invalid');
+  mkdirSync(join(repository, 'tools'));
+  writeFileSync(join(repository, 'tools/a.mjs'), 'export const value = 1;\n');
+  git('add', 'tools/a.mjs');
+  git('commit', '-qm', 'base');
+  const base = git('rev-parse', 'HEAD');
+  writeFileSync(join(repository, 'tools/a.mjs'), 'export const value = 2;\n');
+  git('add', 'tools/a.mjs');
+  git('commit', '-qm', 'head');
+  const head = git('rev-parse', 'HEAD');
+
+  writeFileSync(join(repository, 'tools/a.mjs'), 'uncommitted content is not scope evidence\n');
+  assert.deepEqual(readLocalObservedAgainstMain(repository, base, head, base), {
+    status: 'complete',
+    paths: ['tools/a.mjs'],
+    count: 1,
+    baseCommit: base,
+    baseTree: git('rev-parse', `${base}^{tree}`),
+    headCommit: head,
+    headTree: git('rev-parse', `${head}^{tree}`),
+    source: 'same-host-local-immutable-tree',
+  });
+  assert.equal(readLocalObservedAgainstMain(repository, base, head, head).status, 'unavailable');
+  assert.equal(
+    readLocalObservedAgainstMain(repository, base, 'f'.repeat(40), base).status,
+    'unavailable',
+  );
 });
 
 test('missing, orphaned, malformed, and unsupported reserved-ref evidence fails closed', (t) => {

@@ -1,3 +1,5 @@
+import { normalizeScopePaths } from './coordination-scope.mjs';
+
 export const REGISTRY_SCHEMA_VERSION_FIELD = 'Registry-Schema-Version';
 export const CURRENT_REGISTRY_SCHEMA_VERSION = '2';
 export const CLAIM_BRANCH_VERSION = 1;
@@ -359,32 +361,7 @@ export function parseStrictDependencies(value) {
   return { status: 'declared', numbers };
 }
 
-export function normalizeScopePaths(value) {
-  if (typeof value !== 'string') return { status: 'invalid', paths: [] };
-  const trimmed = value.trim();
-  if (trimmed === 'none') return { status: 'none', paths: [] };
-  const paths = trimmed
-    .split(/\r?\n|,\s*/)
-    .map((entry) => entry.trim().replace(/^[-*]\s+/, ''))
-    .filter(Boolean);
-  if (
-    paths.length === 0 ||
-    new Set(paths).size !== paths.length ||
-    paths.some(
-      (path) =>
-        path.startsWith('/') ||
-        path.startsWith('~/') ||
-        /^[A-Za-z]:\//.test(path) ||
-        path.includes('\\') ||
-        path.split('/').some((segment) => ['', '.', '..'].includes(segment)) ||
-        /[\0\r\n,]/.test(path) ||
-        /\s/.test(path),
-    )
-  ) {
-    return { status: 'invalid', paths: [] };
-  }
-  return { status: 'declared', paths };
-}
+export { normalizeScopePaths };
 
 function validateCheckpoint(record, claimState, errors, { allowInitial = true } = {}) {
   requireFields(record, CHECKPOINT_EVIDENCE_FIELDS, errors);
@@ -840,6 +817,22 @@ export function validatePlanComment(body, planRecord) {
   return { applicable: true, valid: errors.length === 0, fields: record.fields, errors };
 }
 
+export function validateStandaloneCheckpointEvidence(body, version = '2') {
+  if (typeof body !== 'string') throw new TypeError('checkpoint evidence must be a string');
+  if (!['1', '2'].includes(version)) {
+    return { applicable: false, valid: false, fields: {}, errors: [] };
+  }
+  const claimFields = version === '2' ? V2_PORTABLE_CLAIM_FIELDS : V1_PORTABLE_CLAIM_FIELDS;
+  const record = structuredRecord(body, [...claimFields, ...CHECKPOINT_EVIDENCE_FIELDS]);
+  const errors = [];
+  requireFields(record, [...claimFields, ...CHECKPOINT_EVIDENCE_FIELDS], errors);
+  if (!errors.some(({ code }) => ['missing-field', 'duplicate-field'].includes(code))) {
+    if (version === '2') validateV2Ownership(record, errors);
+    validateCheckpoint(record, record.fields['Claim-State'], errors, { allowInitial: true });
+  }
+  return { applicable: true, valid: errors.length === 0, fields: record.fields, errors };
+}
+
 export function validateCheckpointComment(body, workRecord) {
   if (typeof body !== 'string') throw new TypeError('checkpoint comment must be a string');
   const commentShape = structuredRecord(body, ['Claim-Worktree', 'Claim-Host']);
@@ -871,18 +864,10 @@ export function validateCheckpointComment(body, workRecord) {
     workRecord.version === '2' ? V2_PORTABLE_CLAIM_FIELDS : V1_PORTABLE_CLAIM_FIELDS;
   const names = [...claimFields, ...CHECKPOINT_EVIDENCE_FIELDS, 'Coordination-Write-ID'];
   const record = structuredRecord(body, names);
-  const errors = [];
-  requireFields(record, [...claimFields, ...CHECKPOINT_EVIDENCE_FIELDS], errors);
-  if (!errors.some(({ code }) => ['missing-field', 'duplicate-field'].includes(code))) {
-    for (const field of claimFields) {
-      if (record.fields[field] !== workRecord.fields[field]) {
-        errors.push(
-          problem('body-comment-mismatch', field, `${field} does not match the proposed body`),
-        );
-      }
-    }
-    validateCheckpoint(record, record.fields['Claim-State'], errors, { allowInitial: true });
-    for (const field of CHECKPOINT_EVIDENCE_FIELDS) {
+  const standalone = validateStandaloneCheckpointEvidence(body, workRecord.version);
+  const errors = [...standalone.errors];
+  if (standalone.valid) {
+    for (const field of [...claimFields, ...CHECKPOINT_EVIDENCE_FIELDS]) {
       if (record.fields[field] !== workRecord.fields[field]) {
         errors.push(
           problem('body-comment-mismatch', field, `${field} does not match the proposed body`),
