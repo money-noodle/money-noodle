@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
+import { createHash } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,7 +9,9 @@ import { fileURLToPath } from 'node:url';
 import {
   normalizeScopePaths,
   parseReservedClaimRef,
+  validateCheckpointComment,
   validateStandaloneCheckpointEvidence,
+  validateWorkItemBody,
 } from './coordination-schema.mjs';
 import {
   buildScopeRouting,
@@ -1204,25 +1207,114 @@ function applyScopeEvidence({
   };
 }
 
-export function isExactSameOperationPostRefTransition({
+const TRANSITION_IDENTITY_FIELDS = [
+  ['Claim-Harness', 'claimHarness'],
+  ['Claim-Run-ID', 'claimRunId'],
+  ['Claim-Agent', 'claimAgent'],
+  ['Claim-Host', 'claimHost'],
+  ['Claimed-At', 'claimedAt'],
+];
+const TRANSITION_STATE_LABELS = new Set(REQUIRED_LABELS.filter((label) => label !== 'work:plan'));
+const sha256 = (value) => createHash('sha256').update(value).digest('hex');
+
+export function isExactSameOperationTransitionQuestion({
   provisionalClaim,
   issue,
+  comments,
   reservedRefs,
   entry,
 }) {
-  const ref = `refs/heads/${provisionalClaim?.branch ?? ''}`;
-  const state = claimField(issue?.body ?? '', 'Claim-State');
-  return (
-    provisionalClaim?.phase === 'after-ref' &&
-    provisionalClaim.refCreatedByOperation === true &&
-    /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(provisionalClaim.operationId ?? '') &&
-    issue?.number === provisionalClaim.issueNumber &&
-    issue.body === provisionalClaim.expectedIssueBody &&
+  const candidate = provisionalClaim ?? {};
+  const ref = `refs/heads/${candidate.branch ?? ''}`;
+  const sourceValidation = validateWorkItemBody(candidate.sourceIssueBody ?? '');
+  const preparedValidation = validateWorkItemBody(candidate.preparedIssueBody ?? '');
+  const preparedIdentityMatches = TRANSITION_IDENTITY_FIELDS.every(
+    ([field, key]) =>
+      typeof candidate[key] === 'string' &&
+      candidate[key].length > 0 &&
+      claimField(candidate.preparedIssueBody ?? '', field) === candidate[key],
+  );
+  const operationMarkers =
+    typeof candidate.expectedOperationComment === 'string'
+      ? candidate.expectedOperationComment
+          .split('\n')
+          .filter((line) => line.startsWith('Coordination-Write-ID:'))
+      : [];
+  const common =
+    candidate.phase === 'after-ref' &&
+    ['ref-created-parked', 'writer-recovery'].includes(candidate.transition) &&
+    /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(candidate.operationId ?? '') &&
+    Number.isSafeInteger(candidate.issueNumber) &&
+    issue?.number === candidate.issueNumber &&
+    candidate.ref === ref &&
+    /^[0-9a-f]{40}$/.test(candidate.expectedBase ?? '') &&
+    typeof candidate.sourceIssueBody === 'string' &&
+    candidate.sourceIssueBodySha256 === sha256(candidate.sourceIssueBody) &&
+    sourceValidation.valid &&
+    sourceValidation.version === '2' &&
+    ['proposed', 'ready'].includes(claimField(candidate.sourceIssueBody, 'Claim-State')) &&
+    candidate.expectedSourceStateLabel ===
+      `work:${claimField(candidate.sourceIssueBody, 'Claim-State')}` &&
+    typeof candidate.expectedIssueBody === 'string' &&
+    candidate.expectedIssueBodySha256 === sha256(candidate.expectedIssueBody) &&
+    typeof candidate.preparedIssueBody === 'string' &&
+    candidate.preparedIssueBodySha256 === sha256(candidate.preparedIssueBody) &&
+    preparedValidation.valid &&
+    preparedValidation.version === '2' &&
+    typeof candidate.expectedOperationComment === 'string' &&
+    candidate.expectedOperationCommentSha256 === sha256(candidate.expectedOperationComment) &&
+    operationMarkers.length === 1 &&
+    operationMarkers[0] === `Coordination-Write-ID: ${candidate.operationId}` &&
+    ['work:proposed', 'work:ready'].includes(candidate.expectedSourceStateLabel) &&
+    candidate.desiredStateLabel === 'work:active' &&
+    claimField(candidate.preparedIssueBody, 'Claim-State') === 'active' &&
+    claimField(candidate.preparedIssueBody, 'Claim-Branch') === candidate.branch &&
+    preparedIdentityMatches &&
+    issue.body === candidate.expectedIssueBody &&
+    Array.isArray(comments) &&
     reservedRefs.filter((remote) => remote.ref === ref).length === 1 &&
-    reservedRefs.find((remote) => remote.ref === ref)?.sha === provisionalClaim.expectedBase &&
-    entry?.code === 'orphaned-claim-ref' &&
+    reservedRefs.find((remote) => remote.ref === ref)?.sha === candidate.expectedBase;
+  if (!common) return false;
+
+  const stateLabels = issue.labels.filter((label) => TRANSITION_STATE_LABELS.has(label));
+  const reconciledValue = claimField(issue.body, 'Reconciled-Claim-Comment-IDs');
+  const reconciledIds = new Set(
+    reconciledValue && reconciledValue !== 'none' ? reconciledValue.split(', ').map(Number) : [],
+  );
+  const matchingCheckpoints = comments.filter((comment) => {
+    if (reconciledIds.has(comment.id)) return false;
+    const validation = validateCheckpointComment(comment.body ?? '', preparedValidation);
+    return validation.applicable && validation.valid;
+  });
+  const operationComments = matchingCheckpoints.filter(
+    (comment) => comment.body === candidate.expectedOperationComment,
+  );
+  if (candidate.transition === 'ref-created-parked') {
+    return (
+      candidate.refCreatedByOperation === true &&
+      stateLabels.length === 1 &&
+      stateLabels[0] === candidate.expectedSourceStateLabel &&
+      candidate.expectedSourceStateLabel ===
+        `work:${claimField(candidate.expectedIssueBody, 'Claim-State')}` &&
+      matchingCheckpoints.length === 0 &&
+      operationComments.length === 0 &&
+      entry?.code === 'orphaned-claim-ref' &&
+      entry.message ===
+        `${ref} exists while issue #${candidate.issueNumber} is ${claimField(issue.body, 'Claim-State')}; do not adopt or release it automatically`
+    );
+  }
+  return (
+    candidate.refCreatedByOperation === false &&
+    candidate.expectedIssueBodySha256 === candidate.preparedIssueBodySha256 &&
+    stateLabels.length === 1 &&
+    stateLabels[0] === candidate.expectedSourceStateLabel &&
+    candidate.expectedSourceStateLabel !== candidate.desiredStateLabel &&
+    matchingCheckpoints.length === 1 &&
+    operationComments.length === 1 &&
+    operationComments[0].createdAt === operationComments[0].updatedAt &&
+    entry?.code === 'body-label-state-mismatch' &&
     entry.message ===
-      `${ref} exists while issue #${provisionalClaim.issueNumber} is ${state}; do not adopt or release it automatically`
+      `Claim-State active does not match exactly one state label (found ${candidate.expectedSourceStateLabel})`
   );
 }
 
@@ -1426,19 +1518,28 @@ function readRegistry(local, nowMs, { provisionalClaim = null } = {}) {
   const transitionalIssue = provisionalClaim
     ? issueRecords.find(({ number }) => number === provisionalClaim.issueNumber)
     : null;
-  const expectedPostRefOrphan = (entry) =>
+  const transitionalComments = provisionalClaim
+    ? commentsByIssue.get(provisionalClaim.issueNumber) ?? []
+    : [];
+  const expectedTransitionQuestion = (issueNumber, entry) =>
     scope.status === 'complete' &&
-    isExactSameOperationPostRefTransition({
+    issueNumber === provisionalClaim?.issueNumber &&
+    isExactSameOperationTransitionQuestion({
       provisionalClaim,
       issue: transitionalIssue,
+      comments: transitionalComments,
       reservedRefs,
       entry,
     });
   const maintainerQuestions = [
     ...[...coordination.plans, ...coordination.workItems].flatMap((item) =>
-      item.questions.map((entry) => ({ issueNumber: item.number, ...entry })),
+      item.questions
+        .filter((entry) => !expectedTransitionQuestion(item.number, entry))
+        .map((entry) => ({ issueNumber: item.number, ...entry })),
     ),
-    ...coordination.remoteClaims.questions.filter((entry) => !expectedPostRefOrphan(entry)),
+    ...coordination.remoteClaims.questions.filter(
+      (entry) => !expectedTransitionQuestion(provisionalClaim?.issueNumber, entry),
+    ),
   ];
 
   return {

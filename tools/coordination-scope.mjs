@@ -782,8 +782,51 @@ export function evaluateScopeGate(selector, findings, { known = true, targetExis
 }
 
 const consumedScopeEvidenceIds = new Set();
+const COMPLETE_SCOPE_BINDING_FIELDS = [
+  'target',
+  'phase',
+  'transition',
+  'operationId',
+  'issueNumber',
+  'branch',
+  'ref',
+  'expectedBase',
+  'sourceIssueBodySha256',
+  'expectedIssueBodySha256',
+  'preparedIssueBodySha256',
+  'claimHarness',
+  'claimRunId',
+  'claimAgent',
+  'claimHost',
+  'claimedAt',
+];
 
-export function assertFreshScopeGate(scopeGate, expected, binding = null, nowMs = Date.now()) {
+export function assertFreshScopeGate(scopeGate, expected, binding, nowMs = Date.now()) {
+  const target = typeof binding?.target === 'string' ? binding.target.match(SCOPE_GATE) : null;
+  const completeBinding =
+    binding !== null &&
+    typeof binding === 'object' &&
+    !Array.isArray(binding) &&
+    binding.target === expected &&
+    target !== null &&
+    Number(target[2]) === binding.issueNumber &&
+    Number.isSafeInteger(binding.issueNumber) &&
+    binding.issueNumber > 0 &&
+    PORTABLE_OPERATION_ID.test(binding.operationId ?? '') &&
+    binding.ref === `refs/heads/${binding.branch}` &&
+    /^[0-9a-f]{40}$/.test(binding.expectedBase ?? '') &&
+    /^[0-9a-f]{64}$/.test(binding.sourceIssueBodySha256 ?? '') &&
+    /^[0-9a-f]{64}$/.test(binding.expectedIssueBodySha256 ?? '') &&
+    /^[0-9a-f]{64}$/.test(binding.preparedIssueBodySha256 ?? '') &&
+    COMPLETE_SCOPE_BINDING_FIELDS.every(
+      (field) =>
+        Object.hasOwn(binding, field) &&
+        (field === 'issueNumber' ||
+          (typeof binding[field] === 'string' && binding[field].length > 0)),
+    );
+  if (!completeBinding) {
+    throw new Error(`fresh scope gate ${expected} requires one complete operation binding`);
+  }
   if (
     !scopeGate ||
     scopeGate.requested !== expected ||
@@ -793,7 +836,6 @@ export function assertFreshScopeGate(scopeGate, expected, binding = null, nowMs 
   ) {
     throw new Error(`fresh scope gate ${expected} must be clear`);
   }
-  if (binding === null) return true;
   const evidence = scopeGate.evidence;
   const issuedAt =
     typeof evidence?.issuedAt === 'string' && STRICT_INSTANT.test(evidence.issuedAt)
@@ -807,12 +849,7 @@ export function assertFreshScopeGate(scopeGate, expected, binding = null, nowMs 
     new Date(issuedAt).toISOString() !== evidence.issuedAt ||
     issuedAt > nowMs ||
     nowMs - issuedAt > 30_000 ||
-    evidence.phase !== binding.phase ||
-    evidence.operationId !== binding.operationId ||
-    evidence.issueNumber !== binding.issueNumber ||
-    evidence.branch !== binding.branch ||
-    evidence.expectedBase !== binding.expectedBase ||
-    evidence.expectedIssueBodySha256 !== binding.expectedIssueBodySha256 ||
+    COMPLETE_SCOPE_BINDING_FIELDS.some((field) => evidence[field] !== binding[field]) ||
     consumedScopeEvidenceIds.has(evidence.evidenceId)
   ) {
     throw new Error(

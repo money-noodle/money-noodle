@@ -468,12 +468,53 @@ test('stable canonical findings route only to operation-specific targets', () =>
   assert.equal(parseScopeGate('claim:01').status, 'invalid');
   assert.equal(parseScopeGate('publication:0').status, 'invalid');
   assert.equal(evaluateScopeGate(undefined, result.findings).status, 'clear');
+  const binding = {
+    target: 'integration-pr:72',
+    phase: 'before-integration',
+    transition: 'none',
+    operationId: 'integration-72',
+    issueNumber: 72,
+    branch: 'review/pr-72',
+    ref: 'refs/heads/review/pr-72',
+    expectedBase: SHA_A,
+    sourceIssueBodySha256: SHA_B.repeat(1).padEnd(64, 'b'),
+    expectedIssueBodySha256: SHA_B.repeat(1).padEnd(64, 'b'),
+    preparedIssueBodySha256: SHA_B.repeat(1).padEnd(64, 'b'),
+    claimHarness: 'pi',
+    claimRunId: 'run-72',
+    claimAgent: 'agent-72',
+    claimHost: 'runner-01',
+    claimedAt: '2026-09-01T01:00:00Z',
+  };
+  const issuedAt = '2026-09-01T02:00:00.000Z';
   assert.equal(
+    assertFreshScopeGate(
+      {
+        ...evaluateScopeGate('integration-pr:72', result.findings),
+        evidence: { version: 1, evidenceId: 'integration-72-evidence', issuedAt, ...binding },
+      },
+      'integration-pr:72',
+      binding,
+      Date.parse(issuedAt),
+    ),
+    true,
+  );
+  assert.throws(() =>
     assertFreshScopeGate(
       evaluateScopeGate('integration-pr:72', result.findings),
       'integration-pr:72',
     ),
-    true,
+  );
+  assert.throws(() =>
+    assertFreshScopeGate(
+      {
+        ...evaluateScopeGate('integration-pr:72', result.findings),
+        evidence: { version: 1, evidenceId: 'incomplete-binding', issuedAt, ...binding },
+      },
+      'integration-pr:72',
+      { ...binding, ref: undefined },
+      Date.parse(issuedAt),
+    ),
   );
   assert.throws(() =>
     assertFreshScopeGate(evaluateScopeGate('claim:44', result.findings), 'claim:44'),

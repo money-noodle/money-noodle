@@ -9,13 +9,15 @@ import {
   CoordinationClaimError,
   claimBranchForIssue,
   claimRefForIssue,
-  createCoordinationScopeGuard,
-  createGitHubClaimHost,
-  executeCoordinationClaim,
+  createCoordinationScopeGuardForTest as createCoordinationScopeGuard,
+  createGitHubClaimHostForTest as createGitHubClaimHost,
+  executeCoordinationClaim as executeProductionCoordinationClaim,
+  executeCoordinationClaimForTest as executeCoordinationClaim,
   parseReservedClaimBranch,
   parseReservedClaimRef,
   prepareCoordinationClaim,
-  runCoordinationClaimCli,
+  runCoordinationClaimCli as runProductionCoordinationClaimCli,
+  runCoordinationClaimCliForTest as runCoordinationClaimCli,
   validateClaimBranch,
 } from './coordination-claim.mjs';
 
@@ -255,12 +257,22 @@ function scopeGateFor(request, overrides = {}) {
       version: 1,
       evidenceId: `test-scope-${scopeEvidenceSequence}`,
       issuedAt: new Date().toISOString(),
+      target: request.requested,
       phase: request.phase,
+      transition: request.transition,
       operationId: request.operationId,
       issueNumber: request.issueNumber,
       branch: request.branch,
+      ref: request.ref,
       expectedBase: request.expectedBase,
+      sourceIssueBodySha256: createHash('sha256').update(request.sourceIssueBody).digest('hex'),
       expectedIssueBodySha256: createHash('sha256').update(request.expectedIssueBody).digest('hex'),
+      preparedIssueBodySha256: createHash('sha256').update(request.preparedIssueBody).digest('hex'),
+      claimHarness: request.claimHarness,
+      claimRunId: request.claimRunId,
+      claimAgent: request.claimAgent,
+      claimHost: request.claimHost,
+      claimedAt: request.claimedAt,
       ...overrides.evidence,
     },
     ...Object.fromEntries(Object.entries(overrides).filter(([key]) => key !== 'evidence')),
@@ -661,7 +673,9 @@ test('closed, mislabeled, malformed, or competing parked issues create no orphan
 });
 
 test('the production guard cannot self-activate for issue 44', async () => {
-  const guard = createCoordinationScopeGuard();
+  const guard = createCoordinationScopeGuard(() => {
+    throw new Error('self-activation must fail before status evaluation');
+  });
   await assert.rejects(
     guard({
       phase: 'before-ref',
@@ -690,9 +704,44 @@ test('claim execution rejects omitted and incorrectly bound scope evidence befor
     ['target', async (request) => scopeGateFor(request, { requested: 'claim:74' })],
     ['phase', async (request) => scopeGateFor(request, { evidence: { phase: 'after-ref' } })],
     [
+      'transition',
+      async (request) => scopeGateFor(request, { evidence: { transition: 'writer-recovery' } }),
+    ],
+    [
       'operation',
       async (request) => scopeGateFor(request, { evidence: { operationId: 'other-operation' } }),
     ],
+    ['issue', async (request) => scopeGateFor(request, { evidence: { issueNumber: 74 } })],
+    [
+      'branch',
+      async (request) => scopeGateFor(request, { evidence: { branch: 'claim-v1/issue-74' } }),
+    ],
+    [
+      'ref',
+      async (request) =>
+        scopeGateFor(request, { evidence: { ref: 'refs/heads/claim-v1/issue-74' } }),
+    ],
+    ['base', async (request) => scopeGateFor(request, { evidence: { expectedBase: OTHER } })],
+    [
+      'source-body',
+      async (request) =>
+        scopeGateFor(request, { evidence: { sourceIssueBodySha256: 'b'.repeat(64) } }),
+    ],
+    [
+      'expected-body',
+      async (request) =>
+        scopeGateFor(request, { evidence: { expectedIssueBodySha256: 'b'.repeat(64) } }),
+    ],
+    [
+      'prepared-body',
+      async (request) =>
+        scopeGateFor(request, { evidence: { preparedIssueBodySha256: 'b'.repeat(64) } }),
+    ],
+    ['harness', async (request) => scopeGateFor(request, { evidence: { claimHarness: 'other' } })],
+    ['run', async (request) => scopeGateFor(request, { evidence: { claimRunId: 'other' } })],
+    ['agent', async (request) => scopeGateFor(request, { evidence: { claimAgent: 'other' } })],
+    ['host', async (request) => scopeGateFor(request, { evidence: { claimHost: 'other' } })],
+    ['claimed-at', async (request) => scopeGateFor(request, { evidence: { claimedAt: 'other' } })],
     [
       'cached',
       async (request) =>
@@ -711,6 +760,69 @@ test('claim execution rejects omitted and incorrectly bound scope evidence befor
   }
 });
 
+test('production mutation exports reject every caller-selected authority or host', async () => {
+  const fabricatedScopeGuard = async (request) => scopeGateFor(request);
+  assert.throws(
+    () => createGitHubClaimHost(),
+    (error) => error instanceof CoordinationClaimError && error.code === 'test-dependency-required',
+  );
+  await assert.rejects(
+    runCoordinationClaimCli({ argv: [] }),
+    (error) => error instanceof CoordinationClaimError && error.code === 'test-dependency-required',
+  );
+  for (const injected of [
+    { scopeGuard: fabricatedScopeGuard },
+    { claimHost: new MockClaimHost() },
+    { writerHost: new MockWriterHost() },
+  ]) {
+    await assert.rejects(
+      executeProductionCoordinationClaim({ ...prepareInput(), ...injected }),
+      (error) =>
+        error instanceof CoordinationClaimError &&
+        error.code === 'production-dependency-injection-forbidden',
+    );
+  }
+  await assert.rejects(
+    runProductionCoordinationClaimCli({ argv: [], scopeGuard: fabricatedScopeGuard }),
+    (error) =>
+      error instanceof CoordinationClaimError &&
+      error.code === 'production-dependency-injection-forbidden',
+  );
+});
+
+test('incomplete authority evidence cannot authorize the first mutation', async () => {
+  for (const field of [
+    'target',
+    'phase',
+    'transition',
+    'operationId',
+    'issueNumber',
+    'branch',
+    'ref',
+    'expectedBase',
+    'sourceIssueBodySha256',
+    'expectedIssueBodySha256',
+    'preparedIssueBodySha256',
+    'claimHarness',
+    'claimRunId',
+    'claimAgent',
+    'claimHost',
+    'claimedAt',
+  ]) {
+    const claimHost = new MockClaimHost();
+    const writerHost = new MockWriterHost();
+    const scopeGuard = async (request) =>
+      scopeGateFor(request, { evidence: { [field]: undefined } });
+    await assert.rejects(
+      executeCoordinationClaim(input(claimHost, writerHost, { scopeGuard })),
+      (error) => error instanceof CoordinationClaimError && error.code === 'scope-gate-not-clear',
+      field,
+    );
+    assert.equal(claimHost.createCalls, 0, field);
+    assert.deepEqual(writerHost.mutations, [], field);
+  }
+});
+
 test('a reused clear evidence identity cannot authorize a later claim phase', async () => {
   const claimHost = new MockClaimHost();
   const writerHost = new MockWriterHost();
@@ -725,26 +837,40 @@ test('a reused clear evidence identity cannot authorize a later claim phase', as
 
 test('the production scope-guard adapter binds cross-module status evidence to every phase', async () => {
   const provisionalClaims = [];
-  const scopeGuard = createCoordinationScopeGuard({
-    buildReport(requested, { provisionalClaim }) {
-      provisionalClaims.push(structuredClone(provisionalClaim));
-      return { scopeGate: { requested, status: 'clear', blockingFindingIds: [] } };
-    },
+  const scopeGuard = createCoordinationScopeGuard((requested, { provisionalClaim }) => {
+    provisionalClaims.push(structuredClone(provisionalClaim));
+    return { scopeGate: { requested, status: 'clear', blockingFindingIds: [] } };
   });
   const claimHost = new MockClaimHost();
   const writerHost = new MockWriterHost();
   const outcome = await executeCoordinationClaim(input(claimHost, writerHost, { scopeGuard }));
   assert.equal(outcome.status, 'complete');
   assert.deepEqual(
-    provisionalClaims.map(({ phase, operationId, refCreatedByOperation }) => ({
+    provisionalClaims.map(({ phase, transition, operationId, refCreatedByOperation }) => ({
       phase,
+      transition,
       operationId,
       refCreatedByOperation,
     })),
     [
-      { phase: 'before-ref', operationId: 'claim-73', refCreatedByOperation: false },
-      { phase: 'after-ref', operationId: 'claim-73', refCreatedByOperation: true },
-      { phase: 'after-write', operationId: 'claim-73', refCreatedByOperation: false },
+      {
+        phase: 'before-ref',
+        transition: 'before-ref',
+        operationId: 'claim-73',
+        refCreatedByOperation: false,
+      },
+      {
+        phase: 'after-ref',
+        transition: 'ref-created-parked',
+        operationId: 'claim-73',
+        refCreatedByOperation: true,
+      },
+      {
+        phase: 'after-write',
+        transition: 'after-write',
+        operationId: 'claim-73',
+        refCreatedByOperation: false,
+      },
     ],
   );
 });

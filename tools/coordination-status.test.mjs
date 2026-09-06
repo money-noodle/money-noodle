@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 
 import { spawnSync } from 'node:child_process';
@@ -16,9 +17,16 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  isExactSameOperationPostRefTransition,
+  buildReport,
+  isExactSameOperationTransitionQuestion,
   readLocalObservedAgainstMain,
 } from './coordination-status.mjs';
+import {
+  CANONICAL_REPOSITORY,
+  createCoordinationScopeGuardForTest,
+  executeCoordinationClaimForTest,
+  prepareCoordinationClaim,
+} from './coordination-claim.mjs';
 
 const STATUS_TOOL = fileURLToPath(new URL('./coordination-status.mjs', import.meta.url));
 const SERIALIZING_SOURCE = readFileSync(
@@ -589,17 +597,38 @@ test('issue and pull request retrieval consumes records beyond the first API pag
   assert(result.invocations.includes(`gh api --paginate --slurp ${PULLS_ENDPOINT}`));
 });
 
-test('only an exact same-operation post-ref transition suppresses its one orphan warning', () => {
-  const issue = v2ReadyIssue(73);
+test('only exact same-operation transitional state suppresses its one expected mismatch', () => {
+  const parked = { ...v2ReadyIssue(73), labels: ['work:ready'] };
+  const prepared = { ...v2ActiveIssue(73), labels: ['work:active'] };
   const expectedBase = 'a'.repeat(40);
-  const provisionalClaim = {
+  const operationComment = {
+    id: 73,
+    author: 'maintainer',
+    body: `Coordination-Write-ID: claim-73-operation\n${prepared.body}`,
+    createdAt: '2026-09-01T02:00:00Z',
+    updatedAt: '2026-09-01T02:00:00Z',
+  };
+  const digest = (value) => createHash('sha256').update(value).digest('hex');
+  const common = {
     phase: 'after-ref',
-    refCreatedByOperation: true,
     operationId: 'claim-73-operation',
     issueNumber: 73,
     branch: 'claim-v1/issue-73',
+    ref: 'refs/heads/claim-v1/issue-73',
     expectedBase,
-    expectedIssueBody: issue.body,
+    sourceIssueBody: parked.body,
+    sourceIssueBodySha256: digest(parked.body),
+    preparedIssueBody: prepared.body,
+    preparedIssueBodySha256: digest(prepared.body),
+    expectedOperationComment: operationComment.body,
+    expectedOperationCommentSha256: digest(operationComment.body),
+    expectedSourceStateLabel: 'work:ready',
+    desiredStateLabel: 'work:active',
+    claimHarness: 'pi',
+    claimRunId: 'run-73',
+    claimAgent: 'agent-73',
+    claimHost: 'runner-01',
+    claimedAt: '2026-09-01T01:00:00Z',
   };
   const reservedRefs = [
     {
@@ -608,45 +637,266 @@ test('only an exact same-operation post-ref transition suppresses its one orphan
       sha: expectedBase,
     },
   ];
-  const entry = {
+  const orphanEntry = {
     code: 'orphaned-claim-ref',
     message:
       'refs/heads/claim-v1/issue-73 exists while issue #73 is ready; do not adopt or release it automatically',
   };
+  const refCreated = {
+    ...common,
+    transition: 'ref-created-parked',
+    refCreatedByOperation: true,
+    expectedIssueBody: parked.body,
+    expectedIssueBodySha256: digest(parked.body),
+  };
   assert.equal(
-    isExactSameOperationPostRefTransition({ provisionalClaim, issue, reservedRefs, entry }),
+    isExactSameOperationTransitionQuestion({
+      provisionalClaim: refCreated,
+      issue: parked,
+      comments: [],
+      reservedRefs,
+      entry: orphanEntry,
+    }),
     true,
   );
+
+  const recoveryIssue = { ...prepared, labels: ['work:ready'] };
+  const recoveryEntry = {
+    code: 'body-label-state-mismatch',
+    message: 'Claim-State active does not match exactly one state label (found work:ready)',
+  };
+  const recovery = {
+    ...common,
+    transition: 'writer-recovery',
+    refCreatedByOperation: false,
+    expectedIssueBody: prepared.body,
+    expectedIssueBodySha256: digest(prepared.body),
+  };
+  const exactRecovery = {
+    provisionalClaim: recovery,
+    issue: recoveryIssue,
+    comments: [operationComment],
+    reservedRefs,
+    entry: recoveryEntry,
+  };
+  assert.equal(isExactSameOperationTransitionQuestion(exactRecovery), true);
   for (const candidate of [
-    { provisionalClaim: { ...provisionalClaim, phase: 'before-ref' }, issue, reservedRefs, entry },
+    { ...exactRecovery, provisionalClaim: { ...recovery, phase: 'before-ref' } },
+    { ...exactRecovery, provisionalClaim: { ...recovery, operationId: 'claim/73' } },
+    { ...exactRecovery, provisionalClaim: { ...recovery, claimRunId: 'other-run' } },
+    { ...exactRecovery, provisionalClaim: { ...recovery, expectedBase: 'b'.repeat(40) } },
+    { ...exactRecovery, issue: { ...recoveryIssue, body: `${recoveryIssue.body}drift\n` } },
+    { ...exactRecovery, comments: [] },
+    { ...exactRecovery, comments: [operationComment, { ...operationComment, id: 74 }] },
     {
-      provisionalClaim: { ...provisionalClaim, refCreatedByOperation: false },
-      issue,
-      reservedRefs,
-      entry,
+      ...exactRecovery,
+      comments: [{ ...operationComment, updatedAt: '2026-09-01T03:00:00Z' }],
     },
-    {
-      provisionalClaim: { ...provisionalClaim, operationId: 'claim/73' },
-      issue,
-      reservedRefs,
-      entry,
-    },
-    { provisionalClaim, issue: { ...issue, body: `${issue.body}drift\n` }, reservedRefs, entry },
-    { provisionalClaim, issue, reservedRefs: [], entry },
-    {
-      provisionalClaim,
-      issue,
-      reservedRefs,
-      entry: { code: 'other-warning', message: entry.message },
-    },
-    {
-      provisionalClaim,
-      issue,
-      reservedRefs,
-      entry: { ...entry, message: `${entry.message} drift` },
-    },
+    { ...exactRecovery, reservedRefs: [] },
+    { ...exactRecovery, entry: { code: 'other-warning', message: recoveryEntry.message } },
+    { ...exactRecovery, entry: { ...recoveryEntry, message: `${recoveryEntry.message} drift` } },
   ]) {
-    assert.equal(isExactSameOperationPostRefTransition(candidate), false);
+    assert.equal(isExactSameOperationTransitionQuestion(candidate), false);
+  }
+});
+
+test('real production status/report/guard path authorizes only exact same-operation recovery', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'mn-coordination-recovery-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const invocationLog = join(directory, 'invocations.log');
+  writeFileSync(invocationLog, '');
+  mkdirSync(join(directory, '.githooks'));
+  writeExecutable(directory, '.githooks/pre-commit', '#!/bin/sh\nexit 0\n');
+  writeExecutable(directory, '.githooks/pre-merge-commit', '#!/bin/sh\nexit 0\n');
+  writeExecutable(directory, 'hostname', '#!/bin/sh\nprintf "runner-01\\n"\n');
+  writeGitShim(directory);
+
+  const issueNumber = 73;
+  const base = 'a'.repeat(40);
+  const branch = `claim-v1/issue-${issueNumber}`;
+  const ref = `refs/heads/${branch}`;
+  const parked = v2ReadyIssue(issueNumber, { 'Checkpoint-Commit': base });
+  const active = v2ActiveIssue(issueNumber);
+  const values = {
+    'Claim-State': 'active',
+    'Claim-Harness': 'pi',
+    'Claim-Run-ID': 'run-73',
+    'Claim-Agent': 'agent-73',
+    'Claim-Branch': branch,
+    'Claim-Host': 'runner-01',
+    'Claimed-At': '2026-09-01T01:00:00Z',
+    'Check-In-By': FAR_FUTURE,
+    'Waiting-Since': 'unclaimed',
+    'Checkpoint-State': 'active',
+    'Checkpoint-At': '2026-09-01T01:00:00Z',
+    'Checkpoint-Commit': base,
+    'Checkpoint-Changed-Path-Count': '0',
+    'Checkpoint-Checks-Verdict': 'unavailable',
+    'Checkpoint-CI-Run': 'unavailable',
+    'Checkpoint-CI-Commit': 'unavailable',
+    'Checkpoint-Security-Impact': 'unknown',
+    'Checkpoint-Tenant-Impact': 'unknown',
+    'Checkpoint-Provider-Impact': 'unknown',
+    'Checkpoint-Deployment-Impact': 'unknown',
+    'Checkpoint-Residual-Risk-Count': '0',
+    'Next-Action': 'claim after the full protocol',
+    Blockers: 'none',
+  };
+  const operationId = 'claim-73-production-recovery';
+  const claimInput = {
+    repository: CANONICAL_REPOSITORY,
+    issueNumber,
+    expectedBase: base,
+    expectedBody: parked.body,
+    values,
+    checkpointComment: active.body,
+    operationId,
+  };
+  const prepared = prepareCoordinationClaim(claimInput);
+  const operationComment = {
+    id: 7300,
+    user: { login: 'maintainer' },
+    body: prepared.operation.comment,
+    created_at: '2026-09-01T02:00:00Z',
+    updated_at: '2026-09-01T02:00:00Z',
+  };
+  const transitionIssue = restIssue({
+    number: issueNumber,
+    title: active.title,
+    body: prepared.prepared.body,
+    labels: ['work:ready'],
+  });
+  const treeSha = 'b'.repeat(40);
+  const blobSha = 'c'.repeat(40);
+  const canonicalIssues = `repos/${CANONICAL_REPOSITORY}/issues?state=all&per_page=100`;
+  const canonicalLabels = `repos/${CANONICAL_REPOSITORY}/labels?per_page=100`;
+  const canonicalRefs = `repos/${CANONICAL_REPOSITORY}/git/matching-refs/heads/claim-v?per_page=100`;
+  const canonicalMain = `repos/${CANONICAL_REPOSITORY}/git/ref/heads/main`;
+  const canonicalPulls = `repos/${CANONICAL_REPOSITORY}/pulls?state=open&per_page=100`;
+  const canonicalComments = `repos/${CANONICAL_REPOSITORY}/issues/${issueNumber}/comments?per_page=100`;
+  const responses = {
+    '--version': { stdout: 'gh version 2.0.0 (test)\n' },
+    auth: { stdout: 'Logged in to github.com as test-agent\n' },
+    repo: { stdout: `${CANONICAL_REPOSITORY}\n` },
+    [`api:${canonicalLabels}`]: { stdout: JSON.stringify([COORDINATION_LABELS]) },
+    [`api:${canonicalIssues}`]: { stdout: JSON.stringify([[PLAN_ISSUE, transitionIssue]]) },
+    [`api:${canonicalRefs}`]: { stdout: JSON.stringify([[restRef(ref)]]) },
+    [`api:${canonicalMain}`]: { stdout: JSON.stringify(restRef('refs/heads/main')) },
+    [`api:${canonicalPulls}`]: { stdout: '[[]]' },
+    [`api:${canonicalComments}`]: { stdout: JSON.stringify([[operationComment]]) },
+    [`api:repos/${CANONICAL_REPOSITORY}/git/commits/${base}`]: {
+      stdout: JSON.stringify({ sha: base, tree: { sha: treeSha } }),
+    },
+    [`api:repos/${CANONICAL_REPOSITORY}/git/trees/${treeSha}?recursive=1`]: {
+      stdout: JSON.stringify({
+        sha: treeSha,
+        truncated: false,
+        tree: [
+          { path: '.github', mode: '040000', type: 'tree', sha: '6'.repeat(40) },
+          {
+            path: '.github/coordination',
+            mode: '040000',
+            type: 'tree',
+            sha: '7'.repeat(40),
+          },
+          {
+            path: '.github/coordination/serializing-paths.v1.json',
+            mode: '100644',
+            type: 'blob',
+            sha: blobSha,
+          },
+        ],
+      }),
+    },
+    [`api:repos/${CANONICAL_REPOSITORY}/git/blobs/${blobSha}`]: {
+      stdout: JSON.stringify({
+        sha: blobSha,
+        encoding: 'base64',
+        content: Buffer.from(SERIALIZING_SOURCE).toString('base64'),
+      }),
+    },
+  };
+  writeGhShim(directory, responses);
+  const responseFile = join(directory, 'responses.json');
+  const normalizedComment = {
+    id: operationComment.id,
+    author: 'maintainer',
+    body: operationComment.body,
+    createdAt: operationComment.created_at,
+    updatedAt: operationComment.updated_at,
+  };
+  const writerHost = {
+    issue: {
+      state: 'open',
+      body: prepared.prepared.body,
+      labels: ['work:ready'],
+      comments: [normalizedComment],
+    },
+    mutations: [],
+    async readIssue() {
+      return structuredClone(this.issue);
+    },
+    async updateBody(_number, body) {
+      this.mutations.push('body');
+      this.issue.body = body;
+    },
+    async replaceStateLabel(_number, label) {
+      this.mutations.push('label');
+      this.issue.labels = [label];
+      const next = JSON.parse(readFileSync(responseFile, 'utf8'));
+      next[`api:${canonicalIssues}`] = {
+        stdout: JSON.stringify([[PLAN_ISSUE, { ...transitionIssue, labels: [{ name: label }] }]]),
+      };
+      writeFileSync(responseFile, JSON.stringify(next));
+    },
+    async addComment(_number, body) {
+      this.mutations.push('comment');
+      this.issue.comments.push({ ...normalizedComment, id: 7301, body });
+    },
+  };
+  const claimHost = {
+    async readRepository() {
+      return { nameWithOwner: CANONICAL_REPOSITORY, defaultBranch: 'main' };
+    },
+    async readMainRef() {
+      return restRef('refs/heads/main');
+    },
+    async readClaimRef() {
+      return restRef(ref);
+    },
+    async createClaimRef() {
+      throw new Error('recovery must not create a ref');
+    },
+  };
+
+  const previous = {
+    cwd: process.cwd(),
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    INVOCATION_LOG: process.env.INVOCATION_LOG,
+  };
+  process.chdir(directory);
+  process.env.PATH = directory;
+  process.env.HOME = directory;
+  process.env.INVOCATION_LOG = invocationLog;
+  try {
+    const outcome = await executeCoordinationClaimForTest({
+      ...claimInput,
+      claimHost,
+      writerHost,
+      scopeGuard: createCoordinationScopeGuardForTest(buildReport),
+    });
+    assert.equal(outcome.status, 'complete', JSON.stringify(outcome, null, 2));
+    assert.equal(outcome.stage, 'writer-recovery');
+    assert.deepEqual(outcome.writerMutations, { body: 0, label: 1, comment: 0 });
+    assert.deepEqual(writerHost.mutations, ['label']);
+    assert.match(readFileSync(invocationLog, 'utf8'), /gh api --paginate --slurp/);
+  } finally {
+    process.chdir(previous.cwd);
+    process.env.PATH = previous.PATH;
+    process.env.HOME = previous.HOME;
+    if (previous.INVOCATION_LOG === undefined) delete process.env.INVOCATION_LOG;
+    else process.env.INVOCATION_LOG = previous.INVOCATION_LOG;
   }
 });
 

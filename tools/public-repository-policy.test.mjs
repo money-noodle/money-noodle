@@ -805,6 +805,11 @@ test('remote-reference claim authority is derived, create-only, and isolated fro
   );
   assert.match(coordinationClaim, /scope-guard-required/);
   assert.match(coordinationClaim, /scope-self-activation-forbidden/);
+  assert.match(coordinationClaim, /production-dependency-injection-forbidden/);
+  assert.match(coordinationClaim, /executeCoordinationClaimForTest/);
+  assert.match(coordinationClaim, /runCoordinationClaimCliForTest/);
+  assert.match(coordinationClaim, /scopeGuard: createProductionScopeAuthority\(\)/);
+  assert.match(coordinationClaim, /buildCoordinationStatusReport/);
   assert.match(coordinationClaim, /refCreatedByOperation: true/);
   assert.match(coordinationClaim, /claimSnapshotGuard\(claim, operationId\)\(\{ issue \}\)/);
   assert.match(coordinationClaim, /'--method', 'POST', `\$\{root\}\/git\/refs`/);
@@ -822,6 +827,9 @@ test('remote-reference claim authority is derived, create-only, and isolated fro
   assert.doesNotMatch(coordinationWriter, /\/git\/refs|createClaimRef/);
   assert.doesNotMatch(coordinationLib, /from ['"]\.\/coordination-claim\.mjs['"]/);
   assert.doesNotMatch(coordinationStatus, /from ['"]\.\/coordination-claim\.mjs['"]/);
+  assert.match(coordinationScope, /requires one complete operation binding/);
+  assert.match(coordinationScope, /COMPLETE_SCOPE_BINDING_FIELDS\.some/);
+  assert.match(coordinationStatus, /isExactSameOperationTransitionQuestion/);
 
   const implementationSources = readdirSync('tools')
     .filter((name) => name.endsWith('.mjs') && !name.endsWith('.test.mjs'))

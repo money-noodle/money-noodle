@@ -497,6 +497,7 @@ async function requireScopeGuard(
   scopeGuard,
   claim,
   phase,
+  transition,
   expectedIssueBody,
   { refCreatedByOperation = false } = {},
 ) {
@@ -508,17 +509,33 @@ async function requireScopeGuard(
   }
   const requested = `claim:${claim.issueNumber}`;
   const binding = {
+    target: requested,
     phase,
+    transition,
     operationId: claim.operationId,
     issueNumber: claim.issueNumber,
     branch: claim.branch,
+    ref: claim.ref,
     expectedBase: claim.expectedBase,
+    sourceIssueBodySha256: scopeBodyHash(claim.expectedBody),
     expectedIssueBodySha256: scopeBodyHash(expectedIssueBody),
+    preparedIssueBodySha256: scopeBodyHash(claim.prepared.body),
+    claimHarness: claim.prepared.fields['Claim-Harness'],
+    claimRunId: claim.prepared.fields['Claim-Run-ID'],
+    claimAgent: claim.prepared.fields['Claim-Agent'],
+    claimHost: claim.prepared.fields['Claim-Host'],
+    claimedAt: claim.prepared.fields['Claimed-At'],
   };
   const scopeGate = await scopeGuard({
     ...binding,
     requested,
+    sourceIssueBody: claim.expectedBody,
     expectedIssueBody,
+    preparedIssueBody: claim.prepared.body,
+    expectedOperationComment: claim.operation.comment,
+    expectedOperationCommentSha256: scopeBodyHash(claim.operation.comment),
+    expectedSourceStateLabel: `work:${claim.expected.fields['Claim-State']}`,
+    desiredStateLabel: claim.desiredLabel,
     refCreatedByOperation,
   });
   try {
@@ -533,21 +550,31 @@ async function requireScopeGuard(
   return scopeGate;
 }
 
-export function createCoordinationScopeGuard({ buildReport = buildCoordinationStatusReport } = {}) {
-  if (typeof buildReport !== 'function') {
-    throw new CoordinationClaimError(
-      'invalid-scope-guard-builder',
-      'buildReport must be a function',
-    );
-  }
+function createScopeAuthority(buildReport) {
   return async ({
     phase,
+    transition,
     requested,
     operationId,
     issueNumber,
     branch,
+    ref,
     expectedBase,
+    sourceIssueBody,
+    sourceIssueBodySha256,
     expectedIssueBody,
+    expectedIssueBodySha256,
+    preparedIssueBody,
+    preparedIssueBodySha256,
+    expectedOperationComment,
+    expectedOperationCommentSha256,
+    expectedSourceStateLabel,
+    desiredStateLabel,
+    claimHarness,
+    claimRunId,
+    claimAgent,
+    claimHost,
+    claimedAt,
     refCreatedByOperation,
   }) => {
     // Issue #44 established its claim under the previously integrated protocol. Its own proposed
@@ -561,11 +588,27 @@ export function createCoordinationScopeGuard({ buildReport = buildCoordinationSt
     const report = buildReport(requested, {
       provisionalClaim: {
         phase,
+        transition,
         operationId,
         issueNumber,
         branch,
+        ref,
         expectedBase,
+        sourceIssueBody,
+        sourceIssueBodySha256,
         expectedIssueBody,
+        expectedIssueBodySha256,
+        preparedIssueBody,
+        preparedIssueBodySha256,
+        expectedOperationComment,
+        expectedOperationCommentSha256,
+        expectedSourceStateLabel,
+        desiredStateLabel,
+        claimHarness,
+        claimRunId,
+        claimAgent,
+        claimHost,
+        claimedAt,
         refCreatedByOperation: refCreatedByOperation === true,
       },
     });
@@ -575,15 +618,40 @@ export function createCoordinationScopeGuard({ buildReport = buildCoordinationSt
         version: 1,
         evidenceId: randomUUID(),
         issuedAt: new Date().toISOString(),
+        target: requested,
         phase,
+        transition,
         operationId,
         issueNumber,
         branch,
+        ref,
         expectedBase,
-        expectedIssueBodySha256: scopeBodyHash(expectedIssueBody),
+        sourceIssueBodySha256,
+        expectedIssueBodySha256,
+        preparedIssueBodySha256,
+        claimHarness,
+        claimRunId,
+        claimAgent,
+        claimHost,
+        claimedAt,
       },
     };
   };
+}
+
+function createProductionScopeAuthority() {
+  return createScopeAuthority(buildCoordinationStatusReport);
+}
+
+/** Test-only seam. Production mutation exports never consume this injected authority. */
+export function createCoordinationScopeGuardForTest(buildReport) {
+  if (typeof buildReport !== 'function') {
+    throw new CoordinationClaimError(
+      'invalid-scope-guard-builder',
+      'buildReport must be a function',
+    );
+  }
+  return createScopeAuthority(buildReport);
 }
 
 function result(status, stage, detail = {}) {
@@ -596,7 +664,8 @@ function result(status, stage, detail = {}) {
   };
 }
 
-export async function executeCoordinationClaim({
+/** Test-only mutation seam with explicit injected hosts and authority. */
+export async function executeCoordinationClaimForTest({
   claimHost,
   writerHost,
   repository,
@@ -675,7 +744,13 @@ export async function executeCoordinationClaim({
       });
     }
     try {
-      await requireScopeGuard(scopeGuard, claim, 'after-ref', claim.prepared.body);
+      await requireScopeGuard(
+        scopeGuard,
+        claim,
+        'after-ref',
+        'writer-recovery',
+        claim.prepared.body,
+      );
     } catch (error) {
       return result('blocked', 'writer-recovery-scope-guard', {
         message: error.message,
@@ -693,7 +768,13 @@ export async function executeCoordinationClaim({
     });
     if (write.status === 'complete') {
       try {
-        await requireScopeGuard(scopeGuard, claim, 'after-write', claim.prepared.body);
+        await requireScopeGuard(
+          scopeGuard,
+          claim,
+          'after-write',
+          'after-write',
+          claim.prepared.body,
+        );
       } catch (error) {
         return {
           ...result('blocked', 'post-write-scope-reconciliation'),
@@ -739,7 +820,7 @@ export async function executeCoordinationClaim({
   if (!finalInspection.valid) {
     return result('collision', finalInspection.code, { message: finalInspection.message });
   }
-  await requireScopeGuard(scopeGuard, claim, 'before-ref', expectedBody);
+  await requireScopeGuard(scopeGuard, claim, 'before-ref', 'before-ref', expectedBody);
   let created;
   try {
     created = await claimHost.createClaimRef({ ref: claim.ref, sha: expectedBase });
@@ -777,7 +858,7 @@ export async function executeCoordinationClaim({
   }
 
   try {
-    await requireScopeGuard(scopeGuard, claim, 'after-ref', expectedBody, {
+    await requireScopeGuard(scopeGuard, claim, 'after-ref', 'ref-created-parked', expectedBody, {
       refCreatedByOperation: true,
     });
   } catch (error) {
@@ -799,7 +880,7 @@ export async function executeCoordinationClaim({
   });
   if (write.status === 'complete') {
     try {
-      await requireScopeGuard(scopeGuard, claim, 'after-write', claim.prepared.body);
+      await requireScopeGuard(scopeGuard, claim, 'after-write', 'after-write', claim.prepared.body);
     } catch (error) {
       return {
         ...result('blocked', 'post-write-scope-reconciliation', { refMutations: 1 }),
@@ -828,6 +909,36 @@ export async function executeCoordinationClaim({
   };
 }
 
+const PRODUCTION_CLAIM_FIELDS = new Set([
+  'repository',
+  'issueNumber',
+  'expectedBase',
+  'expectedBody',
+  'values',
+  'checkpointComment',
+  'operationId',
+]);
+
+function rejectProductionDependencyInjection(options, allowed, boundary) {
+  const injected = Object.keys(options ?? {}).filter((key) => !allowed.has(key));
+  if (injected.length > 0) {
+    throw new CoordinationClaimError(
+      'production-dependency-injection-forbidden',
+      `${boundary} does not accept caller-selected dependencies: ${injected.join(', ')}`,
+    );
+  }
+}
+
+export async function executeCoordinationClaim(options) {
+  rejectProductionDependencyInjection(options, PRODUCTION_CLAIM_FIELDS, 'executeCoordinationClaim');
+  return executeCoordinationClaimForTest({
+    ...options,
+    claimHost: createGitHubClaimHost(),
+    writerHost: createGitHubCliHost({ repository: options.repository }),
+    scopeGuard: createProductionScopeAuthority(),
+  });
+}
+
 function parseJson(text, context) {
   try {
     return JSON.parse(text);
@@ -836,7 +947,7 @@ function parseJson(text, context) {
   }
 }
 
-export async function runClaimGitHubCli(args, input) {
+async function runClaimGitHubCli(args, input) {
   return await new Promise((resolve, reject) => {
     const child = spawn('gh', args, { stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '';
@@ -858,10 +969,10 @@ function parseIncludedResponse(output) {
   return { statusCode: Number(match[1]), body: parseJson(match[2], 'claim-ref create response') };
 }
 
-export function createGitHubClaimHost({
+function createGitHubClaimHost({
   repository = CANONICAL_REPOSITORY,
   runGh = runClaimGitHubCli,
-}) {
+} = {}) {
   if (repository !== CANONICAL_REPOSITORY) {
     throw new CoordinationClaimError(
       'repository-mismatch',
@@ -921,6 +1032,17 @@ export function createGitHubClaimHost({
   };
 }
 
+/** Test-only adapter seam. Production mutation exports always use runClaimGitHubCli. */
+export function createGitHubClaimHostForTest(options) {
+  if (typeof options?.runGh !== 'function') {
+    throw new CoordinationClaimError(
+      'test-dependency-required',
+      'the test-only claim host requires an explicit runGh dependency',
+    );
+  }
+  return createGitHubClaimHost(options);
+}
+
 function parseCliArguments(argv) {
   const options = {};
   const values = new Set([
@@ -964,14 +1086,28 @@ function parseCliArguments(argv) {
   };
 }
 
-export async function runCoordinationClaimCli({
+/** Test-only CLI seam. Production CLI export fixes every authority and I/O dependency. */
+export async function runCoordinationClaimCliForTest({
   argv,
-  readText = (path) => readFile(path, 'utf8'),
-  claimRunGh = runClaimGitHubCli,
-  writerRunGh = runGitHubCli,
-  scopeGuard = null,
-  writeOutput = (text) => process.stdout.write(text),
+  readText,
+  claimRunGh,
+  writerRunGh,
+  scopeGuard,
+  writeOutput,
 }) {
+  for (const [name, dependency] of Object.entries({
+    readText,
+    claimRunGh,
+    writerRunGh,
+    writeOutput,
+  })) {
+    if (typeof dependency !== 'function') {
+      throw new CoordinationClaimError(
+        'test-dependency-required',
+        `the test-only CLI requires an explicit ${name} dependency`,
+      );
+    }
+  }
   const options = parseCliArguments(argv);
   if (!/^[1-9]\d*$/.test(String(options.issueNumberText))) {
     throw new CoordinationClaimError(
@@ -1008,7 +1144,7 @@ export async function runCoordinationClaimCli({
     writeOutput(`${JSON.stringify(preview, null, 2)}\n`);
     return preview;
   }
-  const result = await executeCoordinationClaim({
+  const result = await executeCoordinationClaimForTest({
     claimHost: createGitHubClaimHost({ repository: options.repository, runGh: claimRunGh }),
     writerHost: createGitHubCliHost({ repository: options.repository, runGh: writerRunGh }),
     repository: options.repository,
@@ -1024,12 +1160,23 @@ export async function runCoordinationClaimCli({
   return result;
 }
 
+const PRODUCTION_CLI_FIELDS = new Set(['argv']);
+
+export async function runCoordinationClaimCli(options) {
+  rejectProductionDependencyInjection(options, PRODUCTION_CLI_FIELDS, 'runCoordinationClaimCli');
+  return runCoordinationClaimCliForTest({
+    argv: options.argv,
+    readText: (path) => readFile(path, 'utf8'),
+    claimRunGh: runClaimGitHubCli,
+    writerRunGh: runGitHubCli,
+    scopeGuard: createProductionScopeAuthority(),
+    writeOutput: (text) => process.stdout.write(text),
+  });
+}
+
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 if (isMain) {
-  runCoordinationClaimCli({
-    argv: process.argv.slice(2),
-    scopeGuard: createCoordinationScopeGuard(),
-  })
+  runCoordinationClaimCli({ argv: process.argv.slice(2) })
     .then((result) => {
       if (!['dry-run', 'complete'].includes(result.status)) process.exitCode = 2;
     })
