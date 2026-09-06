@@ -34,6 +34,8 @@ import {
   isoInstantMilliseconds,
 } from './coordination-lib.mjs';
 
+import { computeNextWork, dependencyIssueNumbers } from './coordination-next-work.mjs';
+
 const REQUIRED_LABELS = [
   "work:plan",
   "work:proposed",
@@ -273,8 +275,9 @@ function rereadRegistrySurfaces(repository) {
       .map(({ issueNumber }) => issueNumber),
   );
   const commentsByIssue = new Map();
+  const dependencyNumbers = dependencyIssueNumbers(issues);
   for (const issue of issues.filter(
-    ({ number, state }) => state === 'open' || reservedIssueNumbers.has(number),
+    ({ number, state }) => state === 'open' || reservedIssueNumbers.has(number) || dependencyNumbers.has(number),
   )) {
     const comments = apiPages(
       `repos/${repository}/issues/${issue.number}/comments?per_page=100`,
@@ -1204,6 +1207,8 @@ function applyScopeEvidence({
     activation,
     stablePullRequests: stable,
     stableMain,
+    claims,
+    pullRequests: observedPullRequests,
   };
 }
 
@@ -1447,8 +1452,9 @@ function readRegistry(local, nowMs, { provisionalClaim = null } = {}) {
   }
 
   const commentsByIssue = new Map();
+  const dependencyNumbers = dependencyIssueNumbers(issueRecords);
   for (const issue of issueRecords.filter(
-    ({ number, state }) => state === 'open' || reservedIssueNumbers.has(number),
+    ({ number, state }) => state === 'open' || reservedIssueNumbers.has(number) || dependencyNumbers.has(number),
   )) {
     const comments = apiPages(`repos/${repository}/issues/${issue.number}/comments?per_page=100`).map(
       (comment) => normalizeComment(comment, issue.number),
@@ -1557,6 +1563,15 @@ function readRegistry(local, nowMs, { provisionalClaim = null } = {}) {
       paths: scope.activation.configuration?.paths ?? [],
     },
     maintainerQuestions,
+    nextWork: computeNextWork({
+      issues: issueRecords,
+      workItems: coordination.workItems,
+      commentsByIssue,
+      local,
+      remoteClaims: coordination.remoteClaims,
+      scope,
+      nowMs,
+    }),
   };
 }
 
@@ -1657,6 +1672,11 @@ export function buildReport(scopeSelector = 'board', { provisionalClaim = null }
   return report;
 }
 
+function boardExitCode(report) {
+  const closureErrorCodes = new Set(['dependency-cycle', 'dependency-evidence-missing', 'dependency-completion-unknown', 'dependency-declaration-unknown', 'record-unknown']);
+  return !report.coordinationKnown || report.warnings.length > 0 || report.registry.nextWork.diagnostics.some(({ code }) => closureErrorCodes.has(code)) ? 2 : 0;
+}
+
 function section(title) {
   process.stdout.write(`\n## ${title}\n`);
 }
@@ -1692,6 +1712,8 @@ function renderHuman(report) {
   if (!report.coordinationKnown) {
     console.error(`\nCOORDINATION UNKNOWN: ${report.errors.map(({ message }) => message).join("; ")}`);
     console.error("Do not assume work is unclaimed. Inspect Git/worktrees and ask the maintainer before overlapping work.");
+    section('Principal-owed work (never expires)');
+    console.log('unavailable — principal work cannot be enumerated from an unknown registry');
     return;
   }
 
@@ -1774,13 +1796,31 @@ function renderHuman(report) {
 
   section('Scope gate');
   const gateExit = report.scopeGate.requested === 'board'
-    ? report.warnings.length === 0 ? 0 : 2
+    ? boardExitCode(report)
     : report.scopeGate.status === 'clear' ? 0 : 2;
   console.log(
     `requested=${report.scopeGate.requested} status=${report.scopeGate.status} blockers=${report.scopeGate.blockingFindingIds.join(', ') || 'none'} exit=${gateExit}`,
   );
 
+  section('Principal-owed work (never expires)');
+  if (registry.nextWork.principalOwed.length === 0) console.log('none');
+  for (const number of registry.nextWork.principalOwed) {
+    const item = registry.workItems.find((entry) => entry.number === number);
+    const row = registry.nextWork.items.find((entry) => entry.number === number);
+    console.log(`#${number} owner=${item.integrationOwner} waiting-age-ms=${row.liveness.ageMs ?? 'unknown'} waiting-status=${row.liveness.status} (${item.url})`);
+  }
+
+  section('Computed next work (advisory opportunities only)');
+  console.log(`status=${registry.nextWork.status} order=${registry.nextWork.order}; not priority, acceptance, sequencing or claim clearance`);
+  if (registry.nextWork.items.length === 0) console.log('none');
+  for (const row of registry.nextWork.items) {
+    console.log(`#${row.number} ${row.category} availability=${row.availability} rank=${row.rank ?? 'none'} liveness=${row.liveness.status} planning-scope=${row.planningScope.status} candidateSafety=${row.candidateSafety}`);
+    for (const entry of row.exclusionReasons) console.log(`  [${entry.code}] ${entry.message}`);
+  }
+  for (const entry of registry.nextWork.diagnostics) console.log(`DIAGNOSTIC: ${entry.issueNumber ? `#${entry.issueNumber} ` : ''}[${entry.code}] ${entry.message}`);
+
   section('Ready candidates (evidence only)');
+  console.log('Legacy ready-label triage, not the computed opportunity set.');
   const candidates = registry.workItems.filter(({ triage }) => triage === "candidate");
   if (candidates.length === 0) console.log("none");
   for (const item of candidates) {
@@ -1836,7 +1876,7 @@ function main(arguments_) {
   if (parsed.json) console.log(JSON.stringify(report, null, 2));
   else renderHuman(report);
   if (parsed.gate !== 'board') return report.scopeGate.status === 'clear' ? 0 : 2;
-  return report.coordinationKnown && report.warnings.length === 0 ? 0 : 2;
+  return boardExitCode(report);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
