@@ -782,6 +782,11 @@ test('registry v2 policy preserves mixed-version, non-atomic, and bootstrap boun
   assert.match(coordinationWriter, /--dry-run/);
   assert.match(coordinationWriter, /--apply/);
   assert.match(coordinationWriter, /createGitHubCliHost/);
+  assert.match(coordinationWriter, /production-dependency-injection-forbidden/);
+  assert.doesNotMatch(
+    coordinationWriter,
+    /export\s+(?:async\s+)?function\s+(?:executeClaimEstablishmentWrite|executeCoordinationWriteWithDependencies|runCoordinationWriteCliWithDependencies|createGitHubCliHost|runGitHubCli)\b/,
+  );
   assert.match(coordinationWriter, /finalVerification/);
   assert.doesNotMatch(coordinationWriter, /spawnSync|gh issue|bulk migrat/i);
 });
@@ -819,14 +824,14 @@ test('remote-reference claim authority is derived, create-only, and isolated fro
   assert.match(coordinationClaim, /refCreatedByOperation: true/);
   assert.match(coordinationClaim, /claimSnapshotGuard\(claim, operationId\)\(\{ issue \}\)/);
   assert.match(coordinationClaim, /'--method', 'POST', `\$\{root\}\/git\/refs`/);
-  assert.doesNotMatch(coordinationClaim, /'--method',\s*'(?:PATCH|PUT|DELETE)'/);
+  assert.doesNotMatch(coordinationClaim, /'--method',\s*'(?:PUT|DELETE)'/);
   assert.doesNotMatch(coordinationClaim, /git\s+push|force-push|force push|update-ref|delete-ref/i);
 
   assert.match(coordinationWriter, /initial-claim-requires-reference/);
   assert.match(coordinationWriter, /dedicated remote-reference claim module/);
   assert.match(coordinationWriter, /CLAIM_ESTABLISHMENT_AUTHORITY = Symbol/);
-  assert.match(coordinationWriter, /missing-claim-snapshot-guard/);
-  assert.match(coordinationWriter, /stage: 'claim-snapshot-guard'/);
+  assert.doesNotMatch(coordinationWriter, /executeClaimEstablishmentWrite/);
+  assert.match(coordinationClaim, /stage: 'claim-snapshot-guard'/);
   assert.match(coordinationClaim, /evaluateClaimCommentHistoryForBody/);
   assert.match(coordinationClaim, /claimSnapshotGuard: claimSnapshotGuard\(claim, operationId/);
   assert.match(coordinationLib, /export function evaluateClaimCommentHistoryForBody/);
@@ -845,7 +850,6 @@ test('remote-reference claim authority is derived, create-only, and isolated fro
   );
   assert.deepEqual(privilegedCallsites.map(([path]) => path).sort(), [
     'tools/coordination-claim.mjs',
-    'tools/coordination-write.mjs',
   ]);
   const privilegedPreparationCallsites = implementationSources.filter(([, source]) =>
     source.includes('prepareClaimEstablishmentWrite('),

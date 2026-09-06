@@ -35,12 +35,7 @@ export {
 import { evaluateClaimCommentHistoryForBody, hasClaimSignal } from './coordination-lib.mjs';
 import { assertFreshScopeGate } from './coordination-scope.mjs';
 import { buildReport as buildCoordinationStatusReport } from './coordination-status.mjs';
-import {
-  createGitHubCliHost,
-  executeClaimEstablishmentWrite,
-  prepareClaimEstablishmentWrite,
-  runGitHubCli,
-} from './coordination-write.mjs';
+import { prepareClaimEstablishmentWrite } from './coordination-write.mjs';
 
 export const CANONICAL_REPOSITORY = 'money-noodle/money-noodle';
 const FULL_COMMIT = /^[0-9a-f]{40}$/;
@@ -653,6 +648,194 @@ function result(status, stage, detail = {}) {
   };
 }
 
+function hasExactOperationMarker(body, marker) {
+  return typeof body === 'string' && body.split(/\r?\n/).some((line) => line.trimEnd() === marker);
+}
+
+function writerPartial(stage, error, mutations, detail = {}) {
+  return {
+    status: 'partial',
+    stage,
+    recoverable: true,
+    mutations,
+    error: error instanceof Error ? error.message : String(error),
+    ...detail,
+  };
+}
+
+async function executeClaimEstablishmentWrite({ host, claim, claimSnapshotGuard }) {
+  assertWriterHost(host);
+  const { issueNumber, expectedBody, prepared, operation, desiredLabel } = claim;
+  const marker = `Coordination-Write-ID: ${claim.operationId}`;
+  const proposedComment = operation.comment;
+  const mutations = { body: 0, label: 0, comment: 0 };
+  let issue = await host.readIssue(issueNumber);
+  if (
+    !issue ||
+    typeof issue.body !== 'string' ||
+    !Array.isArray(issue.labels) ||
+    !Array.isArray(issue.comments)
+  ) {
+    throw new CoordinationClaimError(
+      'invalid-writer-host-read',
+      'writer host returned an invalid issue snapshot',
+    );
+  }
+
+  const guard = claimSnapshotGuard({
+    issue,
+    expectedBody,
+    prepared,
+    desiredLabel,
+    marker,
+    proposedComment,
+  });
+  if (!guard?.valid) {
+    return {
+      status: guard?.status ?? 'collision',
+      stage: 'claim-snapshot-guard',
+      recoverable: false,
+      mutations,
+      message:
+        guard?.message ??
+        'post-reference claim evidence is unsafe; preserve the ref for reconciliation',
+      guard,
+    };
+  }
+
+  if (issue.body !== expectedBody && issue.body !== prepared.body) {
+    return {
+      status: 'collision',
+      stage: 'pre-write',
+      recoverable: false,
+      mutations,
+      message: 'the host body changed after the caller snapshot; no mutation was attempted',
+    };
+  }
+
+  const initialOperationComments = issue.comments.filter((comment) =>
+    hasExactOperationMarker(comment.body, marker),
+  );
+  if (
+    initialOperationComments.length > 1 ||
+    (initialOperationComments.length === 1 && initialOperationComments[0].body !== proposedComment)
+  ) {
+    return {
+      status: 'collision',
+      stage: 'pre-write-comment',
+      recoverable: false,
+      mutations,
+      message: 'the operation marker already identifies different or duplicate evidence',
+    };
+  }
+
+  if (issue.body !== prepared.body) {
+    try {
+      mutations.body += 1;
+      await host.updateBody(issueNumber, prepared.body);
+      issue = await host.readIssue(issueNumber);
+    } catch (error) {
+      return writerPartial('body', error, mutations, { bodyMayHaveChanged: true });
+    }
+    if (issue.body !== prepared.body) {
+      return writerPartial(
+        'body-verification',
+        'host body does not equal the validated proposed body',
+        mutations,
+        { bodyMayHaveChanged: true },
+      );
+    }
+  }
+
+  const currentStateLabels = issueStateLabels(issue.labels);
+  if (currentStateLabels.length !== 1 || currentStateLabels[0] !== desiredLabel) {
+    try {
+      mutations.label += 1;
+      await host.replaceStateLabel(issueNumber, desiredLabel);
+      issue = await host.readIssue(issueNumber);
+    } catch (error) {
+      return writerPartial('label', error, mutations, { bodyWritten: true });
+    }
+    const verifiedLabels = issueStateLabels(issue.labels);
+    if (verifiedLabels.length !== 1 || verifiedLabels[0] !== desiredLabel) {
+      return writerPartial(
+        'label-verification',
+        'host state label does not match the proposed body',
+        mutations,
+        { bodyWritten: true },
+      );
+    }
+  }
+
+  const existing = issue.comments.filter((comment) =>
+    hasExactOperationMarker(comment.body, marker),
+  );
+  if (existing.length > 1 || (existing.length === 1 && existing[0].body !== proposedComment)) {
+    return {
+      status: 'collision',
+      stage: 'comment-collision',
+      recoverable: false,
+      mutations,
+      message: 'the operation marker became duplicated or attached to different evidence',
+      bodyWritten: true,
+      labelWritten: true,
+    };
+  }
+  if (existing.length === 0) {
+    try {
+      mutations.comment += 1;
+      await host.addComment(issueNumber, proposedComment);
+      issue = await host.readIssue(issueNumber);
+    } catch (error) {
+      return writerPartial('comment', error, mutations, {
+        bodyWritten: true,
+        labelWritten: true,
+        commentMayHaveChanged: true,
+      });
+    }
+  }
+
+  const finalLabels = issueStateLabels(issue.labels);
+  const finalComments = issue.comments.filter((comment) =>
+    hasExactOperationMarker(comment.body, marker),
+  );
+  const finalVerification = {
+    body: issue.body === prepared.body,
+    label: finalLabels.length === 1 && finalLabels[0] === desiredLabel,
+    comment: finalComments.length === 1 && finalComments[0].body === proposedComment,
+  };
+  if (!finalVerification.body) {
+    return {
+      status: 'collision',
+      stage: 'final-verification',
+      recoverable: false,
+      mutations,
+      finalVerification,
+      message: 'the issue body drifted before one coherent final snapshot could be verified',
+    };
+  }
+  if (!finalVerification.label || !finalVerification.comment) {
+    return writerPartial(
+      'final-verification',
+      'label or comment drifted before one coherent final snapshot could be verified',
+      mutations,
+      { bodyWritten: true, finalVerification, commentMayHaveChanged: !finalVerification.comment },
+    );
+  }
+
+  return {
+    status: 'complete',
+    stage: 'complete',
+    recoverable: false,
+    mutations,
+    migrated: prepared.migrated,
+    body: prepared.body,
+    comment: proposedComment,
+    desiredLabel,
+    finalVerification,
+  };
+}
+
 async function executeCoordinationClaimWithDependencies({
   claimHost,
   writerHost,
@@ -747,11 +930,7 @@ async function executeCoordinationClaimWithDependencies({
     }
     const write = await executeClaimEstablishmentWrite({
       host: writerHost,
-      issueNumber,
-      expectedBody,
-      values: claim.canonicalValues,
-      checkpointComment,
-      operationId,
+      claim,
       claimSnapshotGuard: claimSnapshotGuard(claim, operationId, { stopOnCoherent: true }),
     });
     if (write.status === 'complete') {
@@ -859,11 +1038,7 @@ async function executeCoordinationClaimWithDependencies({
 
   const write = await executeClaimEstablishmentWrite({
     host: writerHost,
-    issueNumber,
-    expectedBody,
-    values: claim.canonicalValues,
-    checkpointComment,
-    operationId,
+    claim,
     claimSnapshotGuard: claimSnapshotGuard(claim, operationId, { stopOnCoherent: true }),
   });
   if (write.status === 'complete') {
@@ -919,10 +1094,11 @@ function rejectProductionDependencyInjection(options, allowed, boundary) {
 
 export async function executeCoordinationClaim(options) {
   rejectProductionDependencyInjection(options, PRODUCTION_CLAIM_FIELDS, 'executeCoordinationClaim');
+  const host = createGitHubClaimHost({ repository: options.repository });
   return executeCoordinationClaimWithDependencies({
     ...options,
-    claimHost: createGitHubClaimHost(),
-    writerHost: createGitHubCliHost({ repository: options.repository }),
+    claimHost: host,
+    writerHost: host,
     scopeGuard: createProductionScopeAuthority(),
   });
 }
@@ -984,6 +1160,9 @@ function createGitHubClaimHost({
   async function readRef(path, absent404 = false) {
     return request(['api', `${root}/git/ref/${path}`], undefined, `read ${path}`, { absent404 });
   }
+  async function readRawIssue(issueNumber) {
+    return request(['api', `${root}/issues/${issueNumber}`], undefined, 'issue read');
+  }
   return {
     async readRepository() {
       const record = await request(
@@ -1016,6 +1195,71 @@ function createGitHubClaimHost({
         throw error;
       }
       return parseIncludedResponse(response.stdout);
+    },
+    async readIssue(issueNumber) {
+      const before = await readRawIssue(issueNumber);
+      const pages = await request(
+        ['api', '--paginate', '--slurp', `${root}/issues/${issueNumber}/comments`],
+        undefined,
+        'comment read',
+      );
+      const after = await readRawIssue(issueNumber);
+      if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page))) {
+        throw new CoordinationClaimError(
+          'invalid-adapter-output',
+          'paginated comment read must return an array of pages',
+        );
+      }
+      const labels = (issue) =>
+        Array.isArray(issue.labels)
+          ? issue.labels.map((label) => (typeof label === 'string' ? label : label.name)).sort()
+          : issue.labels;
+      if (
+        before.state !== after.state ||
+        before.body !== after.body ||
+        JSON.stringify(labels(before)) !== JSON.stringify(labels(after))
+      ) {
+        throw new CoordinationClaimError(
+          'unstable-host-read',
+          'issue state, body, or label evidence drifted while comments were being read',
+        );
+      }
+      return {
+        state: after.state,
+        body: after.body,
+        labels: labels(after),
+        comments: pages.flat().map((comment) => ({
+          id: comment.id,
+          author: comment.user?.login,
+          body: comment.body,
+          createdAt: comment.created_at,
+          updatedAt: comment.updated_at,
+        })),
+      };
+    },
+    async updateBody(issueNumber, body) {
+      await request(
+        ['api', '--method', 'PATCH', `${root}/issues/${issueNumber}`, '--input', '-'],
+        JSON.stringify({ body }),
+        'body update',
+      );
+    },
+    async replaceStateLabel(issueNumber, desiredLabel) {
+      const issue = await readRawIssue(issueNumber);
+      const labels = issue.labels.map((label) => (typeof label === 'string' ? label : label.name));
+      const nextLabels = [...labels.filter((label) => !STATE_LABELS.has(label)), desiredLabel];
+      await request(
+        ['api', '--method', 'PATCH', `${root}/issues/${issueNumber}`, '--input', '-'],
+        JSON.stringify({ labels: nextLabels }),
+        'label update',
+      );
+    },
+    async addComment(issueNumber, body) {
+      await request(
+        ['api', '--method', 'POST', `${root}/issues/${issueNumber}/comments`, '--input', '-'],
+        JSON.stringify({ body }),
+        'comment append',
+      );
     },
   };
 }
@@ -1066,17 +1310,11 @@ function parseCliArguments(argv) {
 async function runCoordinationClaimCliWithDependencies({
   argv,
   readText,
-  claimRunGh,
-  writerRunGh,
+  runGh,
   scopeGuard,
   writeOutput,
 }) {
-  for (const [name, dependency] of Object.entries({
-    readText,
-    claimRunGh,
-    writerRunGh,
-    writeOutput,
-  })) {
+  for (const [name, dependency] of Object.entries({ readText, runGh, writeOutput })) {
     if (typeof dependency !== 'function') {
       throw new CoordinationClaimError(
         'test-dependency-required',
@@ -1120,9 +1358,10 @@ async function runCoordinationClaimCliWithDependencies({
     writeOutput(`${JSON.stringify(preview, null, 2)}\n`);
     return preview;
   }
+  const host = createGitHubClaimHost({ repository: options.repository, runGh });
   const result = await executeCoordinationClaimWithDependencies({
-    claimHost: createGitHubClaimHost({ repository: options.repository, runGh: claimRunGh }),
-    writerHost: createGitHubCliHost({ repository: options.repository, runGh: writerRunGh }),
+    claimHost: host,
+    writerHost: host,
     repository: options.repository,
     issueNumber: options.issueNumber,
     expectedBase: options.expectedBase,
@@ -1143,8 +1382,7 @@ export async function runCoordinationClaimCli(options) {
   return runCoordinationClaimCliWithDependencies({
     argv: options.argv,
     readText: (path) => readFile(path, 'utf8'),
-    claimRunGh: runClaimGitHubCli,
-    writerRunGh: runGitHubCli,
+    runGh: runClaimGitHubCli,
     scopeGuard: createProductionScopeAuthority(),
     writeOutput: (text) => process.stdout.write(text),
   });
