@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -314,13 +315,13 @@ function inspectPrivilegedWriterSnapshot(issue, claim, operationId) {
     ...new Set(matchingCheckpoints.map(({ operationId: id }) => id ?? 'missing')),
   ];
   if (
+    preparedBody &&
     !coherent &&
-    matchingCheckpoints.length > 0 &&
-    matchingCheckpoints.some(({ operationId: id }) => id !== operationId)
+    (matchingCheckpoints.length !== 1 || matchingCheckpoints[0].operationId !== operationId)
   ) {
     return unsafe(
       'post-ref-operation-mismatch',
-      `every matching checkpoint on an incomplete claim must carry operation ${operationId}; observed ${observedOperations.join(', ')}, so recovery may not mutate or append duplicate checkpoint evidence`,
+      `an incomplete claim is recoverable only from one exact checkpoint carrying operation ${operationId}; observed ${observedOperations.join(', ') || 'none'}, so recovery may not mutate or append evidence`,
       'collision',
       { observedOperations },
     );
@@ -464,7 +465,7 @@ export function prepareCoordinationClaim({
       'the initial checkpoint commit must equal the expected remote main base',
     );
   }
-  return { repository, issueNumber, expectedBase, expectedBody, ...claim };
+  return { repository, issueNumber, expectedBase, expectedBody, operationId, ...claim };
 }
 
 async function verifyRepositoryAndBase(claimHost, repository, expectedBase) {
@@ -488,31 +489,67 @@ async function verifyRepositoryAndBase(claimHost, repository, expectedBase) {
   }
 }
 
-async function requireScopeGuard(scopeGuard, claim, phase, expectedIssueBody) {
-  if (!scopeGuard) return null;
+function scopeBodyHash(body) {
+  return createHash('sha256').update(body).digest('hex');
+}
+
+async function requireScopeGuard(
+  scopeGuard,
+  claim,
+  phase,
+  expectedIssueBody,
+  { refCreatedByOperation = false } = {},
+) {
+  if (typeof scopeGuard !== 'function') {
+    throw new CoordinationClaimError(
+      'scope-guard-required',
+      'post-activation claim execution requires the production scope guard',
+    );
+  }
   const requested = `claim:${claim.issueNumber}`;
-  const scopeGate = await scopeGuard({
+  const binding = {
     phase,
-    requested,
+    operationId: claim.operationId,
     issueNumber: claim.issueNumber,
     branch: claim.branch,
     expectedBase: claim.expectedBase,
+    expectedIssueBodySha256: scopeBodyHash(expectedIssueBody),
+  };
+  const scopeGate = await scopeGuard({
+    ...binding,
+    requested,
     expectedIssueBody,
+    refCreatedByOperation,
   });
   try {
-    assertFreshScopeGate(scopeGate, requested);
+    assertFreshScopeGate(scopeGate, requested, binding);
   } catch {
     throw new CoordinationClaimError(
       'scope-gate-not-clear',
-      `fresh ${phase} scope gate ${requested} is not clear`,
+      `fresh ${phase} scope gate ${requested} is not clear and exactly bound to this operation`,
       { scopeGate },
     );
   }
   return scopeGate;
 }
 
-export function createCoordinationScopeGuard() {
-  return async ({ phase, requested, issueNumber, branch, expectedBase, expectedIssueBody }) => {
+export function createCoordinationScopeGuard({ buildReport = buildCoordinationStatusReport } = {}) {
+  if (typeof buildReport !== 'function') {
+    throw new CoordinationClaimError(
+      'invalid-scope-guard-builder',
+      'buildReport must be a function',
+    );
+  }
+  return async ({
+    phase,
+    requested,
+    operationId,
+    issueNumber,
+    branch,
+    expectedBase,
+    expectedIssueBody,
+    refCreatedByOperation,
+  }) => {
     // Issue #44 established its claim under the previously integrated protocol. Its own proposed
     // controls can never retroactively qualify or activate that claim.
     if (issueNumber === 44) {
@@ -521,9 +558,31 @@ export function createCoordinationScopeGuard() {
         'issue #44 remains governed by the claim implementation already integrated on its current main',
       );
     }
-    return buildCoordinationStatusReport(requested, {
-      provisionalClaim: { phase, issueNumber, branch, expectedBase, expectedIssueBody },
-    }).scopeGate;
+    const report = buildReport(requested, {
+      provisionalClaim: {
+        phase,
+        operationId,
+        issueNumber,
+        branch,
+        expectedBase,
+        expectedIssueBody,
+        refCreatedByOperation: refCreatedByOperation === true,
+      },
+    });
+    return {
+      ...report.scopeGate,
+      evidence: {
+        version: 1,
+        evidenceId: randomUUID(),
+        issuedAt: new Date().toISOString(),
+        phase,
+        operationId,
+        issueNumber,
+        branch,
+        expectedBase,
+        expectedIssueBodySha256: scopeBodyHash(expectedIssueBody),
+      },
+    };
   };
 }
 
@@ -547,7 +606,7 @@ export async function executeCoordinationClaim({
   values,
   checkpointComment,
   operationId,
-  scopeGuard = null,
+  scopeGuard,
 }) {
   assertClaimHost(claimHost);
   assertWriterHost(writerHost);
@@ -560,6 +619,12 @@ export async function executeCoordinationClaim({
     checkpointComment,
     operationId,
   });
+  if (typeof scopeGuard !== 'function') {
+    throw new CoordinationClaimError(
+      'scope-guard-required',
+      'post-activation claim execution requires the production scope guard',
+    );
+  }
   await verifyRepositoryAndBase(claimHost, repository, expectedBase);
 
   const issue = await writerHost.readIssue(issueNumber);
@@ -579,51 +644,10 @@ export async function executeCoordinationClaim({
   if (present) {
     normalizeRef(present, claim.ref, expectedBase);
     if (issue.body === expectedBody) {
-      if (!scopeGuard) {
-        return result('orphaned', 'ref-present-parked-body', {
-          message: 'the deterministic ref exists while the issue remains parked; do not adopt it',
-        });
-      }
-      try {
-        await requireScopeGuard(scopeGuard, claim, 'after-ref', expectedBody);
-      } catch (error) {
-        return result('blocked', 'writer-recovery-scope-guard', {
-          message: error.message,
-          guard: error.details?.scopeGate,
-        });
-      }
-      const recovery = await executeClaimEstablishmentWrite({
-        host: writerHost,
-        issueNumber,
-        expectedBody,
-        values: claim.canonicalValues,
-        checkpointComment,
-        operationId,
-        claimSnapshotGuard: claimSnapshotGuard(claim, operationId, { stopOnCoherent: true }),
+      return result('orphaned', 'ref-present-parked-body', {
+        message:
+          'the deterministic ref already exists while the issue remains parked; preserve it as an orphan and perform zero issue mutation',
       });
-      if (recovery.status === 'complete') {
-        try {
-          await requireScopeGuard(scopeGuard, claim, 'after-write', claim.prepared.body);
-        } catch (error) {
-          return {
-            ...result('blocked', 'post-write-scope-reconciliation'),
-            writerMutations: recovery.mutations,
-            message: error.message,
-            guard: error.details?.scopeGate,
-            writer: recovery,
-          };
-        }
-      }
-      return {
-        ...result(
-          recovery.status,
-          recovery.status === 'complete' ? 'writer-recovery' : 'writer-partial',
-        ),
-        writerMutations: recovery.mutations,
-        message: recovery.message,
-        guard: recovery.guard,
-        writer: recovery,
-      };
     }
     if (issue.body !== claim.prepared.body) {
       return result('collision', 'ref-present-body-collision', {
@@ -753,7 +777,9 @@ export async function executeCoordinationClaim({
   }
 
   try {
-    await requireScopeGuard(scopeGuard, claim, 'after-ref', expectedBody);
+    await requireScopeGuard(scopeGuard, claim, 'after-ref', expectedBody, {
+      refCreatedByOperation: true,
+    });
   } catch (error) {
     return result('blocked', 'post-ref-scope-guard', {
       refMutations: 1,

@@ -5,7 +5,11 @@ import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { normalizeScopePaths, parseReservedClaimRef } from './coordination-schema.mjs';
+import {
+  normalizeScopePaths,
+  parseReservedClaimRef,
+  validateStandaloneCheckpointEvidence,
+} from './coordination-schema.mjs';
 import {
   buildScopeRouting,
   changedPathsFromTrees,
@@ -158,6 +162,134 @@ function normalizePullRequest(pr) {
     updatedAt: requiredTimestamp(pr.updated_at, `${context} updated_at`),
     url: requiredString(pr.html_url, `${context} html_url`),
     draft: typeof pr.draft === 'boolean' ? pr.draft : null,
+  };
+}
+
+function requireUnique(records, key, context) {
+  const values = records.map((record) => record[key]);
+  if (new Set(values).size !== values.length) {
+    throw new Error(`${context} contains duplicate ${key} identities`);
+  }
+  return records;
+}
+
+function stableRecordSet(records, key) {
+  return [...records].sort((left, right) =>
+    typeof left[key] === 'number' ? left[key] - right[key] : compareUtf8(left[key], right[key]),
+  );
+}
+
+function stableIssueSet(issues) {
+  return stableRecordSet(
+    issues.map((issue) => {
+      if (new Set(issue.labels).size !== issue.labels.length) {
+        throw new Error(`GitHub issue #${issue.number} contains duplicate label identities`);
+      }
+      return { ...issue, labels: [...issue.labels].sort(compareUtf8) };
+    }),
+    'number',
+  );
+}
+
+function registrySurfaceIdentity({ labels, issues, commentsByIssue, reservedRefs, pullRequests, main }) {
+  const refIdentity = ({ ref, objectType, sha }) => ({ ref, objectType, sha });
+  const pullIdentity = ({
+    number,
+    title,
+    state,
+    headRefName,
+    headRef,
+    headSha,
+    headRepository,
+    baseRefName,
+    baseRef,
+    baseSha,
+    baseRepository,
+    updatedAt,
+    url,
+    draft,
+  }) => ({
+    number,
+    title,
+    state,
+    headRefName,
+    headRef,
+    headSha,
+    headRepository,
+    baseRefName,
+    baseRef,
+    baseSha,
+    baseRepository,
+    updatedAt,
+    url,
+    draft,
+  });
+  return JSON.stringify({
+    labels: [...labels].sort(compareUtf8),
+    issues: stableIssueSet(issues),
+    comments: [...commentsByIssue.entries()]
+      .sort(([left], [right]) => left - right)
+      .map(([issueNumber, comments]) => [issueNumber, stableRecordSet(comments, 'id')]),
+    reservedRefs: stableRecordSet(reservedRefs.map(refIdentity), 'ref'),
+    pullRequests: stableRecordSet(pullRequests.map(pullIdentity), 'number'),
+    main,
+  });
+}
+
+function rereadRegistrySurfaces(repository) {
+  const labels = apiPages(`repos/${repository}/labels?per_page=100`).map((label, index) =>
+    requiredString(label?.name, `GitHub label ${index + 1} name`),
+  );
+  requireUnique(labels.map((name) => ({ name })), 'name', 'GitHub labels');
+  let issues = apiPages(`repos/${repository}/issues?state=all&per_page=100`)
+    .filter((issue) => !issue?.pull_request)
+    .map(normalizeIssue);
+  requireUnique(issues, 'number', 'GitHub issues');
+  const reservedRefs = apiPages(
+    `repos/${repository}/git/matching-refs/heads/claim-v?per_page=100`,
+  ).map(normalizeRemoteRef);
+  requireUnique(reservedRefs, 'ref', 'GitHub reserved claim refs');
+  const issueByNumber = new Map(issues.map((issue) => [issue.number, issue]));
+  for (const remote of reservedRefs) {
+    const mapping = parseReservedClaimRef(remote.ref);
+    if (mapping.status !== 'supported') continue;
+    const listed = issueByNumber.get(mapping.issueNumber);
+    if (!listed || listed.state === 'closed') {
+      const direct = normalizeIssue(apiRecord(`repos/${repository}/issues/${mapping.issueNumber}`));
+      if (direct.number !== mapping.issueNumber) {
+        throw new Error(`direct GitHub issue #${mapping.issueNumber} returned a different identity`);
+      }
+      issueByNumber.set(direct.number, direct);
+    }
+  }
+  issues = [...issueByNumber.values()];
+  const reservedIssueNumbers = new Set(
+    reservedRefs
+      .map(({ ref }) => parseReservedClaimRef(ref))
+      .filter(({ status }) => status === 'supported')
+      .map(({ issueNumber }) => issueNumber),
+  );
+  const commentsByIssue = new Map();
+  for (const issue of issues.filter(
+    ({ number, state }) => state === 'open' || reservedIssueNumbers.has(number),
+  )) {
+    const comments = apiPages(
+      `repos/${repository}/issues/${issue.number}/comments?per_page=100`,
+    ).map((comment) => normalizeComment(comment, issue.number));
+    requireUnique(comments, 'id', `GitHub issue #${issue.number} comments`);
+    commentsByIssue.set(issue.number, comments);
+  }
+  const pullRequests = apiPages(`repos/${repository}/pulls?state=open&per_page=100`).map(
+    normalizePullRequest,
+  );
+  requireUnique(pullRequests, 'number', 'GitHub open pull requests');
+  return {
+    labels,
+    issues,
+    commentsByIssue,
+    reservedRefs,
+    pullRequests,
+    main: readExactDirectRef(repository, 'refs/heads/main'),
   };
 }
 
@@ -930,10 +1062,9 @@ function applyScopeEvidence({
   const claims = claimItems.map((item) => {
       const issue = issueByNumber.get(item.number);
       const declaration = normalizeScopePaths(claimField(issue?.body ?? '', 'Scope-Paths'));
-      const recovered = recoverInitialClaimBase(
-        issue,
-        commentsByIssue.get(item.number) ?? [],
-      );
+      const recovered = recoverInitialClaimBase(issue, commentsByIssue.get(item.number) ?? [], {
+        validateCheckpointEvidence: validateStandaloneCheckpointEvidence,
+      });
       const remoteHead = item.remoteClaim?.matchingRefs?.length === 1 ? item.remoteClaim.matchingRefs[0].sha : null;
       const isProvisional = item.number === provisionalClaim?.issueNumber;
       const effectiveBranch = isProvisional ? provisionalClaim.branch : item.claim['Claim-Branch'];
@@ -1073,6 +1204,28 @@ function applyScopeEvidence({
   };
 }
 
+export function isExactSameOperationPostRefTransition({
+  provisionalClaim,
+  issue,
+  reservedRefs,
+  entry,
+}) {
+  const ref = `refs/heads/${provisionalClaim?.branch ?? ''}`;
+  const state = claimField(issue?.body ?? '', 'Claim-State');
+  return (
+    provisionalClaim?.phase === 'after-ref' &&
+    provisionalClaim.refCreatedByOperation === true &&
+    /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(provisionalClaim.operationId ?? '') &&
+    issue?.number === provisionalClaim.issueNumber &&
+    issue.body === provisionalClaim.expectedIssueBody &&
+    reservedRefs.filter((remote) => remote.ref === ref).length === 1 &&
+    reservedRefs.find((remote) => remote.ref === ref)?.sha === provisionalClaim.expectedBase &&
+    entry?.code === 'orphaned-claim-ref' &&
+    entry.message ===
+      `${ref} exists while issue #${provisionalClaim.issueNumber} is ${state}; do not adopt or release it automatically`
+  );
+}
+
 function readRegistry(local, nowMs, { provisionalClaim = null } = {}) {
   let ghVersion;
   try {
@@ -1131,17 +1284,21 @@ function readRegistry(local, nowMs, { provisionalClaim = null } = {}) {
       : null;
 
   const labelRecords = apiPages(`repos/${repository}/labels?per_page=100`);
-  const availableLabels = new Set(
-    labelRecords.map((label, index) => requiredString(label?.name, `GitHub label ${index + 1} name`)),
+  const labelNames = labelRecords.map((label, index) =>
+    requiredString(label?.name, `GitHub label ${index + 1} name`),
   );
+  requireUnique(labelNames.map((name) => ({ name })), 'name', 'GitHub labels');
+  const availableLabels = new Set(labelNames);
   const missingLabels = REQUIRED_LABELS.filter((label) => !availableLabels.has(label));
 
   let issueRecords = apiPages(`repos/${repository}/issues?state=all&per_page=100`)
     .filter((issue) => !issue?.pull_request)
     .map(normalizeIssue);
+  requireUnique(issueRecords, 'number', 'GitHub issues');
   const reservedRefs = apiPages(
     `repos/${repository}/git/matching-refs/heads/claim-v?per_page=100`,
   ).map(normalizeRemoteRef);
+  requireUnique(reservedRefs, 'ref', 'GitHub reserved claim refs');
   const issueByNumber = new Map(issueRecords.map((issue) => [issue.number, issue]));
   for (const remote of reservedRefs) {
     const mapping = parseReservedClaimRef(remote.ref);
@@ -1204,12 +1361,14 @@ function readRegistry(local, nowMs, { provisionalClaim = null } = {}) {
     const comments = apiPages(`repos/${repository}/issues/${issue.number}/comments?per_page=100`).map(
       (comment) => normalizeComment(comment, issue.number),
     );
+    requireUnique(comments, 'id', `GitHub issue #${issue.number} comments`);
     commentsByIssue.set(issue.number, comments);
   }
 
   const pullRequests = apiPages(`repos/${repository}/pulls?state=open&per_page=100`).map(
     normalizePullRequest,
   );
+  requireUnique(pullRequests, 'number', 'GitHub open pull requests');
   const coordination = analyzeCoordination({
     issues: issueRecords,
     commentsByIssue,
@@ -1218,6 +1377,7 @@ function readRegistry(local, nowMs, { provisionalClaim = null } = {}) {
     claimLifecycles,
     nowMs,
   });
+  const scopeMainBefore = readExactDirectRef(repository, 'refs/heads/main');
   const scope = applyScopeEvidence({
     repository,
     coordination,
@@ -1228,12 +1388,52 @@ function readRegistry(local, nowMs, { provisionalClaim = null } = {}) {
     remoteMain,
     provisionalClaim,
   });
+  if (scope.activation.status === 'active') {
+    const beforeIdentity = registrySurfaceIdentity({
+      labels: labelNames,
+      issues: issueRecords,
+      commentsByIssue,
+      reservedRefs,
+      pullRequests,
+      main: scopeMainBefore,
+    });
+    const afterSurfaces = rereadRegistrySurfaces(repository);
+    const stable =
+      scopeMainBefore.status === 'found' &&
+      scopeMainBefore.sha === remoteMain &&
+      afterSurfaces.main.status === 'found' &&
+      afterSurfaces.main.sha === remoteMain &&
+      beforeIdentity === registrySurfaceIdentity(afterSurfaces);
+    scope.surroundingRegistryStable = stable;
+    if (!stable) {
+      scope.status = 'unavailable';
+      scope.findings = [];
+      for (const item of coordination.workItems) item.scope = {
+        findingIds: [],
+        claimBlockerIds: [],
+        publicationBlockerIds: [],
+        checkpointBlockerIds: [],
+        advisoryIds: [],
+        status: 'unavailable',
+      };
+      for (const pr of pullRequests) pr.scope = {
+        findingIds: [],
+        integrationBlockerIds: [],
+        status: 'unavailable',
+      };
+    }
+  }
+  const transitionalIssue = provisionalClaim
+    ? issueRecords.find(({ number }) => number === provisionalClaim.issueNumber)
+    : null;
   const expectedPostRefOrphan = (entry) =>
-    provisionalClaim?.phase === 'after-ref' &&
-    entry.code === 'orphaned-claim-ref' &&
-    entry.message.startsWith(
-      `refs/heads/${provisionalClaim.branch} exists while issue #${provisionalClaim.issueNumber} is `,
-    );
+    scope.status === 'complete' &&
+    isExactSameOperationPostRefTransition({
+      provisionalClaim,
+      issue: transitionalIssue,
+      reservedRefs,
+      entry,
+    });
   const maintainerQuestions = [
     ...[...coordination.plans, ...coordination.workItems].flatMap((item) =>
       item.questions.map((entry) => ({ issueNumber: item.number, ...entry })),

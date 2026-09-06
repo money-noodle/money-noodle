@@ -4,6 +4,7 @@ const SCOPE_GATE = /^(claim|publication|checkpoint|integration-pr):([1-9]\d*)$/;
 const GLOB_CHARACTERS = /[*?\[\]{}!]/u;
 const CONTROL_OR_WHITESPACE = /[\p{Cc}\p{White_Space}]/u;
 const TREE_TYPES = new Set(['blob', 'tree', 'commit']);
+const STRICT_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 export function compareUtf8(left, right) {
   return Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8'));
@@ -29,8 +30,6 @@ function literalSegments(value) {
   if (
     value === '' ||
     value.startsWith('/') ||
-    value.startsWith('~/') ||
-    /^[A-Za-z]:\//.test(value) ||
     value.endsWith('/') ||
     value.includes('\\') ||
     value.includes(',') ||
@@ -351,9 +350,12 @@ function singleLineField(body, name) {
   return matches.length === 1 ? matches[0][1] : null;
 }
 
-export function recoverInitialClaimBase(issue, comments) {
-  if (!issue || !Array.isArray(comments)) {
-    return { status: 'unavailable', reason: 'claim history is unavailable' };
+export function recoverInitialClaimBase(issue, comments, { validateCheckpointEvidence } = {}) {
+  if (!issue || !Array.isArray(comments) || typeof validateCheckpointEvidence !== 'function') {
+    return {
+      status: 'unavailable',
+      reason: 'claim history or complete checkpoint validation is unavailable',
+    };
   }
   const identityFields = [
     'Claim-Harness',
@@ -373,27 +375,6 @@ export function recoverInitialClaimBase(issue, comments) {
   const reconciled = new Set(
     reconciledValue && reconciledValue !== 'none' ? reconciledValue.split(', ').map(Number) : [],
   );
-  const completeFields = [
-    ...identityFields,
-    'Claim-State',
-    'Check-In-By',
-    'Waiting-Since',
-    'Checkpoint-Evidence-Version',
-    'Checkpoint-State',
-    'Checkpoint-At',
-    'Checkpoint-Commit',
-    'Checkpoint-Changed-Path-Count',
-    'Checkpoint-Checks-Verdict',
-    'Checkpoint-CI-Run',
-    'Checkpoint-CI-Commit',
-    'Checkpoint-Security-Impact',
-    'Checkpoint-Tenant-Impact',
-    'Checkpoint-Provider-Impact',
-    'Checkpoint-Deployment-Impact',
-    'Checkpoint-Residual-Risk-Count',
-    'Next-Action',
-    'Blockers',
-  ];
   const candidates = comments
     .filter(({ id, body, createdAt, updatedAt }) => {
       if (
@@ -408,32 +389,20 @@ export function recoverInitialClaimBase(issue, comments) {
         singleLineField(body, 'Registry-Schema-Version') !== '2'
       )
         return false;
-      if (completeFields.some((field) => singleLineField(body, field) === null)) return false;
+      const validation = validateCheckpointEvidence(body, '2');
+      if (!validation?.applicable || !validation.valid) return false;
       if (
-        singleLineField(body, 'Claim-State') !== 'active' ||
-        singleLineField(body, 'Checkpoint-State') !== 'active' ||
-        singleLineField(body, 'Checkpoint-Evidence-Version') !== '1' ||
-        singleLineField(body, 'Checkpoint-At') !== current['Claimed-At'] ||
-        singleLineField(body, 'Waiting-Since') !== 'unclaimed' ||
-        singleLineField(body, 'Checkpoint-Checks-Verdict') !== 'unavailable' ||
-        singleLineField(body, 'Checkpoint-CI-Run') !== 'unavailable' ||
-        singleLineField(body, 'Checkpoint-CI-Commit') !== 'unavailable' ||
-        !/^(?:none|present|unknown)$/.test(
-          singleLineField(body, 'Checkpoint-Security-Impact') ?? '',
-        ) ||
-        !/^(?:none|present|unknown)$/.test(
-          singleLineField(body, 'Checkpoint-Tenant-Impact') ?? '',
-        ) ||
-        !/^(?:none|present|unknown)$/.test(
-          singleLineField(body, 'Checkpoint-Provider-Impact') ?? '',
-        ) ||
-        !/^(?:none|present|unknown)$/.test(
-          singleLineField(body, 'Checkpoint-Deployment-Impact') ?? '',
-        ) ||
-        !/^(?:0|[1-9]\d*)$/.test(singleLineField(body, 'Checkpoint-Residual-Risk-Count') ?? '')
+        validation.fields['Claim-State'] !== 'active' ||
+        validation.fields['Checkpoint-State'] !== 'active' ||
+        validation.fields['Checkpoint-Evidence-Version'] !== '1' ||
+        validation.fields['Checkpoint-At'] !== current['Claimed-At'] ||
+        validation.fields['Waiting-Since'] !== 'unclaimed' ||
+        validation.fields['Checkpoint-Checks-Verdict'] !== 'unavailable' ||
+        validation.fields['Checkpoint-CI-Run'] !== 'unavailable' ||
+        validation.fields['Checkpoint-CI-Commit'] !== 'unavailable'
       )
         return false;
-      return identityFields.every((field) => singleLineField(body, field) === current[field]);
+      return identityFields.every((field) => validation.fields[field] === current[field]);
     })
     .map((comment) => ({
       commentId: comment.id,
@@ -812,7 +781,9 @@ export function evaluateScopeGate(selector, findings, { known = true, targetExis
   };
 }
 
-export function assertFreshScopeGate(scopeGate, expected) {
+const consumedScopeEvidenceIds = new Set();
+
+export function assertFreshScopeGate(scopeGate, expected, binding = null, nowMs = Date.now()) {
   if (
     !scopeGate ||
     scopeGate.requested !== expected ||
@@ -822,5 +793,32 @@ export function assertFreshScopeGate(scopeGate, expected) {
   ) {
     throw new Error(`fresh scope gate ${expected} must be clear`);
   }
+  if (binding === null) return true;
+  const evidence = scopeGate.evidence;
+  const issuedAt =
+    typeof evidence?.issuedAt === 'string' && STRICT_INSTANT.test(evidence.issuedAt)
+      ? Date.parse(evidence.issuedAt)
+      : NaN;
+  if (
+    evidence?.version !== 1 ||
+    typeof evidence.evidenceId !== 'string' ||
+    !PORTABLE_OPERATION_ID.test(evidence.evidenceId) ||
+    !Number.isFinite(issuedAt) ||
+    new Date(issuedAt).toISOString() !== evidence.issuedAt ||
+    issuedAt > nowMs ||
+    nowMs - issuedAt > 30_000 ||
+    evidence.phase !== binding.phase ||
+    evidence.operationId !== binding.operationId ||
+    evidence.issueNumber !== binding.issueNumber ||
+    evidence.branch !== binding.branch ||
+    evidence.expectedBase !== binding.expectedBase ||
+    evidence.expectedIssueBodySha256 !== binding.expectedIssueBodySha256 ||
+    consumedScopeEvidenceIds.has(evidence.evidenceId)
+  ) {
+    throw new Error(
+      `fresh scope gate ${expected} has missing, mismatched, stale, or reused evidence`,
+    );
+  }
+  consumedScopeEvidenceIds.add(evidence.evidenceId);
   return true;
 }

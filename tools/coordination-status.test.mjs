@@ -15,7 +15,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { readLocalObservedAgainstMain } from './coordination-status.mjs';
+import {
+  isExactSameOperationPostRefTransition,
+  readLocalObservedAgainstMain,
+} from './coordination-status.mjs';
 
 const STATUS_TOOL = fileURLToPath(new URL('./coordination-status.mjs', import.meta.url));
 const SERIALIZING_SOURCE = readFileSync(
@@ -586,6 +589,67 @@ test('issue and pull request retrieval consumes records beyond the first API pag
   assert(result.invocations.includes(`gh api --paginate --slurp ${PULLS_ENDPOINT}`));
 });
 
+test('only an exact same-operation post-ref transition suppresses its one orphan warning', () => {
+  const issue = v2ReadyIssue(73);
+  const expectedBase = 'a'.repeat(40);
+  const provisionalClaim = {
+    phase: 'after-ref',
+    refCreatedByOperation: true,
+    operationId: 'claim-73-operation',
+    issueNumber: 73,
+    branch: 'claim-v1/issue-73',
+    expectedBase,
+    expectedIssueBody: issue.body,
+  };
+  const reservedRefs = [
+    {
+      ref: 'refs/heads/claim-v1/issue-73',
+      objectType: 'commit',
+      sha: expectedBase,
+    },
+  ];
+  const entry = {
+    code: 'orphaned-claim-ref',
+    message:
+      'refs/heads/claim-v1/issue-73 exists while issue #73 is ready; do not adopt or release it automatically',
+  };
+  assert.equal(
+    isExactSameOperationPostRefTransition({ provisionalClaim, issue, reservedRefs, entry }),
+    true,
+  );
+  for (const candidate of [
+    { provisionalClaim: { ...provisionalClaim, phase: 'before-ref' }, issue, reservedRefs, entry },
+    {
+      provisionalClaim: { ...provisionalClaim, refCreatedByOperation: false },
+      issue,
+      reservedRefs,
+      entry,
+    },
+    {
+      provisionalClaim: { ...provisionalClaim, operationId: 'claim/73' },
+      issue,
+      reservedRefs,
+      entry,
+    },
+    { provisionalClaim, issue: { ...issue, body: `${issue.body}drift\n` }, reservedRefs, entry },
+    { provisionalClaim, issue, reservedRefs: [], entry },
+    {
+      provisionalClaim,
+      issue,
+      reservedRefs,
+      entry: { code: 'other-warning', message: entry.message },
+    },
+    {
+      provisionalClaim,
+      issue,
+      reservedRefs,
+      entry: { ...entry, message: `${entry.message} drift` },
+    },
+  ]) {
+    assert.equal(isExactSameOperationPostRefTransition(candidate), false);
+  }
+});
+
 test('activated immutable scope evidence emits exact gates and preserves non-self-activation', (t) => {
   const active = v2ActiveIssue(73);
   const remote = restRef('refs/heads/claim-v1/issue-73');
@@ -644,7 +708,7 @@ test('activated immutable scope evidence emits exact gates and preserves non-sel
     result.invocations.filter(
       (invocation) => invocation === `gh api --paginate --slurp ${PULLS_ENDPOINT}`,
     ).length,
-    2,
+    3,
   );
 
   const raced = structuredClone(responses);
@@ -688,6 +752,113 @@ test('activated immutable scope evidence emits exact gates and preserves non-sel
   });
   assert.equal(malformedResult.exitCode, 2);
   assert.equal(JSON.parse(malformedResult.stdout).scopeGate.status, 'unknown');
+
+  const surfaceRaces = [];
+  const issueRace = structuredClone(responses);
+  issueRace[`api:${ISSUES_ENDPOINT}`] = {
+    sequence: [
+      { stdout: JSON.stringify([[PLAN_ISSUE, active]]) },
+      { stdout: JSON.stringify([[PLAN_ISSUE, { ...active, body: `${active.body}drift\n` }]]) },
+    ],
+  };
+  surfaceRaces.push(['issue-body', issueRace]);
+
+  const issueLabelRace = structuredClone(responses);
+  issueLabelRace[`api:${ISSUES_ENDPOINT}`] = {
+    sequence: [
+      { stdout: JSON.stringify([[PLAN_ISSUE, active]]) },
+      {
+        stdout: JSON.stringify([
+          [PLAN_ISSUE, { ...active, labels: [{ name: 'work:active' }, { name: 'late-label' }] }],
+        ]),
+      },
+    ],
+  };
+  surfaceRaces.push(['issue-labels', issueLabelRace]);
+
+  const labelRace = structuredClone(responses);
+  labelRace[`api:${LABELS_ENDPOINT}`] = {
+    sequence: [
+      { stdout: JSON.stringify([COORDINATION_LABELS]) },
+      { stdout: JSON.stringify([COORDINATION_LABELS.slice(0, -1)]) },
+    ],
+  };
+  surfaceRaces.push(['labels', labelRace]);
+
+  const commentRace = structuredClone(responses);
+  const checkpoint = restCheckpointComment(active);
+  commentRace[`api:${commentEndpoint(73)}`] = {
+    sequence: [
+      { stdout: JSON.stringify([[checkpoint]]) },
+      {
+        stdout: JSON.stringify([
+          [
+            checkpoint,
+            {
+              ...checkpoint,
+              id: 7400,
+              body: 'unrelated late comment',
+              created_at: '2026-09-01T03:00:00Z',
+              updated_at: '2026-09-01T03:00:00Z',
+            },
+          ],
+        ]),
+      },
+    ],
+  };
+  surfaceRaces.push(['comments', commentRace]);
+
+  const refRace = structuredClone(responses);
+  refRace[`api:${CLAIM_REFS_ENDPOINT}`] = {
+    sequence: [{ stdout: JSON.stringify([[remote]]) }, { stdout: '[[]]' }],
+  };
+  surfaceRaces.push(['reserved-ref-count', refRace]);
+
+  const mainRace = structuredClone(responses);
+  mainRace[`api:${MAIN_REF_ENDPOINT}`] = {
+    sequence: [
+      ...Array.from({ length: 4 }, () => ({
+        stdout: JSON.stringify(restRef('refs/heads/main')),
+      })),
+      { stdout: JSON.stringify(restRef('refs/heads/main', 'f'.repeat(40))) },
+    ],
+  };
+  surfaceRaces.push(['main', mainRace]);
+
+  for (const [name, racedResponses] of surfaceRaces) {
+    const raceResult = runStatus(t, {
+      responses: racedResponses,
+      args: ['--json', '--gate', 'claim:73'],
+    });
+    const raceReport = JSON.parse(raceResult.stdout);
+    assert.equal(raceResult.exitCode, 2, name);
+    assert.equal(raceReport.registry.scopeStatus, 'unavailable', name);
+    assert.equal(raceReport.scopeGate.status, 'unknown', name);
+    assert(
+      raceReport.warnings.some(({ code }) => code === 'scope-evidence-unavailable'),
+      name,
+    );
+  }
+
+  for (const [name, secondComments] of [
+    ['incomplete-comment-reread', [[]]],
+    ['duplicate-comment-count', [[checkpoint, { ...checkpoint }]]],
+  ]) {
+    const incomplete = structuredClone(responses);
+    incomplete[`api:${commentEndpoint(73)}`] = {
+      sequence: [
+        { stdout: JSON.stringify([[checkpoint]]) },
+        { stdout: JSON.stringify(secondComments) },
+      ],
+    };
+    const incompleteResult = runStatus(t, {
+      responses: incomplete,
+      args: ['--json', '--gate', 'claim:73'],
+    });
+    const incompleteReport = JSON.parse(incompleteResult.stdout);
+    assert.equal(incompleteResult.exitCode, 2, name);
+    assert.equal(incompleteReport.scopeGate.status, 'unknown', name);
+  }
 });
 
 test('routed PR findings block only selected integration gates while board and disjoint claim gates stay clear', (t) => {

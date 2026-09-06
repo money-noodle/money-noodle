@@ -801,8 +801,11 @@ test('remote-reference claim authority is derived, create-only, and isolated fro
   assert.match(coordinationClaim, /ref-present-operation-mismatch/);
   assert.match(
     coordinationClaim,
-    /matchingCheckpoints\.some\(\(\{ operationId: id \}\) => id !== operationId\)/,
+    /matchingCheckpoints\.length !== 1 \|\| matchingCheckpoints\[0\]\.operationId !== operationId/,
   );
+  assert.match(coordinationClaim, /scope-guard-required/);
+  assert.match(coordinationClaim, /scope-self-activation-forbidden/);
+  assert.match(coordinationClaim, /refCreatedByOperation: true/);
   assert.match(coordinationClaim, /claimSnapshotGuard\(claim, operationId\)\(\{ issue \}\)/);
   assert.match(coordinationClaim, /'--method', 'POST', `\$\{root\}\/git\/refs`/);
   assert.doesNotMatch(coordinationClaim, /'--method',\s*'(?:PATCH|PUT|DELETE)'/);

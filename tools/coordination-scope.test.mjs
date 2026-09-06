@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
 
+import { validateStandaloneCheckpointEvidence } from './coordination-schema.mjs';
 import {
   assertFreshScopeGate,
   buildScopeRouting,
@@ -64,6 +65,9 @@ test('the exact grammar accepts only a repository file, literal prefix glob, or 
   });
   assert.equal(parseScopePath('docs/**').kind, 'prefix');
   assert.equal(parseScopePath('**').kind, 'root');
+  assert.equal(parseScopePath('~/literal').kind, 'exact');
+  assert.equal(parseScopePath('C:/drive-like').kind, 'exact');
+  assert.equal(parseScopePath('C:literal').kind, 'exact');
   for (const invalid of [
     '',
     '/root',
@@ -165,7 +169,7 @@ test('the serializing file has exact accepted canonical bytes', () => {
   }
 });
 
-test('initial claim base recovery requires one unedited unreconciled establishment operation', () => {
+test('initial claim base recovery requires one fully valid unedited unreconciled establishment operation', () => {
   const identity = {
     'Claim-Harness': 'pi',
     'Claim-Run-ID': 'run-44',
@@ -208,29 +212,43 @@ test('initial claim base recovery requires one unedited unreconciled establishme
     createdAt: '2026-09-05T01:00:00Z',
     updatedAt: '2026-09-05T01:00:00Z',
   };
-  assert.deepEqual(recoverInitialClaimBase(issue, [comment]), {
+  const recover = (candidateIssue, candidateComments) =>
+    recoverInitialClaimBase(candidateIssue, candidateComments, {
+      validateCheckpointEvidence: validateStandaloneCheckpointEvidence,
+    });
+  assert.deepEqual(recover(issue, [comment]), {
     status: 'recovered',
     baseCommit: SHA_A,
     commentId: 10,
   });
+  assert.equal(recover(issue, [comment, { ...comment, id: 11 }]).status, 'unavailable');
   assert.equal(
-    recoverInitialClaimBase(issue, [comment, { ...comment, id: 11 }]).status,
+    recover(issue, [{ ...comment, updatedAt: '2026-09-05T02:00:00Z' }]).status,
     'unavailable',
   );
   assert.equal(
-    recoverInitialClaimBase(issue, [{ ...comment, updatedAt: '2026-09-05T02:00:00Z' }]).status,
+    recover({ ...issue, body: issue.body.replace('none', '10') }, [comment]).status,
     'unavailable',
   );
   assert.equal(
-    recoverInitialClaimBase({ ...issue, body: issue.body.replace('none', '10') }, [comment]).status,
+    recover(issue, [{ ...comment, body: comment.body.replace('claim-44', 'claim/44') }]).status,
     'unavailable',
   );
-  assert.equal(
-    recoverInitialClaimBase(issue, [
-      { ...comment, body: comment.body.replace('claim-44', 'claim/44') },
-    ]).status,
-    'unavailable',
-  );
+  for (const invalidBody of [
+    comment.body.replace('Check-In-By: 2026-09-05T05:00:00Z', 'Check-In-By: unclaimed'),
+    comment.body.replace('Checkpoint-CI-Run: unavailable', 'Checkpoint-CI-Run: bad'),
+    comment.body.replace('Checkpoint-Tenant-Impact: none', 'Checkpoint-Tenant-Impact: maybe'),
+    comment.body.replace(
+      'Checkpoint-Checks-Verdict: unavailable',
+      'Checkpoint-Checks-Verdict: passed',
+    ),
+  ]) {
+    assert.equal(
+      recover(issue, [{ ...comment, body: invalidBody }]).status,
+      'unavailable',
+      invalidBody,
+    );
+  }
 });
 
 test('complete recursive immutable trees derive exact sorted changed paths and fail closed', () => {

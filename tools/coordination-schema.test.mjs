@@ -262,7 +262,7 @@ test('strict dependencies separate issue references from dependency prose', () =
   }
 });
 
-test('scope paths are portable repository paths or explicit none, never local paths', () => {
+test('scope paths preserve settled POSIX-relative grammar including literal tilde and drive-like segments', () => {
   assert.deepEqual(normalizeScopePaths('docs/example.md\ntools/**'), {
     status: 'declared',
     paths: ['docs/example.md', 'tools/**'],
@@ -272,10 +272,11 @@ test('scope paths are portable repository paths or explicit none, never local pa
     ],
   });
   assert.deepEqual(normalizeScopePaths('none'), { status: 'none', paths: [], entries: [] });
+  assert.equal(normalizeScopePaths('C:/Users/example/worktree').status, 'declared');
+  assert.equal(normalizeScopePaths('~/worktree').status, 'declared');
+  assert.equal(normalizeScopePaths('~literal/file').status, 'declared');
   for (const invalid of [
     '/Users/example/worktree',
-    'C:/Users/example/worktree',
-    '~/worktree',
     '../secret',
     './tools',
     'tools//example.mjs',
