@@ -643,17 +643,6 @@ function createProductionScopeAuthority() {
   return createScopeAuthority(buildCoordinationStatusReport);
 }
 
-/** Test-only seam. Production mutation exports never consume this injected authority. */
-export function createCoordinationScopeGuardForTest(buildReport) {
-  if (typeof buildReport !== 'function') {
-    throw new CoordinationClaimError(
-      'invalid-scope-guard-builder',
-      'buildReport must be a function',
-    );
-  }
-  return createScopeAuthority(buildReport);
-}
-
 function result(status, stage, detail = {}) {
   return {
     status,
@@ -664,8 +653,7 @@ function result(status, stage, detail = {}) {
   };
 }
 
-/** Test-only mutation seam with explicit injected hosts and authority. */
-export async function executeCoordinationClaimForTest({
+async function executeCoordinationClaimWithDependencies({
   claimHost,
   writerHost,
   repository,
@@ -931,7 +919,7 @@ function rejectProductionDependencyInjection(options, allowed, boundary) {
 
 export async function executeCoordinationClaim(options) {
   rejectProductionDependencyInjection(options, PRODUCTION_CLAIM_FIELDS, 'executeCoordinationClaim');
-  return executeCoordinationClaimForTest({
+  return executeCoordinationClaimWithDependencies({
     ...options,
     claimHost: createGitHubClaimHost(),
     writerHost: createGitHubCliHost({ repository: options.repository }),
@@ -1032,17 +1020,6 @@ function createGitHubClaimHost({
   };
 }
 
-/** Test-only adapter seam. Production mutation exports always use runClaimGitHubCli. */
-export function createGitHubClaimHostForTest(options) {
-  if (typeof options?.runGh !== 'function') {
-    throw new CoordinationClaimError(
-      'test-dependency-required',
-      'the test-only claim host requires an explicit runGh dependency',
-    );
-  }
-  return createGitHubClaimHost(options);
-}
-
 function parseCliArguments(argv) {
   const options = {};
   const values = new Set([
@@ -1086,8 +1063,7 @@ function parseCliArguments(argv) {
   };
 }
 
-/** Test-only CLI seam. Production CLI export fixes every authority and I/O dependency. */
-export async function runCoordinationClaimCliForTest({
+async function runCoordinationClaimCliWithDependencies({
   argv,
   readText,
   claimRunGh,
@@ -1144,7 +1120,7 @@ export async function runCoordinationClaimCliForTest({
     writeOutput(`${JSON.stringify(preview, null, 2)}\n`);
     return preview;
   }
-  const result = await executeCoordinationClaimForTest({
+  const result = await executeCoordinationClaimWithDependencies({
     claimHost: createGitHubClaimHost({ repository: options.repository, runGh: claimRunGh }),
     writerHost: createGitHubCliHost({ repository: options.repository, runGh: writerRunGh }),
     repository: options.repository,
@@ -1164,7 +1140,7 @@ const PRODUCTION_CLI_FIELDS = new Set(['argv']);
 
 export async function runCoordinationClaimCli(options) {
   rejectProductionDependencyInjection(options, PRODUCTION_CLI_FIELDS, 'runCoordinationClaimCli');
-  return runCoordinationClaimCliForTest({
+  return runCoordinationClaimCliWithDependencies({
     argv: options.argv,
     readText: (path) => readFile(path, 'utf8'),
     claimRunGh: runClaimGitHubCli,

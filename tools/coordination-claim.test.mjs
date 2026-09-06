@@ -1,26 +1,60 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { CHECKPOINT_EVIDENCE_FIELDS, V2_PORTABLE_CLAIM_FIELDS } from './coordination-schema.mjs';
-import {
+import * as productionClaimModule from './coordination-claim.mjs';
+
+const instrumentedDirectory = mkdtempSync(join(tmpdir(), 'mn-claim-private-test-'));
+const claimSourcePath = fileURLToPath(new URL('./coordination-claim.mjs', import.meta.url));
+let instrumentedSource = readFileSync(claimSourcePath, 'utf8');
+for (const dependency of [
+  'coordination-schema.mjs',
+  'coordination-lib.mjs',
+  'coordination-scope.mjs',
+  'coordination-status.mjs',
+  'coordination-write.mjs',
+]) {
+  instrumentedSource = instrumentedSource.replaceAll(
+    `'./${dependency}'`,
+    JSON.stringify(new URL(`./${dependency}`, import.meta.url).href),
+  );
+}
+instrumentedSource += `
+export {
+  createScopeAuthority as __testCreateScopeAuthority,
+  executeCoordinationClaimWithDependencies as __testExecuteCoordinationClaim,
+};
+`;
+const instrumentedPath = join(instrumentedDirectory, 'coordination-claim.instrumented.mjs');
+writeFileSync(instrumentedPath, instrumentedSource);
+process.once('exit', () => rmSync(instrumentedDirectory, { recursive: true, force: true }));
+const instrumentedClaimModule = await import(pathToFileURL(instrumentedPath).href);
+
+const {
   BOOTSTRAP_BRANCH,
   CANONICAL_REPOSITORY,
   CoordinationClaimError,
   claimBranchForIssue,
   claimRefForIssue,
-  createCoordinationScopeGuardForTest as createCoordinationScopeGuard,
-  createGitHubClaimHostForTest as createGitHubClaimHost,
-  executeCoordinationClaim as executeProductionCoordinationClaim,
-  executeCoordinationClaimForTest as executeCoordinationClaim,
   parseReservedClaimBranch,
   parseReservedClaimRef,
   prepareCoordinationClaim,
-  runCoordinationClaimCli as runProductionCoordinationClaimCli,
-  runCoordinationClaimCliForTest as runCoordinationClaimCli,
   validateClaimBranch,
-} from './coordination-claim.mjs';
+  __testCreateScopeAuthority: createCoordinationScopeGuard,
+  __testExecuteCoordinationClaim: executeCoordinationClaim,
+} = instrumentedClaimModule;
+const {
+  executeCoordinationClaim: executeProductionCoordinationClaim,
+  runCoordinationClaimCli: runProductionCoordinationClaimCli,
+} = productionClaimModule;
 
+const CLAIM_TOOL = fileURLToPath(new URL('./coordination-claim.mjs', import.meta.url));
 const BASE = 'a'.repeat(40);
 const OTHER = 'b'.repeat(40);
 const ISSUE = 73;
@@ -760,34 +794,51 @@ test('claim execution rejects omitted and incorrectly bound scope evidence befor
   }
 });
 
-test('production mutation exports reject every caller-selected authority or host', async () => {
+test('the public module has no alternate mutation export and production boundaries reject injection', async () => {
+  assert.deepEqual(Object.keys(productionClaimModule).sort(), [
+    'BOOTSTRAP_BRANCH',
+    'BOOTSTRAP_ISSUE',
+    'CANONICAL_REPOSITORY',
+    'CLAIM_BRANCH_VERSION',
+    'CoordinationClaimError',
+    'claimBranchForIssue',
+    'claimRefForIssue',
+    'executeCoordinationClaim',
+    'parseReservedClaimBranch',
+    'parseReservedClaimRef',
+    'prepareCoordinationClaim',
+    'runCoordinationClaimCli',
+    'validateClaimBranch',
+  ]);
+  assert.equal(
+    Object.keys(productionClaimModule).some((name) => /ForTest|Host|Guard/.test(name)),
+    false,
+  );
+
   const fabricatedScopeGuard = async (request) => scopeGateFor(request);
-  assert.throws(
-    () => createGitHubClaimHost(),
-    (error) => error instanceof CoordinationClaimError && error.code === 'test-dependency-required',
-  );
-  await assert.rejects(
-    runCoordinationClaimCli({ argv: [] }),
-    (error) => error instanceof CoordinationClaimError && error.code === 'test-dependency-required',
-  );
-  for (const injected of [
+  const fabricatedReportBuilder = async () => ({
+    scopeGate: { requested: `claim:${ISSUE}`, status: 'clear', blockingFindingIds: [] },
+  });
+  const injectedDependencies = [
     { scopeGuard: fabricatedScopeGuard },
     { claimHost: new MockClaimHost() },
     { writerHost: new MockWriterHost() },
-  ]) {
+    { buildReport: fabricatedReportBuilder },
+    { runGh: async () => ({ status: 0, stdout: '{}', stderr: '' }) },
+    { dependencies: { scopeGuard: fabricatedScopeGuard } },
+  ];
+  for (const injected of injectedDependencies) {
     await assert.rejects(
       executeProductionCoordinationClaim({ ...prepareInput(), ...injected }),
-      (error) =>
-        error instanceof CoordinationClaimError &&
-        error.code === 'production-dependency-injection-forbidden',
+      (error) => error.code === 'production-dependency-injection-forbidden',
+      Object.keys(injected)[0],
+    );
+    await assert.rejects(
+      runProductionCoordinationClaimCli({ argv: ['--apply'], ...injected }),
+      (error) => error.code === 'production-dependency-injection-forbidden',
+      Object.keys(injected)[0],
     );
   }
-  await assert.rejects(
-    runProductionCoordinationClaimCli({ argv: [], scopeGuard: fabricatedScopeGuard }),
-    (error) =>
-      error instanceof CoordinationClaimError &&
-      error.code === 'production-dependency-injection-forbidden',
-  );
 });
 
 test('incomplete authority evidence cannot authorize the first mutation', async () => {
@@ -1307,16 +1358,16 @@ test('conflicting structured ownership blocks recovery even without an operation
   assert.deepEqual(writerHost.mutations, []);
 });
 
-test('claim CLI dry-run validates derivation without invoking GitHub', async () => {
-  const files = new Map([
-    ['body.md', PARKED_BODY],
-    ['values.json', JSON.stringify(activeValues())],
-    ['comment.md', checkpointComment()],
-  ]);
-  let calls = 0;
-  const output = [];
-  const result = await runCoordinationClaimCli({
-    argv: [
+test('production CLI dry-run validates derivation without invoking GitHub', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'mn-claim-cli-dry-run-'));
+  try {
+    const bodyPath = join(directory, 'body.md');
+    const valuesPath = join(directory, 'values.json');
+    const commentPath = join(directory, 'comment.md');
+    writeFileSync(bodyPath, PARKED_BODY);
+    writeFileSync(valuesPath, JSON.stringify(activeValues()));
+    writeFileSync(commentPath, checkpointComment());
+    const args = [
       '--dry-run',
       '--repo',
       CANONICAL_REPOSITORY,
@@ -1325,118 +1376,35 @@ test('claim CLI dry-run validates derivation without invoking GitHub', async () 
       '--expected-base',
       BASE,
       '--expected-body-file',
-      'body.md',
+      bodyPath,
       '--values-file',
-      'values.json',
+      valuesPath,
       '--comment-file',
-      'comment.md',
+      commentPath,
       '--operation-id',
       'dry-73',
-    ],
-    readText: async (path) => files.get(path),
-    claimRunGh: async () => {
-      calls += 1;
-      throw new Error('dry-run must not call GitHub');
-    },
-    writerRunGh: async () => {
-      calls += 1;
-      throw new Error('dry-run must not call GitHub');
-    },
-    writeOutput: (text) => output.push(text),
-  });
-  assert.equal(result.status, 'dry-run');
-  assert.equal(result.ref, REF);
-  assert.equal(calls, 0);
-  assert.equal(JSON.parse(output.join('')).branch, BRANCH);
+    ];
+    const result = spawnSync(process.execPath, [CLAIM_TOOL, ...args], {
+      cwd: directory,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: directory },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, '');
+    assert.equal(JSON.parse(result.stdout).status, 'dry-run');
+    assert.equal(JSON.parse(result.stdout).ref, REF);
+    assert.equal(JSON.parse(result.stdout).branch, BRANCH);
 
-  await assert.rejects(
-    runCoordinationClaimCli({
-      argv: [
-        '--dry-run',
-        '--repo',
-        CANONICAL_REPOSITORY,
-        '--issue',
-        '073',
-        '--expected-base',
-        BASE,
-        '--expected-body-file',
-        'body.md',
-        '--values-file',
-        'values.json',
-        '--comment-file',
-        'comment.md',
-        '--operation-id',
-        'dry-73',
-      ],
-      readText: async (path) => files.get(path),
-      claimRunGh: async () => {
-        calls += 1;
-        throw new Error('canonical parsing must fail before GitHub');
-      },
-      writerRunGh: async () => {
-        calls += 1;
-        throw new Error('canonical parsing must fail before GitHub');
-      },
-      writeOutput: () => {},
-    }),
-    (error) => error instanceof CoordinationClaimError && error.code === 'invalid-issue-number',
-  );
-  assert.equal(calls, 0);
-});
-
-test('GitHub claim adapter exposes only current reads and one create-only POST', async () => {
-  const calls = [];
-  const runGh = async (args, input) => {
-    calls.push({ args, input });
-    if (args[0] === 'repo') {
-      return {
-        status: 0,
-        stdout: JSON.stringify({
-          nameWithOwner: CANONICAL_REPOSITORY,
-          defaultBranchRef: { name: 'main' },
-        }),
-        stderr: '',
-      };
-    }
-    if (args.includes('--method')) {
-      return {
-        status: 0,
-        stdout: `HTTP/2 201 Created\ncontent-type: application/json\n\n${JSON.stringify({ ref: REF, object: { type: 'commit', sha: BASE } })}`,
-        stderr: '',
-      };
-    }
-    return {
-      status: 0,
-      stdout: JSON.stringify({
-        ref: args.at(-1).endsWith('heads/main') ? 'refs/heads/main' : REF,
-        object: { type: 'commit', sha: BASE },
-      }),
-      stderr: '',
-    };
-  };
-  const host = createGitHubClaimHost({ runGh });
-  await host.readRepository();
-  await host.readMainRef();
-  await host.readClaimRef(REF);
-  await host.createClaimRef({ ref: REF, sha: BASE });
-
-  const mutations = calls.filter(({ args }) => args.includes('--method'));
-  assert.equal(mutations.length, 1);
-  assert.deepEqual(mutations[0].args, [
-    'api',
-    '--include',
-    '--method',
-    'POST',
-    `repos/${CANONICAL_REPOSITORY}/git/refs`,
-    '--input',
-    '-',
-  ]);
-  assert.deepEqual(JSON.parse(mutations[0].input), { ref: REF, sha: BASE });
-  assert(
-    calls.every(({ args }) => {
-      const methodIndex = args.indexOf('--method');
-      const method = methodIndex < 0 ? 'GET' : args[methodIndex + 1];
-      return !['DELETE', 'PATCH', 'PUT'].includes(method);
-    }),
-  );
+    args[args.indexOf(String(ISSUE))] = '073';
+    const invalid = spawnSync(process.execPath, [CLAIM_TOOL, ...args], {
+      cwd: directory,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: directory },
+    });
+    assert.equal(invalid.status, 1);
+    assert.equal(invalid.stdout, '');
+    assert.match(invalid.stderr, /invalid-issue-number/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

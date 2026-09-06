@@ -806,8 +806,14 @@ test('remote-reference claim authority is derived, create-only, and isolated fro
   assert.match(coordinationClaim, /scope-guard-required/);
   assert.match(coordinationClaim, /scope-self-activation-forbidden/);
   assert.match(coordinationClaim, /production-dependency-injection-forbidden/);
-  assert.match(coordinationClaim, /executeCoordinationClaimForTest/);
-  assert.match(coordinationClaim, /runCoordinationClaimCliForTest/);
+  assert.doesNotMatch(
+    coordinationClaim,
+    /(?:executeCoordinationClaimForTest|runCoordinationClaimCliForTest|createCoordinationScopeGuardForTest|createGitHubClaimHostForTest)/,
+  );
+  assert.doesNotMatch(
+    coordinationClaim,
+    /export\s+(?:async\s+)?function\s+(?:executeCoordinationClaimWithDependencies|runCoordinationClaimCliWithDependencies|createScopeAuthority|createGitHubClaimHost)\b/,
+  );
   assert.match(coordinationClaim, /scopeGuard: createProductionScopeAuthority\(\)/);
   assert.match(coordinationClaim, /buildCoordinationStatusReport/);
   assert.match(coordinationClaim, /refCreatedByOperation: true/);

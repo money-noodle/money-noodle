@@ -23,8 +23,7 @@ import {
 } from './coordination-status.mjs';
 import {
   CANONICAL_REPOSITORY,
-  createCoordinationScopeGuardForTest,
-  executeCoordinationClaimForTest,
+  executeCoordinationClaim,
   prepareCoordinationClaim,
 } from './coordination-claim.mjs';
 
@@ -818,56 +817,84 @@ test('real production status/report/guard path authorizes only exact same-operat
   };
   writeGhShim(directory, responses);
   const responseFile = join(directory, 'responses.json');
-  const normalizedComment = {
-    id: operationComment.id,
-    author: 'maintainer',
-    body: operationComment.body,
-    createdAt: operationComment.created_at,
-    updatedAt: operationComment.updated_at,
-  };
-  const writerHost = {
-    issue: {
-      state: 'open',
-      body: prepared.prepared.body,
-      labels: ['work:ready'],
-      comments: [normalizedComment],
-    },
-    mutations: [],
-    async readIssue() {
-      return structuredClone(this.issue);
-    },
-    async updateBody(_number, body) {
-      this.mutations.push('body');
-      this.issue.body = body;
-    },
-    async replaceStateLabel(_number, label) {
-      this.mutations.push('label');
-      this.issue.labels = [label];
-      const next = JSON.parse(readFileSync(responseFile, 'utf8'));
-      next[`api:${canonicalIssues}`] = {
-        stdout: JSON.stringify([[PLAN_ISSUE, { ...transitionIssue, labels: [{ name: label }] }]]),
-      };
-      writeFileSync(responseFile, JSON.stringify(next));
-    },
-    async addComment(_number, body) {
-      this.mutations.push('comment');
-      this.issue.comments.push({ ...normalizedComment, id: 7301, body });
-    },
-  };
-  const claimHost = {
-    async readRepository() {
-      return { nameWithOwner: CANONICAL_REPOSITORY, defaultBranch: 'main' };
-    },
-    async readMainRef() {
-      return restRef('refs/heads/main');
-    },
-    async readClaimRef() {
-      return restRef(ref);
-    },
-    async createClaimRef() {
-      throw new Error('recovery must not create a ref');
-    },
-  };
+  const mutableStateFile = join(directory, 'mutable-issue-state.json');
+  writeFileSync(
+    mutableStateFile,
+    JSON.stringify({ issue: transitionIssue, comments: [operationComment], mutations: [] }),
+  );
+  writeExecutable(
+    directory,
+    'gh',
+    `#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const inputText = fs.readFileSync(0, "utf8");
+fs.appendFileSync(process.env.INVOCATION_LOG, "gh " + args.join(" ") + "\\n");
+const responseFile = ${JSON.stringify(responseFile)};
+const stateFile = ${JSON.stringify(mutableStateFile)};
+const issueEndpoint = ${JSON.stringify(`repos/${CANONICAL_REPOSITORY}/issues/${issueNumber}`)};
+const commentsEndpoint = issueEndpoint + "/comments";
+const canonicalIssues = ${JSON.stringify(canonicalIssues)};
+const responses = JSON.parse(fs.readFileSync(responseFile, "utf8"));
+const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+const methodIndex = args.indexOf("--method");
+const method = methodIndex < 0 ? "GET" : args[methodIndex + 1];
+const endpoint = args[0] === "api" ? args.find((arg) => arg.startsWith("repos/")) : undefined;
+function output(value) { process.stdout.write(JSON.stringify(value)); }
+if (args[0] === "repo" && args.includes("nameWithOwner,defaultBranchRef")) {
+  output({ nameWithOwner: ${JSON.stringify(CANONICAL_REPOSITORY)}, defaultBranchRef: { name: "main" } });
+  process.exit(0);
+}
+if (endpoint === issueEndpoint && method === "GET") {
+  output(state.issue);
+  process.exit(0);
+}
+if (endpoint === commentsEndpoint && method === "GET") {
+  output([state.comments]);
+  process.exit(0);
+}
+if (endpoint === issueEndpoint && method === "PATCH") {
+  const input = JSON.parse(inputText);
+  if (Object.hasOwn(input, "body")) {
+    state.issue.body = input.body;
+    state.mutations.push("body");
+  }
+  if (Object.hasOwn(input, "labels")) {
+    state.issue.labels = input.labels.map((name) => ({ name }));
+    state.mutations.push("label");
+    responses["api:" + canonicalIssues] = {
+      stdout: JSON.stringify([[${JSON.stringify(PLAN_ISSUE)}, state.issue]]),
+    };
+    fs.writeFileSync(responseFile, JSON.stringify(responses));
+  }
+  fs.writeFileSync(stateFile, JSON.stringify(state));
+  output(state.issue);
+  process.exit(0);
+}
+if (endpoint === commentsEndpoint && method === "POST") {
+  const input = JSON.parse(inputText);
+  state.mutations.push("comment");
+  const comment = { id: 7301, user: { login: "test-agent" }, body: input.body, created_at: "2026-09-01T03:00:00Z", updated_at: "2026-09-01T03:00:00Z" };
+  state.comments.push(comment);
+  fs.writeFileSync(stateFile, JSON.stringify(state));
+  output(comment);
+  process.exit(0);
+}
+const key = args[0] === "api" ? "api:" + args.at(-1) : args[0];
+let fallback = key.includes("/comments?per_page=100") ? { stdout: "[[]]" } : undefined;
+if (!fallback && key.includes("/git/ref/heads/claim-v1/issue-")) {
+  fallback = { stdout: JSON.stringify({ ref: ${JSON.stringify(ref)}, object: { type: "commit", sha: ${JSON.stringify(base)} } }) };
+}
+const response = responses[key] ?? fallback;
+if (!response) {
+  process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
+  process.exit(127);
+}
+if (response.stdout) process.stdout.write(response.stdout);
+if (response.stderr) process.stderr.write(response.stderr);
+process.exit(response.status ?? 0);
+`,
+  );
 
   const previous = {
     cwd: process.cwd(),
@@ -880,17 +907,17 @@ test('real production status/report/guard path authorizes only exact same-operat
   process.env.HOME = directory;
   process.env.INVOCATION_LOG = invocationLog;
   try {
-    const outcome = await executeCoordinationClaimForTest({
-      ...claimInput,
-      claimHost,
-      writerHost,
-      scopeGuard: createCoordinationScopeGuardForTest(buildReport),
-    });
+    const outcome = await executeCoordinationClaim(claimInput);
     assert.equal(outcome.status, 'complete', JSON.stringify(outcome, null, 2));
     assert.equal(outcome.stage, 'writer-recovery');
     assert.deepEqual(outcome.writerMutations, { body: 0, label: 1, comment: 0 });
-    assert.deepEqual(writerHost.mutations, ['label']);
-    assert.match(readFileSync(invocationLog, 'utf8'), /gh api --paginate --slurp/);
+    assert.deepEqual(JSON.parse(readFileSync(mutableStateFile, 'utf8')).mutations, ['label']);
+    const invocations = readFileSync(invocationLog, 'utf8');
+    assert.match(invocations, /gh api --paginate --slurp/);
+    assert.match(
+      invocations,
+      new RegExp(`gh api --method PATCH repos/${CANONICAL_REPOSITORY}/issues/${issueNumber}`),
+    );
   } finally {
     process.chdir(previous.cwd);
     process.env.PATH = previous.PATH;
