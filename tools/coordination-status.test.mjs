@@ -15,7 +15,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { readLocalObservedAgainstMain } from './coordination-status.mjs';
+
 const STATUS_TOOL = fileURLToPath(new URL('./coordination-status.mjs', import.meta.url));
+const SERIALIZING_SOURCE = readFileSync(
+  fileURLToPath(new URL('../.github/coordination/serializing-paths.v1.json', import.meta.url)),
+  'utf8',
+);
 const FAR_FUTURE = '2999-01-01T00:00:00Z';
 const LONG_PAST = '2000-01-01T00:00:00Z';
 const REPOSITORY = 'example/registry';
@@ -325,6 +331,13 @@ if (!fallback && key.includes("/git/ref/heads/claim-v1/issue-")) {
   const ref = key.slice(key.indexOf("repos/") + 6).split("/git/ref/")[1];
   fallback = { stdout: JSON.stringify({ ref: "refs/" + ref, object: { type: "commit", sha: "${'a'.repeat(40)}" } }) };
 }
+if (!fallback && key.includes("/git/commits/") && /^[0-9a-f]{40}$/.test(key.slice(-40))) {
+  const sha = key.slice(-40);
+  fallback = { stdout: JSON.stringify({ sha, tree: { sha: "${'d'.repeat(40)}" } }) };
+}
+if (!fallback && key.endsWith("/git/trees/${'d'.repeat(40)}?recursive=1")) {
+  fallback = { stdout: JSON.stringify({ sha: "${'d'.repeat(40)}", truncated: false, tree: [] }) };
+}
 const configured = responses[key] ?? fallback;
 const counts = JSON.parse(fs.readFileSync(${JSON.stringify(countsFile)}, "utf8"));
 const call = counts[key] ?? 0;
@@ -458,6 +471,13 @@ test('versioned JSON mode is one parseable document with candidate safety explic
   assert.equal(report.coordinationKnown, true);
   assert.equal(report.registry.workItems[0].triage, 'candidate');
   assert.equal(report.registry.workItems[0].candidateSafety, 'not-established');
+  assert.equal(report.registry.scopeStatus, 'inactive');
+  assert.equal(report.registry.workItems[0].scope.status, 'unavailable');
+  assert.deepEqual(report.scopeGate, {
+    requested: 'board',
+    status: 'clear',
+    blockingFindingIds: [],
+  });
   assert.equal(report.local.integrationCheckout.status, 'mirrored');
   assert.equal(report.local.hooks.configuration.status, 'unset');
   assert.equal(report.local.hooks.configuration.effective, null);
@@ -564,6 +584,272 @@ test('issue and pull request retrieval consumes records beyond the first API pag
   assert.match(result.stdout, /#88 test\/page-two -> main/);
   assert(result.invocations.includes(`gh api --paginate --slurp ${ISSUES_ENDPOINT}`));
   assert(result.invocations.includes(`gh api --paginate --slurp ${PULLS_ENDPOINT}`));
+});
+
+test('activated immutable scope evidence emits exact gates and preserves non-self-activation', (t) => {
+  const active = v2ActiveIssue(73);
+  const remote = restRef('refs/heads/claim-v1/issue-73');
+  const treeSha = 'b'.repeat(40);
+  const blobSha = 'c'.repeat(40);
+  const responses = defaultResponses();
+  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE, active]]) };
+  responses[`api:${CLAIM_REFS_ENDPOINT}`] = { stdout: JSON.stringify([[remote]]) };
+  responses[`api:${commentEndpoint(73)}`] = {
+    stdout: JSON.stringify([[restCheckpointComment(active)]]),
+  };
+  responses[`api:repos/${REPOSITORY}/git/commits/${'a'.repeat(40)}`] = {
+    stdout: JSON.stringify({ sha: 'a'.repeat(40), tree: { sha: treeSha } }),
+  };
+  responses[`api:repos/${REPOSITORY}/git/trees/${treeSha}?recursive=1`] = {
+    stdout: JSON.stringify({
+      sha: treeSha,
+      truncated: false,
+      tree: [
+        { path: '.github', mode: '040000', type: 'tree', sha: '6'.repeat(40) },
+        {
+          path: '.github/coordination',
+          mode: '040000',
+          type: 'tree',
+          sha: '7'.repeat(40),
+        },
+        {
+          path: '.github/coordination/serializing-paths.v1.json',
+          mode: '100644',
+          type: 'blob',
+          sha: blobSha,
+        },
+      ],
+    }),
+  };
+  responses[`api:repos/${REPOSITORY}/git/blobs/${blobSha}`] = {
+    stdout: JSON.stringify({
+      sha: blobSha,
+      encoding: 'base64',
+      content: Buffer.from(SERIALIZING_SOURCE).toString('base64'),
+    }),
+  };
+
+  const result = runStatus(t, { responses, args: ['--json', '--gate', 'claim:73'] });
+  const report = JSON.parse(result.stdout);
+  assert.equal(result.exitCode, 0, JSON.stringify(report, null, 2));
+  assert.deepEqual(report.scopeGate, {
+    requested: 'claim:73',
+    status: 'clear',
+    blockingFindingIds: [],
+  });
+  assert.equal(report.registry.scopeStatus, 'complete');
+  assert.deepEqual(report.registry.scopeFindings, []);
+  assert.equal(report.registry.workItems.find(({ number }) => number === 73).scope.status, 'clear');
+  assert.equal(
+    result.invocations.filter(
+      (invocation) => invocation === `gh api --paginate --slurp ${PULLS_ENDPOINT}`,
+    ).length,
+    2,
+  );
+
+  const raced = structuredClone(responses);
+  raced[`api:${PULLS_ENDPOINT}`] = {
+    sequence: [
+      { stdout: '[[]]' },
+      {
+        stdout: JSON.stringify([
+          [
+            {
+              number: 80,
+              title: 'late PR',
+              state: 'open',
+              draft: false,
+              head: { ref: 'late', sha: 'e'.repeat(40), repo: { full_name: REPOSITORY } },
+              base: { ref: 'main', sha: 'a'.repeat(40), repo: { full_name: REPOSITORY } },
+              updated_at: '2026-09-03T01:00:00Z',
+              html_url: 'https://example.invalid/pull/80',
+            },
+          ],
+        ]),
+      },
+    ],
+  };
+  const racedResult = runStatus(t, { responses: raced, args: ['--json', '--gate', 'claim:73'] });
+  const racedReport = JSON.parse(racedResult.stdout);
+  assert.equal(racedResult.exitCode, 2);
+  assert.equal(racedReport.registry.scopeStatus, 'unavailable');
+  assert.equal(racedReport.scopeGate.status, 'unknown');
+  assert(racedReport.warnings.some(({ code }) => code === 'scope-evidence-unavailable'));
+
+  const malformed = structuredClone(responses);
+  malformed[`api:repos/${REPOSITORY}/git/blobs/${blobSha}`].stdout = JSON.stringify({
+    sha: blobSha,
+    encoding: 'base64',
+    content: Buffer.from(`${SERIALIZING_SOURCE}\n`).toString('base64'),
+  });
+  const malformedResult = runStatus(t, {
+    responses: malformed,
+    args: ['--json', '--gate', 'claim:73'],
+  });
+  assert.equal(malformedResult.exitCode, 2);
+  assert.equal(JSON.parse(malformedResult.stdout).scopeGate.status, 'unknown');
+});
+
+test('routed PR findings block only selected integration gates while board and disjoint claim gates stay clear', (t) => {
+  const active = v2ActiveIssue(44);
+  const main = 'a'.repeat(40);
+  const heads = { 31: 'b'.repeat(40), 32: 'c'.repeat(40), 33: 'e'.repeat(40) };
+  const trees = {
+    main: '1'.repeat(40),
+    31: '2'.repeat(40),
+    32: '3'.repeat(40),
+    33: '4'.repeat(40),
+  };
+  const blob = '5'.repeat(40);
+  const unchanged = '6'.repeat(40);
+  const historicalBase = 'f'.repeat(40);
+  const changed = '7'.repeat(40);
+  const pathEntry = (path, sha) => ({ path, mode: '100644', type: 'blob', sha });
+  const pulls = [31, 32, 33].map((number) => ({
+    number,
+    title: `PR ${number}`,
+    state: 'open',
+    draft: false,
+    head: {
+      ref: `feature/${number}`,
+      sha: heads[number],
+      repo: { full_name: REPOSITORY },
+    },
+    base: { ref: 'main', sha: historicalBase, repo: { full_name: REPOSITORY } },
+    updated_at: '2026-09-03T01:00:00Z',
+    html_url: `https://example.invalid/pull/${number}`,
+  }));
+  const responses = defaultResponses();
+  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE, active]]) };
+  responses[`api:${CLAIM_REFS_ENDPOINT}`] = {
+    stdout: JSON.stringify([[restRef('refs/heads/claim-v1/issue-44')]]),
+  };
+  responses[`api:${commentEndpoint(44)}`] = {
+    stdout: JSON.stringify([[restCheckpointComment(active)]]),
+  };
+  responses[`api:${PULLS_ENDPOINT}`] = { stdout: JSON.stringify([pulls]) };
+  for (const [commit, tree] of [
+    [main, trees.main],
+    ...[31, 32, 33].map((number) => [heads[number], trees[number]]),
+  ]) {
+    responses[`api:repos/${REPOSITORY}/git/commits/${commit}`] = {
+      stdout: JSON.stringify({ sha: commit, tree: { sha: tree } }),
+    };
+  }
+  const directoryEntry = (path, sha) => ({ path, mode: '040000', type: 'tree', sha });
+  const directories = [
+    directoryEntry('.github', 'a'.repeat(40)),
+    directoryEntry('.github/coordination', 'b'.repeat(40)),
+    directoryEntry('.github/workflows', 'c'.repeat(40)),
+  ];
+  const baseEntries = [
+    ...directories,
+    pathEntry('.github/coordination/serializing-paths.v1.json', blob),
+    pathEntry('.github/workflows/ci.yml', unchanged),
+    pathEntry('.github/workflows/delivery.yml', unchanged),
+  ];
+  const treeEntries = {
+    [trees.main]: baseEntries,
+    [trees[31]]: [
+      ...directories,
+      pathEntry('.github/coordination/serializing-paths.v1.json', blob),
+      pathEntry('.github/workflows/ci.yml', changed),
+      pathEntry('.github/workflows/delivery.yml', changed),
+    ],
+    [trees[32]]: [
+      ...directories,
+      pathEntry('.github/coordination/serializing-paths.v1.json', blob),
+      pathEntry('.github/workflows/ci.yml', '8'.repeat(40)),
+      pathEntry('.github/workflows/delivery.yml', '8'.repeat(40)),
+    ],
+    [trees[33]]: [
+      ...directories,
+      pathEntry('.github/coordination/serializing-paths.v1.json', blob),
+      pathEntry('.github/workflows/ci.yml', '9'.repeat(40)),
+      pathEntry('.github/workflows/delivery.yml', '9'.repeat(40)),
+    ],
+  };
+  for (const [tree, entries] of Object.entries(treeEntries)) {
+    responses[`api:repos/${REPOSITORY}/git/trees/${tree}?recursive=1`] = {
+      stdout: JSON.stringify({ sha: tree, truncated: false, tree: entries }),
+    };
+  }
+  responses[`api:repos/${REPOSITORY}/git/blobs/${blob}`] = {
+    stdout: JSON.stringify({
+      sha: blob,
+      size: Buffer.byteLength(SERIALIZING_SOURCE),
+      encoding: 'base64',
+      content: Buffer.from(SERIALIZING_SOURCE).toString('base64'),
+    }),
+  };
+  for (const number of [31, 32, 33]) {
+    responses[`api:${compareEndpoint(main, heads[number])}`] = {
+      stdout: JSON.stringify({
+        status: 'ahead',
+        ahead_by: 1,
+        behind_by: 0,
+        base_commit: { sha: main },
+        merge_base_commit: { sha: main },
+      }),
+    };
+  }
+
+  const cases = [
+    [[], 0, 'board', 'clear'],
+    [['--gate', 'integration-pr:31'], 2, 'integration-pr:31', 'blocked'],
+    [['--gate', 'integration-pr:32'], 2, 'integration-pr:32', 'blocked'],
+    [['--gate', 'integration-pr:33'], 2, 'integration-pr:33', 'blocked'],
+    [['--gate', 'claim:44'], 0, 'claim:44', 'clear'],
+  ];
+  for (const [args, exitCode, requested, status] of cases) {
+    const result = runStatus(t, { responses, args: ['--json', ...args] });
+    const report = JSON.parse(result.stdout);
+    assert.equal(result.exitCode, exitCode, `${requested}: ${JSON.stringify(report, null, 2)}`);
+    assert.equal(report.scopeGate.requested, requested);
+    assert.equal(report.scopeGate.status, status);
+    assert.equal(report.warnings.length, 0, requested);
+    assert.deepEqual(
+      report.registry.scopeFindings.map(({ id }) => id),
+      ['scope-v1:pr-pr:31:32', 'scope-v1:pr-pr:31:33', 'scope-v1:pr-pr:32:33'],
+    );
+    assert.equal(report.registry.scopeFindings[0].globalPublicationBlock, false);
+  }
+  const human = runStatus(t, { responses });
+  assert.equal(human.exitCode, 0);
+  assert.match(
+    human.stdout,
+    /\[BLOCK pr-pr\] PR #31 <-> PR #32 paths=\.github\/workflows\/ci\.yml, \.github\/workflows\/delivery\.yml routes=integration-pr:#31,integration-pr:#32 global-publication=false/,
+  );
+  assert.match(human.stdout, /## Scope gate\nrequested=board status=clear blockers=none exit=0/);
+  assert(
+    human.stdout.indexOf('## Routed scope findings') < human.stdout.indexOf('## Ready candidates'),
+  );
+
+  const baseDrift = structuredClone(responses);
+  const driftedPulls = structuredClone(pulls);
+  driftedPulls[0].base.sha = '0'.repeat(40);
+  baseDrift[`api:${PULLS_ENDPOINT}`] = {
+    sequence: [{ stdout: JSON.stringify([pulls]) }, { stdout: JSON.stringify([driftedPulls]) }],
+  };
+  const baseDriftResult = runStatus(t, {
+    responses: baseDrift,
+    args: ['--json', '--gate', 'claim:44'],
+  });
+  const baseDriftReport = JSON.parse(baseDriftResult.stdout);
+  assert.equal(baseDriftResult.exitCode, 2);
+  assert.equal(baseDriftReport.registry.scopeStatus, 'unavailable');
+  assert.equal(baseDriftReport.scopeGate.status, 'unknown');
+  assert(baseDriftReport.warnings.some(({ code }) => code === 'scope-evidence-unavailable'));
+});
+
+test('scope selector syntax and missing targets fail closed with exit 2', (t) => {
+  const malformed = runStatus(t, { args: ['--gate', 'claim:01'] });
+  assert.equal(malformed.exitCode, 2);
+  assert.match(malformed.stderr, /Usage:/);
+
+  const missing = runStatus(t, { args: ['--json', '--gate', 'claim:999'] });
+  assert.equal(missing.exitCode, 2);
+  assert.equal(JSON.parse(missing.stdout).scopeGate.status, 'unknown');
 });
 
 test('reserved claim-ref enumeration consumes every page and reconciles a derived active claim', (t) => {
@@ -1021,6 +1307,45 @@ test('same-host clean claim containment is the only local-ahead fallback', (t) =
   const item = report.registry.workItems.find(({ number }) => number === 61);
   assert.equal(item.remoteClaim.lifecycle.status, 'local-ahead');
   assert.equal(item.remoteClaim.lifecycle.source, 'same-host-local-containment');
+});
+
+test('same-host scope fallback reads only stable committed immutable trees', (t) => {
+  const repository = mkdtempSync(join(tmpdir(), 'mn-scope-local-'));
+  t.after(() => rmSync(repository, { recursive: true, force: true }));
+  const git = (...args) => {
+    const result = spawnSync('git', ['-C', repository, ...args], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git('init', '-q');
+  git('config', 'user.name', 'Scope Test');
+  git('config', 'user.email', 'scope@example.invalid');
+  mkdirSync(join(repository, 'tools'));
+  writeFileSync(join(repository, 'tools/a.mjs'), 'export const value = 1;\n');
+  git('add', 'tools/a.mjs');
+  git('commit', '-qm', 'base');
+  const base = git('rev-parse', 'HEAD');
+  writeFileSync(join(repository, 'tools/a.mjs'), 'export const value = 2;\n');
+  git('add', 'tools/a.mjs');
+  git('commit', '-qm', 'head');
+  const head = git('rev-parse', 'HEAD');
+
+  writeFileSync(join(repository, 'tools/a.mjs'), 'uncommitted content is not scope evidence\n');
+  assert.deepEqual(readLocalObservedAgainstMain(repository, base, head, base), {
+    status: 'complete',
+    paths: ['tools/a.mjs'],
+    count: 1,
+    baseCommit: base,
+    baseTree: git('rev-parse', `${base}^{tree}`),
+    headCommit: head,
+    headTree: git('rev-parse', `${head}^{tree}`),
+    source: 'same-host-local-immutable-tree',
+  });
+  assert.equal(readLocalObservedAgainstMain(repository, base, head, head).status, 'unavailable');
+  assert.equal(
+    readLocalObservedAgainstMain(repository, base, 'f'.repeat(40), base).status,
+    'unavailable',
+  );
 });
 
 test('missing, orphaned, malformed, and unsupported reserved-ref evidence fails closed', (t) => {

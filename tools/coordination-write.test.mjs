@@ -61,7 +61,7 @@ Blockers: none
 function values(overrides = {}) {
   return {
     'Parent-Plan': '#27',
-    'Scope-Paths': 'tools/**\ndocs/example.md',
+    'Scope-Paths': 'docs/example.md\ntools/**',
     'Depends-On': 'none',
     'Dependency-Notes': 'none',
     'Integration-Owner': 'maintainer',
@@ -189,7 +189,7 @@ test('implicit-v1 migration is deterministic, complete, and preserves narrative 
   assert.equal(second.body, first.body);
   assert.match(first.body, /Preserve this narrative exactly\./);
   assert.match(first.body, /Registry-Schema-Version: 2/);
-  assert.match(first.body, /Scope-Paths: tools\/\*\*, docs\/example\.md/);
+  assert.match(first.body, /Scope-Paths: docs\/example\.md, tools\/\*\*/);
   assert.doesNotMatch(first.body, /Claim-Worktree|Shared-Hotspots/);
 });
 

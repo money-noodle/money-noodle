@@ -8,6 +8,7 @@ import {
   CoordinationClaimError,
   claimBranchForIssue,
   claimRefForIssue,
+  createCoordinationScopeGuard,
   createGitHubClaimHost,
   executeCoordinationClaim,
   parseReservedClaimBranch,
@@ -627,6 +628,107 @@ test('closed, mislabeled, malformed, or competing parked issues create no orphan
     assert.equal(claimHost.createCalls, 0, name);
     assert.deepEqual(writerHost.mutations, [], name);
   }
+});
+
+test('the production guard cannot self-activate for issue 44', async () => {
+  const guard = createCoordinationScopeGuard();
+  await assert.rejects(
+    guard({
+      phase: 'before-ref',
+      requested: 'claim:44',
+      issueNumber: 44,
+      branch: 'claim-v1/issue-44',
+      expectedBase: BASE,
+    }),
+    (error) =>
+      error instanceof CoordinationClaimError && error.code === 'scope-self-activation-forbidden',
+  );
+});
+
+test('fresh scope guards bracket the sole ref mutation and block all later issue writes on drift', async () => {
+  {
+    const claimHost = new MockClaimHost();
+    const writerHost = new MockWriterHost();
+    const calls = [];
+    const scopeGuard = async (request) => {
+      calls.push(request.phase);
+      assert.equal(request.expectedIssueBody, PARKED_BODY);
+      return {
+        requested: request.requested,
+        status: request.phase === 'before-ref' ? 'clear' : 'blocked',
+        blockingFindingIds: request.phase === 'before-ref' ? [] : ['scope-v1:test'],
+      };
+    };
+    const outcome = await executeCoordinationClaim(input(claimHost, writerHost, { scopeGuard }));
+    assert.deepEqual(calls, ['before-ref', 'after-ref']);
+    assert.equal(outcome.status, 'blocked');
+    assert.equal(outcome.stage, 'post-ref-scope-guard');
+    assert.equal(outcome.refMutations, 1);
+    assert.deepEqual(writerHost.mutations, []);
+  }
+  {
+    const claimHost = new MockClaimHost();
+    const writerHost = new MockWriterHost();
+    const scopeGuard = async ({ requested }) => ({
+      requested,
+      status: 'unknown',
+      blockingFindingIds: [],
+    });
+    await assert.rejects(
+      executeCoordinationClaim(input(claimHost, writerHost, { scopeGuard })),
+      (error) => error instanceof CoordinationClaimError && error.code === 'scope-gate-not-clear',
+    );
+    assert.equal(claimHost.createCalls, 0);
+    assert.deepEqual(writerHost.mutations, []);
+  }
+  {
+    const claimHost = new MockClaimHost();
+    const writerHost = new MockWriterHost();
+    const calls = [];
+    const scopeGuard = async (request) => {
+      calls.push(request.phase);
+      assert.equal(
+        request.expectedIssueBody,
+        request.phase === 'after-write'
+          ? prepareCoordinationClaim(prepareInput()).prepared.body
+          : PARKED_BODY,
+      );
+      return {
+        requested: request.requested,
+        status: request.phase === 'after-write' ? 'blocked' : 'clear',
+        blockingFindingIds: request.phase === 'after-write' ? ['scope-v1:late-race'] : [],
+      };
+    };
+    const outcome = await executeCoordinationClaim(input(claimHost, writerHost, { scopeGuard }));
+    assert.deepEqual(calls, ['before-ref', 'after-ref', 'after-write']);
+    assert.equal(outcome.status, 'blocked');
+    assert.equal(outcome.stage, 'post-write-scope-reconciliation');
+    assert.equal(outcome.refMutations, 1);
+    assert.deepEqual(writerHost.mutations, ['body', 'label', 'comment']);
+  }
+});
+
+test('an exact parked-body ref can enter guarded writer recovery without another ref mutation', async () => {
+  const claimHost = new MockClaimHost();
+  claimHost.ref = { ref: REF, object: { type: 'commit', sha: BASE } };
+  const writerHost = new MockWriterHost();
+  const calls = [];
+  const scopeGuard = async (request) => {
+    calls.push(request.phase);
+    assert.equal(
+      request.expectedIssueBody,
+      request.phase === 'after-write'
+        ? prepareCoordinationClaim(prepareInput()).prepared.body
+        : PARKED_BODY,
+    );
+    return { requested: request.requested, status: 'clear', blockingFindingIds: [] };
+  };
+  const outcome = await executeCoordinationClaim(input(claimHost, writerHost, { scopeGuard }));
+  assert.equal(outcome.status, 'complete');
+  assert.equal(outcome.stage, 'writer-recovery');
+  assert.equal(claimHost.createCalls, 0);
+  assert.deepEqual(calls, ['after-ref', 'after-write']);
+  assert.deepEqual(writerHost.mutations, ['body', 'label', 'comment']);
 });
 
 test('a complete schema-v2 readiness checkpoint with another marker remains valid pre-create history', async () => {

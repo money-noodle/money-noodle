@@ -32,6 +32,8 @@ export {
   validateClaimBranch,
 } from './coordination-schema.mjs';
 import { evaluateClaimCommentHistoryForBody, hasClaimSignal } from './coordination-lib.mjs';
+import { assertFreshScopeGate } from './coordination-scope.mjs';
+import { buildReport as buildCoordinationStatusReport } from './coordination-status.mjs';
 import {
   createGitHubCliHost,
   executeClaimEstablishmentWrite,
@@ -486,6 +488,45 @@ async function verifyRepositoryAndBase(claimHost, repository, expectedBase) {
   }
 }
 
+async function requireScopeGuard(scopeGuard, claim, phase, expectedIssueBody) {
+  if (!scopeGuard) return null;
+  const requested = `claim:${claim.issueNumber}`;
+  const scopeGate = await scopeGuard({
+    phase,
+    requested,
+    issueNumber: claim.issueNumber,
+    branch: claim.branch,
+    expectedBase: claim.expectedBase,
+    expectedIssueBody,
+  });
+  try {
+    assertFreshScopeGate(scopeGate, requested);
+  } catch {
+    throw new CoordinationClaimError(
+      'scope-gate-not-clear',
+      `fresh ${phase} scope gate ${requested} is not clear`,
+      { scopeGate },
+    );
+  }
+  return scopeGate;
+}
+
+export function createCoordinationScopeGuard() {
+  return async ({ phase, requested, issueNumber, branch, expectedBase, expectedIssueBody }) => {
+    // Issue #44 established its claim under the previously integrated protocol. Its own proposed
+    // controls can never retroactively qualify or activate that claim.
+    if (issueNumber === 44) {
+      throw new CoordinationClaimError(
+        'scope-self-activation-forbidden',
+        'issue #44 remains governed by the claim implementation already integrated on its current main',
+      );
+    }
+    return buildCoordinationStatusReport(requested, {
+      provisionalClaim: { phase, issueNumber, branch, expectedBase, expectedIssueBody },
+    }).scopeGate;
+  };
+}
+
 function result(status, stage, detail = {}) {
   return {
     status,
@@ -506,6 +547,7 @@ export async function executeCoordinationClaim({
   values,
   checkpointComment,
   operationId,
+  scopeGuard = null,
 }) {
   assertClaimHost(claimHost);
   assertWriterHost(writerHost);
@@ -537,9 +579,51 @@ export async function executeCoordinationClaim({
   if (present) {
     normalizeRef(present, claim.ref, expectedBase);
     if (issue.body === expectedBody) {
-      return result('orphaned', 'ref-present-parked-body', {
-        message: 'the deterministic ref exists while the issue remains parked; do not adopt it',
+      if (!scopeGuard) {
+        return result('orphaned', 'ref-present-parked-body', {
+          message: 'the deterministic ref exists while the issue remains parked; do not adopt it',
+        });
+      }
+      try {
+        await requireScopeGuard(scopeGuard, claim, 'after-ref', expectedBody);
+      } catch (error) {
+        return result('blocked', 'writer-recovery-scope-guard', {
+          message: error.message,
+          guard: error.details?.scopeGate,
+        });
+      }
+      const recovery = await executeClaimEstablishmentWrite({
+        host: writerHost,
+        issueNumber,
+        expectedBody,
+        values: claim.canonicalValues,
+        checkpointComment,
+        operationId,
+        claimSnapshotGuard: claimSnapshotGuard(claim, operationId, { stopOnCoherent: true }),
       });
+      if (recovery.status === 'complete') {
+        try {
+          await requireScopeGuard(scopeGuard, claim, 'after-write', claim.prepared.body);
+        } catch (error) {
+          return {
+            ...result('blocked', 'post-write-scope-reconciliation'),
+            writerMutations: recovery.mutations,
+            message: error.message,
+            guard: error.details?.scopeGate,
+            writer: recovery,
+          };
+        }
+      }
+      return {
+        ...result(
+          recovery.status,
+          recovery.status === 'complete' ? 'writer-recovery' : 'writer-partial',
+        ),
+        writerMutations: recovery.mutations,
+        message: recovery.message,
+        guard: recovery.guard,
+        writer: recovery,
+      };
     }
     if (issue.body !== claim.prepared.body) {
       return result('collision', 'ref-present-body-collision', {
@@ -566,6 +650,14 @@ export async function executeCoordinationClaim({
           'the exact complete claim already exists; continue only after normal reconciliation',
       });
     }
+    try {
+      await requireScopeGuard(scopeGuard, claim, 'after-ref', claim.prepared.body);
+    } catch (error) {
+      return result('blocked', 'writer-recovery-scope-guard', {
+        message: error.message,
+        guard: error.details?.scopeGate,
+      });
+    }
     const write = await executeClaimEstablishmentWrite({
       host: writerHost,
       issueNumber,
@@ -575,6 +667,19 @@ export async function executeCoordinationClaim({
       operationId,
       claimSnapshotGuard: claimSnapshotGuard(claim, operationId, { stopOnCoherent: true }),
     });
+    if (write.status === 'complete') {
+      try {
+        await requireScopeGuard(scopeGuard, claim, 'after-write', claim.prepared.body);
+      } catch (error) {
+        return {
+          ...result('blocked', 'post-write-scope-reconciliation'),
+          writerMutations: write.mutations,
+          message: error.message,
+          guard: error.details?.scopeGate,
+          writer: write,
+        };
+      }
+    }
     return {
       ...result(
         write.status,
@@ -610,6 +715,7 @@ export async function executeCoordinationClaim({
   if (!finalInspection.valid) {
     return result('collision', finalInspection.code, { message: finalInspection.message });
   }
+  await requireScopeGuard(scopeGuard, claim, 'before-ref', expectedBody);
   let created;
   try {
     created = await claimHost.createClaimRef({ ref: claim.ref, sha: expectedBase });
@@ -646,6 +752,16 @@ export async function executeCoordinationClaim({
     });
   }
 
+  try {
+    await requireScopeGuard(scopeGuard, claim, 'after-ref', expectedBody);
+  } catch (error) {
+    return result('blocked', 'post-ref-scope-guard', {
+      refMutations: 1,
+      message: error.message,
+      guard: error.details?.scopeGate,
+    });
+  }
+
   const write = await executeClaimEstablishmentWrite({
     host: writerHost,
     issueNumber,
@@ -655,6 +771,19 @@ export async function executeCoordinationClaim({
     operationId,
     claimSnapshotGuard: claimSnapshotGuard(claim, operationId, { stopOnCoherent: true }),
   });
+  if (write.status === 'complete') {
+    try {
+      await requireScopeGuard(scopeGuard, claim, 'after-write', claim.prepared.body);
+    } catch (error) {
+      return {
+        ...result('blocked', 'post-write-scope-reconciliation', { refMutations: 1 }),
+        writerMutations: write.mutations,
+        message: error.message,
+        guard: error.details?.scopeGate,
+        writer: write,
+      };
+    }
+  }
   return {
     status: write.status,
     stage:
@@ -814,6 +943,7 @@ export async function runCoordinationClaimCli({
   readText = (path) => readFile(path, 'utf8'),
   claimRunGh = runClaimGitHubCli,
   writerRunGh = runGitHubCli,
+  scopeGuard = null,
   writeOutput = (text) => process.stdout.write(text),
 }) {
   const options = parseCliArguments(argv);
@@ -862,6 +992,7 @@ export async function runCoordinationClaimCli({
     values,
     checkpointComment,
     operationId: options.operationId,
+    scopeGuard,
   });
   writeOutput(`${JSON.stringify(result, null, 2)}\n`);
   return result;
@@ -869,7 +1000,10 @@ export async function runCoordinationClaimCli({
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 if (isMain) {
-  runCoordinationClaimCli({ argv: process.argv.slice(2) })
+  runCoordinationClaimCli({
+    argv: process.argv.slice(2),
+    scopeGuard: createCoordinationScopeGuard(),
+  })
     .then((result) => {
       if (!['dry-run', 'complete'].includes(result.status)) process.exitCode = 2;
     })

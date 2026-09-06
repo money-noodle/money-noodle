@@ -57,7 +57,7 @@ function proposedFields(overrides = {}) {
   return {
     'Registry-Schema-Version': '2',
     'Parent-Plan': '#27',
-    'Scope-Paths': 'tools/**, docs/example.md',
+    'Scope-Paths': 'docs/example.md, tools/**',
     'Depends-On': 'none',
     'Dependency-Notes': 'none',
     'Integration-Owner': 'maintainer',
@@ -196,8 +196,8 @@ test('a deterministic body emitted by the parallel-work Issue Form validates as 
     '',
     '### Scope-Paths',
     '',
-    'tools/**',
     'docs/example.md',
+    'tools/**',
     '',
     '### Dependencies and integration',
     '',
@@ -232,7 +232,7 @@ test('a deterministic body emitted by the parallel-work Issue Form validates as 
   const result = validateWorkItemBody(formBody);
 
   assert.equal(result.valid, true, JSON.stringify(result.errors));
-  assert.deepEqual(result.normalized.scopePaths, ['tools/**', 'docs/example.md']);
+  assert.deepEqual(result.normalized.scopePaths, ['docs/example.md', 'tools/**']);
 });
 
 test('v2 requires every field and rejects removed local-path and hotspot fields', () => {
@@ -263,11 +263,15 @@ test('strict dependencies separate issue references from dependency prose', () =
 });
 
 test('scope paths are portable repository paths or explicit none, never local paths', () => {
-  assert.deepEqual(normalizeScopePaths('tools/**\ndocs/example.md'), {
+  assert.deepEqual(normalizeScopePaths('docs/example.md\ntools/**'), {
     status: 'declared',
-    paths: ['tools/**', 'docs/example.md'],
+    paths: ['docs/example.md', 'tools/**'],
+    entries: [
+      { status: 'valid', kind: 'exact', value: 'docs/example.md', path: 'docs/example.md' },
+      { status: 'valid', kind: 'prefix', value: 'tools/**', prefix: 'tools' },
+    ],
   });
-  assert.deepEqual(normalizeScopePaths('none'), { status: 'none', paths: [] });
+  assert.deepEqual(normalizeScopePaths('none'), { status: 'none', paths: [], entries: [] });
   for (const invalid of [
     '/Users/example/worktree',
     'C:/Users/example/worktree',
@@ -276,6 +280,7 @@ test('scope paths are portable repository paths or explicit none, never local pa
     './tools',
     'tools//example.mjs',
     'tools/a, tools/a',
+    'tools/**, docs/example.md',
     'path with spaces',
   ]) {
     assert.equal(normalizeScopePaths(invalid).status, 'invalid', invalid);

@@ -1,3 +1,5 @@
+import { normalizeScopePaths } from './coordination-scope.mjs';
+
 export const REGISTRY_SCHEMA_VERSION_FIELD = 'Registry-Schema-Version';
 export const CURRENT_REGISTRY_SCHEMA_VERSION = '2';
 export const CLAIM_BRANCH_VERSION = 1;
@@ -359,32 +361,7 @@ export function parseStrictDependencies(value) {
   return { status: 'declared', numbers };
 }
 
-export function normalizeScopePaths(value) {
-  if (typeof value !== 'string') return { status: 'invalid', paths: [] };
-  const trimmed = value.trim();
-  if (trimmed === 'none') return { status: 'none', paths: [] };
-  const paths = trimmed
-    .split(/\r?\n|,\s*/)
-    .map((entry) => entry.trim().replace(/^[-*]\s+/, ''))
-    .filter(Boolean);
-  if (
-    paths.length === 0 ||
-    new Set(paths).size !== paths.length ||
-    paths.some(
-      (path) =>
-        path.startsWith('/') ||
-        path.startsWith('~/') ||
-        /^[A-Za-z]:\//.test(path) ||
-        path.includes('\\') ||
-        path.split('/').some((segment) => ['', '.', '..'].includes(segment)) ||
-        /[\0\r\n,]/.test(path) ||
-        /\s/.test(path),
-    )
-  ) {
-    return { status: 'invalid', paths: [] };
-  }
-  return { status: 'declared', paths };
-}
+export { normalizeScopePaths };
 
 function validateCheckpoint(record, claimState, errors, { allowInitial = true } = {}) {
   requireFields(record, CHECKPOINT_EVIDENCE_FIELDS, errors);
