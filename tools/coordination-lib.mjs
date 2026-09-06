@@ -379,12 +379,15 @@ export function hasClaimSignal(body) {
   if (PORTABLE_CLAIM_FIELDS.some((name) => new RegExp(`^${escapeRegExp(name)}:`, "m").test(body))) {
     return true;
   }
-  return /\bclaim(?:ed|ing)?\b|\bcheck[- ]?in\b|\bcheckpoint\b|\b(?:started|starting|began|beginning)\s+(?:the\s+)?work\b|\b(?:take|taking|took|assume|assuming)\s+ownership\b/i.test(
-    body,
-  );
+  return /\bclaim(?:ed|ing)?\b|\bcheck[- ]?in\b|\bcheckpoint\b/i.test(body) || hasOwnershipSignal(body);
 }
 
-function meaningful(value) {
+// Coarse phrase evidence, including quoted or negated wording; not proof of intent.
+export function hasOwnershipSignal(body) {
+  return /\b(?:started|starting|began|beginning)\s+(?:the\s+)?work\b|\b(?:take|taking|took|assume|assuming)\s+ownership\b/i.test(body);
+}
+
+export function meaningful(value) {
   return typeof value === "string" && !UNCLAIMED_VALUES.has(value.trim().toLowerCase());
 }
 

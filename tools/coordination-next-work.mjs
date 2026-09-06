@@ -2,9 +2,15 @@ import {
   analyzeWorkItem,
   claimField,
   deadlineStatus,
+  hasOwnershipSignal,
+  meaningful,
   parseDependencies,
 } from './coordination-lib.mjs';
-import { isoInstantMilliseconds } from './coordination-schema.mjs';
+import {
+  isoInstantMilliseconds,
+  V1_PORTABLE_CLAIM_FIELDS,
+  validateStandaloneCheckpointEvidence,
+} from './coordination-schema.mjs';
 import {
   compareUtf8,
   normalizeScopePaths,
@@ -20,8 +26,6 @@ const ownershipFields = [
   'Claim-Host',
   'Claim-Worktree',
 ];
-const meaningful = (value) =>
-  typeof value === 'string' && !['', 'unclaimed', 'missing', 'none'].includes(value);
 const numeric = (values) => [...new Set(values)].sort((a, b) => a - b);
 const reason = (code, message, issueNumber) => ({
   code,
@@ -54,12 +58,16 @@ export function dependencyIssueNumbers(issues) {
 function categoryFor(item) {
   if (['active', 'review'].includes(item.claimState)) return 'agent-owed';
   if (item.claimState === 'blocked') {
-    if (
-      item.registrySchema.version === '1' &&
-      ownershipFields.some((field) => meaningful(item.claim[field]))
-    )
-      return 'agent-owed';
-    return 'principal-owed';
+    const version = item.registrySchema.version;
+    if (!['1', '2'].includes(version)) return 'unknown';
+    const fields = ownershipFields.filter(
+      (field) => field !== (version === '1' ? 'Claim-Host' : 'Claim-Worktree'),
+    );
+    const owned = fields.map((field) => meaningful(item.claim[field]));
+    if (owned.every((value) => !value) && meaningful(item.integrationOwner))
+      return 'principal-owed';
+    if (version === '1' && owned.every(Boolean)) return 'agent-owed';
+    return 'unknown';
   }
   if (['proposed', 'ready'].includes(item.claimState)) return 'parked';
   if (['done', 'abandoned'].includes(item.claimState)) return 'terminal';
@@ -197,7 +205,68 @@ function closureFor(root, nodes, issues, commentsByIssue, remoteClaims) {
   };
 }
 
-function planningScopeFor(item, workItems, issues, scope, known) {
+function unresolvedPlanningIntent(item, comments) {
+  // These body states already reserve scope; their existing reconciliation controls ambiguity.
+  if (['active', 'review', 'blocked'].includes(item.claimState)) return [];
+  const reasons = [];
+  for (const evidence of item.claimComments.filter(
+    ({ reconciliation }) => reconciliation === 'unresolved',
+  )) {
+    const comment = comments.find(({ id }) => id === evidence.id);
+    const fields = evidence.structuredFields;
+    const state = fields['Claim-State'];
+    const version =
+      Object.hasOwn(fields, 'Claim-Worktree') && !Object.hasOwn(fields, 'Claim-Host')
+        ? '1'
+        : item.registrySchema.version;
+    const legacyParked =
+      version === '1' &&
+      ['proposed', 'ready'].includes(state) &&
+      [
+        ...V1_PORTABLE_CLAIM_FIELDS.filter((field) => field !== 'Claimed-At'),
+        'Checkpoint-At',
+        'Checkpoint-Commit',
+      ].every((field) => Object.hasOwn(fields, field)) &&
+      ownershipFields.every((field) => !meaningful(fields[field])) &&
+      !meaningful(fields['Check-In-By']) &&
+      !meaningful(fields['Claimed-At']);
+    const standalone = comment && validateStandaloneCheckpointEvidence(comment.body, version);
+    const parked = ['proposed', 'ready'].includes(state);
+    const nonOwning =
+      (parked || ['done', 'abandoned'].includes(state)) &&
+      (legacyParked || standalone?.valid) &&
+      (!parked || ownershipFields.every((field) => !meaningful(fields[field])));
+    if (
+      !comment ||
+      hasOwnershipSignal(comment.body) ||
+      !nonOwning ||
+      evidence.duplicateFields.length ||
+      isoInstantMilliseconds(evidence.createdAt) !== isoInstantMilliseconds(evidence.updatedAt)
+    ) {
+      reasons.push(
+        reason(
+          'planning-ownership-intent',
+          `unresolved ownership evidence in comment ${evidence.id} on #${item.number}`,
+          item.number,
+        ),
+      );
+    }
+  }
+  return reasons;
+}
+
+function mappedRefContradiction(number, remoteClaims) {
+  return (
+    remoteClaims.questions.some((entry) => entry.issueNumber === number) ||
+    remoteClaims.refs.some(
+      (entry) =>
+        entry.mapping?.issueNumber === number &&
+        !['preserved-non-ownership', 'current-agent-claim-evidence'].includes(entry.disposition),
+    )
+  );
+}
+
+function planningScopeFor(item, workItems, issues, scope, known, remoteClaims, intentByNumber) {
   const reasons = [];
   if (!known)
     return {
@@ -224,14 +293,12 @@ function planningScopeFor(item, workItems, issues, scope, known) {
   let unknown = false;
   for (const other of workItems) {
     if (other.number === item.number) continue;
+    const intent = intentByNumber.get(other.number) ?? [];
+    const refContradiction = mappedRefContradiction(other.number, remoteClaims);
     const plausibleOwnership =
       ownershipFields.some((field) => meaningful(other.claim[field])) ||
-      other.claimComments.some(
-        (comment) =>
-          comment.reconciliation === 'unresolved' &&
-          (Object.keys(comment.structuredFields).length === 0 ||
-            ownershipFields.some((field) => meaningful(comment.structuredFields[field]))),
-      );
+      intent.length > 0 ||
+      refContradiction;
     if (!['active', 'review', 'blocked'].includes(other.claimState) && !plausibleOwnership)
       continue;
     const reservation = normalizeScopePaths(
@@ -241,8 +308,8 @@ function planningScopeFor(item, workItems, issues, scope, known) {
     if (scopeSetsIntersect(declaration.entries, reservation.entries ?? [])) {
       reasons.push(
         reason(
-          'planning-reservation-overlap',
-          `declaration overlaps reservation #${other.number}; future changes are not observed`,
+          refContradiction ? 'planning-ref-reservation-overlap' : 'planning-reservation-overlap',
+          `declaration overlaps reservation #${other.number}${refContradiction ? ' with contradictory mapped ref evidence' : ''}; future changes are not observed`,
           other.number,
         ),
       );
@@ -264,6 +331,7 @@ function planningScopeFor(item, workItems, issues, scope, known) {
         !other.registrySchema.valid ||
         other.reconciliation !== 'consistent' ||
         !['declared', 'none'].includes(reservation.status) ||
+        intent.length > 0 ||
         (categoryFor(other) === 'agent-owed' && observed?.status !== 'complete'))
     ) {
       unknown = true;
@@ -321,7 +389,11 @@ export function computeNextWork({
     scope.status === 'complete' &&
     !remoteClaims.questions.some((entry) => entry.issueNumber === undefined);
   const nodes = new Map(workItems.map((item) => [item.number, item]));
-  for (const number of dependencyIssueNumbers(issues)) {
+  const analyzedNumbers = new Set([
+    ...dependencyIssueNumbers(issues),
+    ...remoteClaims.refs.map((entry) => entry.mapping?.issueNumber).filter(Number.isSafeInteger),
+  ]);
+  for (const number of analyzedNumbers) {
     if (!nodes.has(number) && issueByNumber.has(number))
       nodes.set(
         number,
@@ -334,6 +406,16 @@ export function computeNextWork({
         ),
       );
   }
+  const workNumbers = new Set(workItems.map(({ number }) => number));
+  const reservations = [...nodes.values()].filter(
+    (item) => workNumbers.has(item.number) || mappedRefContradiction(item.number, remoteClaims),
+  );
+  const intentByNumber = new Map(
+    reservations.map((item) => [
+      item.number,
+      unresolvedPlanningIntent(item, commentsByIssue.get(item.number) ?? []),
+    ]),
+  );
   const diagnostics = [];
   if (!known)
     diagnostics.push(
@@ -350,9 +432,19 @@ export function computeNextWork({
       const closure = closureFor(item.number, nodes, issueByNumber, commentsByIssue, remoteClaims);
       const planningScope =
         category === 'parked'
-          ? planningScopeFor(item, workItems, issueByNumber, scope, known)
+          ? planningScopeFor(
+              item,
+              reservations,
+              issueByNumber,
+              scope,
+              known,
+              remoteClaims,
+              intentByNumber,
+            )
           : { status: 'not-applicable', reasons: [] };
-      const reasons = [...closure.reasons, ...planningScope.reasons];
+      const ownIntent = category === 'parked' ? (intentByNumber.get(item.number) ?? []) : [];
+      const reasons = [...closure.reasons, ...planningScope.reasons, ...ownIntent];
+      diagnostics.push(...ownIntent);
       if (category !== 'parked')
         reasons.push(
           reason(
@@ -377,7 +469,10 @@ export function computeNextWork({
       if (closure.evidence.status === 'unknown')
         diagnostics.push(...closure.reasons.filter(({ code }) => code !== 'dependency-open'));
       const uncertain =
-        !known || closure.evidence.status === 'unknown' || planningScope.status === 'unknown';
+        !known ||
+        closure.evidence.status === 'unknown' ||
+        planningScope.status === 'unknown' ||
+        ownIntent.length > 0;
       return {
         number: item.number,
         category,

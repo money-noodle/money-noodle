@@ -2294,6 +2294,7 @@ test('legacy principal work is always visible without invented waiting ages or n
     /^(Claim-(?:Harness|Run-ID|Agent|Branch|Worktree)|Claimed-At|Check-In-By): .*$/gm,
     '$1: unclaimed',
   );
+  principal.body = principal.body.replace('Claim-Agent: unclaimed', 'Claim-Agent: Unclaimed');
   const active = v2ActiveIssue(73);
   const responses = nextWorkResponses([principal, active], active);
   const result = runStatus(t, { responses, args: ['--json', '--gate', 'checkpoint:73'] });
@@ -2314,4 +2315,58 @@ test('legacy principal work is always visible without invented waiting ages or n
   assert.equal(ordinaryBoard.exitCode, 0);
   const unknown = runStatus(t, { responses: { ...responses, auth: { status: 1 } } });
   assert.match(unknown.stdout, /Principal-owed work \(never expires\)\nunavailable/);
+});
+
+test('R1 advisory ownership signals refuse self and peers without changing selected gates', (t) => {
+  const active = v2ActiveIssue(73);
+  const peer = v2ReadyIssue(9, { 'Scope-Paths': 'docs/shared.md' });
+  const claimant = v2ReadyIssue(10, { 'Scope-Paths': 'docs/shared.md' });
+  for (const [narrative, expectedCandidates] of [
+    ['Claim after the full protocol.', [9, 10]],
+    ['I am taking ownership', []],
+  ]) {
+    const responses = nextWorkResponses([active, peer, claimant], active);
+    responses[`api:${commentEndpoint(10)}`] = {
+      stdout: JSON.stringify([
+        [restCheckpointComment(claimant, 10001, `${claimant.body}\n${narrative}`)],
+      ]),
+    };
+    for (const args of [[], ['--gate', 'checkpoint:73']]) {
+      const result = runStatus(t, { responses, args: ['--json', ...args] });
+      const report = JSON.parse(result.stdout);
+      assert.equal(result.exitCode, 0, narrative);
+      assert.deepEqual(report.warnings, []);
+      assert.equal(report.scopeGate.status, 'clear');
+      assert.deepEqual(report.registry.nextWork.candidates, expectedCandidates);
+      assert.equal(
+        report.registry.workItems.find(({ number }) => number === 10).triage,
+        'candidate',
+      );
+    }
+  }
+});
+
+test('R2 overlapping orphan scope never becomes advisory clearance or changes existing warning gates', (t) => {
+  const orphan = v2ReadyIssue(9, { 'Scope-Paths': 'docs/shared.md' });
+  const peer = v2ReadyIssue(10, { 'Scope-Paths': 'docs/shared.md' });
+  const disjoint = v2ReadyIssue(11, { 'Scope-Paths': 'docs/disjoint.md' });
+  const active = v2ActiveIssue(73);
+  const responses = nextWorkResponses([active, orphan, peer, disjoint], active);
+  responses[`api:${CLAIM_REFS_ENDPOINT}`] = {
+    stdout: JSON.stringify([
+      [restRef('refs/heads/claim-v1/issue-9'), restRef('refs/heads/claim-v1/issue-73')],
+    ]),
+  };
+  for (const args of [[], ['--gate', 'checkpoint:73']]) {
+    const result = runStatus(t, { responses, args: ['--json', ...args] });
+    const report = JSON.parse(result.stdout);
+    assert.equal(result.exitCode, 2);
+    assert(report.warnings.some(({ code }) => code === 'orphaned-claim-ref'));
+    assert.equal(report.scopeGate.status, 'unknown');
+    assert.deepEqual(report.registry.nextWork.candidates, [11]);
+    assert.equal(
+      report.registry.nextWork.items.find(({ number }) => number === 10).planningScope.status,
+      'blocked',
+    );
+  }
 });

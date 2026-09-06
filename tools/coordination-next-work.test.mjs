@@ -329,3 +329,147 @@ test('unstructured plausible ownership cannot silently disappear from planning r
   assert.equal(row(result, 1).planningScope.status, 'unknown');
   assert.deepEqual(result.candidates, []);
 });
+
+test('R1 partial active comments and checkpoint ownership prose reserve self and peers', () => {
+  const shared = { 'Scope-Paths': 'files/shared' };
+  const other = issue(2, 'ready', shared);
+  for (const body of [
+    'Claim-State: active',
+    'Checkpoint-At: 2026-09-06T11:00:00Z\nI am taking ownership',
+    `${other.body}\nI am taking ownership`,
+  ]) {
+    const comment = {
+      id: 123,
+      author: 'other',
+      body,
+      createdAt: '2026-09-06T11:00:00Z',
+      updatedAt: '2026-09-06T11:00:00Z',
+    };
+    const result = board([issue(1, 'ready', shared), other], {
+      comments: new Map([
+        [1, []],
+        [2, [comment]],
+      ]),
+    });
+    assert.deepEqual(result.candidates, [], body);
+    assert.notEqual(row(result, 1).planningScope.status, 'clear');
+    assert.equal(row(result, 2).availability, 'unknown');
+    assert(
+      row(result, 2).exclusionReasons.some(({ code }) => code === 'planning-ownership-intent'),
+    );
+  }
+});
+
+test('R1 coherent parked and terminal non-owning history remains advisory-only and eligible', () => {
+  const ready = issue(2);
+  for (const body of [
+    ready.body,
+    `${ready.body}\nClaim after the full protocol.`,
+    issue(2, 'done').body,
+  ]) {
+    const comment = (id, body) => ({
+      id,
+      author: 'maintainer',
+      body,
+      createdAt: `2026-09-06T11:0${id}:00Z`,
+      updatedAt: `2026-09-06T11:0${id}:00Z`,
+    });
+    const result = board([issue(1), ready], {
+      comments: new Map([
+        [1, []],
+        [2, [comment(1, body), comment(2, ready.body)]],
+      ]),
+    });
+    assert.deepEqual(result.candidates, [1, 2], body);
+  }
+});
+
+test('R2 mapped ref reservations exclude overlap and unknown scope, not provable disjointness', () => {
+  const refs = [{ ref: 'refs/heads/claim-v1/issue-1', objectType: 'commit', sha: 'a'.repeat(40) }];
+  const candidate = issue(2, 'ready', { 'Scope-Paths': 'files/shared' });
+  const overlapping = board([issue(1, 'ready', { 'Scope-Paths': 'files/shared' }), candidate], {
+    refs,
+  });
+  assert.deepEqual(overlapping.candidates, []);
+  assert(
+    row(overlapping, 2).exclusionReasons.some(
+      ({ code }) => code === 'planning-ref-reservation-overlap',
+    ),
+  );
+  assert.deepEqual(board([issue(1), candidate], { refs }).candidates, [2]);
+  assert.equal(
+    row(board([issue(1, 'ready', {}, '1'), candidate], { refs }), 2).planningScope.status,
+    'unknown',
+  );
+  const closed = issue(1, 'done', { 'Claim-Agent': 'partial' });
+  assert.equal(row(board([closed, candidate], { refs }), 2).planningScope.status, 'unknown');
+});
+
+test('R3 partial blocked identity is unknown and canonical legacy unclaimed remains principal', () => {
+  for (const version of ['1', '2']) {
+    const partial = board([issue(3, 'blocked', { 'Claim-Agent': 'other' }, version)]);
+    assert.equal(row(partial, 3).category, 'unknown');
+    assert.equal(row(partial, 3).liveness.kind, 'unknown');
+    assert.deepEqual(partial.principalOwed, []);
+  }
+  for (const sentinel of ['Unclaimed', ' UNCLAIMED ', 'None', 'missing']) {
+    const result = board([issue(6, 'blocked', { 'Claim-Agent': sentinel }, '1')]);
+    assert.equal(row(result, 6).category, 'principal-owed', sentinel);
+    assert.equal(row(result, 6).liveness.status, 'unknown');
+    assert.deepEqual(result.principalOwed, [6]);
+  }
+});
+
+test('R3 missing or invalid liveness alone does not erase otherwise established ownership', () => {
+  for (const checkIn of ['unclaimed', 'yesterday']) {
+    const owned = issue(1, 'active', { 'Check-In-By': checkIn }, '1');
+    owned.body = owned.body.replaceAll('State: active', 'State: blocked');
+    owned.labels = ['work:blocked'];
+    assert.equal(row(board([owned]), 1).category, 'agent-owed');
+  }
+  for (const waiting of ['unclaimed', 'yesterday', '2026-09-07T12:00:00Z']) {
+    const result = board([issue(2, 'blocked', { 'Waiting-Since': waiting })]);
+    assert.equal(row(result, 2).category, 'principal-owed');
+    assert.deepEqual(result.principalOwed, [2]);
+  }
+});
+
+test('pure signal extraction preserves the existing claim-signal language', async () => {
+  const { hasClaimSignal, hasOwnershipSignal, PORTABLE_CLAIM_FIELDS } =
+    await import('./coordination-lib.mjs');
+  const old = (body) =>
+    PORTABLE_CLAIM_FIELDS.some((name) => new RegExp(`^${name}:`, 'm').test(body)) ||
+    /\bclaim(?:ed|ing)?\b|\bcheck[- ]?in\b|\bcheckpoint\b|\b(?:started|starting|began|beginning)\s+(?:the\s+)?work\b|\b(?:take|taking|took|assume|assuming)\s+ownership\b/i.test(
+      body,
+    );
+  const samples = [
+    '',
+    'unrelated',
+    'claimed',
+    'claiming',
+    'check-in',
+    'check in',
+    'checkpoint',
+    'Claim after the full protocol.',
+    'I am taking ownership',
+    'not taking ownership',
+    'Claim-State: active',
+    ...PORTABLE_CLAIM_FIELDS.map((field) => `${field}: unclaimed`),
+    ...['started', 'starting', 'began', 'beginning'].flatMap((word) => [
+      `${word} work`,
+      `${word} the work`,
+    ]),
+    ...['take', 'taking', 'took', 'assume', 'assuming'].map((word) => `${word} ownership`),
+  ];
+  for (const value of samples.flatMap((value) => [
+    value,
+    value.toUpperCase(),
+    `prefix\n${value}\nsuffix`,
+  ]))
+    assert.equal(hasClaimSignal(value), old(value), value);
+  assert.equal(hasOwnershipSignal('Claim after the full protocol.'), false);
+  assert.equal(
+    hasOwnershipSignal('Checkpoint-At: 2026-09-06T11:00:00Z\nI am taking ownership'),
+    true,
+  );
+});
