@@ -630,7 +630,7 @@ function classify(item) {
   return item.claimState || "question";
 }
 
-function analyzeWorkItem(issue, comments, issueByNumber, local, nowMs) {
+export function analyzeWorkItem(issue, comments, issueByNumber, local, nowMs) {
   const registrySchema = validateWorkItemBody(issue.body);
   const portableClaimFields = claimFieldsForVersion(registrySchema.version);
   const ownershipFields = ownershipFieldsForVersion(registrySchema.version);
@@ -989,21 +989,23 @@ export function reconcileRemoteClaims({
     const branch = fields['Claim-Branch'];
     if (!schema.valid) {
       evidence.disposition = 'question';
-      questions.push(
-        question('claim-ref-issue-malformed', `${remote.ref} maps to a malformed issue record`),
-      );
+      questions.push({
+        issueNumber: parsed.issueNumber,
+        ...question('claim-ref-issue-malformed', `${remote.ref} maps to a malformed issue record`),
+      });
     } else if (['proposed', 'ready'].includes(state)) {
       Object.assign(evidence, {
         disposition: 'orphaned',
         currentOwnership: false,
         lifecycleMonitoring: false,
       });
-      questions.push(
-        question(
+      questions.push({
+        issueNumber: parsed.issueNumber,
+        ...question(
           'orphaned-claim-ref',
           `${remote.ref} exists while issue #${parsed.issueNumber} is ${state}; do not adopt or release it automatically`,
         ),
-      );
+      });
     } else if (
       schema.version === '2' &&
       ((state === 'blocked' && branch === 'unclaimed') ||
@@ -1017,12 +1019,13 @@ export function reconcileRemoteClaims({
       });
     } else if (branch !== parsed.branch) {
       evidence.disposition = 'question';
-      questions.push(
-        question(
+      questions.push({
+        issueNumber: parsed.issueNumber,
+        ...question(
           'claim-ref-branch-mismatch',
           `${remote.ref} disagrees with issue #${parsed.issueNumber} Claim-Branch ${branch}`,
         ),
-      );
+      });
     } else {
       Object.assign(evidence, {
         disposition: 'current-agent-claim-evidence',

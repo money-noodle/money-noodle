@@ -1168,7 +1168,10 @@ test('routed PR findings block only selected integration gates while board and d
     html_url: `https://example.invalid/pull/${number}`,
   }));
   const responses = defaultResponses();
-  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE, active]]) };
+  const opportunity = v2ReadyIssue(90, { 'Scope-Paths': '.github/workflows/ci.yml' });
+  responses[`api:${ISSUES_ENDPOINT}`] = {
+    stdout: JSON.stringify([[PLAN_ISSUE, active, opportunity]]),
+  };
   responses[`api:${CLAIM_REFS_ENDPOINT}`] = {
     stdout: JSON.stringify([[restRef('refs/heads/claim-v1/issue-44')]]),
   };
@@ -1261,6 +1264,10 @@ test('routed PR findings block only selected integration gates while board and d
       ['scope-v1:pr-pr:31:32', 'scope-v1:pr-pr:31:33', 'scope-v1:pr-pr:32:33'],
     );
     assert.equal(report.registry.scopeFindings[0].globalPublicationBlock, false);
+    const opportunityRow = report.registry.nextWork.items.find(({ number }) => number === 90);
+    assert.equal(opportunityRow.availability, 'excluded');
+    assert.equal(opportunityRow.planningScope.status, 'blocked');
+    assert(opportunityRow.exclusionReasons.some(({ code }) => code === 'planning-pr-overlap'));
   }
   const human = runStatus(t, { responses });
   assert.equal(human.exitCode, 0);
@@ -2153,4 +2160,158 @@ test('status uses only read-only commands and does not change local files', (t) 
     ),
     result.invocations.join('\n'),
   );
+});
+
+function nextWorkResponses(issues, active = null) {
+  const responses = defaultResponses();
+  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE, ...issues]]) };
+  responses[`api:${CLAIM_REFS_ENDPOINT}`] = {
+    stdout: JSON.stringify([active ? [restRef(`refs/heads/claim-v1/issue-${active.number}`)] : []]),
+  };
+  if (active)
+    responses[`api:${commentEndpoint(active.number)}`] = {
+      stdout: JSON.stringify([[restCheckpointComment(active)]]),
+    };
+  const sha = 'a'.repeat(40);
+  const tree = 'b'.repeat(40);
+  const blob = 'c'.repeat(40);
+  responses[`api:repos/${REPOSITORY}/git/commits/${sha}`] = {
+    stdout: JSON.stringify({ sha, tree: { sha: tree } }),
+  };
+  responses[`api:repos/${REPOSITORY}/git/trees/${tree}?recursive=1`] = {
+    stdout: JSON.stringify({
+      sha: tree,
+      truncated: false,
+      tree: [
+        { path: '.github', mode: '040000', type: 'tree', sha: '6'.repeat(40) },
+        { path: '.github/coordination', mode: '040000', type: 'tree', sha: '7'.repeat(40) },
+        {
+          path: '.github/coordination/serializing-paths.v1.json',
+          mode: '100644',
+          type: 'blob',
+          sha: blob,
+        },
+      ],
+    }),
+  };
+  responses[`api:repos/${REPOSITORY}/git/blobs/${blob}`] = {
+    stdout: JSON.stringify({
+      sha: blob,
+      encoding: 'base64',
+      content: Buffer.from(SERIALIZING_SOURCE).toString('base64'),
+    }),
+  };
+  return responses;
+}
+
+test('computed parked opportunities do not supply standalone claim gate clearance', (t) => {
+  const ready = v2ReadyIssue(10, { 'Scope-Paths': 'docs/next.md' });
+  const proposed = v2ReadyIssue(9, {
+    'Scope-Paths': 'docs/proposal.md',
+    'Claim-State': 'proposed',
+    'Checkpoint-State': 'proposed',
+  });
+  proposed.labels = [{ name: 'work:proposed' }];
+  const active = v2ActiveIssue(73);
+  const responses = nextWorkResponses([ready, active, proposed], active);
+  const result = runStatus(t, { responses, args: ['--json'] });
+  const report = JSON.parse(result.stdout);
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(report.registry.nextWork.candidates, [9, 10]);
+  assert.equal(report.registry.workItems.find(({ number }) => number === 9).triage, 'proposed');
+  assert.equal(
+    report.registry.workItems.find(({ number }) => number === 10).scope.status,
+    'unavailable',
+  );
+  const selected = runStatus(t, { responses, args: ['--json', '--gate', 'claim:10'] });
+  assert.equal(selected.exitCode, 2);
+  assert.deepEqual(JSON.parse(selected.stdout).scopeGate, {
+    requested: 'claim:10',
+    status: 'unknown',
+    blockingFindingIds: [],
+  });
+  assert.deepEqual(JSON.parse(selected.stdout).registry.nextWork.candidates, [9, 10]);
+});
+
+test('new closed-closure errors are local advisory refusals and board-only failures, not gate mutations', (t) => {
+  const active = v2ActiveIssue(73);
+  const ready = v2ReadyIssue(10, { 'Scope-Paths': 'docs/next.md' });
+  const dependent = v2ReadyIssue(11, { 'Scope-Paths': 'docs/later.md', 'Depends-On': '#12' });
+  const done = (number, dependency) => ({
+    ...v2ReadyIssue(number, {
+      'Claim-State': 'done',
+      'Checkpoint-State': 'done',
+      'Checkpoint-At': LONG_PAST,
+      'Depends-On': `#${dependency}`,
+    }),
+    state: 'closed',
+    labels: [{ name: 'work:done' }],
+  });
+  const responses = nextWorkResponses(
+    [active, ready, dependent, done(12, 13), done(13, 12)],
+    active,
+  );
+  const result = runStatus(t, { responses, args: ['--json'] });
+  const report = JSON.parse(result.stdout);
+  assert.equal(result.exitCode, 2);
+  assert.deepEqual(report.warnings, []);
+  assert.deepEqual(report.registry.nextWork.candidates, [10]);
+  assert.equal(
+    report.registry.nextWork.items.find(({ number }) => number === 11).availability,
+    'unknown',
+  );
+  for (const number of [12, 13])
+    assert.equal(
+      result.invocations.filter((call) => call.endsWith(commentEndpoint(number))).length,
+      2,
+    );
+  const selected = runStatus(t, { responses, args: ['--json', '--gate', 'checkpoint:73'] });
+  assert.equal(selected.exitCode, 0);
+  assert.deepEqual(JSON.parse(selected.stdout).scopeGate, {
+    requested: 'checkpoint:73',
+    status: 'clear',
+    blockingFindingIds: [],
+  });
+  const human = runStatus(t, { responses });
+  assert.equal(human.exitCode, 2);
+  assert.match(human.stdout, /requested=board status=clear blockers=none exit=2/);
+  const race = structuredClone(responses);
+  race[`api:${commentEndpoint(13)}`] = {
+    sequence: [
+      { stdout: '[[]]' },
+      { stdout: JSON.stringify([[restCheckpointComment(done(13, 12), 12345, 'late comment')]]) },
+    ],
+  };
+  const raced = runStatus(t, { responses: race, args: ['--json'] });
+  assert.equal(raced.exitCode, 2);
+  assert.equal(JSON.parse(raced.stdout).registry.nextWork.status, 'unknown');
+  assert.deepEqual(JSON.parse(raced.stdout).registry.nextWork.candidates, []);
+});
+
+test('legacy principal work is always visible without invented waiting ages or new gate warnings', (t) => {
+  const principal = claimIssue({ number: 20, state: 'blocked' });
+  principal.body = principal.body.replace(
+    /^(Claim-(?:Harness|Run-ID|Agent|Branch|Worktree)|Claimed-At|Check-In-By): .*$/gm,
+    '$1: unclaimed',
+  );
+  const active = v2ActiveIssue(73);
+  const responses = nextWorkResponses([principal, active], active);
+  const result = runStatus(t, { responses, args: ['--json', '--gate', 'checkpoint:73'] });
+  const report = JSON.parse(result.stdout);
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(report.warnings, []);
+  assert.deepEqual(report.registry.nextWork.principalOwed, [20]);
+  const waiting = report.registry.nextWork.items.find(({ number }) => number === 20).liveness;
+  assert.equal(waiting.status, 'unknown');
+  assert.equal(waiting.ageMs, null);
+  const human = runStatus(t, { responses, args: ['--gate', 'checkpoint:73'] });
+  assert.equal(human.exitCode, 0);
+  assert.match(human.stdout, /#20 owner=maintainer waiting-age-ms=unknown waiting-status=unknown/);
+  assert(
+    human.stdout.indexOf('## Principal-owed work') < human.stdout.indexOf('## Computed next work'),
+  );
+  const ordinaryBoard = runStatus(t, { responses });
+  assert.equal(ordinaryBoard.exitCode, 0);
+  const unknown = runStatus(t, { responses: { ...responses, auth: { status: 1 } } });
+  assert.match(unknown.stdout, /Principal-owed work \(never expires\)\nunavailable/);
 });
