@@ -17,9 +17,12 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  BUFFER_EXCEEDED_CODE,
+  SUBPROCESS_MAX_BUFFER_BYTES,
   buildReport,
   isExactSameOperationTransitionQuestion,
   readLocalObservedAgainstMain,
+  runSubprocess,
 } from './coordination-status.mjs';
 import {
   CANONICAL_REPOSITORY,
@@ -358,9 +361,21 @@ if (!response) {
   process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
   process.exit(127);
 }
-if (response.stdout) process.stdout.write(response.stdout);
-if (response.stderr) process.stderr.write(response.stderr);
-process.exit(response.status ?? 0);
+if (response.stdoutBytes) {
+  const chunk = Buffer.alloc(1024 * 1024, 120);
+  let remaining = response.stdoutBytes;
+  while (remaining > 0) {
+    const size = Math.min(remaining, chunk.length);
+    process.stdout.write(size === chunk.length ? chunk : chunk.subarray(0, size));
+    remaining -= size;
+  }
+} else {
+  if (response.stdout) process.stdout.write(response.stdout);
+  if (response.stderr) process.stderr.write(response.stderr);
+}
+// Exit by code rather than process.exit so a response larger than the pipe buffer is
+// delivered whole; process.exit would truncate it and fake a malformed registry.
+process.exitCode = response.status ?? 0;
 `,
   );
 }
@@ -394,6 +409,9 @@ function runStatus(
     cwd: directory,
     encoding: 'utf8',
     env: { PATH: directory, HOME: directory, INVOCATION_LOG: invocationLog },
+    // The harness must not reintroduce the defect it exists to prove fixed: reading the
+    // tool's own output at Node's 1 MiB default would fail on any oversized registry.
+    maxBuffer: SUBPROCESS_MAX_BUFFER_BYTES,
   });
 
   assert.equal(result.error, undefined, `could not run status tool: ${result.error?.message}`);
@@ -2369,4 +2387,101 @@ test('R2 overlapping orphan scope never becomes advisory clearance or changes ex
       'blocked',
     );
   }
+});
+
+// Regression coverage for the inherited 1 MiB child-process buffer that silently turned
+// every gate `unknown` once the registry payload crossed it.
+const LEGACY_DEFAULT_MAX_BUFFER_BYTES = 1024 * 1024;
+
+test('subprocess reads use an explicit generous ceiling instead of the inherited default', () => {
+  assert.equal(SUBPROCESS_MAX_BUFFER_BYTES, 64 * 1024 * 1024);
+  assert.ok(SUBPROCESS_MAX_BUFFER_BYTES >= LEGACY_DEFAULT_MAX_BUFFER_BYTES * 32);
+
+  const oversized = LEGACY_DEFAULT_MAX_BUFFER_BYTES * 4;
+  const read = runSubprocess(process.execPath, [
+    '-e',
+    `process.stdout.write('x'.repeat(${oversized}))`,
+  ]);
+
+  assert.equal(read.error, undefined);
+  assert.equal(read.status, 0);
+  assert.equal(read.stdout.length, oversized);
+});
+
+test('a genuine buffer overrun fails closed with a distinct named error', () => {
+  const emitMoreThanFits = ['-e', "process.stdout.write('x'.repeat(4096))"];
+
+  for (const options of [{ maxBuffer: 64 }, { maxBuffer: 64, allowFailure: true }]) {
+    assert.throws(
+      () => runSubprocess(process.execPath, emitMoreThanFits, options),
+      (error) => {
+        assert.equal(error.code, BUFFER_EXCEEDED_CODE);
+        assert.match(error.message, /exceeded the 64-byte subprocess read limit \(ENOBUFS\)/);
+        assert.match(error.message, /fails closed and no gate result may be inferred/);
+        assert.match(error.message, /outgrown the configured buffer/);
+        return true;
+      },
+      `allowFailure must never soften a buffer overrun: ${JSON.stringify(options)}`,
+    );
+  }
+});
+
+test('an oversized registry payload reports the distinct buffer failure, not a bare ENOBUFS', (t) => {
+  const responses = defaultResponses();
+  responses[`api:${ISSUES_ENDPOINT}`] = {
+    stdoutBytes: SUBPROCESS_MAX_BUFFER_BYTES + LEGACY_DEFAULT_MAX_BUFFER_BYTES,
+  };
+
+  const result = runStatus(t, { responses });
+
+  assertReportsUnknown(
+    result,
+    new RegExp(`exceeded the ${SUBPROCESS_MAX_BUFFER_BYTES}-byte subprocess read limit`),
+  );
+  assert.match(result.stderr, /read the registry in smaller pages/);
+  assert.doesNotMatch(result.stdout, /claiming is safe/);
+});
+
+test('a registry far above the old default reads identically to the same registry below it', (t) => {
+  const baselineResponses = defaultResponses();
+  assert.ok(
+    Buffer.byteLength(baselineResponses[`api:${ISSUES_ENDPOINT}`].stdout) <
+      LEGACY_DEFAULT_MAX_BUFFER_BYTES,
+    'baseline registry must sit below the old default so the comparison is meaningful',
+  );
+
+  const oversizedResponses = defaultResponses();
+  oversizedResponses[`api:${ISSUES_ENDPOINT}`] = {
+    stdout: JSON.stringify([
+      [
+        PLAN_ISSUE,
+        ACTIVE_CLAIM,
+        restIssue({
+          number: 42,
+          title: 'Not coordinated work',
+          body: 'padding '.repeat(LEGACY_DEFAULT_MAX_BUFFER_BYTES / 2),
+          labels: ['question'],
+        }),
+      ],
+    ]),
+  };
+  assert.ok(
+    Buffer.byteLength(oversizedResponses[`api:${ISSUES_ENDPOINT}`].stdout) >
+      LEGACY_DEFAULT_MAX_BUFFER_BYTES * 3,
+    'oversized registry must clear the old default by a wide margin',
+  );
+
+  const baseline = runStatus(t, { responses: baselineResponses, args: ['--json'] });
+  const oversized = runStatus(t, { responses: oversizedResponses, args: ['--json'] });
+  const withoutTimestamp = (raw) => {
+    const report = JSON.parse(raw);
+    delete report.generatedAt;
+    return report;
+  };
+
+  assert.equal(baseline.exitCode, 0);
+  assert.equal(oversized.exitCode, 0);
+  assert.equal(oversized.stderr, baseline.stderr);
+  assert.deepEqual(withoutTimestamp(oversized.stdout), withoutTimestamp(baseline.stdout));
+  assert.deepEqual(oversized.invocations, baseline.invocations);
 });
