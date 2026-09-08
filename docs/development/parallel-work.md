@@ -324,6 +324,15 @@ Before releasing a claim, the agent:
 3. makes only a normal owned-branch push under the scoped publication rule above; pull-request creation, metadata changes, retargeting, closing, reopening, and merging still require separate explicit authorization, although the push may advance an existing pull request's source-branch head as described above;
 4. sets `work:review`, `work:done`, or `work:abandoned` accurately, or hands the item to its named `Integration-Owner` as principal-owned `work:blocked` with `Waiting-Since`;
 5. leaves explicit continuation and cleanup instructions;
-6. removes a worktree only after changes are preserved and removal is authorized/safe.
+6. leaves its dedicated worktree in place and records in the final checkpoint that it is ready for retirement. An agent does not remove its own worktree while its claim is `active` or `review`: a missing dedicated worktree is stale evidence.
 
 An unfinished agent checkpoints and either remains accurately active with a ticket blocker, completes a principal-owned blocked handoff, or marks the work abandoned; it never leaves an apparently active claim without current liveness. A merged task is not complete until integration checks and, for `main`, production deployment verification succeed.
+
+### Worktree retirement
+
+A dedicated worktree persists while its claim is agent-owned, because a missing dedicated worktree is one of the suspected-stale signals above. Retirement happens once the claim reaches `done` or `abandoned` and the work is in the integration branch.
+
+A coordinator retires worktrees as routine maintenance, not the execution session, which has usually ended before its work merges. Before removing one, prove the work is preserved: the branch’s commits must already be in the integration branch **by patch identity**, because squash merges make ancestry checks report merged work as unmerged. `git cherry <integration-branch> <branch>` reporting no `+` commits is that proof; `git merge-base --is-ancestor` alone is not. Confirm the working tree is clean and that no record holds the worktree; a preservation hold names its exact path and branch.
+
+Retiring a worktree never deletes its branch or reserved ref. Refs remain preserved evidence under the rules above. A worktree with unmerged commits, uncommitted changes, an agent-owned claim, or a preservation hold stays until the maintainer resolves it.
+
