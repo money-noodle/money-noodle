@@ -8,7 +8,7 @@ Money Noodle is an architecture-first rebuild of a continuously deployed, multi-
 
 ## Session orientation
 
-Determine session kind before working role. A delegated assignment is a bounded subagent session—worker, reviewer, researcher, planner, or ordinary diagnostic—not a root supervisor or human-directed debugger; ask the assigning supervisor when that is unclear. Parent context, a role label, and ordinary fanout permission do not change this.
+Determine session kind before working role. A delegated assignment is a bounded subagent session—worker, reviewer, researcher, planner, or ordinary diagnostic—not a root supervisor or human-directed debugger; ask the assigning supervisor when that is unclear. Parent context, a role label, and ordinary fanout permission do not change this. Use the [delegation contract](docs/development/parallel-work.md#delegation-contract) for bounded briefs, returns, and native-child lifecycle.
 
 An independent session normally works as an execution supervisor for a clear build or development request; a plan, ticket, research, or specification request selects planning supervisor. Infer natural-language intent, briefly state the working role, and ask a concise question before consequential work only when role, outcome, or authority is materially unclear. The [parallel-work standard](docs/development/parallel-work.md#session-roles) owns role responsibilities, transitions, and the separately human-directed debugger role.
 

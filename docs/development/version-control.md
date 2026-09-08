@@ -30,6 +30,8 @@ Committed hooks in `.githooks/` refuse authored commits and non-fast-forward mer
 
 ## Scoped owned-branch publication
 
+For native children, the [delegation contract](parallel-work.md#delegation-contract) owns named-claimant accountability and recovery; a run ending or restarting never transfers or releases its branch reservation.
+
 A current matching claim authorizes its named execution agent to make a normal, non-force push only from the registered branch and dedicated worktree to the identically named remote branch. That remote branch was created atomically at claim time; publication may only fast-forward that same ref after verifying current ownership and the destination under [`parallel-work.md`](parallel-work.md#checkpoints-integration-and-publication). This is checkpoint-publication authority, not general Git or integration authority.
 
 The agent may never use it to push `main` or another integration/protected branch, create or push a tag, push another claim's branch, select a differently named destination, force push, use `--force-with-lease`, make a non-fast-forward update, rewrite published history, or delete any branch, tag, or ref. Cleanup and deletion remain separate explicitly authorized operations and never happen automatically. Pull requests remain mandatory for all integration; a branch push or successful CI run does not authorize opening a pull request, integration, merge, host-control changes, provider effects, or deployment.

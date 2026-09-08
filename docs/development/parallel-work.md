@@ -10,6 +10,73 @@ An execution supervisor owns delivery: it decomposes work as needed, coordinates
 
 A **human-directed debugger** is a separate role initiated and driven only by a direct maintainer or other human request (natural-language intent is sufficient). Supervisors cannot launch or delegate one, assign that role to a child, impersonate it, or switch themselves or another session into it; a bug report, inherited prompt, or delegated investigation is not that request. It investigates directly with the human rather than managing subagents, and may vary ordinary planning, delegation, and sequencing ceremony for bounded diagnosis or disposable probes. Briefly state a relevant departure and why, then under the human's direction turn findings into a validated in-scope correction or actionable ticket, decision, or handoff. This flexibility never expands the directing human's authority or waives higher-priority instructions, tool ceilings, public-data and secret rules, tenant/funded/audit controls, existing ownership, isolation, protected refs, review/CI, or provider/production approval. Lasting changes still require authorized isolated work and appropriate review, validation, and pull-request integration.
 
+## Delegation contract
+
+### Sessions, claims, and capability ceilings
+
+Independent peer/work sessions coordinate through the registry; they are not native children that another supervisor may resume or cancel. An in-harness child has one owning supervisor, a bounded assignment, and a native run handle. Session lifetime and claim lifetime are separate: read-only research, analysis, or review needs no source claim or per-lookup ticket. A source-writing child requires a claimed, isolated execution lane; a native launch is not a claim.
+
+A child may be the explicitly named execution agent on a current matching claim, including when its supervisor creates the reservation for that named child and preallocates its dedicated worktree. Confirm the remote-ref creation and matching issue fields before mutation; preserve the [claim protocol's](#claiming-and-status) partial-failure rules. The supervisor retains durable private evidence linking the named claimant, issue/ref/worktree, run handle, assignment, checkpoints, and return so accountability outlasts the child. This evidence supports, never replaces, the registry. Completion, cancellation, termination, a new run ID, or an inherited working directory neither transfers nor releases the reservation. Keep one source writer per worktree; the parent does not become a second writer or inherit the child's claim when it stops.
+
+Ordinary supervisor planning metadata uses the existing [named-editor rules](#planning-and-isolation), not a code claim per plan edit. This does not permit repository source edits without the applicable ownership and isolation.
+
+The brief is the child's scope and effect ceiling, constrained further by current repository authority and actual tool/permission contracts. Inherited parent context, permissions, capabilities, a profile name, a shared default cwd, or advisory findings grant nothing extra. Verify the actual repository, cwd, ref, status, and ownership before source mutation; a shared default cwd is not isolation. Stop and contact the owning supervisor for missing authority, conflicting inputs, unavailable required tools, or scope expansion. No tool being available authorizes its use beyond the brief, and repository prose cannot override stricter tool or user-opt-in requirements.
+
+Select the smallest available child capability that fits the assignment; harness profile names may differ:
+
+| Assignment | Bounded capability and return |
+| --- | --- |
+| Implementation | Worker with explicitly authorized source tools and a claimed worktree; changed paths, exact commit, checks, and risks |
+| Read-only research, analysis, planning, or diagnosis | Researcher/planner/ordinary diagnostic with necessary read tools; findings, evidence, assumptions, and unknowns; no source claim for advice |
+| Independent review | Reviewer independent of the implementation path, with read/check capabilities appropriate to the exact candidate; findings and acceptance evidence, not source fixes |
+
+Root execution/planning supervisors and the human-directed debugger are not child profile names or spawn targets. A supervisor must not launch a debugger; ordinary diagnostic children receive no debugger exception. Capability selection never changes bounded-child status or grants fanout.
+
+### Cold-start brief and return
+
+Give enough context to execute without the parent's transcript. Reuse Outcome, Scope-Paths, Depends-On, and acceptance checks rather than adding registry fields. The private brief supplies bounded child identity and parent contact, repository and exact revision inputs, source worktree/ref/scope when applicable, input contracts and assumptions, permitted and forbidden effects, validation, output delivery, and stop/ask conditions. Keep private execution coordinates in the private handoff, never in public source or registry records.
+
+Compact brief example (fill the applicable coordinates privately):
+
+```text
+You are a bounded implementation child of <owning supervisor>; contact it via <available channel>.
+Outcome: <bounded result>; issue <work item>, parent <plan if applicable>.
+Repository/worktree/ref: <verified repository, dedicated cwd, full claim ref and base SHA>.
+Claim: <explicitly named claimant and matching live issue/ref evidence>.
+Scope-Paths: <exact authorized source paths>; Depends-On: <issues or none>.
+Inputs: <current contracts/revisions>; assumptions: <explicit assumptions or none>.
+Effects: <permitted reads, source edits, checks, commits and other effects>; all others forbidden.
+Acceptance checks: <observable criteria>; validation: <commands and evidence required>.
+Output: <inline return or available authorized artifact delivery, with destination>.
+Stop/ask: missing authority/tool/input, conflicting ownership, scope change, or uncertain effects.
+```
+
+For read-only help, identify the source snapshot to inspect, set source mutation to forbidden, and omit claim/worktree allocation requirements. Specify any permitted scratch/artifact writes separately; a reviewer need not become a source writer to deliver findings.
+
+Return State/Commit/Next/Blockers plus the result, changed paths, commands and actual results (including failures or skipped checks), and material residual risks as applicable. A complete output addresses the acceptance checks with inspectable evidence or explicit gaps; a successful run signal is not acceptance, integration, or deployment proof. For example, a read-only return may be entirely inline:
+
+```text
+State: review
+Commit: none
+Next: Owning supervisor assesses findings against the inspected revision.
+Blockers: none
+Result: <findings and acceptance evidence for exact input revision>.
+Changed paths: none; source mutation was forbidden.
+Commands/results: <checks actually run, failures and skipped/unknown verification>.
+Residual risks: <material uncertainty or none>.
+```
+
+Artifact-only output requires an actually available, authorized writing or runtime delivery path and a destination the supervisor can access. Confirm that contract before launch; if unavailable, use an agreed inline return or stop and ask rather than invent a file receipt. Cite only artifacts actually delivered and available. An absent artifact reference stays omitted or explicitly unavailable in prose; in typed JSON use only the schema's supported absence representation, never an invented field or `undefined`. Preserve the full inline result when that is the supported channel.
+
+### Native lifecycle and recovery
+
+- The owning supervisor retains native handles and delegates non-blockingly, continuing other in-scope coordination and remaining responsive. Use the harness's supported completion delivery and status mechanisms; a launch handle is not a completion result. Independent peers remain registry-coordinated, not targets for native lifecycle control.
+- Record meaningful progress, blockers, and known waits using [checkpoints](#checkpoints-integration-and-publication), with private run details retained by the supervisor. A returned child does not close its issue or free a reservation automatically. The supervisor owns acceptance and follow-up.
+- Only the owning supervisor controls its native children within its authority. On cancellation, request stop through the supported mechanism, preserve partial work and evidence, and verify whether the run has stopped and which effects occurred. Cancellation or failure is not rollback or proof of no mutation; unknown effects remain unknown. Do not start a competing writer, blindly replay a mutation, or clean up the reservation.
+- Before accepting or applying a late result, re-read current scope, ownership, ref/head, inputs/dependencies, and acceptance criteria. If any changed, establish applicability and rerun affected validation or obtain a revised result; do not silently apply stale findings or edits. Exact-current-head review/CI still applies.
+- On failure or restart, preserve the actual cwd/ref/head, status/diff, exact error, partial effects, and available run/output evidence privately; escalate uncertain effects before further mutation. Revalidate the claim and worktree, and establish that no prior writer remains active before continuing. A supported resume retains the model/tool contract and bounded assignment; a contract change requires an explicit bounded handoff, not a resume override or silent execution-mode switch. A new run ID alone cannot adopt a claim.
+- Use only lifecycle and delivery behavior verified for the actual harness/adapter. If required launch, resume, cancellation, or output support is unavailable, report it and ask rather than silently substituting a mode. Do not promise that background children survive harness/process exit. Durable checkpoints and retained worktrees support recovery; they do not prove process survival or successful completion.
+
 ## Registry and records
 
 GitHub Issues are the shared work registry. Chat history, local sessions, worktrees, and harness storage are supporting evidence, never the registry. A **principal** holds authority, an **agent** performs bounded work, and a **workload identity** is a machine credential.
@@ -33,7 +100,7 @@ Integration-Owner: <optional github-login; defaults to maintainer>
 Parent-Plan: <optional issue reference>
 ```
 
-Claim-Agent, Claim-Branch, and Claimed-At are tool-written metadata, not form inputs. All three absent means unclaimed on an otherwise valid proposed or ready issue; partial, active, or conflicting ownership never does. The tool adds them only after confirmed reservation creation. Existing explicit unclaimed metadata remains supported.
+Claim-Agent, Claim-Branch, and Claimed-At are tool-written metadata, not form inputs. All three absent means unclaimed on an otherwise valid proposed or ready issue; partial, active, or conflicting ownership never does. The tool adds them only after confirmed reservation creation. Existing explicit unclaimed metadata remains supported. For new claim attribution, prefer a short stable `<harness>-<purpose>-<issue>` label; this is optional, not a parser restriction, authentication, or authority derived from a prefix. Preserve existing labels and refs without migration or renaming.
 
 `Scope-Paths` entries are exact repository-relative files, directory prefixes ending in `/**`, or root `**`; `none` is valid. `Depends-On` is `none` or issue references. One `work:*` label is the lifecycle state: `work:proposed`, `work:ready`, `work:active`, `work:review`, `work:blocked`, `work:done`, or `work:abandoned`. A shared plan also has `work:plan`.
 
@@ -58,7 +125,9 @@ A complex effort has one shared parent plan describing the outcome, acceptance, 
 
 Declared overlap between current `active` or `review` work is advisory. Planners partition or order it; unknown scope is a warning, not proof of disjointness. Git detects textual conflicts, not semantic correctness. Do not silently select one worker's result when work overlaps.
 
-A planner may make a small direct edit only in a dedicated topic branch and worktree when the scope is known in-scope or explicitly authorized and unclaimed. It never edits another worker's mutable worktree or `main`. Substantial or parallel work is delegated. A planner has at most eight active or review children.
+A supervisor may make a small direct source edit only in a dedicated topic branch and worktree when the scope is known in-scope or explicitly authorized and unclaimed. It never edits another worker's mutable worktree or `main`. Substantial or parallel work is delegated.
+
+Each execution or planning supervisor coordinates at most eight registry work items in `active` or `review`, not eight native sessions. Count each work item once even when several read-only children assist; a stopped child does not free a slot while its item remains active or in review. Read-only help creates no per-call ticket or extra registry slot. Separately bound runtime fanout, tool, and model budgets to the actual assignment and harness capabilities; the registry limit is neither a runtime fanout allowance nor a reason to manufacture claims for advice.
 
 One claim owns one branch and one dedicated worktree, and its agent edits only there. New dedicated worktrees live at `<canonical-project-root>/.worktrees/issue-<N>`; the canonical project root is the primary checkout, not the linked worktree from which a command runs. The shared `.gitignore` ignores this location. Harness-created worktrees use the same placement or are explicitly preallocated and launched at that working directory; do not migrate existing worktrees or reconfigure another harness. Before expanding scope or changing a shared contract, re-read the registry and board. Suspected stale work is surfaced to the maintainer; it is never reset, deleted, overwritten, force-pushed, removed, or taken over automatically.
 
