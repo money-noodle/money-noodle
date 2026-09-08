@@ -21,6 +21,7 @@
 | Accepted first remote deployment composition and dated comparison evidence | [`operations/deployment-composition.md`](operations/deployment-composition.md) |
 | Version control and cutover | [`development/version-control.md`](development/version-control.md) |
 | Session roles, parallel planning, work claims, stale detection, and handoff | [`development/parallel-work.md`](development/parallel-work.md) |
+| Bounded child briefs, returns, capability ceilings, and native lifecycle | [`Delegation contract`](development/parallel-work.md#delegation-contract) |
 
 ## Dated evidence
 
