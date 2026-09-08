@@ -2,6 +2,7 @@
 
 > **Status:** Working
 > **Date decided:** 2026-08-30
+> **Corrected:** 2026-09-08 — the mechanisms below were substantially simplified; read [Correction 2026-09-08](#correction-2026-09-08-the-protocol-was-simplified) before relying on any rule here.
 > **Owners:** Maintainer / platform foundation
 > **Related documents:** [`../../development/parallel-work.md`](../../development/parallel-work.md), [`../../../AGENTS.md`](../../../AGENTS.md)
 > **Depends on:** none
@@ -23,6 +24,8 @@ Pull request #49 had been merged personally by the maintainer without a review a
 ## Decision
 
 Adopt the following eight coordination and isolation rules as one protocol. They define required behavior and safety boundaries, not an implementation design.
+
+**The mechanisms in rules 3 through 7 were superseded on 2026-09-08.** Their goals stand; the machinery recorded below does not. Read [Correction 2026-09-08](#correction-2026-09-08-the-protocol-was-simplified) and then [`parallel-work.md`](../../development/parallel-work.md) for what is actually in force. The text of rules 1 through 8 is left unedited as the record of what was decided on 2026-08-30 and what the correction responded to.
 
 These rules are accepted direction, not current operating procedure. None of these rules changes present authorization or process until the work item or items implementing that rule are integrated and the governing guidance is updated. Until then, [`AGENTS.md`](../../../AGENTS.md) and [`docs/development/parallel-work.md`](../../development/parallel-work.md) as currently written govern.
 
@@ -139,3 +142,40 @@ The exception never reaches production approval or provider authority. It cannot
 - Per-decision recording interrupts coordination work and requires judgment about when a decision has actually settled.
 - A temporary maintainer-only exception still depends on personal discipline until the second reviewer and host-control retirement conditions are complete.
 - Each exception merge adds evidence overhead, and expiry can halt integration before replacement review capacity or host controls are ready.
+
+## Correction 2026-09-08: the protocol was simplified
+
+This record stays **Working**. Under the lifecycle in [`README.md`](README.md#lifecycle), a Working record is corrected rather than replaced, so the decided rules above are left unedited and this section records what changed and why. Nothing here promotes any record to Settled.
+
+### What happened
+
+The rules above were implemented as roughly 15,590 lines of coordination tooling, configuration, and normative prose guarding roughly 1,418 lines of product code — an 11:1 process-to-product ratio on a platform with no deployment yet. `docs/development/parallel-work.md` reached 338 lines of dense normative text describing one-use phase-bound scope clearances, five-SHA agreement on branch bootstrap, orphan-ref reconciliation, integration-hold evidence blocks, a thirteen-field checkpoint evidence header, and a v1/v2 registry-schema duality.
+
+The machinery also failed on its own terms. `tools/coordination-status.mjs` grew past the default subprocess output buffer, so the status command that every gate depended on could not be read reliably and the gates it fed were effectively disabled (issue #110). A control that cannot run is not a control.
+
+Most of the removed mechanism re-proved what Git and GitHub already guarantee, or defined recovery protocols for partial-failure states whose correct resolution is "stop and ask the maintainer" — which is what an agent does anyway.
+
+### What was kept, and why
+
+- **Creating the remote reference is the claim** (rule 5). This is the one real atomic guarantee in the protocol: `POST /git/refs` either returns 201 or 422, and the loser mutates nothing. It is kept exactly, with the branch renamed from `claim-v1/issue-<N>` to `claim/issue-<N>`.
+- **Declared scope** (rule 7), as a `Scope-Paths` field with the same three-form path grammar. It is cheap to write and makes overlap visible.
+- **Every dependency is a ticket** (rule 2), so the work graph stays machine-readable and planners can build parallel waves.
+- **A read-only status board**, reporting active claims, ready work, blocked work, overlaps, and warnings.
+- **The owned-branch push limit** (rule 3) and every safety boundary: no direct push to `main`, no force push or history rewriting, pull requests as the only integration route, maintainer-only authorization for merges and provider or deployment effects, and the sole-maintainer integration exception remaining outside agent authority.
+- **Per-decision durability** (rule 8) and the principal-operated integration checkout (rule 6), minus its remote-lifecycle classification machinery.
+
+### What was removed
+
+Scope gates and the whole selected-gate concept (`--gate claim:`, `publication:`, `checkpoint:`, `integration-pr:`); one-use, phase-bound, operation-bound clearances; immutable-tree diffing and observed-scope-creep derivation; five-SHA bootstrap agreement; merge-base re-verification; integration holds; the serializing-paths configuration and its hard-stop routing; orphan-ref reconciliation and `Reconciled-Claim-Comment-IDs`; the `coordinationKnown` / `registry: null` fail-closed ceremony; triage, candidate-safety, liveness, and planning-scope enums; principal-wait accounting; the dry-run/apply writer duality; the registry-schema version field and v1/v2 duality; and the `Claim-Host`, `Claim-Harness`, `Claim-Run-ID`, `Check-In-By`, `Waiting-Since`, `Claim-Worktree`, `Shared-Hotspots`, and `Claim-State` fields. The thirteen-field checkpoint evidence header is replaced by four lines; CI results live in GitHub authoritatively and are no longer transcribed.
+
+Overlap between two active claims' declared scope is now a board **warning**, not a block. The planner narrows scope or serializes the work, and Git's own merge remains the backstop for conflicting edits.
+
+Self-activation clauses are gone. Rules that were written to become authority only after a specific issue was integrated are simply in force as written.
+
+### Consequences accepted
+
+- Declaration overlap no longer mechanically stops a push, so two agents can edit intersecting paths and discover it at merge time. This is the tradeoff for a protocol that runs at all.
+- Scope creep beyond a declaration is no longer detected automatically; review catches it.
+- Partial-failure states (ref created, issue update failed) are reported and left for a person instead of being reconciled by tooling. This is more manual and much smaller.
+- Liveness is a three-day age warning rather than an agent-set deadline, so a stalled claim is noticed later.
+- Cross-harness portability now rests on a much smaller schema, which is easier for another harness to implement and easier to keep correct.
