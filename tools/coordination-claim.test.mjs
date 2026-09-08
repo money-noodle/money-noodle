@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -14,6 +14,7 @@ import {
   parseArguments,
   readBodyField,
   renderResult,
+  worktreeSetupCommand,
 } from './coordination-claim.mjs';
 
 import { buildReport } from './coordination-status.mjs';
@@ -97,6 +98,35 @@ test('a 201 ref creation wins the claim and rewrites exactly the claim fields', 
   const output = renderResult(result);
   assert.match(output, /claim-v1\/issue-7/);
   assert.match(output, /git worktree add/);
+});
+
+test('claim setup places worktrees under the primary checkout from main or a linked worktree', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'mn-worktree-root-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const run = (args, cwd = root) => {
+    const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+  };
+  run(['init', '--initial-branch=main']);
+  run(['config', 'user.email', 'test@example.invalid']);
+  run(['config', 'user.name', 'Test']);
+  writeFileSync(join(root, 'README.md'), 'fixture\n');
+  run(['add', 'README.md']);
+  run(['commit', '-m', 'fixture']);
+  run(['branch', 'claim-v1/issue-7']);
+  const linked = join(root, 'linked');
+  run(['worktree', 'add', '--detach', linked, 'HEAD']);
+
+  const command = worktreeSetupCommand(7, 'claim-v1/issue-7');
+  assert.match(command, /--path-format=absolute/);
+  assert.match(command, /"claim-v1\/issue-7"$/);
+  for (const cwd of [root, linked]) {
+    const target = join(root, '.worktrees', 'issue-7');
+    const result = spawnSync('sh', ['-c', command], { cwd, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(existsSync(target));
+    run(['worktree', 'remove', '--force', target]);
+  }
 });
 
 test('a 422 loses the race and mutates nothing', async () => {

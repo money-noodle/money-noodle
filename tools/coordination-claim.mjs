@@ -179,6 +179,10 @@ export async function claim({ issue: issueNumber, agent, api, now = () => new Da
   return { outcome: 'claimed', issue: issueNumber, branch, sha, agent, claimedAt };
 }
 
+export function worktreeSetupCommand(issue, branch) {
+  return `git worktree add "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/.worktrees/issue-${issue}" "${branch}"`;
+}
+
 export function renderResult(result) {
   const branch = result.branch;
   switch (result.outcome) {
@@ -187,8 +191,8 @@ export function renderResult(result) {
         `Claimed issue #${result.issue} as ${result.agent}.`,
         `Branch: ${branch} (at ${result.sha})`,
         '',
-        `git fetch --no-tags origin ${branch}`,
-        `git worktree add ../money-noodle-issue-${result.issue} ${branch}`,
+        `git fetch --no-tags origin "${branch}"`,
+        worktreeSetupCommand(result.issue, branch),
       ].join('\n');
     case 'already-claimed':
       return `Issue #${result.issue} is reserved by ${branch}; recorded holder ${result.holder} (since ${result.claimedAt}). This attempt made no issue mutation. Do not adopt or delete the ref.`;

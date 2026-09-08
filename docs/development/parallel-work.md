@@ -1,5 +1,15 @@
 # Parallel agent work standard
 
+## Session roles
+
+Determine session **kind** before role. A delegated assignment remains a bounded child session (worker, reviewer, researcher, planner, or ordinary diagnostic) even if inherited context or task wording names a supervisor. It has only its assigned scope and authority, asks its assigning supervisor when unclear, and neither claims unrelated work nor fans out without explicit delegation and available tools. No child may select a supervisor or debugger role; ordinary debugging under a supervisor remains bounded work.
+
+An independent session infers its working role from the principal's natural-language request: clear build/development work normally selects an **execution supervisor**, and planning, ticket, research, or specification work normally selects a **planning supervisor**. State that role briefly. Ask a concise question before consequential work when role, desired outcome, or authority is materially unclear; clear requests need no ceremonial interview. Resumption and phase changes retain kind, scope, and authority—changing a label grants nothing.
+
+An execution supervisor owns delivery: it decomposes work as needed, coordinates isolated implementation and independent validation/review subagents, retains final acceptance, and integrates only when explicitly authorized. A planning supervisor uses audit, research, planning, and specification subagents; it maintains coherent plans and implementable, reviewed tickets with outcome, scope, dependencies, contracts, measurable acceptance, constraints, unresolved decisions, and handoff context. Both delegate non-blockingly and remain responsive to the principal.
+
+A **human-directed debugger** is a separate role initiated and driven only by a direct maintainer or other human request (natural-language intent is sufficient). Supervisors cannot launch or delegate one, assign that role to a child, impersonate it, or switch themselves or another session into it; a bug report, inherited prompt, or delegated investigation is not that request. It investigates directly with the human rather than managing subagents, and may vary ordinary planning, delegation, and sequencing ceremony for bounded diagnosis or disposable probes. Briefly state a relevant departure and why, then under the human's direction turn findings into a validated in-scope correction or actionable ticket, decision, or handoff. This flexibility never expands the directing human's authority or waives higher-priority instructions, tool ceilings, public-data and secret rules, tenant/funded/audit controls, existing ownership, isolation, protected refs, review/CI, or provider/production approval. Lasting changes still require authorized isolated work and appropriate review, validation, and pull-request integration.
+
 ## Registry and records
 
 GitHub Issues are the shared work registry. Chat history, local sessions, worktrees, and harness storage are supporting evidence, never the registry. A **principal** holds authority, an **agent** performs bounded work, and a **workload identity** is a machine credential.
@@ -50,7 +60,7 @@ Declared overlap between current `active` or `review` work is advisory. Planners
 
 A planner may make a small direct edit only in a dedicated topic branch and worktree when the scope is known in-scope or explicitly authorized and unclaimed. It never edits another worker's mutable worktree or `main`. Substantial or parallel work is delegated. A planner has at most eight active or review children.
 
-One claim owns one branch and one dedicated worktree, and its agent edits only there. Before expanding scope or changing a shared contract, re-read the registry and board. Suspected stale work is surfaced to the maintainer; it is never reset, deleted, overwritten, force-pushed, removed, or taken over automatically.
+One claim owns one branch and one dedicated worktree, and its agent edits only there. New dedicated worktrees live at `<canonical-project-root>/.worktrees/issue-<N>`; the canonical project root is the primary checkout, not the linked worktree from which a command runs. The shared `.gitignore` ignores this location. Harness-created worktrees use the same placement or are explicitly preallocated and launched at that working directory; do not migrate existing worktrees or reconfigure another harness. Before expanding scope or changing a shared contract, re-read the registry and board. Suspected stale work is surfaced to the maintainer; it is never reset, deleted, overwritten, force-pushed, removed, or taken over automatically.
 
 ## Checkpoints, integration, and publication
 

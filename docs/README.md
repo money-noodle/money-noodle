@@ -20,7 +20,7 @@
 | Agent-operated production control plane and versioned operation catalog (decided, not implemented) | [`operations/production-control-plane.md`](operations/production-control-plane.md) |
 | Accepted first remote deployment composition and dated comparison evidence | [`operations/deployment-composition.md`](operations/deployment-composition.md) |
 | Version control and cutover | [`development/version-control.md`](development/version-control.md) |
-| Parallel planning, work claims, stale detection, and handoff | [`development/parallel-work.md`](development/parallel-work.md) |
+| Session roles, parallel planning, work claims, stale detection, and handoff | [`development/parallel-work.md`](development/parallel-work.md) |
 
 ## Dated evidence
 

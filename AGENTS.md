@@ -6,6 +6,12 @@ Money Noodle is an architecture-first rebuild of a continuously deployed, multi-
 
 `AGENTS.md` is the required entry point and operational map, not the repository's encyclopedia. Read it first, run `node tools/coordination-status.mjs`, then read the linked document relevant to the task completely. GitHub Issues are the cross-harness work registry; a missing or unreachable registry never means work is unclaimed. Keep detailed standards and rationale in their owning documents so this guide stays short, current, and useful.
 
+## Session orientation
+
+Determine session kind before working role. A delegated assignment is a bounded subagent session—worker, reviewer, researcher, planner, or ordinary diagnostic—not a root supervisor or human-directed debugger; ask the assigning supervisor when that is unclear. Parent context, a role label, and ordinary fanout permission do not change this.
+
+An independent session normally works as an execution supervisor for a clear build or development request; a plan, ticket, research, or specification request selects planning supervisor. Infer natural-language intent, briefly state the working role, and ask a concise question before consequential work only when role, outcome, or authority is materially unclear. The [parallel-work standard](docs/development/parallel-work.md#session-roles) owns role responsibilities, transitions, and the separately human-directed debugger role.
+
 ## Current non-negotiables
 
 - Treat the private archive and all prior-generation material as historical evidence, never current authority. Revalidate before reuse.
@@ -23,7 +29,7 @@ Money Noodle is an architecture-first rebuild of a continuously deployed, multi-
 - Agents are intended technical operators for routine platform work through reviewed automation, short-lived workload identity, default-deny authorization, independent verification, and durable evidence. Humans retain account ownership, recovery authority, and explicit scoped approval of production effects; neither agents nor humans bypass the pipeline through a cloud console or developer laptop. [`docs/operations/delivery.md`](docs/operations/delivery.md) owns the detailed boundary.
 - Default authorization to deny, enforce tenant scope at every boundary, keep operational secrets in durable managed storage, and preserve reconstructable audit/accounting records.
 - Keep architecture visually current with version-controlled diagrams-as-code. A boundary or topology change is incomplete when its current diagram is stale.
-- A primary/root agent session is a planner: it plans, breaks work into issues, delegates, reviews, and integrates when explicitly authorized. It may make a small edit itself only with known in-scope ownership or explicitly authorized unclaimed scope—still on a dedicated typed branch and worktree, still through a pull request—and delegates when the work is substantial or several sessions run in parallel. [`docs/development/parallel-work.md`](docs/development/parallel-work.md) owns the planning and isolation rules. Never hand-edit in the integration checkout while integrating someone else's work; conflicts and corrections go back to the execution branch. Delegation is non-blocking: dispatch the execution session and stay responsive to the principal rather than idling until it returns. Planners may run concurrently and share no local state; what another session has claimed comes from the GitHub registry and refs, never from a session list or worktree inspection.
+- Root session roles, bounded-child status, and human-directed debugging are defined by [`docs/development/parallel-work.md`](docs/development/parallel-work.md#session-roles). A supervisor may make a small direct edit only with known in-scope ownership or explicitly authorized unclaimed scope—still on a dedicated typed branch and worktree, still through a pull request—and delegates substantial or parallel work non-blockingly. Never hand-edit in the integration checkout while integrating someone else's work; conflicts and corrections go back to the execution branch. Claims come from the GitHub registry and refs, never a session list or worktree inspection.
 - Whimsy guides the user experience; precise industry terminology guides code and infrastructure. Never let playful language conceal financial meaning or risk.
 - Prefer self-healing leases, reconciliation, cleanup, and status checks. Administrative repair exists as an authorized, audited fallback.
 
@@ -52,7 +58,7 @@ Use the accepted source/deployment map instead of inferring current boundaries f
 
 ## Working method
 
-Follow the single [`implementation workflow`](docs/engineering/standards.md#implementation-workflow) for every change. [`docs/development/parallel-work.md`](docs/development/parallel-work.md) owns the claim, isolation, checkpoint, staleness, and handoff protocol for agent sessions, and [`docs/development/version-control.md`](docs/development/version-control.md) owns branch, publication, and integration rules.
+Use the applicable [`implementation workflow`](docs/engineering/standards.md#implementation-workflow) for lasting implementation work. [`docs/development/parallel-work.md`](docs/development/parallel-work.md) owns session roles, claims, isolation, checkpoints, staleness, and handoff; [`docs/development/version-control.md`](docs/development/version-control.md) owns worktree placement, branches, publication, and integration.
 
 ## Keep the guidance operational
 
