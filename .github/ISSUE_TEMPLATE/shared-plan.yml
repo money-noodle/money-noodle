@@ -1,6 +1,6 @@
 name: Shared parallel plan
 description: Create a lightweight shared plan for a complex outcome.
-title: "Plan: "
+title: 'Plan: '
 labels:
   - work:plan
   - work:proposed
@@ -9,12 +9,12 @@ body:
   - type: markdown
     attributes:
       value: |
-        Keep one named editor on the same shared-plan section at a time. Do not include local paths or sensitive information.
+        Keep one named editor on the same shared-plan section at a time. Include risks, decisions, or notes where useful. Do not include local paths or sensitive information.
   - type: textarea
     id: outcome
     attributes:
-      label: Outcome
-      description: State the independently verifiable end state.
+      label: Outcome and acceptance
+      description: State the independently verifiable end state and how to check it.
     validations:
       required: true
   - type: textarea
@@ -22,20 +22,5 @@ body:
     attributes:
       label: Work graph
       description: List child issues, dependencies, parallel waves, and serialized boundaries.
-    validations:
-      required: true
-  - type: input
-    id: integration_owner
-    attributes:
-      label: Integration-Owner
-      description: Principal responsible for integration sequencing.
-      value: maintainer
-    validations:
-      required: true
-  - type: textarea
-    id: risks_decisions
-    attributes:
-      label: Risks and decisions needed
-      description: Record current risks, blockers, and decisions needed.
     validations:
       required: true

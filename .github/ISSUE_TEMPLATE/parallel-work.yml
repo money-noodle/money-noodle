@@ -1,6 +1,6 @@
 name: Parallel work item
-description: Create a claimable unit linked to a shared plan.
-title: "Work: "
+description: Create one independently verifiable unit of work.
+title: 'Work: '
 labels:
   - work:proposed
 assignees: []
@@ -8,20 +8,12 @@ body:
   - type: markdown
     attributes:
       value: |
-        New work starts proposed and unclaimed. Use the claim protocol rather than editing ownership during creation. Do not include local paths or sensitive information.
-  - type: input
-    id: parent_plan
-    attributes:
-      label: Parent-Plan
-      description: Optional parent plan issue reference.
-      placeholder: "#ISSUE or none"
-    validations:
-      required: false
+        New work starts proposed and unclaimed. The claim tool writes ownership metadata after reserving the branch. Do not include local paths or sensitive information.
   - type: textarea
-    id: outcome_scope
+    id: outcome
     attributes:
-      label: Outcome and scope
-      description: State one independently verifiable outcome and exclusions.
+      label: Outcome
+      description: State the outcome and exclusions; include parent links or notes here if useful.
     validations:
       required: true
   - type: textarea
@@ -43,41 +35,9 @@ body:
     validations:
       required: true
   - type: textarea
-    id: dependency_notes
+    id: acceptance_checks
     attributes:
-      label: Dependency-Notes
-      description: Optional dependency explanation.
-    validations:
-      required: false
-  - type: input
-    id: claim_agent
-    attributes:
-      label: Claim-Agent
-      description: Leave unclaimed until the claim tool succeeds.
-      value: unclaimed
-    validations:
-      required: true
-  - type: input
-    id: claim_branch
-    attributes:
-      label: Claim-Branch
-      description: Leave none until the claim tool creates the reservation.
-      value: none
-    validations:
-      required: true
-  - type: input
-    id: claimed_at
-    attributes:
-      label: Claimed-At
-      description: Leave none until the claim tool succeeds.
-      value: none
-    validations:
-      required: true
-  - type: input
-    id: integration_owner
-    attributes:
-      label: Integration-Owner
-      description: Principal responsible for integration sequencing.
-      value: maintainer
+      label: Acceptance checks
+      description: How will the outcome be verified?
     validations:
       required: true

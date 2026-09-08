@@ -8,7 +8,9 @@ This repository and its issues are public. Do not put secrets, credentials, cust
 
 Use the Issue Forms at `.github/ISSUE_TEMPLATE/parallel-work.yml` and `.github/ISSUE_TEMPLATE/shared-plan.yml`. Readers accept both GitHub Issue Form heading output and existing `Field: value` lines. Retired fields are ignored; malformed or contradictory surviving fields remain visible rather than being silently repaired.
 
-A work item uses these fields:
+The work-item form asks only for Outcome, Scope-Paths, Depends-On (default `none`), and Acceptance checks. Put optional parent links and notes in Outcome. The shared-plan form asks only for Outcome and acceptance and Work graph; risks and decisions fit within those sections.
+
+The tools read these structured fields from both new and existing records:
 
 ```text
 Scope-Paths: none | <comma-space list>
@@ -17,9 +19,11 @@ Dependency-Notes: <optional prose>
 Claim-Agent: unclaimed | <short label>
 Claim-Branch: none | claim-v1/issue-<N>
 Claimed-At: none | <ISO-8601 instant>
-Integration-Owner: <github-login>
+Integration-Owner: <optional github-login; defaults to maintainer>
 Parent-Plan: <optional issue reference>
 ```
+
+Claim-Agent, Claim-Branch, and Claimed-At are tool-written metadata, not form inputs. All three absent means unclaimed on an otherwise valid proposed or ready issue; partial, active, or conflicting ownership never does. The tool adds them only after confirmed reservation creation. Existing explicit unclaimed metadata remains supported.
 
 `Scope-Paths` entries are exact repository-relative files, directory prefixes ending in `/**`, or root `**`; `none` is valid. `Depends-On` is `none` or issue references. One `work:*` label is the lifecycle state: `work:proposed`, `work:ready`, `work:active`, `work:review`, `work:blocked`, `work:done`, or `work:abandoned`. A shared plan also has `work:plan`.
 
@@ -40,7 +44,7 @@ A dependency is clear only when its declared prerequisite issues are closed. Unk
 
 ## Planning and isolation
 
-A complex effort has one shared parent plan with scope, dependencies, acceptance, risks, and integration ownership. Multiple planners use the same plan; one named editor changes a shared plan section at a time, while independent child records may change in parallel. Use ordinary issue edits and comments, not a global distributed writer.
+A complex effort has one shared parent plan describing the outcome, acceptance, and child work graph. Add risks or decisions where useful; integration ownership defaults to the maintainer. Multiple planners use the same plan; one named editor changes a shared plan section at a time, while independent child records may change in parallel. Use ordinary issue edits and comments, not a global distributed writer.
 
 Declared overlap between current `active` or `review` work is advisory. Planners partition or order it; unknown scope is a warning, not proof of disjointness. Git detects textual conflicts, not semantic correctness. Do not silently select one worker's result when work overlaps.
 
@@ -63,7 +67,9 @@ Add concise useful narrative or a CI link as needed. Run focused local checks wh
 
 A current matching claim authorizes only a normal, non-force push of its named branch from its dedicated worktree to the identically named remote branch. It never authorizes a push to `main`, tags, another branch, force push, history rewrite, deletion, pull-request mutation, merge, provider action, or deployment. Pull requests remain the only integration route.
 
-The integration owner manages contracts, merge order, compatibility, and acceptance. Planner or worker status does not confer integration authority. Delegated commits receive review and required checks before authorized integration. Fixes and conflicts return to the execution branch; never hand-edit the integration checkout.
+For integration, review the scope and diff, run focused local checks while working and the applicable combined check once, then push the owned branch when authorized. Open one explicitly authorized pull request with a few sentences on changes, tests, and risks. Link related issues, using a closing keyword when fully satisfied, rather than duplicating completion records. Use GitHub's required review and CI on the exact current head; the principal merges. No hold record, scratch integration worktree, duplicate checkpoint evidence, or issue-body edit merely to recopy CI is required.
+
+The integration owner manages contracts, merge order, compatibility, and acceptance. Planner or worker status does not confer integration authority. Fixes and conflicts stay on the execution branch; never hand-edit the integration checkout.
 
 A dedicated worktree persists while agent-owned. Cleanup is separately authorized. Do not infer content preservation from ancestry or `git cherry`; use the merged pull request or a reviewed content comparison appropriate to the changed paths.
 

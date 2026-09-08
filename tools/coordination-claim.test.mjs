@@ -16,6 +16,8 @@ import {
   renderResult,
 } from './coordination-claim.mjs';
 
+import { buildReport } from './coordination-status.mjs';
+
 const BODY = [
   'Scope-Paths: tools/example.mjs',
   'Depends-On: none',
@@ -351,6 +353,61 @@ test('minimal four-field Issue Form is unclaimed and receives tool-written metad
       /partial or not unclaimed/,
     );
   }
+});
+
+test('committed Issue Form headings round-trip through the board and claim tool', async () => {
+  const renderForm = (path, answers) => {
+    const template = readFileSync(path, 'utf8');
+    const headings = [...template.matchAll(/^      label: (.+)$/gm)].map((match) => match[1]);
+    assert.deepEqual(headings, Object.keys(answers));
+    return headings.map((heading) => `### ${heading}\n\n${answers[heading]}\n`).join('\n');
+  };
+  const workBody = renderForm('.github/ISSUE_TEMPLATE/parallel-work.yml', {
+    Outcome: 'Make an example. Parent: #9.',
+    'Scope-Paths': 'tools/example.mjs\ndocs/example.md',
+    'Depends-On': 'none',
+    'Acceptance checks': 'Run focused tests.',
+  });
+  const planBody = renderForm('.github/ISSUE_TEMPLATE/shared-plan.yml', {
+    'Outcome and acceptance': 'Deliver the example and verify its behavior.',
+    'Work graph': '#7 can proceed independently. No current blockers.',
+  });
+  const work = openIssue({ body: workBody, labels: ['work:proposed'] });
+  const plan = openIssue({ number: 9, body: planBody, labels: ['work:plan', 'work:proposed'] });
+  const report = buildReport({ issues: [work, plan], claimBranches: [], now: at() });
+  assert.deepEqual(
+    report.proposed.map((item) => item.number),
+    [7],
+  );
+  assert.deepEqual(
+    report.plans.map((item) => item.number),
+    [9],
+  );
+  assert.equal(report.proposed[0].integrationOwner, 'maintainer');
+  assert.deepEqual(report.proposed[0].scopePaths, ['tools/example.mjs', 'docs/example.md']);
+  const readyReport = buildReport({
+    issues: [{ ...work, labels: ['work:ready'] }, plan],
+    claimBranches: [],
+    now: at(),
+  });
+  assert.deepEqual(
+    readyReport.ready.map((item) => item.number),
+    [7],
+  );
+  assert.deepEqual(report.warnings, []);
+  assert.match(checkClaimable(plan), /plan/);
+  const api = fakeApi({ issue: work });
+  assert.equal((await claim({ issue: 7, agent: 'worker', api, now: at })).outcome, 'claimed');
+  const patch = api.calls.find(([name]) => name === 'updateIssue')[2];
+  assert.ok(patch.body.startsWith(workBody));
+  const claimedReport = buildReport({
+    issues: [{ ...work, ...patch }, plan],
+    claimBranches: [claimBranch(7)],
+    now: at(),
+  });
+  assert.deepEqual(claimedReport.ready, []);
+  assert.equal(claimedReport.active[0].agent, 'worker');
+  assert.deepEqual(claimedReport.active[0].warnings, []);
 });
 
 test('claim CLI adapter uses mocked gh effects, exact HTTP creation evidence and fresh PATCH inputs', (t) => {

@@ -22,17 +22,19 @@ Keep work single-purpose and commits reviewable with imperative subjects. A clai
 
 `main` is also the only ref eligible for delivery federation, artifact provenance, and production operations. Deleted migration branches, tags, pull-request refs, forks, other workflows, and sibling repositories must not obtain provider authority.
 
-## Integration checkout and test integration
+## Integration checkout
 
 The sole integration checkout is the worktree on full symbolic ref `refs/heads/main`; authored work, merge commits, rebases, resets, conflict resolution, and history rewriting there are forbidden. Its normal state is a clean mirror of the remote `main` head, and a clean ancestor of that head is ordinary fast-forward lag rather than permission to update it. Only a separately authorized clean, conflict-free fast-forward to the verified remote head may change local `main`.
 
-Committed hooks in `.githooks/` refuse authored commits and non-fast-forward merge commits on `refs/heads/main`. They are inert until separately authorized repository-local activation and remain bypassable defense in depth. Integration testing uses a separately authorized principal-owned scratch branch and dedicated worktree; fixes and conflict resolution return to the execution branch. Neither hooks nor a mirrored checkout grant pull-request, merge, push, cleanup, provider, or deployment authority.
+Committed hooks in `.githooks/` refuse authored commits and non-fast-forward merge commits on `refs/heads/main`. They are inert until separately authorized repository-local activation and remain bypassable defense in depth. Review, combined checks, fixes, and conflict resolution stay on the execution branch and its dedicated worktree; no separate scratch integration ceremony is required. Follow the short [pull-request handoff](parallel-work.md#checkpoints-integration-and-publication). Neither hooks nor a mirrored checkout grant pull-request, merge, push, cleanup, provider, or deployment authority.
 
 ## Scoped owned-branch publication
 
-A current matching claim authorizes its named execution agent to make a normal, non-force push only from the registered branch and dedicated worktree to the identically named remote branch. That remote branch was created atomically at claim time; publication may only fast-forward that same ref after the pre-push checks in [`parallel-work.md`](parallel-work.md#publication). This is checkpoint-publication authority, not general Git or integration authority.
+A current matching claim authorizes its named execution agent to make a normal, non-force push only from the registered branch and dedicated worktree to the identically named remote branch. That remote branch was created atomically at claim time; publication may only fast-forward that same ref after verifying current ownership and the destination under [`parallel-work.md`](parallel-work.md#checkpoints-integration-and-publication). This is checkpoint-publication authority, not general Git or integration authority.
 
 The agent may never use it to push `main` or another integration/protected branch, create or push a tag, push another claim's branch, select a differently named destination, force push, use `--force-with-lease`, make a non-fast-forward update, rewrite published history, or delete any branch, tag, or ref. Cleanup and deletion remain separate explicitly authorized operations and never happen automatically. Pull requests remain mandatory for all integration; a branch push or successful CI run does not authorize opening a pull request, integration, merge, host-control changes, provider effects, or deployment.
+
+An unintegrated widening of publication authority cannot authorize its own publication.
 
 The CI branch matrix remains unchanged. Existing container jobs continue to run on routine owned-branch pushes, accepting the higher short-term CI cost; any matrix reduction requires a separate scoped change.
 

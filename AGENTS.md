@@ -23,7 +23,7 @@ Money Noodle is an architecture-first rebuild of a continuously deployed, multi-
 - Agents are intended technical operators for routine platform work through reviewed automation, short-lived workload identity, default-deny authorization, independent verification, and durable evidence. Humans retain account ownership, recovery authority, and explicit scoped approval of production effects; neither agents nor humans bypass the pipeline through a cloud console or developer laptop. [`docs/operations/delivery.md`](docs/operations/delivery.md) owns the detailed boundary.
 - Default authorization to deny, enforce tenant scope at every boundary, keep operational secrets in durable managed storage, and preserve reconstructable audit/accounting records.
 - Keep architecture visually current with version-controlled diagrams-as-code. A boundary or topology change is incomplete when its current diagram is stale.
-- A primary/root agent session is a planner: it plans, breaks work into issues, delegates, reviews, and integrates when explicitly authorized. It may make a small edit itself when the change is small and no active claim covers those paths—still on a typed branch, still through a pull request—and delegates when the work is substantial or several sessions run in parallel. Never hand-edit in the integration checkout while integrating someone else's work; conflicts and corrections go back to the execution branch. Delegation is non-blocking: dispatch the execution session and stay responsive to the principal rather than idling until it returns. Planners may run concurrently and share no local state; what another session has claimed comes from the GitHub registry and refs, never from a session list or worktree inspection.
+- A primary/root agent session is a planner: it plans, breaks work into issues, delegates, reviews, and integrates when explicitly authorized. It may make a small edit itself only with known in-scope ownership or explicitly authorized unclaimed scope—still on a dedicated typed branch and worktree, still through a pull request—and delegates when the work is substantial or several sessions run in parallel. [`docs/development/parallel-work.md`](docs/development/parallel-work.md) owns the planning and isolation rules. Never hand-edit in the integration checkout while integrating someone else's work; conflicts and corrections go back to the execution branch. Delegation is non-blocking: dispatch the execution session and stay responsive to the principal rather than idling until it returns. Planners may run concurrently and share no local state; what another session has claimed comes from the GitHub registry and refs, never from a session list or worktree inspection.
 - Whimsy guides the user experience; precise industry terminology guides code and infrastructure. Never let playful language conceal financial meaning or risk.
 - Prefer self-healing leases, reconciliation, cleanup, and status checks. Administrative repair exists as an authorized, audited fallback.
 
@@ -31,22 +31,22 @@ Money Noodle is an architecture-first rebuild of a continuously deployed, multi-
 
 Authority descends from the maintainer's current instruction, to accepted current specifications/decisions, to implemented behavior, to tests and dated validation evidence, and finally to historical material. Resolve conflicts visibly. Proposed documents do not become accepted merely by being committed.
 
-| Task area | Read completely |
-| --- | --- |
-| Documentation authority and placement | [`docs/README.md`](docs/README.md) |
-| Current repository, host-control, validation, and deployment truth | [`docs/current-status.md`](docs/current-status.md) |
-| Public security reporting and accidental disclosure | [`SECURITY.md`](SECURITY.md) |
-| Public contribution and untrusted-fork expectations | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
-| Decision index, log, and promotion to Settled | [`docs/architecture/decisions/README.md`](docs/architecture/decisions/README.md) |
-| Product experience, risk profiles, offline use, and whimsy | [`docs/product/experience.md`](docs/product/experience.md) |
-| Whimsical-to-domain vocabulary | [`docs/product/glossary.md`](docs/product/glossary.md) |
-| Architecture, monorepo, diagrams, runtime boundaries, and self-healing | [`docs/architecture/principles.md`](docs/architecture/principles.md) |
-| Accepted first web/API boundaries, diagrams, and source/deployment map | [`docs/architecture/overview.md`](docs/architecture/overview.md) |
-| Data placement, telemetry, audit, identity, ownership, and roles | [`docs/architecture/data-identity-observability.md`](docs/architecture/data-identity-observability.md) |
-| Implementation and testing standards | [`docs/engineering/standards.md`](docs/engineering/standards.md) |
-| CI/CD, remote operation, secrets, and deployment | [`docs/operations/delivery.md`](docs/operations/delivery.md) |
-| Branches, tags, publication, and releases | [`docs/development/version-control.md`](docs/development/version-control.md) |
-| Parallel planning, claims, worktrees, stale sessions, and handoff | [`docs/development/parallel-work.md`](docs/development/parallel-work.md) |
+| Task area                                                              | Read completely                                                                                        |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Documentation authority and placement                                  | [`docs/README.md`](docs/README.md)                                                                     |
+| Current repository, host-control, validation, and deployment truth     | [`docs/current-status.md`](docs/current-status.md)                                                     |
+| Public security reporting and accidental disclosure                    | [`SECURITY.md`](SECURITY.md)                                                                           |
+| Public contribution and untrusted-fork expectations                    | [`CONTRIBUTING.md`](CONTRIBUTING.md)                                                                   |
+| Decision index, log, and promotion to Settled                          | [`docs/architecture/decisions/README.md`](docs/architecture/decisions/README.md)                       |
+| Product experience, risk profiles, offline use, and whimsy             | [`docs/product/experience.md`](docs/product/experience.md)                                             |
+| Whimsical-to-domain vocabulary                                         | [`docs/product/glossary.md`](docs/product/glossary.md)                                                 |
+| Architecture, monorepo, diagrams, runtime boundaries, and self-healing | [`docs/architecture/principles.md`](docs/architecture/principles.md)                                   |
+| Accepted first web/API boundaries, diagrams, and source/deployment map | [`docs/architecture/overview.md`](docs/architecture/overview.md)                                       |
+| Data placement, telemetry, audit, identity, ownership, and roles       | [`docs/architecture/data-identity-observability.md`](docs/architecture/data-identity-observability.md) |
+| Implementation and testing standards                                   | [`docs/engineering/standards.md`](docs/engineering/standards.md)                                       |
+| CI/CD, remote operation, secrets, and deployment                       | [`docs/operations/delivery.md`](docs/operations/delivery.md)                                           |
+| Branches, tags, publication, and releases                              | [`docs/development/version-control.md`](docs/development/version-control.md)                           |
+| Parallel planning, claims, worktrees, stale sessions, and handoff      | [`docs/development/parallel-work.md`](docs/development/parallel-work.md)                               |
 
 Use the accepted source/deployment map instead of inferring current boundaries from directory names alone.
 
