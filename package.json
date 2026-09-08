@@ -21,7 +21,7 @@
     "test": "nx run-many -t test",
     "typecheck": "nx run-many -t typecheck",
     "verify:boundaries": "node tools/verify-boundary-rules.mjs",
-    "verify:foundation": "node --check tools/coordination-lib.mjs && node --check tools/coordination-status.mjs && node --check tools/verify-doc-links.mjs && node --test tools/*.test.mjs && node tools/verify-doc-links.mjs",
+    "verify:foundation": "node --check tools/coordination-fields.mjs && node --check tools/coordination-claim.mjs && node --check tools/coordination-status.mjs && node --check tools/verify-doc-links.mjs && node --test tools/*.test.mjs && node tools/verify-doc-links.mjs",
     "verify:runtime": "node tools/verify-runtime.mjs"
   },
   "devDependencies": {
