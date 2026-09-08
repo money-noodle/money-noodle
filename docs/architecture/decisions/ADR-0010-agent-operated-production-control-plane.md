@@ -1,8 +1,10 @@
 # ADR-0010: Agent-operated production control plane
 
-> **Status:** Proposed
+> **Status:** Working
 > **Date proposed:** 2026-08-30
-> **Owners:** Platform operations; proposed for maintainer acceptance
+> **Date accepted:** 2026-09-07
+> **Owners:** Platform operations; accepted by maintainer
+> **Evidence:** none — decision and catalog only; no control-plane component is implemented, applied, or remotely validated
 > **Related architecture:** [`../overview.md`](../overview.md)
 > **Related operations:** [`../../operations/production-control-plane.md`](../../operations/production-control-plane.md)
 > **Depends on:** [`ADR-0005`](ADR-0005-delivery-trust-and-secret-custody.md), [`ADR-0006`](ADR-0006-infrastructure-as-code-and-remote-state.md)
@@ -96,4 +98,4 @@ Break-glass is a human-custodied, incident-bound, strongly authenticated session
 - A distinct eligible production approver and requester/executor identity are operational prerequisites; the current protected environment is not usable when one actor would initiate and self-approve.
 - Payload-blind external secret ingress is a new protected surface whose compromise would bypass the agent boundary even though it would not expose the value to the agent.
 - The minimized initial bootstrap still includes human technical execution until the constrained-runner controls are implemented and proven.
-- This proposal grants no current provider authority; implementation and remote validation remain separate work.
+- Accepting this record grants no current provider or production authority. Nothing described here is implemented, applied, or remotely validated; implementation and remote validation remain separate work that has not started.

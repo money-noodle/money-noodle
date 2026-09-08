@@ -18,7 +18,7 @@ maintainer, and then reconciles itself into remote state so that no part of the
 platform is held together by something a person did by hand and nobody wrote
 down.
 
-## Relationship to the proposed production control plane
+## Relationship to the production control plane
 
 [`production-control-plane.md`](../docs/operations/production-control-plane.md)
 assesses whether a short-lived agent-operated bootstrap runner can safely reduce
@@ -31,11 +31,12 @@ credential, emit durable private audit, and destroy itself after independent
 verification.
 
 Even such a runner cannot own the provider/billing relationship, accept payment
-or legal terms, hold root recovery/MFA custody, or approve production. Until it
-is implemented and independently validated, the steps below remain the explicit
-human-only bootstrap exception. Every created resource still migrates into
-reviewed remote state, and accepting the proposal would not itself authorize
-this procedure or any provider effect.
+or legal terms, hold root recovery/MFA custody, or approve production. No such
+runner has been built, so the steps below remain the explicit human-only
+bootstrap exception. Every created resource still migrates into reviewed remote
+state. The maintainer's acceptance of that control-plane design on 2026-09-07
+authorized no provider effect and does not authorize this procedure; running it
+still requires separate explicit maintainer authorization.
 
 ## What the maintainer must supply
 

@@ -1,13 +1,14 @@
 # Production operation control plane and catalog
 
-> **Status:** Proposed for maintainer acceptance; not implemented authority
+> **Status:** Working design authority under [`ADR-0010`](../architecture/decisions/ADR-0010-agent-operated-production-control-plane.md); not implemented, not applied, and not production authority
 > **Catalog ID:** `money-noodle.production-operations`
 > **Catalog version:** `1`
 > **Prepared:** 2026-08-30 under GitHub issue #20
+> **Accepted:** 2026-09-07 by the maintainer
 > **Owning decision:** [`ADR-0010`](../architecture/decisions/ADR-0010-agent-operated-production-control-plane.md)
 > **Related authority:** [`delivery.md`](delivery.md), [`../architecture/data-identity-observability.md`](../architecture/data-identity-observability.md)
 
-This document is the normative catalog for routine production operations. It designs machine-readable control surfaces; it does not create one. No Google Cloud resource, production deployment, operational secret, agent credential, or real-money authority currently exists.
+This document is the normative catalog for routine production operations. It designs machine-readable control surfaces; it does not create one. Acceptance settled that design and authorizes implementation through reviewed code and pipeline changes; it granted no provider or production authority and built nothing. No authorization service, bounded administrative job, operation audit store, payload-blind secret ingress, Google Cloud resource, production deployment, operational secret, agent credential, or real-money authority currently exists, and no operation below has ever run.
 
 ## Invariants and actors
 
@@ -219,9 +220,9 @@ The agent may prepare options and later verify redacted state but cannot receive
 | Partial secret rotation or consumer refresh | Keep bounded overlap where safe, do not revoke the last working version, and surface blocked consumers. |
 | Break-glass exceeds scope/expiry or normal automation becomes available | Revoke immediately and return to the ordinary operation path. |
 
-## Proposed control-plane views
+## Control-plane views
 
-Every element in these diagrams is proposed unless already present in the accepted delivery foundation. Dotted relationships involving ADR-0009 show coordination, not acceptance of that proposal.
+Every element in these diagrams is decided design rather than a running component, unless it is already present in the accepted delivery foundation. Dotted relationships involving ADR-0009 show coordination, not acceptance of that proposal.
 
 ```mermaid
 flowchart LR
@@ -298,4 +299,8 @@ sequenceDiagram
 
 ## Acceptance and implementation handoff
 
-Maintainer acceptance moves ADR-0010 and this document from Proposed to Working; it does not grant provider authority. Implementation children remain blocked until that review. They must implement machine-readable catalog schemas, authorization storage/evaluation, purpose-specific identities, durable audit, independent read paths, secret ingress/generation, and every negative case they claim to support. Remote validation must exercise denial, concurrency, stale-plan, failed-verification, recovery, and payload non-exposure before any operation is called routine.
+The maintainer accepted ADR-0010 and this catalog on 2026-09-07, moving both from Proposed to Working. Working is not Settled: nothing here has been proven by running, and the platform has no production deployment against which it could be. Acceptance granted no provider or production authority and created no component.
+
+Implementation work must still build machine-readable catalog schemas, authorization storage and evaluation, purpose-specific identities, durable audit, independent read paths, secret ingress and generation, and every negative case it claims to support. Remote validation must exercise denial, concurrency, stale-plan, failed-verification, recovery, and payload non-exposure before any operation is called routine. Until then no operation ID in this document is invocable.
+
+Two prerequisites named by ADR-0010 are still unmet and are not resolved by acceptance: a distinct eligible production approver, which [`../current-status.md`](../current-status.md) records as absent because the protected `production` environment lists only the maintainer as reviewer with `prevent_self_review=true`, and the constrained bootstrap runner that would reduce the maintainer-executed procedure in [`../../infra/bootstrap.md`](../../infra/bootstrap.md).

@@ -351,7 +351,7 @@ This boundary is **decided architecture, not an implemented system**. Working [`
 
 ```mermaid
 flowchart LR
-    human["Human approver<br/>account, approval, recovery"]
+    human["Human principal<br/>account, approval, recovery"]
     agent["Agent operator<br/>plan, request, invoke, verify"]
     auth["Authorization service<br/>exact expiring grant<br/>decided, not built"]
 
@@ -387,7 +387,7 @@ flowchart LR
     reads --> audit
 ```
 
-Under the decided design, an operation absent from the catalog is denied rather than routed to a shell, provider console, laptop, or generic administrative endpoint. A human authorizes the exact effect; the agent coordinates technical execution; a separate workload identity performs it; and verification reads authoritative/provider-observed state rather than trusting workflow success. Secret values take the ingress/store path and never cross the agent, OpenTofu plan/state, or public automation boundary. These rules bind the implementation and remote validation still to be done; nothing running enforces them today, and the distinct eligible production approver the design requires does not exist yet.
+Under the decided design, an operation absent from the catalog is denied rather than routed to a shell, provider console, laptop, or generic administrative endpoint. A human authorizes the exact effect; the agent coordinates technical execution; a separate workload identity performs it; and verification reads authoritative/provider-observed state rather than trusting workflow success. Secret values take the ingress/store path and never cross the agent, OpenTofu plan/state, or public automation boundary. These rules bind the implementation and remote validation still to be done; nothing running enforces them today, and the distinct eligible production reviewer the design requires does not exist yet.
 
 ### Proposal only: administrative observability (not current architecture)
 
