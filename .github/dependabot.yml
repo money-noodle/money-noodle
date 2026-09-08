@@ -10,6 +10,13 @@ updates:
       timezone: Etc/UTC
     open-pull-requests-limit: 5
     versioning-strategy: increase
+    # Node majors move as one coordinated change owned by #66. @types/node 26
+    # drops TransferListItem from worker_threads, which breaks thread-stream
+    # (via pino). Remove this ignore as part of #66, not on its own.
+    ignore:
+      - dependency-name: '@types/node'
+        update-types:
+          - version-update:semver-major
     groups:
       production-minor-and-patch:
         dependency-type: production
@@ -46,6 +53,13 @@ updates:
       time: '05:00'
       timezone: Etc/UTC
     open-pull-requests-limit: 2
+    # Node 25+ images ship without corepack, which both Dockerfiles use to
+    # install pnpm, and engines.node is asserted exactly by
+    # tools/verify-runtime.mjs. Base-image majors move with #66.
+    ignore:
+      - dependency-name: node
+        update-types:
+          - version-update:semver-major
     groups:
       images-minor-and-patch:
         patterns:
@@ -62,6 +76,12 @@ updates:
       time: '05:00'
       timezone: Etc/UTC
     open-pull-requests-limit: 2
+    # See /apps/web above: corepack removal plus the exact engines.node
+    # assertion make Node base-image majors a coordinated #66 change.
+    ignore:
+      - dependency-name: node
+        update-types:
+          - version-update:semver-major
     groups:
       images-minor-and-patch:
         patterns:
