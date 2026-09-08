@@ -8,6 +8,7 @@ Newest first. Keep entries to one or two sentences. If an entry needs a paragrap
 
 ## 2026
 
+- **2026-09-08** — The coordination protocol uses an atomic `claim-v1` remote-reference claim, declared scope, an issue dependency graph, and a read-only status board; it removes scope gates, verbose evidence headers, and reconciliation machinery that did not improve ordinary coordination. See [`ADR-0011`](ADR-0011-agent-coordination-and-isolation-protocol.md).
 - **2026-08-30** — Agent coordination uses remote claim isolation, fail-closed planning, remotely verifiable lifecycle and scope evidence, and per-decision durability; see [`ADR-0011`](ADR-0011-agent-coordination-and-isolation-protocol.md).
 - **2026-08-30** — Free-tier and quota headroom is a derived figure, computed from Cloud Monitoring usage against the dated limits in `../../operations/deployment-composition.md`, because the provider exposes no clean free-tier-consumption API. Labeled as derived wherever it appears; weaker evidence than reported spend.
 - **2026-08-30** — `.gitignore` ignores `.claude/*` rather than `.claude/`, because excluding the directory itself makes any later negation unreachable and a shared project settings file should stay committable.
