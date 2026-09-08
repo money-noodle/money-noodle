@@ -345,6 +345,50 @@ flowchart LR
     client --> consumers
 ```
 
+### Agent-operated production control plane (decided, not implemented)
+
+This boundary is **decided architecture, not an implemented system**. Working [`ADR-0010`](decisions/ADR-0010-agent-operated-production-control-plane.md) and the catalog it owns in [`production-control-plane.md`](../operations/production-control-plane.md) hold the versioned operation catalog, approval envelope, operation evidence, bootstrap/break-glass bounds, and payload-blind secret lifecycle. Every element labelled *decided, not built* below does not exist: acceptance created no project, workload identity, store, or deployment, none of them appears in the source/deployment map, and none carries provider or production authority. Existing CI/CD, provider, runtime, and managed-secret boundaries remain as shown in the accepted deployment diagrams above.
+
+```mermaid
+flowchart LR
+    human["Human approver<br/>account, approval, recovery"]
+    agent["Agent operator<br/>plan, request, invoke, verify"]
+    auth["Authorization service<br/>exact expiring grant<br/>decided, not built"]
+
+    subgraph execution["Purpose-specific short-lived execution"]
+        ci["Reviewed CI/CD<br/>accepted foundation"]
+        admin["Bounded administrative jobs<br/>decided, not built"]
+    end
+
+    reads["Scoped read-only operational APIs/jobs<br/>decided, not built"]
+    state["Provider + authoritative platform state<br/>external / future"]
+    audit["Append-only operation audit<br/>decided, not built; not telemetry"]
+    ingress["Private payload-blind ingress<br/>decided, not built"]
+    secretStore["Managed secret store<br/>accepted empty boundary"]
+    runtime["Runtime consumers<br/>least privilege"]
+
+    agent -->|"safe intent + plan digest"| auth
+    human -->|"one scoped approval"| auth
+    auth --> ci
+    auth --> admin
+    ci --> state
+    admin --> state
+    state --> reads
+    agent -->|"independent read-only observation"| reads
+
+    human -->|"external payload, never through agent"| ingress
+    ingress --> secretStore
+    admin -->|"generate/version inside boundary"| secretStore
+    secretStore --> runtime
+
+    auth --> audit
+    ci --> audit
+    admin --> audit
+    reads --> audit
+```
+
+Under the decided design, an operation absent from the catalog is denied rather than routed to a shell, provider console, laptop, or generic administrative endpoint. A human authorizes the exact effect; the agent coordinates technical execution; a separate workload identity performs it; and verification reads authoritative/provider-observed state rather than trusting workflow success. Secret values take the ingress/store path and never cross the agent, OpenTofu plan/state, or public automation boundary. These rules bind the implementation and remote validation still to be done; nothing running enforces them today, and the distinct eligible production approver the design requires does not exist yet.
+
 ### Proposal only: administrative observability (not current architecture)
 
 > **Proposal only — excluded from current architecture and the source/deployment map.** The diagram illustrates [`ADR-0009`](decisions/ADR-0009-administrative-observability-surface.md), whose [`ADR-0008`](decisions/ADR-0008-single-object-store.md) dependency is also Proposed. Neither record, its scope, nor any proposed node, edge, label, identity, store, or deployment below is accepted or implemented. Accepted-context nodes are labeled only to show where the proposal would connect; every dotted edge is a proposed flow with no current authority.
@@ -378,7 +422,7 @@ Only if both proposals were separately accepted, became Working, and were implem
 
 The workspace, projects, status contract, generated client, web presentation/API adapter, API inner layers/HTTP/deployment adapters, health routes, and container definitions below exist. `infra/` now exists as reviewable, statically validated configuration; **no provider resource has been applied**, and the outstanding items before an apply can be trusted are listed in [`../../infra/README.md`](../../infra/README.md).
 
-No row below is proposed. The proposal-only subsection above is illustrative, is outside this map, and confers no source, storage, job, identity, provider, infrastructure, or deployment authority. `jobs/` does not exist, and neither the administrative ingestion unit, its read model, nor its API operations are represented here, because [`ADR-0009`](decisions/ADR-0009-administrative-observability-surface.md) is Proposed rather than Working. Rows are added when projects exist, not when they are merely proposed. [`../current-status.md`](../current-status.md) owns current host, validation, and deployment truth.
+No row below is proposed. The administrative-observability proposal-only subsection above is illustrative, is outside this map, and confers no source, storage, job, identity, provider, infrastructure, or deployment authority. `jobs/` does not exist, and neither the administrative ingestion unit, its read model, nor its API operations are represented here, because [`ADR-0009`](decisions/ADR-0009-administrative-observability-surface.md) is Proposed rather than Working. The authorization service, bounded administrative operations, operation audit, and secret ingress decided in Working [`ADR-0010`](decisions/ADR-0010-agent-operated-production-control-plane.md) are absent for a different reason: that decision settled their boundary shape without creating any of them. Rows are added when projects exist, not when they are decided or merely proposed. [`../current-status.md`](../current-status.md) owns current host, validation, and deployment truth.
 
 | Path | Project/deployment | Boundary and ownership |
 | --- | --- | --- |
