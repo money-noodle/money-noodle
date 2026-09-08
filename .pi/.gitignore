@@ -1,0 +1,13 @@
+# Generated Pi project state and locally installed packages.
+npm/
+sessions/
+runs/
+schedules/
+cache/
+subagents/
+agent-memory/
+
+# Incidental machine-local state.
+*.local
+*.tmp
+.DS_Store
