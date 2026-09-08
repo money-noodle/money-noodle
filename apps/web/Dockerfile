@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
-FROM node:22.22.0-alpine3.22@sha256:7aa86fa052f6e4b101557ccb56717cb4311be1334381f526fe013418fe157384 AS build
+FROM node:22.22.3-alpine3.22@sha256:cd7807368cf24826297cbad5dca1a44972ccfd770647db52a8c7589eb4599ac8 AS build
 
 ENV NEXT_TELEMETRY_DISABLED=1
 WORKDIR /workspace
@@ -15,7 +15,7 @@ COPY apps/web apps/web
 COPY packages/platform-api-client packages/platform-api-client
 RUN pnpm nx run web:build
 
-FROM node:22.22.0-alpine3.22@sha256:7aa86fa052f6e4b101557ccb56717cb4311be1334381f526fe013418fe157384 AS runtime
+FROM node:22.22.3-alpine3.22@sha256:cd7807368cf24826297cbad5dca1a44972ccfd770647db52a8c7589eb4599ac8 AS runtime
 
 ENV HOSTNAME=0.0.0.0
 ENV NODE_ENV=production
