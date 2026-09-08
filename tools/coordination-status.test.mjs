@@ -1,2487 +1,583 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
 import test from 'node:test';
-
 import { spawnSync } from 'node:child_process';
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import {
-  BUFFER_EXCEEDED_CODE,
-  SUBPROCESS_MAX_BUFFER_BYTES,
   buildReport,
-  isExactSameOperationTransitionQuestion,
-  readLocalObservedAgainstMain,
-  runSubprocess,
+  main,
+  parseDependsOn,
+  parseScopePaths,
+  parseWorkItem,
+  pages,
+  readRegistry,
+  MAX_PAGES,
+  PAGE_SIZE,
+  renderReport,
+  scopeOverlap,
 } from './coordination-status.mjs';
-import {
-  CANONICAL_REPOSITORY,
-  executeCoordinationClaim,
-  prepareCoordinationClaim,
-} from './coordination-claim.mjs';
 
-const STATUS_TOOL = fileURLToPath(new URL('./coordination-status.mjs', import.meta.url));
-const SERIALIZING_SOURCE = readFileSync(
-  fileURLToPath(new URL('../.github/coordination/serializing-paths.v1.json', import.meta.url)),
-  'utf8',
-);
-const FAR_FUTURE = '2999-01-01T00:00:00Z';
-const LONG_PAST = '2000-01-01T00:00:00Z';
-const REPOSITORY = 'example/registry';
-const ISSUES_ENDPOINT = `repos/${REPOSITORY}/issues?state=all&per_page=100`;
-const LABELS_ENDPOINT = `repos/${REPOSITORY}/labels?per_page=100`;
-const PULLS_ENDPOINT = `repos/${REPOSITORY}/pulls?state=open&per_page=100`;
-const CLAIM_REFS_ENDPOINT = `repos/${REPOSITORY}/git/matching-refs/heads/claim-v?per_page=100`;
-const MAIN_REF_ENDPOINT = `repos/${REPOSITORY}/git/ref/heads/main`;
-const SHIM_PATH = 'PATH=/usr/bin:/bin';
+const NOW = new Date('2026-09-08T12:00:00.000Z');
 
-const COORDINATION_LABELS = [
-  'work:plan',
-  'work:proposed',
-  'work:ready',
-  'work:active',
-  'work:blocked',
-  'work:review',
-  'work:done',
-  'work:abandoned',
-].map((name) => ({ name }));
-
-function restIssue({ number, title, body, labels, state = 'open' }) {
-  return {
-    number,
-    title,
-    body,
-    labels: labels.map((name) => ({ name })),
-    state,
-    updated_at: '2026-08-29T19:08:12Z',
-    html_url: `https://example.invalid/${number}`,
-  };
-}
-
-const PLAN_ISSUE = restIssue({
-  number: 2,
-  title: 'Plan: sample shared plan',
-  body: 'Plan-State: active\nIntegration-Owner: maintainer\n',
-  labels: ['work:plan', 'work:active'],
-});
-
-function claimIssue({
-  number,
-  state,
-  checkIn = FAR_FUTURE,
-  label = `work:${state}`,
-  dependencies = 'none',
-}) {
-  return restIssue({
-    number,
-    title: `Work: sample claim ${number}`,
-    body: [
-      'Parent-Plan: #2',
-      `Depends-On: ${dependencies}`,
-      'Integration-Owner: maintainer',
-      'Reconciled-Claim-Comment-IDs: none',
-      `Claim-State: ${state}`,
-      'Claim-Harness: pi',
-      'Claim-Run-ID: run-123',
-      'Claim-Agent: pi-sample',
-      'Claim-Branch: test/sample',
-      'Claim-Worktree: /fake/worktree',
-      'Claimed-At: 2026-08-29T18:00:00Z',
-      `Check-In-By: ${checkIn}`,
-      'Checkpoint-At: 2026-08-29T18:00:00Z',
-      'Checkpoint-Commit: uncommitted',
-      'Next-Action: test',
-      'Blockers: none',
-      '',
-    ].join('\n'),
-    labels: label ? [label] : ['area:foundation'],
-  });
-}
-
-const ACTIVE_CLAIM = claimIssue({ number: 9, state: 'active' });
-
-function v2ReadyIssue(number, overrides = {}) {
-  const fields = {
-    'Registry-Schema-Version': '2',
-    'Parent-Plan': '#2',
-    'Scope-Paths': 'tools/**',
-    'Depends-On': 'none',
-    'Dependency-Notes': 'none',
-    'Integration-Owner': 'maintainer',
-    'Reconciled-Claim-Comment-IDs': 'none',
-    'Claim-State': 'ready',
-    'Claim-Harness': 'unclaimed',
-    'Claim-Run-ID': 'unclaimed',
-    'Claim-Agent': 'unclaimed',
-    'Claim-Branch': 'unclaimed',
-    'Claim-Host': 'unclaimed',
-    'Claimed-At': 'unclaimed',
-    'Check-In-By': 'unclaimed',
-    'Waiting-Since': 'unclaimed',
-    'Checkpoint-Evidence-Version': '1',
-    'Checkpoint-State': 'ready',
-    'Checkpoint-At': 'unclaimed',
-    'Checkpoint-Commit': 'uncommitted',
-    'Checkpoint-Changed-Path-Count': '0',
-    'Checkpoint-Checks-Verdict': 'unavailable',
-    'Checkpoint-CI-Run': 'unavailable',
-    'Checkpoint-CI-Commit': 'unavailable',
-    'Checkpoint-Security-Impact': 'unknown',
-    'Checkpoint-Tenant-Impact': 'unknown',
-    'Checkpoint-Provider-Impact': 'unknown',
-    'Checkpoint-Deployment-Impact': 'unknown',
-    'Checkpoint-Residual-Risk-Count': '0',
-    'Next-Action': 'claim after the full protocol',
-    Blockers: 'none',
-    ...overrides,
-  };
-  return restIssue({
-    number,
-    title: `Work: v2 record ${number}`,
-    body: `${Object.entries(fields)
-      .map(([name, value]) => `${name}: ${value}`)
-      .join('\n')}\n`,
-    labels: ['work:ready'],
-  });
-}
-
-function v2ActiveIssue(number, overrides = {}) {
-  const issue = v2ReadyIssue(number, {
-    'Claim-State': 'active',
-    'Claim-Harness': 'pi',
-    'Claim-Run-ID': `run-${number}`,
-    'Claim-Agent': `agent-${number}`,
-    'Claim-Branch': `claim-v1/issue-${number}`,
-    'Claim-Host': 'runner-01',
-    'Claimed-At': '2026-09-01T01:00:00Z',
-    'Check-In-By': FAR_FUTURE,
-    'Checkpoint-State': 'active',
-    'Checkpoint-At': '2026-09-01T01:00:00Z',
-    'Checkpoint-Commit': 'a'.repeat(40),
-    ...overrides,
-  });
-  issue.labels = [{ name: 'work:active' }];
-  return issue;
-}
-
-const UNRELATED_ISSUE = restIssue({
-  number: 42,
-  title: 'Not coordinated work',
-  body: '',
-  labels: ['question'],
-});
-
-function commentEndpoint(number) {
-  return `repos/${REPOSITORY}/issues/${number}/comments?per_page=100`;
-}
-
-function claimRefEndpoint(number) {
-  return `repos/${REPOSITORY}/git/ref/heads/claim-v1/issue-${number}`;
-}
-
-function compareEndpoint(left, right) {
-  return `repos/${REPOSITORY}/compare/${left}...${right}`;
-}
-
-function restRef(ref, sha = 'a'.repeat(40), type = 'commit') {
-  return { ref, object: { type, sha } };
-}
-
-function restCompare(left, status, aheadBy, behindBy) {
-  return { status, ahead_by: aheadBy, behind_by: behindBy, base_commit: { sha: left } };
-}
-
-function restCheckpointComment(issue, id = 7300, body = issue.body) {
-  return {
-    id,
-    user: { login: 'maintainer' },
-    body: `Coordination-Write-ID: checkpoint-${id}\n${body}`,
-    created_at: '2026-09-01T02:00:00Z',
-    updated_at: '2026-09-01T02:00:00Z',
-  };
-}
-
-function restIntegrationHold({
-  id = 8000,
-  action = 'acquire',
-  pr = '61',
-  head = 'a'.repeat(40),
-  base = 'b'.repeat(40),
-  attempt = '1',
-  principal = 'maintainer',
-  acquiredAt = '2026-09-03T05:00:00.000Z',
-  eventAt = acquiredAt,
-  outcome = action === 'acquire' ? 'unclaimed' : 'integrated',
-  author = principal,
-  updatedAt = eventAt,
+function body({
+  scope = 'none',
+  dependsOn = 'none',
+  agent = 'unclaimed',
+  branch = 'none',
+  claimedAt = 'none',
 } = {}) {
-  return {
-    id,
-    user: { login: author },
-    body: [
-      '## Integration hold evidence',
-      'Integration-Hold-Evidence-Version: 1',
-      `Integration-Hold-Action: ${action}`,
-      `Integration-Hold-ID: pr-${pr}-head-${head}-base-${base}-attempt-${attempt}`,
-      `Integration-Hold-Principal: ${principal}`,
-      `Integration-Hold-PR: ${pr}`,
-      `Integration-Hold-Head: ${head}`,
-      `Integration-Hold-Base: ${base}`,
-      `Integration-Hold-Attempt: ${attempt}`,
-      `Integration-Hold-Scratch-Branch: test/integration-pr-${pr}-base-${base.slice(0, 12)}-attempt-${attempt}`,
-      `Integration-Hold-Acquired-At: ${acquiredAt}`,
-      `Integration-Hold-Event-At: ${eventAt}`,
-      `Integration-Hold-Outcome: ${outcome}`,
-    ].join('\n'),
-    created_at: eventAt,
-    updated_at: updatedAt,
-  };
+  return [
+    `Scope-Paths: ${scope}`,
+    `Depends-On: ${dependsOn}`,
+    'Dependency-Notes: none',
+    `Claim-Agent: ${agent}`,
+    `Claim-Branch: ${branch}`,
+    `Claimed-At: ${claimedAt}`,
+    'Integration-Owner: money-noodle',
+  ].join('\n');
 }
 
-function defaultResponses() {
-  return {
-    '--version': { stdout: 'gh version 2.0.0 (test)\n' },
-    auth: { stdout: 'Logged in to github.com as test-agent\n' },
-    repo: { stdout: `${REPOSITORY}\n` },
-    [`api:${LABELS_ENDPOINT}`]: { stdout: JSON.stringify([COORDINATION_LABELS]) },
-    [`api:${ISSUES_ENDPOINT}`]: {
-      stdout: JSON.stringify([[PLAN_ISSUE, ACTIVE_CLAIM, UNRELATED_ISSUE]]),
-    },
-    [`api:${CLAIM_REFS_ENDPOINT}`]: { stdout: '[[]]' },
-    [`api:${MAIN_REF_ENDPOINT}`]: {
-      stdout: JSON.stringify(restRef('refs/heads/main')),
-    },
-    [`api:${PULLS_ENDPOINT}`]: { stdout: '[[]]' },
-  };
-}
+const issue = (number, labels, options = {}) => ({
+  number,
+  state: options.state ?? 'open',
+  title: options.title ?? `Work: ${number}`,
+  labels,
+  body: options.body ?? body(options),
+});
 
-function writeExecutable(directory, name, body) {
-  const path = join(directory, name);
-  writeFileSync(path, body);
-  chmodSync(path, 0o755);
-}
+const active = (number, options) =>
+  issue(number, ['work:active'], {
+    agent: options.agent,
+    branch: `claim-v1/issue-${number}`,
+    claimedAt: options.claimedAt ?? '2026-09-08T09:00:00.000Z',
+    scope: options.scope,
+  });
 
-function writeGitShim(
-  directory,
-  worktreeOutput = [
-    'worktree /fake/integration',
-    `HEAD ${'a'.repeat(40)}`,
-    'branch refs/heads/main',
-    '',
-    'worktree /fake/worktree',
-    'HEAD abc1234',
-    'branch refs/heads/test/sample',
-    '',
-  ].join('\n'),
-  hooksConfigOutput = '',
-  localBranchesOutput = 'test/sample\tabc1234\n',
-) {
-  const worktreeFile = join(directory, 'git-worktrees.out');
-  const hooksConfigFile = join(directory, 'git-hooks-config.out');
-  const localBranchesFile = join(directory, 'git-local-branches.out');
-  const integrationGitDirectory = join(directory, 'integration-git');
-  writeFileSync(worktreeFile, worktreeOutput);
-  writeFileSync(hooksConfigFile, hooksConfigOutput);
-  writeFileSync(localBranchesFile, localBranchesOutput);
-  writeExecutable(
-    directory,
-    'git',
-    `#!/bin/sh
-${SHIM_PATH}
-printf 'git GIT_OPTIONAL_LOCKS=%s %s\\n' "$GIT_OPTIONAL_LOCKS" "$*" >> "$INVOCATION_LOG"
-if [ "$1" = "--no-optional-locks" ]; then shift; else exit 126; fi
-if [ "$1" = "-C" ]; then
-  cwd=$2
-  shift 2
-  case "$1" in
-    status) case " $* " in *" --branch "*) printf '# branch.oid ${'a'.repeat(40)}\\n# branch.head main\\n' ;; *) : ;; esac ;;
-    symbolic-ref) if [ "$cwd" = "/fake/worktree" ]; then printf 'refs/heads/claim-v1/issue-61\\n'; else printf 'refs/heads/main\\n'; fi ;;
-    rev-parse) printf '${integrationGitDirectory}\\n' ;;
-    config) if [ -s '${hooksConfigFile}' ]; then cat '${hooksConfigFile}'; else exit 1; fi ;;
-    ls-files) printf '100755 %s 0\\t%s\\n' '${'b'.repeat(40)}' "$4" ;;
-    merge-base) if [ "$3" = "${'b'.repeat(40)}" ] && [ "$4" = "${'a'.repeat(40)}" ]; then exit 0; else exit 1; fi ;;
-    *) printf 'unexpected git -C invocation: %s %s\\n' "$cwd" "$*" >&2; exit 127 ;;
-  esac
-  exit 0
-fi
-case "$1" in
-  status) printf '## test/sample...origin/main\\n' ;;
-  worktree) cat '${worktreeFile}' ;;
-  for-each-ref) cat '${localBranchesFile}' ;;
-  ls-remote) printf '${'a'.repeat(40)}\\trefs/heads/main\\n' ;;
-  *) printf 'unexpected git invocation: %s\\n' "$*" >&2; exit 127 ;;
-esac
-`,
+test('scope paths accept the three declared forms and reject everything else', () => {
+  assert.equal(parseScopePaths('none').status, 'none');
+  assert.equal(parseScopePaths('**').status, 'declared');
+  assert.equal(parseScopePaths('docs/**, tools/a.mjs').status, 'declared');
+  assert.equal(parseScopePaths('tools/b.mjs, tools/a.mjs').status, 'declared', 'order is advisory');
+  assert.equal(parseScopePaths('tools/a.mjs, tools/a.mjs').status, 'invalid', 'must be unique');
+  assert.equal(parseScopePaths('tools/*.mjs').status, 'invalid', 'no free globs');
+  assert.equal(parseScopePaths('/tools/a.mjs').status, 'invalid');
+  assert.equal(parseScopePaths('tools/../a.mjs').status, 'invalid');
+  assert.equal(parseScopePaths('tools/a.mjs,tools/b.mjs').status, 'declared');
+  assert.equal(parseScopePaths(undefined).status, 'missing');
+});
+
+test('scope overlap follows prefix containment, not string prefixes', () => {
+  const entries = (raw) => parseScopePaths(raw).entries;
+  assert.deepEqual(scopeOverlap(entries('tools/a.mjs'), entries('tools/b.mjs')), []);
+  assert.deepEqual(scopeOverlap(entries('tools/a.mjs'), entries('tools/**')), [
+    'tools/a.mjs',
+    'tools/**',
+  ]);
+  assert.deepEqual(scopeOverlap(entries('docs/**'), entries('docs/architecture/**')), [
+    'docs/**',
+    'docs/architecture/**',
+  ]);
+  assert.deepEqual(scopeOverlap(entries('tools/**'), entries('toolsmith/**')), []);
+  assert.deepEqual(scopeOverlap(entries('**'), entries('tools/a.mjs')), ['**', 'tools/a.mjs']);
+  assert.deepEqual(scopeOverlap(entries('tools/**'), entries('tools')), [], 'dir/** excludes dir');
+});
+
+test('Depends-On accepts none or canonical references only', () => {
+  assert.deepEqual(parseDependsOn('none'), { status: 'none', numbers: [] });
+  assert.deepEqual(parseDependsOn('#12, #13'), { status: 'declared', numbers: [12, 13] });
+  assert.equal(parseDependsOn('12, 13').status, 'invalid');
+  assert.equal(parseDependsOn('#12,#13').status, 'declared');
+  assert.equal(parseDependsOn('see #12').status, 'invalid');
+});
+
+test('ready lists only work:ready issues whose dependencies are all closed', () => {
+  const report = buildReport({
+    issues: [
+      issue(10, ['work:done'], { state: 'closed' }),
+      issue(11, ['work:ready'], { state: 'open' }),
+      issue(20, ['work:ready'], { dependsOn: '#10' }),
+      issue(21, ['work:ready'], { dependsOn: '#11' }),
+      issue(22, ['work:ready'], { dependsOn: '#10, #11' }),
+      issue(23, ['work:proposed'], { dependsOn: '#10' }),
+    ],
+    claimBranches: [],
+    now: NOW,
+  });
+
+  assert.deepEqual(
+    report.ready.map((entry) => entry.number),
+    [11, 20],
   );
-}
-
-function writeGhShim(directory, responses) {
-  const responseFile = join(directory, 'responses.json');
-  const countsFile = join(directory, 'gh-counts.json');
-  writeFileSync(responseFile, JSON.stringify(responses));
-  writeFileSync(countsFile, '{}');
-  writeExecutable(
-    directory,
-    'gh',
-    `#!${process.execPath}
-const fs = require("node:fs");
-const args = process.argv.slice(2);
-fs.appendFileSync(process.env.INVOCATION_LOG, "gh " + args.join(" ") + "\\n");
-const responses = JSON.parse(fs.readFileSync(${JSON.stringify(responseFile)}, "utf8"));
-const key = args[0] === "api" ? "api:" + args.at(-1) : args[0];
-let fallback = key.includes("/comments?per_page=100") ? { stdout: "[[]]" } : undefined;
-if (!fallback && key.includes("/git/ref/heads/claim-v1/issue-")) {
-  const ref = key.slice(key.indexOf("repos/") + 6).split("/git/ref/")[1];
-  fallback = { stdout: JSON.stringify({ ref: "refs/" + ref, object: { type: "commit", sha: "${'a'.repeat(40)}" } }) };
-}
-if (!fallback && key.includes("/git/commits/") && /^[0-9a-f]{40}$/.test(key.slice(-40))) {
-  const sha = key.slice(-40);
-  fallback = { stdout: JSON.stringify({ sha, tree: { sha: "${'d'.repeat(40)}" } }) };
-}
-if (!fallback && key.endsWith("/git/trees/${'d'.repeat(40)}?recursive=1")) {
-  fallback = { stdout: JSON.stringify({ sha: "${'d'.repeat(40)}", truncated: false, tree: [] }) };
-}
-const configured = responses[key] ?? fallback;
-const counts = JSON.parse(fs.readFileSync(${JSON.stringify(countsFile)}, "utf8"));
-const call = counts[key] ?? 0;
-counts[key] = call + 1;
-fs.writeFileSync(${JSON.stringify(countsFile)}, JSON.stringify(counts));
-const response = configured?.sequence ? configured.sequence[Math.min(call, configured.sequence.length - 1)] : configured;
-if (!response) {
-  process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
-  process.exit(127);
-}
-if (response.stdoutBytes) {
-  const chunk = Buffer.alloc(1024 * 1024, 120);
-  let remaining = response.stdoutBytes;
-  while (remaining > 0) {
-    const size = Math.min(remaining, chunk.length);
-    process.stdout.write(size === chunk.length ? chunk : chunk.subarray(0, size));
-    remaining -= size;
-  }
-} else {
-  if (response.stdout) process.stdout.write(response.stdout);
-  if (response.stderr) process.stderr.write(response.stderr);
-}
-// Exit by code rather than process.exit so a response larger than the pipe buffer is
-// delivered whole; process.exit would truncate it and fake a malformed registry.
-process.exitCode = response.status ?? 0;
-`,
+  assert.deepEqual(
+    report.blocked.map((entry) => [entry.number, entry.blockedBy]),
+    [
+      [21, [11]],
+      [22, [11]],
+    ],
   );
-}
-
-function runStatus(
-  t,
-  {
-    responses = defaultResponses(),
-    gh = true,
-    args = [],
-    gitWorktrees,
-    gitHooksConfig,
-    gitLocalBranches,
-  } = {},
-) {
-  const directory = mkdtempSync(join(tmpdir(), 'mn-coordination-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const invocationLog = join(directory, 'invocations.log');
-  writeFileSync(invocationLog, '');
-  writeFileSync(join(directory, 'sentinel.txt'), 'unchanged\n');
-  mkdirSync(join(directory, '.githooks'));
-  writeExecutable(directory, '.githooks/pre-commit', '#!/bin/sh\nexit 0\n');
-  writeExecutable(directory, '.githooks/pre-merge-commit', '#!/bin/sh\nexit 0\n');
-  writeExecutable(directory, 'hostname', '#!/bin/sh\nprintf "runner-01\\n"\n');
-  writeGitShim(directory, gitWorktrees, gitHooksConfig, gitLocalBranches);
-  if (gh) writeGhShim(directory, responses);
-  const beforeFiles = readdirSync(directory).sort();
-  const beforeSentinel = readFileSync(join(directory, 'sentinel.txt'), 'utf8');
-
-  const result = spawnSync(process.execPath, [STATUS_TOOL, ...args], {
-    cwd: directory,
-    encoding: 'utf8',
-    env: { PATH: directory, HOME: directory, INVOCATION_LOG: invocationLog },
-    // The harness must not reintroduce the defect it exists to prove fixed: reading the
-    // tool's own output at Node's 1 MiB default would fail on any oversized registry.
-    maxBuffer: SUBPROCESS_MAX_BUFFER_BYTES,
-  });
-
-  assert.equal(result.error, undefined, `could not run status tool: ${result.error?.message}`);
-  return {
-    stdout: result.stdout,
-    stderr: result.stderr,
-    exitCode: result.status,
-    invocations: readFileSync(invocationLog, 'utf8').trim().split('\n').filter(Boolean),
-    beforeFiles,
-    afterFiles: readdirSync(directory).sort(),
-    beforeSentinel,
-    afterSentinel: readFileSync(join(directory, 'sentinel.txt'), 'utf8'),
-  };
-}
-
-function assertReportsUnknown(result, detail) {
-  assert.equal(result.exitCode, 2);
-  assert.match(result.stderr, /COORDINATION UNKNOWN/);
-  assert.match(result.stderr, /Do not assume work is unclaimed/);
-  assert.doesNotMatch(result.stdout, /## Shared plans/);
-  if (detail) assert.match(result.stderr, detail);
-}
-
-test('healthy human output reports reconciled claims and advisory candidate semantics', (t) => {
-  const result = runStatus(t);
-
-  assert.equal(result.exitCode, 0);
-  assert.equal(result.stderr, '');
-  assert.match(result.stdout, /## Shared registry\nexample\/registry/);
-  assert.match(result.stdout, /#2 \[active\] Plan: sample shared plan/);
-  assert.match(result.stdout, /#9 \[active; claimed\] Work: sample claim 9/);
-  assert.match(result.stdout, /dependencies=clear reconciliation=consistent/);
-  assert.match(result.stdout, /local=matched/);
-  assert.match(result.stdout, /claiming is safe/);
-  assert.doesNotMatch(result.stdout, /#42/);
-});
-
-test('plan integration holds are visible, paired deterministically, and malformed evidence warns', (t) => {
-  {
-    const responses = defaultResponses();
-    responses[`api:${commentEndpoint(2)}`] = {
-      stdout: JSON.stringify([[restIntegrationHold()]]),
-    };
-    const result = runStatus(t, { responses, args: ['--json'] });
-    const report = JSON.parse(result.stdout);
-    assert.equal(result.exitCode, 0);
-    assert.equal(report.registry.plans[0].integrationHold.status, 'held');
-    assert.match(report.registry.plans[0].integrationHold.active.holdId, /^pr-61-head-/);
-  }
-  {
-    const responses = defaultResponses();
-    responses[`api:${commentEndpoint(2)}`] = {
-      stdout: JSON.stringify([[restIntegrationHold({ author: 'other-principal' })]]),
-    };
-    const result = runStatus(t, { responses, args: ['--json'] });
-    const report = JSON.parse(result.stdout);
-    assert.equal(result.exitCode, 2);
-    assert.equal(report.registry.plans[0].integrationHold.status, 'question');
-    assert(
-      report.registry.maintainerQuestions.some(
-        ({ issueNumber, code }) => issueNumber === 2 && code === 'integration-hold-malformed',
-      ),
-    );
-  }
-});
-
-test('versioned JSON mode is one parseable document with candidate safety explicit', (t) => {
-  const ready = claimIssue({ number: 10, state: 'ready', label: 'work:ready' });
-  ready.body = ready.body
-    .replace('Claim-Harness: pi', 'Claim-Harness: unclaimed')
-    .replace('Claim-Run-ID: run-123', 'Claim-Run-ID: unclaimed')
-    .replace('Claim-Agent: pi-sample', 'Claim-Agent: unclaimed')
-    .replace('Claim-Branch: test/sample', 'Claim-Branch: unclaimed')
-    .replace('Claim-Worktree: /fake/worktree', 'Claim-Worktree: unclaimed')
-    .replace('Claimed-At: 2026-08-29T18:00:00Z', 'Claimed-At: unclaimed')
-    .replace(`Check-In-By: ${FAR_FUTURE}`, 'Check-In-By: unclaimed');
-  const responses = defaultResponses();
-  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE, ready]]) };
-  const result = runStatus(t, { responses, args: ['--json'] });
-  const report = JSON.parse(result.stdout);
-
-  assert.equal(result.exitCode, 0);
-  assert.equal(result.stderr, '');
-  assert.equal(report.schemaVersion, '1.0');
-  assert.equal(report.coordinationKnown, true);
-  assert.equal(report.registry.workItems[0].triage, 'candidate');
-  assert.equal(report.registry.workItems[0].candidateSafety, 'not-established');
-  assert.equal(report.registry.scopeStatus, 'inactive');
-  assert.equal(report.registry.workItems[0].scope.status, 'unavailable');
-  assert.deepEqual(report.scopeGate, {
-    requested: 'board',
-    status: 'clear',
-    blockingFindingIds: [],
-  });
-  assert.equal(report.local.integrationCheckout.status, 'mirrored');
-  assert.equal(report.local.hooks.configuration.status, 'unset');
-  assert.equal(report.local.hooks.configuration.effective, null);
-  assert.equal(report.local.hooks.checkoutPath, '/fake/integration');
-  assert.equal(report.local.hooks.files['pre-commit'].indexMode, '100755');
-  assert.equal(report.local.hooks.files['pre-commit'].filesystem.status, 'missing');
-  assert.equal(report.local.hooks.files['pre-merge-commit'].indexMode, '100755');
-  assert.equal(report.local.hooks.files['pre-merge-commit'].filesystem.status, 'missing');
-  assert.equal(report.local.hooks.ready, false);
-  assert.match(report.advisory, /never proves that claiming is safe/);
-});
-
-test('hook configuration reports effective value, scope, and origin without changing it', (t) => {
-  const configured = runStatus(t, {
-    args: ['--json'],
-    gitHooksConfig: 'local\tfile:/fake/integration/.git/config\t.githooks\n',
-  });
-  const report = JSON.parse(configured.stdout);
-  assert.equal(configured.exitCode, 2);
-  assert.deepEqual(report.local.hooks.configuration.effective, {
-    scope: 'local',
-    origin: 'file:/fake/integration/.git/config',
-    value: '.githooks',
-  });
-  assert.equal(report.local.hooks.checkoutPath, '/fake/integration');
-  assert.equal(report.local.hooks.ready, false);
-  assert(report.warnings.some(({ code }) => code === 'integration-hooks-not-ready'));
-
-  const mismatch = runStatus(t, {
-    args: ['--json'],
-    gitHooksConfig: 'global\tfile:/fake/home/.gitconfig\t/unsafe/hooks\n',
-  });
-  const mismatchReport = JSON.parse(mismatch.stdout);
-  assert.equal(mismatch.exitCode, 2);
-  assert(mismatchReport.warnings.some(({ code }) => code === 'integration-hooks-path-mismatch'));
-
-  const wrongScope = runStatus(t, {
-    args: ['--json'],
-    gitHooksConfig: 'global\tfile:/fake/home/.gitconfig\t.githooks\n',
-  });
-  const wrongScopeReport = JSON.parse(wrongScope.stdout);
-  assert.equal(wrongScope.exitCode, 2);
-  assert(wrongScopeReport.warnings.some(({ code }) => code === 'integration-hooks-path-mismatch'));
-});
-
-test('mixed v1/v2 JSON exposes each record schema without changing candidate ordering', (t) => {
-  const readyV2 = v2ReadyIssue(11);
-  const responses = defaultResponses();
-  responses[`api:${ISSUES_ENDPOINT}`] = {
-    stdout: JSON.stringify([[PLAN_ISSUE, ACTIVE_CLAIM, readyV2]]),
-  };
-  const result = runStatus(t, { responses, args: ['--json'] });
-  const report = JSON.parse(result.stdout);
-  const v1 = report.registry.workItems.find(({ number }) => number === 9);
-  const v2 = report.registry.workItems.find(({ number }) => number === 11);
-
-  assert.equal(result.exitCode, 0);
-  assert.deepEqual([v1.number, v2.number], [9, 11]);
-  assert.equal(v1.registrySchema.version, '1');
-  assert.equal(v1.registrySchema.explicit, false);
-  assert.equal(v2.registrySchema.version, '2');
-  assert.equal(v2.registrySchema.explicit, true);
-  assert.equal(v2.triage, 'candidate');
-  assert.deepEqual(v2.scopePaths, ['tools/**']);
-});
-
-test('unsupported and malformed host edits remain on the human board and fail closed', (t) => {
-  const unsupported = v2ReadyIssue(12, { 'Registry-Schema-Version': 'future' });
-  const responses = defaultResponses();
-  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE, unsupported]]) };
-  const result = runStatus(t, { responses });
-
-  assert.equal(result.exitCode, 2);
-  assert.match(result.stdout, /#12 \[ready; question\]/);
-  assert.match(result.stdout, /## Unparseable or unsupported registry records/);
-  assert.match(result.stdout, /schema=vfuture status=unsupported/);
-  assert.match(result.stdout, /unsupported-schema-version/);
-  assert.doesNotMatch(result.stdout, /#12 dependencies clear; claiming safety not established/);
-});
-
-test('issue and pull request retrieval consumes records beyond the first API page', (t) => {
-  const secondPage = claimIssue({ number: 77, state: 'active' });
-  secondPage.body = secondPage.body
-    .replace('Claim-Branch: test/sample', 'Claim-Branch: test/page-two')
-    .replace('Claim-Worktree: /fake/worktree', 'Claim-Worktree: /remote/page-two');
-  const pull = {
-    number: 88,
-    title: 'Page two PR',
-    head: { ref: 'test/page-two' },
-    base: { ref: 'main' },
-    updated_at: '2026-08-29T20:00:00Z',
-    html_url: 'https://example.invalid/pull/88',
-    draft: false,
-  };
-  const responses = defaultResponses();
-  responses[`api:${ISSUES_ENDPOINT}`] = {
-    stdout: JSON.stringify([[PLAN_ISSUE, ACTIVE_CLAIM], [secondPage]]),
-  };
-  responses[`api:${PULLS_ENDPOINT}`] = { stdout: JSON.stringify([[], [pull]]) };
-  const result = runStatus(t, { responses });
-
-  assert.equal(result.exitCode, 0);
-  assert.match(result.stdout, /#77/);
-  assert.match(result.stdout, /#88 test\/page-two -> main/);
-  assert(result.invocations.includes(`gh api --paginate --slurp ${ISSUES_ENDPOINT}`));
-  assert(result.invocations.includes(`gh api --paginate --slurp ${PULLS_ENDPOINT}`));
-});
-
-test('only exact same-operation transitional state suppresses its one expected mismatch', () => {
-  const parked = { ...v2ReadyIssue(73), labels: ['work:ready'] };
-  const prepared = { ...v2ActiveIssue(73), labels: ['work:active'] };
-  const expectedBase = 'a'.repeat(40);
-  const operationComment = {
-    id: 73,
-    author: 'maintainer',
-    body: `Coordination-Write-ID: claim-73-operation\n${prepared.body}`,
-    createdAt: '2026-09-01T02:00:00Z',
-    updatedAt: '2026-09-01T02:00:00Z',
-  };
-  const digest = (value) => createHash('sha256').update(value).digest('hex');
-  const common = {
-    phase: 'after-ref',
-    operationId: 'claim-73-operation',
-    issueNumber: 73,
-    branch: 'claim-v1/issue-73',
-    ref: 'refs/heads/claim-v1/issue-73',
-    expectedBase,
-    sourceIssueBody: parked.body,
-    sourceIssueBodySha256: digest(parked.body),
-    preparedIssueBody: prepared.body,
-    preparedIssueBodySha256: digest(prepared.body),
-    expectedOperationComment: operationComment.body,
-    expectedOperationCommentSha256: digest(operationComment.body),
-    expectedSourceStateLabel: 'work:ready',
-    desiredStateLabel: 'work:active',
-    claimHarness: 'pi',
-    claimRunId: 'run-73',
-    claimAgent: 'agent-73',
-    claimHost: 'runner-01',
-    claimedAt: '2026-09-01T01:00:00Z',
-  };
-  const reservedRefs = [
-    {
-      ref: 'refs/heads/claim-v1/issue-73',
-      objectType: 'commit',
-      sha: expectedBase,
-    },
-  ];
-  const orphanEntry = {
-    code: 'orphaned-claim-ref',
-    message:
-      'refs/heads/claim-v1/issue-73 exists while issue #73 is ready; do not adopt or release it automatically',
-  };
-  const refCreated = {
-    ...common,
-    transition: 'ref-created-parked',
-    refCreatedByOperation: true,
-    expectedIssueBody: parked.body,
-    expectedIssueBodySha256: digest(parked.body),
-  };
-  assert.equal(
-    isExactSameOperationTransitionQuestion({
-      provisionalClaim: refCreated,
-      issue: parked,
-      comments: [],
-      reservedRefs,
-      entry: orphanEntry,
-    }),
-    true,
+  assert.deepEqual(
+    report.proposed.map((entry) => entry.number),
+    [23],
   );
-
-  const recoveryIssue = { ...prepared, labels: ['work:ready'] };
-  const recoveryEntry = {
-    code: 'body-label-state-mismatch',
-    message: 'Claim-State active does not match exactly one state label (found work:ready)',
-  };
-  const recovery = {
-    ...common,
-    transition: 'writer-recovery',
-    refCreatedByOperation: false,
-    expectedIssueBody: prepared.body,
-    expectedIssueBodySha256: digest(prepared.body),
-  };
-  const exactRecovery = {
-    provisionalClaim: recovery,
-    issue: recoveryIssue,
-    comments: [operationComment],
-    reservedRefs,
-    entry: recoveryEntry,
-  };
-  assert.equal(isExactSameOperationTransitionQuestion(exactRecovery), true);
-  for (const candidate of [
-    { ...exactRecovery, provisionalClaim: { ...recovery, phase: 'before-ref' } },
-    { ...exactRecovery, provisionalClaim: { ...recovery, operationId: 'claim/73' } },
-    { ...exactRecovery, provisionalClaim: { ...recovery, claimRunId: 'other-run' } },
-    { ...exactRecovery, provisionalClaim: { ...recovery, expectedBase: 'b'.repeat(40) } },
-    { ...exactRecovery, issue: { ...recoveryIssue, body: `${recoveryIssue.body}drift\n` } },
-    { ...exactRecovery, comments: [] },
-    { ...exactRecovery, comments: [operationComment, { ...operationComment, id: 74 }] },
-    {
-      ...exactRecovery,
-      comments: [{ ...operationComment, updatedAt: '2026-09-01T03:00:00Z' }],
-    },
-    { ...exactRecovery, reservedRefs: [] },
-    { ...exactRecovery, entry: { code: 'other-warning', message: recoveryEntry.message } },
-    { ...exactRecovery, entry: { ...recoveryEntry, message: `${recoveryEntry.message} drift` } },
-  ]) {
-    assert.equal(isExactSameOperationTransitionQuestion(candidate), false);
-  }
+  assert.equal(report.warnings.length, 0);
 });
 
-test('real production status/report/guard path authorizes only exact same-operation recovery', async (t) => {
-  const directory = mkdtempSync(join(tmpdir(), 'mn-coordination-recovery-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const invocationLog = join(directory, 'invocations.log');
-  writeFileSync(invocationLog, '');
-  mkdirSync(join(directory, '.githooks'));
-  writeExecutable(directory, '.githooks/pre-commit', '#!/bin/sh\nexit 0\n');
-  writeExecutable(directory, '.githooks/pre-merge-commit', '#!/bin/sh\nexit 0\n');
-  writeExecutable(directory, 'hostname', '#!/bin/sh\nprintf "runner-01\\n"\n');
-  writeGitShim(directory);
-
-  const issueNumber = 73;
-  const base = 'a'.repeat(40);
-  const branch = `claim-v1/issue-${issueNumber}`;
-  const ref = `refs/heads/${branch}`;
-  const parked = v2ReadyIssue(issueNumber, { 'Checkpoint-Commit': base });
-  const active = v2ActiveIssue(issueNumber);
-  const values = {
-    'Claim-State': 'active',
-    'Claim-Harness': 'pi',
-    'Claim-Run-ID': 'run-73',
-    'Claim-Agent': 'agent-73',
-    'Claim-Branch': branch,
-    'Claim-Host': 'runner-01',
-    'Claimed-At': '2026-09-01T01:00:00Z',
-    'Check-In-By': FAR_FUTURE,
-    'Waiting-Since': 'unclaimed',
-    'Checkpoint-State': 'active',
-    'Checkpoint-At': '2026-09-01T01:00:00Z',
-    'Checkpoint-Commit': base,
-    'Checkpoint-Changed-Path-Count': '0',
-    'Checkpoint-Checks-Verdict': 'unavailable',
-    'Checkpoint-CI-Run': 'unavailable',
-    'Checkpoint-CI-Commit': 'unavailable',
-    'Checkpoint-Security-Impact': 'unknown',
-    'Checkpoint-Tenant-Impact': 'unknown',
-    'Checkpoint-Provider-Impact': 'unknown',
-    'Checkpoint-Deployment-Impact': 'unknown',
-    'Checkpoint-Residual-Risk-Count': '0',
-    'Next-Action': 'claim after the full protocol',
-    Blockers: 'none',
-  };
-  const operationId = 'claim-73-production-recovery';
-  const claimInput = {
-    repository: CANONICAL_REPOSITORY,
-    issueNumber,
-    expectedBase: base,
-    expectedBody: parked.body,
-    values,
-    checkpointComment: active.body,
-    operationId,
-  };
-  const prepared = prepareCoordinationClaim(claimInput);
-  const operationComment = {
-    id: 7300,
-    user: { login: 'maintainer' },
-    body: prepared.operation.comment,
-    created_at: '2026-09-01T02:00:00Z',
-    updated_at: '2026-09-01T02:00:00Z',
-  };
-  const transitionIssue = restIssue({
-    number: issueNumber,
-    title: active.title,
-    body: prepared.prepared.body,
-    labels: ['work:ready'],
+test('an unknown dependency blocks the item and is warned about', () => {
+  const report = buildReport({
+    issues: [issue(30, ['work:ready'], { dependsOn: '#999' })],
+    claimBranches: [],
+    now: NOW,
   });
-  const treeSha = 'b'.repeat(40);
-  const blobSha = 'c'.repeat(40);
-  const canonicalIssues = `repos/${CANONICAL_REPOSITORY}/issues?state=all&per_page=100`;
-  const canonicalLabels = `repos/${CANONICAL_REPOSITORY}/labels?per_page=100`;
-  const canonicalRefs = `repos/${CANONICAL_REPOSITORY}/git/matching-refs/heads/claim-v?per_page=100`;
-  const canonicalMain = `repos/${CANONICAL_REPOSITORY}/git/ref/heads/main`;
-  const canonicalPulls = `repos/${CANONICAL_REPOSITORY}/pulls?state=open&per_page=100`;
-  const canonicalComments = `repos/${CANONICAL_REPOSITORY}/issues/${issueNumber}/comments?per_page=100`;
-  const responses = {
-    '--version': { stdout: 'gh version 2.0.0 (test)\n' },
-    auth: { stdout: 'Logged in to github.com as test-agent\n' },
-    repo: { stdout: `${CANONICAL_REPOSITORY}\n` },
-    [`api:${canonicalLabels}`]: { stdout: JSON.stringify([COORDINATION_LABELS]) },
-    [`api:${canonicalIssues}`]: { stdout: JSON.stringify([[PLAN_ISSUE, transitionIssue]]) },
-    [`api:${canonicalRefs}`]: { stdout: JSON.stringify([[restRef(ref)]]) },
-    [`api:${canonicalMain}`]: { stdout: JSON.stringify(restRef('refs/heads/main')) },
-    [`api:${canonicalPulls}`]: { stdout: '[[]]' },
-    [`api:${canonicalComments}`]: { stdout: JSON.stringify([[operationComment]]) },
-    [`api:repos/${CANONICAL_REPOSITORY}/git/commits/${base}`]: {
-      stdout: JSON.stringify({ sha: base, tree: { sha: treeSha } }),
-    },
-    [`api:repos/${CANONICAL_REPOSITORY}/git/trees/${treeSha}?recursive=1`]: {
-      stdout: JSON.stringify({
-        sha: treeSha,
-        truncated: false,
-        tree: [
-          { path: '.github', mode: '040000', type: 'tree', sha: '6'.repeat(40) },
-          {
-            path: '.github/coordination',
-            mode: '040000',
-            type: 'tree',
-            sha: '7'.repeat(40),
-          },
-          {
-            path: '.github/coordination/serializing-paths.v1.json',
-            mode: '100644',
-            type: 'blob',
-            sha: blobSha,
-          },
-        ],
-      }),
-    },
-    [`api:repos/${CANONICAL_REPOSITORY}/git/blobs/${blobSha}`]: {
-      stdout: JSON.stringify({
-        sha: blobSha,
-        encoding: 'base64',
-        content: Buffer.from(SERIALIZING_SOURCE).toString('base64'),
-      }),
-    },
-  };
-  writeGhShim(directory, responses);
-  const responseFile = join(directory, 'responses.json');
-  const mutableStateFile = join(directory, 'mutable-issue-state.json');
-  writeFileSync(
-    mutableStateFile,
-    JSON.stringify({ issue: transitionIssue, comments: [operationComment], mutations: [] }),
-  );
-  writeExecutable(
-    directory,
-    'gh',
-    `#!${process.execPath}
-const fs = require("node:fs");
-const args = process.argv.slice(2);
-const inputText = fs.readFileSync(0, "utf8");
-fs.appendFileSync(process.env.INVOCATION_LOG, "gh " + args.join(" ") + "\\n");
-const responseFile = ${JSON.stringify(responseFile)};
-const stateFile = ${JSON.stringify(mutableStateFile)};
-const issueEndpoint = ${JSON.stringify(`repos/${CANONICAL_REPOSITORY}/issues/${issueNumber}`)};
-const commentsEndpoint = issueEndpoint + "/comments";
-const canonicalIssues = ${JSON.stringify(canonicalIssues)};
-const responses = JSON.parse(fs.readFileSync(responseFile, "utf8"));
-const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
-const methodIndex = args.indexOf("--method");
-const method = methodIndex < 0 ? "GET" : args[methodIndex + 1];
-const endpoint = args[0] === "api" ? args.find((arg) => arg.startsWith("repos/")) : undefined;
-function output(value) { process.stdout.write(JSON.stringify(value)); }
-if (args[0] === "repo" && args.includes("nameWithOwner,defaultBranchRef")) {
-  output({ nameWithOwner: ${JSON.stringify(CANONICAL_REPOSITORY)}, defaultBranchRef: { name: "main" } });
-  process.exit(0);
-}
-if (endpoint === issueEndpoint && method === "GET") {
-  output(state.issue);
-  process.exit(0);
-}
-if (endpoint === commentsEndpoint && method === "GET") {
-  output([state.comments]);
-  process.exit(0);
-}
-if (endpoint === issueEndpoint && method === "PATCH") {
-  const input = JSON.parse(inputText);
-  if (Object.hasOwn(input, "body")) {
-    state.issue.body = input.body;
-    state.mutations.push("body");
-  }
-  if (Object.hasOwn(input, "labels")) {
-    state.issue.labels = input.labels.map((name) => ({ name }));
-    state.mutations.push("label");
-    responses["api:" + canonicalIssues] = {
-      stdout: JSON.stringify([[${JSON.stringify(PLAN_ISSUE)}, state.issue]]),
-    };
-    fs.writeFileSync(responseFile, JSON.stringify(responses));
-  }
-  fs.writeFileSync(stateFile, JSON.stringify(state));
-  output(state.issue);
-  process.exit(0);
-}
-if (endpoint === commentsEndpoint && method === "POST") {
-  const input = JSON.parse(inputText);
-  state.mutations.push("comment");
-  const comment = { id: 7301, user: { login: "test-agent" }, body: input.body, created_at: "2026-09-01T03:00:00Z", updated_at: "2026-09-01T03:00:00Z" };
-  state.comments.push(comment);
-  fs.writeFileSync(stateFile, JSON.stringify(state));
-  output(comment);
-  process.exit(0);
-}
-const key = args[0] === "api" ? "api:" + args.at(-1) : args[0];
-let fallback = key.includes("/comments?per_page=100") ? { stdout: "[[]]" } : undefined;
-if (!fallback && key.includes("/git/ref/heads/claim-v1/issue-")) {
-  fallback = { stdout: JSON.stringify({ ref: ${JSON.stringify(ref)}, object: { type: "commit", sha: ${JSON.stringify(base)} } }) };
-}
-const response = responses[key] ?? fallback;
-if (!response) {
-  process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
-  process.exit(127);
-}
-if (response.stdout) process.stdout.write(response.stdout);
-if (response.stderr) process.stderr.write(response.stderr);
-process.exit(response.status ?? 0);
-`,
-  );
+  assert.deepEqual(report.ready, []);
+  assert.deepEqual(report.blocked[0].blockedBy, [999]);
+  assert.match(report.warnings.join('\n'), /#30: Depends-On names #999/);
+});
 
-  const previous = {
-    cwd: process.cwd(),
-    PATH: process.env.PATH,
-    HOME: process.env.HOME,
-    INVOCATION_LOG: process.env.INVOCATION_LOG,
-  };
-  process.chdir(directory);
-  process.env.PATH = directory;
-  process.env.HOME = directory;
-  process.env.INVOCATION_LOG = invocationLog;
+test('two active claims with intersecting declared scope are reported as an overlap', () => {
+  const report = buildReport({
+    issues: [
+      active(40, { agent: 'noodle-1', scope: 'docs/**' }),
+      active(41, { agent: 'noodle-2', scope: 'docs/architecture/overview.md' }),
+      active(42, { agent: 'noodle-3', scope: 'tools/a.mjs' }),
+    ],
+    claimBranches: ['claim-v1/issue-40', 'claim-v1/issue-41', 'claim-v1/issue-42'],
+    now: NOW,
+  });
+
+  assert.equal(report.overlaps.length, 1);
+  assert.deepEqual(report.overlaps[0].issues, [40, 41]);
+  assert.deepEqual(report.overlaps[0].paths, ['docs/**', 'docs/architecture/overview.md']);
+  assert.equal(report.warnings.length, 0, 'an overlap is a warning row, not a failure');
+  assert.match(renderReport(report), /#40 and #41 both declare/);
+});
+
+test('claim refs and active issues are reconciled in both directions', () => {
+  const report = buildReport({
+    issues: [active(50, { agent: 'noodle-1', scope: 'tools/a.mjs' }), issue(51, ['work:ready'])],
+    claimBranches: ['claim-v1/issue-52', 'claim-v1/issue-50', 'not-a-claim'],
+    now: NOW,
+  });
+  const warnings = report.warnings.join('\n');
+  assert.match(warnings, /claim-v1\/issue-52 exists but issue #52 is unknown/);
+  assert.doesNotMatch(warnings, /#50 is active but/);
+  assert.match(warnings, /not-a-claim: unrecognized reserved ref/);
+});
+
+test('a claim older than three days is warned about but never released', () => {
+  const report = buildReport({
+    issues: [active(60, { agent: 'noodle-1', claimedAt: '2026-09-01T12:00:00.000Z' })],
+    claimBranches: ['claim-v1/issue-60'],
+    now: NOW,
+  });
+  assert.equal(report.active[0].ageDays, 7);
+  assert.match(report.warnings.join('\n'), /#60: claimed 7 days ago by noodle-1/);
+  assert.deepEqual(
+    report.active.map((entry) => entry.number),
+    [60],
+    'a stale claim stays active on the board',
+  );
+});
+
+test('a malformed body is reported without crashing and the issue still appears', () => {
+  const report = buildReport({
+    issues: [
+      {
+        number: 70,
+        state: 'open',
+        title: 'Work: broken',
+        labels: ['work:active'],
+        body: 'garbage',
+      },
+      { number: 71, state: 'open', title: 'Work: none', labels: ['work:ready'] },
+      {
+        number: 72,
+        state: 'open',
+        title: 'Work: bad scope',
+        labels: ['work:ready'],
+        body: body({ scope: 'tools/*.mjs', dependsOn: 'later' }),
+      },
+    ],
+    claimBranches: ['claim-v1/issue-70'],
+    now: NOW,
+  });
+
+  const warnings = report.warnings.join('\n');
+  assert.match(warnings, /#70: Scope-Paths is absent/);
+  assert.match(warnings, /#70: Claimed-At is not an ISO instant/);
+  assert.match(warnings, /#71: Depends-On is absent/);
+  assert.match(warnings, /#72: Scope-Paths is malformed/);
+  assert.match(warnings, /#72: Depends-On is malformed/);
+  assert.deepEqual(
+    report.active.map((entry) => entry.number),
+    [70],
+  );
+  assert.equal(report.active[0].ageDays, null);
+  assert.doesNotThrow(() => renderReport(report));
+});
+
+test('closed retained refs are historical, and done work stays visible', () => {
+  const report = buildReport({
+    issues: [
+      issue(80, ['work:done'], { state: 'closed' }),
+      issue(81, ['work:active'], { state: 'closed' }),
+    ],
+    claimBranches: ['claim-v1/issue-80', 'claim-v1/issue-81'],
+    now: NOW,
+  });
+  assert.deepEqual(report.active, []);
+  assert.deepEqual(report.ready, []);
+  assert.deepEqual(report.proposed, []);
+  assert.deepEqual(
+    report.done.map((entry) => entry.number),
+    [80],
+  );
+  assert.equal(report.warnings.length, 0);
+});
+
+test('rendered output is bounded and stays far below the default subprocess buffer', () => {
+  const issues = [];
+  const claimBranches = [];
+  for (let number = 100; number < 700; number += 1) {
+    issues.push(active(number, { agent: `noodle-${number}`, scope: `services/svc-${number}/**` }));
+    claimBranches.push(`claim-v1/issue-${number}`);
+  }
+  const report = buildReport({ issues, claimBranches, now: NOW });
+  assert.equal(report.active.length, 600);
+
+  const rendered = renderReport(report);
+  assert.match(rendered, /… and 560 more/);
+  assert.ok(
+    Buffer.byteLength(rendered) < 1024 * 1024,
+    `rendered board was ${Buffer.byteLength(rendered)} bytes`,
+  );
+});
+
+test('the CLI prints JSON on request and refuses unknown arguments', () => {
+  const chunks = [];
+  const write = process.stdout.write.bind(process.stdout);
+  process.stdout.write = (chunk) => chunks.push(String(chunk));
+  const errors = [];
+  const writeError = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (chunk) => errors.push(String(chunk));
   try {
-    const outcome = await executeCoordinationClaim(claimInput);
-    assert.equal(outcome.status, 'complete', JSON.stringify(outcome, null, 2));
-    assert.equal(outcome.stage, 'writer-recovery');
-    assert.deepEqual(outcome.writerMutations, { body: 0, label: 1, comment: 0 });
-    assert.deepEqual(JSON.parse(readFileSync(mutableStateFile, 'utf8')).mutations, ['label']);
-    const invocations = readFileSync(invocationLog, 'utf8');
-    assert.match(invocations, /gh api --paginate --slurp/);
-    assert.match(
-      invocations,
-      new RegExp(`gh api --method PATCH repos/${CANONICAL_REPOSITORY}/issues/${issueNumber}`),
+    const read = () => ({
+      issues: [issue(90, ['work:ready'])],
+      claimBranches: [],
+    });
+    assert.equal(main(['--json'], read), 0);
+    assert.equal(main(['--gate=claim:90'], read), 2);
+  } finally {
+    process.stdout.write = write;
+    process.stderr.write = writeError;
+  }
+  const report = JSON.parse(chunks.join(''));
+  assert.deepEqual(
+    report.ready.map((entry) => entry.number),
+    [90],
+  );
+  assert.match(errors.join(''), /unknown argument --gate=claim:90/);
+});
+
+test('work item parsing keeps the declared fields verbatim', () => {
+  const item = parseWorkItem(
+    issue(95, ['work:active', 'area:tools'], {
+      scope: 'tools/a.mjs, tools/b.mjs',
+      dependsOn: '#12, #13',
+      agent: 'noodle-1',
+      branch: 'claim-v1/issue-95',
+      claimedAt: '2026-09-08T09:00:00.000Z',
+    }),
+  );
+  assert.equal(item.state, 'active');
+  assert.equal(item.agent, 'noodle-1');
+  assert.equal(item.branch, 'claim-v1/issue-95');
+  assert.deepEqual(item.scopePaths, ['tools/a.mjs', 'tools/b.mjs']);
+  assert.deepEqual(item.dependsOn, [12, 13]);
+  assert.deepEqual(item.warnings, []);
+});
+
+test('blocked, review, shared plans and contradictory labels all stay visible', () => {
+  const report = buildReport({
+    issues: [
+      issue(1, ['work:blocked']),
+      { ...active(2, { agent: 'reviewer', scope: 'tools/**' }), labels: ['work:review'] },
+      active(3, { agent: 'worker', scope: 'tools/file.mjs' }),
+      issue(4, ['work:plan', 'work:ready'], { body: '### Integration-Owner\n\nplanner\n' }),
+      issue(5, ['work:ready', 'work:review']),
+    ],
+    claimBranches: ['claim-v1/issue-2', 'claim-v1/issue-3'],
+    now: NOW,
+  });
+  assert.deepEqual(
+    report.blocked.map((row) => row.number),
+    [1],
+  );
+  assert.deepEqual(
+    report.review.map((row) => row.number),
+    [2],
+  );
+  assert.deepEqual(
+    report.plans.map((row) => row.number),
+    [4],
+  );
+  assert.deepEqual(
+    report.unknown.map((row) => row.number),
+    [5],
+  );
+  assert.deepEqual(report.ready, []);
+  assert.deepEqual(report.overlaps[0].issues, [2, 3]);
+  assert.match(renderReport(report), /explicit work:blocked/);
+  assert.match(renderReport(report), /Review/);
+  assert.match(renderReport(report), /Shared plans/);
+});
+
+test('missing, duplicate, malformed, cyclic and abandoned prerequisites never become ready', () => {
+  const report = buildReport({
+    issues: [
+      issue(1, ['work:ready'], { body: body().replace('Depends-On: none', '') }),
+      issue(2, ['work:ready'], { body: body() + '\nDepends-On: none' }),
+      issue(3, ['work:ready'], { dependsOn: '#9, #9' }),
+      issue(4, ['work:ready'], { dependsOn: '#4' }),
+      issue(5, ['work:ready'], { dependsOn: '#6' }),
+      issue(6, ['work:done'], { state: 'closed', dependsOn: '#5' }),
+      issue(7, ['work:ready'], { dependsOn: '#8' }),
+      issue(8, ['work:abandoned'], { state: 'closed' }),
+      { ...issue(9, [], { state: 'closed' }), state_reason: 'not_planned' },
+      issue(10, ['work:ready'], { dependsOn: '#9' }),
+      issue(11, ['work:ready'], { dependsOn: '#99' }),
+    ],
+    claimBranches: [],
+    now: NOW,
+  });
+  assert.deepEqual(report.ready, []);
+  assert.equal(report.blocked.length, 8);
+  assert.match(report.warnings.join('\n'), /duplicated/);
+  assert.match(report.warnings.join('\n'), /cycle or self-reference/);
+  assert.match(report.warnings.join('\n'), /not known delivered/);
+});
+
+test('a live old-namespace ref reserves an otherwise ready issue with incomplete bookkeeping', () => {
+  const report = buildReport({
+    issues: [issue(1, ['work:ready'])],
+    claimBranches: ['claim-v1/issue-1'],
+    now: NOW,
+  });
+  assert.deepEqual(report.ready, []);
+  assert.equal(report.blocked[0].reserved, true);
+  assert.match(report.warnings.join('\n'), /finish by hand, do not reclaim/);
+});
+
+test('GitHub form output supports multiline declarations and nested colon metadata', () => {
+  const item = parseWorkItem(
+    issue(1, ['work:ready'], {
+      body: [
+        '### Scope-Paths',
+        '',
+        'tools/z.mjs',
+        'docs/**',
+        '',
+        '### Depends-On',
+        '',
+        '#2',
+        '#3',
+        '',
+        '### Ownership',
+        '',
+        'Claim-Agent: unclaimed',
+        'Claim-Branch: unclaimed',
+        'Claimed-At: unclaimed',
+        '',
+        '### Integration-Owner',
+        '',
+        'planner',
+        '',
+        '### Parent-Plan',
+        '',
+        '#4',
+        '',
+        '### Dependency-Notes',
+        '',
+        'First paragraph.',
+        '',
+        'Second paragraph.',
+      ].join('\n'),
+    }),
+  );
+  assert.deepEqual(item.scopePaths, ['tools/z.mjs', 'docs/**']);
+  assert.deepEqual(item.dependsOn, [2, 3]);
+  assert.equal(item.agent, 'unclaimed');
+  assert.equal(item.integrationOwner, 'planner');
+  assert.equal(item.parentPlan, '#4');
+  assert.equal(item.dependencyNotes, 'First paragraph.\n\nSecond paragraph.');
+  assert.deepEqual(item.warnings, []);
+});
+
+test('pagination reads every page and fails on malformed, failed or over-limit reads', () => {
+  const calls = [];
+  const rows = pages('repos/example/issues?state=all', (args) => {
+    calls.push(args);
+    return calls.length === 1 ? Array.from({ length: PAGE_SIZE }, (_, number) => number) : [100];
+  });
+  assert.equal(rows.length, 101);
+  assert.match(calls[1][1], /&per_page=100&page=2$/);
+  assert.throws(() => pages('endpoint', () => ({})), /array/);
+  assert.throws(
+    () =>
+      pages('endpoint', () => {
+        throw new Error('unavailable');
+      }),
+    /unavailable/,
+  );
+  let count = 0;
+  assert.throws(
+    () =>
+      pages('endpoint', () => {
+        count++;
+        return Array(PAGE_SIZE).fill({});
+      }),
+    /exceeded/,
+  );
+  assert.equal(count, MAX_PAGES);
+});
+
+test('registry adapter reads only issues and reserved refs, rejecting structural host defects', () => {
+  const calls = [];
+  const read = (args) => {
+    calls.push(args);
+    if (args[1].includes('/issues?'))
+      return [{ ...issue(1, ['work:ready']), labels: [{ name: 'work:ready' }] }];
+    return [
+      { ref: 'refs/heads/claim-v1/issue-1', object: { type: 'commit', sha: 'a'.repeat(40) } },
+    ];
+  };
+  const registry = readRegistry('repos/example', read);
+  assert.deepEqual(registry.claimBranches, ['claim-v1/issue-1']);
+  assert.equal(calls.length, 2);
+  assert.ok(
+    calls.every(([command, endpoint]) => command === 'api' && !endpoint.includes('/comments')),
+  );
+  assert.throws(() => readRegistry('repos/example', () => [{ number: 1 }]), /malformed issue/);
+  assert.throws(
+    () => readRegistry('repos/example', (args) => (args[1].includes('/issues?') ? [] : [{}])),
+    /malformed claim ref/,
+  );
+});
+
+test('required read failures emit unknown JSON, never an empty board, and exit nonzero', () => {
+  const chunks = [],
+    errors = [];
+  const stdout = process.stdout.write,
+    stderr = process.stderr.write;
+  process.stdout.write = (chunk) => chunks.push(String(chunk));
+  process.stderr.write = (chunk) => errors.push(String(chunk));
+  try {
+    assert.equal(
+      main(['--json'], () => {
+        throw new Error('host offline');
+      }),
+      1,
     );
   } finally {
-    process.chdir(previous.cwd);
-    process.env.PATH = previous.PATH;
-    process.env.HOME = previous.HOME;
-    if (previous.INVOCATION_LOG === undefined) delete process.env.INVOCATION_LOG;
-    else process.env.INVOCATION_LOG = previous.INVOCATION_LOG;
+    process.stdout.write = stdout;
+    process.stderr.write = stderr;
   }
-});
-
-test('activated immutable scope evidence emits exact gates and preserves non-self-activation', (t) => {
-  const active = v2ActiveIssue(73);
-  const remote = restRef('refs/heads/claim-v1/issue-73');
-  const treeSha = 'b'.repeat(40);
-  const blobSha = 'c'.repeat(40);
-  const responses = defaultResponses();
-  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE, active]]) };
-  responses[`api:${CLAIM_REFS_ENDPOINT}`] = { stdout: JSON.stringify([[remote]]) };
-  responses[`api:${commentEndpoint(73)}`] = {
-    stdout: JSON.stringify([[restCheckpointComment(active)]]),
-  };
-  responses[`api:repos/${REPOSITORY}/git/commits/${'a'.repeat(40)}`] = {
-    stdout: JSON.stringify({ sha: 'a'.repeat(40), tree: { sha: treeSha } }),
-  };
-  responses[`api:repos/${REPOSITORY}/git/trees/${treeSha}?recursive=1`] = {
-    stdout: JSON.stringify({
-      sha: treeSha,
-      truncated: false,
-      tree: [
-        { path: '.github', mode: '040000', type: 'tree', sha: '6'.repeat(40) },
-        {
-          path: '.github/coordination',
-          mode: '040000',
-          type: 'tree',
-          sha: '7'.repeat(40),
-        },
-        {
-          path: '.github/coordination/serializing-paths.v1.json',
-          mode: '100644',
-          type: 'blob',
-          sha: blobSha,
-        },
-      ],
-    }),
-  };
-  responses[`api:repos/${REPOSITORY}/git/blobs/${blobSha}`] = {
-    stdout: JSON.stringify({
-      sha: blobSha,
-      encoding: 'base64',
-      content: Buffer.from(SERIALIZING_SOURCE).toString('base64'),
-    }),
-  };
-
-  const result = runStatus(t, { responses, args: ['--json', '--gate', 'claim:73'] });
-  const report = JSON.parse(result.stdout);
-  assert.equal(result.exitCode, 0, JSON.stringify(report, null, 2));
-  assert.deepEqual(report.scopeGate, {
-    requested: 'claim:73',
-    status: 'clear',
-    blockingFindingIds: [],
-  });
-  assert.equal(report.registry.scopeStatus, 'complete');
-  assert.deepEqual(report.registry.scopeFindings, []);
-  assert.equal(report.registry.workItems.find(({ number }) => number === 73).scope.status, 'clear');
-  assert.equal(
-    result.invocations.filter(
-      (invocation) => invocation === `gh api --paginate --slurp ${PULLS_ENDPOINT}`,
-    ).length,
-    3,
+  const result = JSON.parse(chunks.join(''));
+  assert.equal(result.coordinationKnown, false);
+  assert.equal(result.ready, undefined);
+  assert.match(errors.join(''), /Coordination unknown/);
+  assert.throws(
+    () => buildReport({ issues: [issue(1, []), issue(1, [])], claimBranches: [] }),
+    /duplicate issue/,
   );
-
-  const raced = structuredClone(responses);
-  raced[`api:${PULLS_ENDPOINT}`] = {
-    sequence: [
-      { stdout: '[[]]' },
-      {
-        stdout: JSON.stringify([
-          [
-            {
-              number: 80,
-              title: 'late PR',
-              state: 'open',
-              draft: false,
-              head: { ref: 'late', sha: 'e'.repeat(40), repo: { full_name: REPOSITORY } },
-              base: { ref: 'main', sha: 'a'.repeat(40), repo: { full_name: REPOSITORY } },
-              updated_at: '2026-09-03T01:00:00Z',
-              html_url: 'https://example.invalid/pull/80',
-            },
-          ],
-        ]),
-      },
-    ],
-  };
-  const racedResult = runStatus(t, { responses: raced, args: ['--json', '--gate', 'claim:73'] });
-  const racedReport = JSON.parse(racedResult.stdout);
-  assert.equal(racedResult.exitCode, 2);
-  assert.equal(racedReport.registry.scopeStatus, 'unavailable');
-  assert.equal(racedReport.scopeGate.status, 'unknown');
-  assert(racedReport.warnings.some(({ code }) => code === 'scope-evidence-unavailable'));
-
-  const malformed = structuredClone(responses);
-  malformed[`api:repos/${REPOSITORY}/git/blobs/${blobSha}`].stdout = JSON.stringify({
-    sha: blobSha,
-    encoding: 'base64',
-    content: Buffer.from(`${SERIALIZING_SOURCE}\n`).toString('base64'),
-  });
-  const malformedResult = runStatus(t, {
-    responses: malformed,
-    args: ['--json', '--gate', 'claim:73'],
-  });
-  assert.equal(malformedResult.exitCode, 2);
-  assert.equal(JSON.parse(malformedResult.stdout).scopeGate.status, 'unknown');
-
-  const surfaceRaces = [];
-  const issueRace = structuredClone(responses);
-  issueRace[`api:${ISSUES_ENDPOINT}`] = {
-    sequence: [
-      { stdout: JSON.stringify([[PLAN_ISSUE, active]]) },
-      { stdout: JSON.stringify([[PLAN_ISSUE, { ...active, body: `${active.body}drift\n` }]]) },
-    ],
-  };
-  surfaceRaces.push(['issue-body', issueRace]);
-
-  const issueLabelRace = structuredClone(responses);
-  issueLabelRace[`api:${ISSUES_ENDPOINT}`] = {
-    sequence: [
-      { stdout: JSON.stringify([[PLAN_ISSUE, active]]) },
-      {
-        stdout: JSON.stringify([
-          [PLAN_ISSUE, { ...active, labels: [{ name: 'work:active' }, { name: 'late-label' }] }],
-        ]),
-      },
-    ],
-  };
-  surfaceRaces.push(['issue-labels', issueLabelRace]);
-
-  const labelRace = structuredClone(responses);
-  labelRace[`api:${LABELS_ENDPOINT}`] = {
-    sequence: [
-      { stdout: JSON.stringify([COORDINATION_LABELS]) },
-      { stdout: JSON.stringify([COORDINATION_LABELS.slice(0, -1)]) },
-    ],
-  };
-  surfaceRaces.push(['labels', labelRace]);
-
-  const commentRace = structuredClone(responses);
-  const checkpoint = restCheckpointComment(active);
-  commentRace[`api:${commentEndpoint(73)}`] = {
-    sequence: [
-      { stdout: JSON.stringify([[checkpoint]]) },
-      {
-        stdout: JSON.stringify([
-          [
-            checkpoint,
-            {
-              ...checkpoint,
-              id: 7400,
-              body: 'unrelated late comment',
-              created_at: '2026-09-01T03:00:00Z',
-              updated_at: '2026-09-01T03:00:00Z',
-            },
-          ],
-        ]),
-      },
-    ],
-  };
-  surfaceRaces.push(['comments', commentRace]);
-
-  const refRace = structuredClone(responses);
-  refRace[`api:${CLAIM_REFS_ENDPOINT}`] = {
-    sequence: [{ stdout: JSON.stringify([[remote]]) }, { stdout: '[[]]' }],
-  };
-  surfaceRaces.push(['reserved-ref-count', refRace]);
-
-  const mainRace = structuredClone(responses);
-  mainRace[`api:${MAIN_REF_ENDPOINT}`] = {
-    sequence: [
-      ...Array.from({ length: 4 }, () => ({
-        stdout: JSON.stringify(restRef('refs/heads/main')),
-      })),
-      { stdout: JSON.stringify(restRef('refs/heads/main', 'f'.repeat(40))) },
-    ],
-  };
-  surfaceRaces.push(['main', mainRace]);
-
-  for (const [name, racedResponses] of surfaceRaces) {
-    const raceResult = runStatus(t, {
-      responses: racedResponses,
-      args: ['--json', '--gate', 'claim:73'],
-    });
-    const raceReport = JSON.parse(raceResult.stdout);
-    assert.equal(raceResult.exitCode, 2, name);
-    assert.equal(raceReport.registry.scopeStatus, 'unavailable', name);
-    assert.equal(raceReport.scopeGate.status, 'unknown', name);
-    assert(
-      raceReport.warnings.some(({ code }) => code === 'scope-evidence-unavailable'),
-      name,
-    );
-  }
-
-  for (const [name, secondComments] of [
-    ['incomplete-comment-reread', [[]]],
-    ['duplicate-comment-count', [[checkpoint, { ...checkpoint }]]],
-  ]) {
-    const incomplete = structuredClone(responses);
-    incomplete[`api:${commentEndpoint(73)}`] = {
-      sequence: [
-        { stdout: JSON.stringify([[checkpoint]]) },
-        { stdout: JSON.stringify(secondComments) },
-      ],
-    };
-    const incompleteResult = runStatus(t, {
-      responses: incomplete,
-      args: ['--json', '--gate', 'claim:73'],
-    });
-    const incompleteReport = JSON.parse(incompleteResult.stdout);
-    assert.equal(incompleteResult.exitCode, 2, name);
-    assert.equal(incompleteReport.scopeGate.status, 'unknown', name);
-  }
 });
 
-test('routed PR findings block only selected integration gates while board and disjoint claim gates stay clear', (t) => {
-  const active = v2ActiveIssue(44);
-  const main = 'a'.repeat(40);
-  const heads = { 31: 'b'.repeat(40), 32: 'c'.repeat(40), 33: 'e'.repeat(40) };
-  const trees = {
-    main: '1'.repeat(40),
-    31: '2'.repeat(40),
-    32: '3'.repeat(40),
-    33: '4'.repeat(40),
-  };
-  const blob = '5'.repeat(40);
-  const unchanged = '6'.repeat(40);
-  const historicalBase = 'f'.repeat(40);
-  const changed = '7'.repeat(40);
-  const pathEntry = (path, sha) => ({ path, mode: '100644', type: 'blob', sha });
-  const pulls = [31, 32, 33].map((number) => ({
-    number,
-    title: `PR ${number}`,
-    state: 'open',
-    draft: false,
-    head: {
-      ref: `feature/${number}`,
-      sha: heads[number],
-      repo: { full_name: REPOSITORY },
-    },
-    base: { ref: 'main', sha: historicalBase, repo: { full_name: REPOSITORY } },
-    updated_at: '2026-09-03T01:00:00Z',
-    html_url: `https://example.invalid/pull/${number}`,
-  }));
-  const responses = defaultResponses();
-  const opportunity = v2ReadyIssue(90, { 'Scope-Paths': '.github/workflows/ci.yml' });
-  responses[`api:${ISSUES_ENDPOINT}`] = {
-    stdout: JSON.stringify([[PLAN_ISSUE, active, opportunity]]),
-  };
-  responses[`api:${CLAIM_REFS_ENDPOINT}`] = {
-    stdout: JSON.stringify([[restRef('refs/heads/claim-v1/issue-44')]]),
-  };
-  responses[`api:${commentEndpoint(44)}`] = {
-    stdout: JSON.stringify([[restCheckpointComment(active)]]),
-  };
-  responses[`api:${PULLS_ENDPOINT}`] = { stdout: JSON.stringify([pulls]) };
-  for (const [commit, tree] of [
-    [main, trees.main],
-    ...[31, 32, 33].map((number) => [heads[number], trees[number]]),
-  ]) {
-    responses[`api:repos/${REPOSITORY}/git/commits/${commit}`] = {
-      stdout: JSON.stringify({ sha: commit, tree: { sha: tree } }),
-    };
-  }
-  const directoryEntry = (path, sha) => ({ path, mode: '040000', type: 'tree', sha });
-  const directories = [
-    directoryEntry('.github', 'a'.repeat(40)),
-    directoryEntry('.github/coordination', 'b'.repeat(40)),
-    directoryEntry('.github/workflows', 'c'.repeat(40)),
-  ];
-  const baseEntries = [
-    ...directories,
-    pathEntry('.github/coordination/serializing-paths.v1.json', blob),
-    pathEntry('.github/workflows/ci.yml', unchanged),
-    pathEntry('.github/workflows/delivery.yml', unchanged),
-  ];
-  const treeEntries = {
-    [trees.main]: baseEntries,
-    [trees[31]]: [
-      ...directories,
-      pathEntry('.github/coordination/serializing-paths.v1.json', blob),
-      pathEntry('.github/workflows/ci.yml', changed),
-      pathEntry('.github/workflows/delivery.yml', changed),
-    ],
-    [trees[32]]: [
-      ...directories,
-      pathEntry('.github/coordination/serializing-paths.v1.json', blob),
-      pathEntry('.github/workflows/ci.yml', '8'.repeat(40)),
-      pathEntry('.github/workflows/delivery.yml', '8'.repeat(40)),
-    ],
-    [trees[33]]: [
-      ...directories,
-      pathEntry('.github/coordination/serializing-paths.v1.json', blob),
-      pathEntry('.github/workflows/ci.yml', '9'.repeat(40)),
-      pathEntry('.github/workflows/delivery.yml', '9'.repeat(40)),
-    ],
-  };
-  for (const [tree, entries] of Object.entries(treeEntries)) {
-    responses[`api:repos/${REPOSITORY}/git/trees/${tree}?recursive=1`] = {
-      stdout: JSON.stringify({ sha: tree, truncated: false, tree: entries }),
-    };
-  }
-  responses[`api:repos/${REPOSITORY}/git/blobs/${blob}`] = {
-    stdout: JSON.stringify({
-      sha: blob,
-      size: Buffer.byteLength(SERIALIZING_SOURCE),
-      encoding: 'base64',
-      content: Buffer.from(SERIALIZING_SOURCE).toString('base64'),
-    }),
-  };
-  for (const number of [31, 32, 33]) {
-    responses[`api:${compareEndpoint(main, heads[number])}`] = {
-      stdout: JSON.stringify({
-        status: 'ahead',
-        ahead_by: 1,
-        behind_by: 0,
-        base_commit: { sha: main },
-        merge_base_commit: { sha: main },
+test('minimal form fields are ready with maintainer default, while partial metadata is not unclaimed', () => {
+  const minimal =
+    '### Outcome\n\nExample.\n\n### Scope-Paths\n\ntools/example.mjs\n\n### Depends-On\n\nnone\n\n### Acceptance checks\n\nTests pass.\n';
+  const report = buildReport({
+    issues: [
+      issue(1, ['work:ready'], { body: minimal }),
+      issue(2, ['work:ready'], { body: minimal + '\nClaim-Agent: unclaimed' }),
+      issue(3, ['work:ready'], { body: minimal }),
+      issue(4, ['work:plan', 'work:proposed'], {
+        body: '### Outcome and acceptance\n\nExample.\n\n### Work graph\n\n#1 precedes #2.',
       }),
-    };
-  }
-
-  const cases = [
-    [[], 0, 'board', 'clear'],
-    [['--gate', 'integration-pr:31'], 2, 'integration-pr:31', 'blocked'],
-    [['--gate', 'integration-pr:32'], 2, 'integration-pr:32', 'blocked'],
-    [['--gate', 'integration-pr:33'], 2, 'integration-pr:33', 'blocked'],
-    [['--gate', 'claim:44'], 0, 'claim:44', 'clear'],
-  ];
-  for (const [args, exitCode, requested, status] of cases) {
-    const result = runStatus(t, { responses, args: ['--json', ...args] });
-    const report = JSON.parse(result.stdout);
-    assert.equal(result.exitCode, exitCode, `${requested}: ${JSON.stringify(report, null, 2)}`);
-    assert.equal(report.scopeGate.requested, requested);
-    assert.equal(report.scopeGate.status, status);
-    assert.equal(report.warnings.length, 0, requested);
-    assert.deepEqual(
-      report.registry.scopeFindings.map(({ id }) => id),
-      ['scope-v1:pr-pr:31:32', 'scope-v1:pr-pr:31:33', 'scope-v1:pr-pr:32:33'],
-    );
-    assert.equal(report.registry.scopeFindings[0].globalPublicationBlock, false);
-    const opportunityRow = report.registry.nextWork.items.find(({ number }) => number === 90);
-    assert.equal(opportunityRow.availability, 'excluded');
-    assert.equal(opportunityRow.planningScope.status, 'blocked');
-    assert(opportunityRow.exclusionReasons.some(({ code }) => code === 'planning-pr-overlap'));
-  }
-  const human = runStatus(t, { responses });
-  assert.equal(human.exitCode, 0);
-  assert.match(
-    human.stdout,
-    /\[BLOCK pr-pr\] PR #31 <-> PR #32 paths=\.github\/workflows\/ci\.yml, \.github\/workflows\/delivery\.yml routes=integration-pr:#31,integration-pr:#32 global-publication=false/,
-  );
-  assert.match(human.stdout, /## Scope gate\nrequested=board status=clear blockers=none exit=0/);
-  assert(
-    human.stdout.indexOf('## Routed scope findings') < human.stdout.indexOf('## Ready candidates'),
-  );
-
-  const baseDrift = structuredClone(responses);
-  const driftedPulls = structuredClone(pulls);
-  driftedPulls[0].base.sha = '0'.repeat(40);
-  baseDrift[`api:${PULLS_ENDPOINT}`] = {
-    sequence: [{ stdout: JSON.stringify([pulls]) }, { stdout: JSON.stringify([driftedPulls]) }],
-  };
-  const baseDriftResult = runStatus(t, {
-    responses: baseDrift,
-    args: ['--json', '--gate', 'claim:44'],
+    ],
+    claimBranches: ['claim-v1/issue-3'],
+    now: NOW,
   });
-  const baseDriftReport = JSON.parse(baseDriftResult.stdout);
-  assert.equal(baseDriftResult.exitCode, 2);
-  assert.equal(baseDriftReport.registry.scopeStatus, 'unavailable');
-  assert.equal(baseDriftReport.scopeGate.status, 'unknown');
-  assert(baseDriftReport.warnings.some(({ code }) => code === 'scope-evidence-unavailable'));
-});
-
-test('scope selector syntax and missing targets fail closed with exit 2', (t) => {
-  const malformed = runStatus(t, { args: ['--gate', 'claim:01'] });
-  assert.equal(malformed.exitCode, 2);
-  assert.match(malformed.stderr, /Usage:/);
-
-  const missing = runStatus(t, { args: ['--json', '--gate', 'claim:999'] });
-  assert.equal(missing.exitCode, 2);
-  assert.equal(JSON.parse(missing.stdout).scopeGate.status, 'unknown');
-});
-
-test('reserved claim-ref enumeration consumes every page and reconciles a derived active claim', (t) => {
-  const active = v2ActiveIssue(73);
-  const remote = {
-    ref: 'refs/heads/claim-v1/issue-73',
-    object: { type: 'commit', sha: 'a'.repeat(40) },
-  };
-  const responses = defaultResponses();
-  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE], [active]]) };
-  responses[`api:${CLAIM_REFS_ENDPOINT}`] = { stdout: JSON.stringify([[], [remote]]) };
-  const result = runStatus(t, { responses, args: ['--json'] });
-  const report = JSON.parse(result.stdout);
-  const item = report.registry.workItems.find(({ number }) => number === 73);
-
-  assert.equal(result.exitCode, 0);
-  assert.equal(item.remoteClaim.branchStatus, 'derived');
-  assert.equal(item.remoteClaim.matchingRefs.length, 1);
-  assert.equal(item.remoteClaim.lifecycle.status, 'matched');
-  assert.equal(item.remoteClaim.lifecycle.checkpointCommit, 'a'.repeat(40));
-  assert.equal(item.remoteClaim.lifecycle.remoteHead, 'a'.repeat(40));
-  assert.equal(report.registry.remoteClaims.refs.length, 1);
-  assert(result.invocations.includes(`gh api --paginate --slurp ${CLAIM_REFS_ENDPOINT}`));
-});
-
-test('a reserved ref directly fetches its closed terminal issue and preserves it without migration', (t) => {
-  const terminal = v2ActiveIssue(73, {
-    'Claim-State': 'done',
-    'Check-In-By': 'unclaimed',
-    'Checkpoint-State': 'done',
-  });
-  terminal.state = 'closed';
-  terminal.labels = [{ name: 'work:done' }];
-  const remote = {
-    ref: 'refs/heads/claim-v1/issue-73',
-    object: { type: 'commit', sha: 'a'.repeat(40) },
-  };
-  const responses = defaultResponses();
-  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE]]) };
-  responses[`api:${CLAIM_REFS_ENDPOINT}`] = { stdout: JSON.stringify([[remote]]) };
-  responses['api:repos/example/registry/issues/73'] = { stdout: JSON.stringify(terminal) };
-  responses[`api:${commentEndpoint(73)}`] = {
-    stdout: JSON.stringify([[restCheckpointComment(terminal)]]),
-  };
-  const result = runStatus(t, { responses, args: ['--json'] });
-  const report = JSON.parse(result.stdout);
-
-  assert.equal(result.exitCode, 0);
-  assert.equal(report.registry.remoteClaims.questions.length, 0);
-  assert.equal(
-    report.registry.workItems.some(({ number }) => number === 73),
-    false,
-  );
-  assert(result.invocations.includes('gh api repos/example/registry/issues/73'));
-  assert(result.invocations.includes(`gh api --paginate --slurp ${commentEndpoint(73)}`));
-});
-
-test('an exact derived ref remains visible when schema-v2 blocked work has no agent owner', (t) => {
-  const blocked = v2ReadyIssue(74, {
-    'Claim-State': 'blocked',
-    'Waiting-Since': '2026-09-01T03:00:00Z',
-    'Checkpoint-State': 'blocked',
-    'Checkpoint-At': '2026-09-01T03:00:00Z',
-  });
-  blocked.labels = [{ name: 'work:blocked' }];
-  const ref = 'refs/heads/claim-v1/issue-74';
-  const responses = defaultResponses();
-  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE, blocked]]) };
-  responses[`api:${CLAIM_REFS_ENDPOINT}`] = {
-    stdout: JSON.stringify([[restRef(ref, 'b'.repeat(40))]]),
-  };
-
-  const result = runStatus(t, { responses, args: ['--json'] });
-  const report = JSON.parse(result.stdout);
-  const item = report.registry.workItems.find(({ number }) => number === 74);
-  const remote = report.registry.remoteClaims.refs[0];
-
-  assert.equal(result.exitCode, 0);
-  assert.equal(item.triage, 'blocked');
-  assert.equal(item.reconciliation, 'consistent');
-  for (const field of [
-    'Claim-Harness',
-    'Claim-Run-ID',
-    'Claim-Agent',
-    'Claim-Branch',
-    'Claim-Host',
-    'Claimed-At',
-    'Check-In-By',
-  ]) {
-    assert.equal(item.claim[field], 'unclaimed', field);
-  }
-  assert.equal(item.remoteClaim.disposition, 'preserved-non-ownership');
-  assert.equal(item.remoteClaim.currentOwnership, false);
-  assert.deepEqual(item.remoteClaim.lifecycle, { status: 'not-applicable', monitoring: false });
-  assert.equal(remote.ref, ref);
-  assert.equal(remote.disposition, 'preserved-non-ownership');
-  assert.equal(remote.currentOwnership, false);
-  assert.equal(remote.lifecycleMonitoring, false);
-  assert.equal(report.registry.maintainerQuestions.length, 0);
-  assert(!result.invocations.includes(`gh api ${claimRefEndpoint(74)}`));
-});
-
-test('closed done and abandoned records preserve derived refs with no retained ownership', (t) => {
-  const terminals = ['done', 'abandoned'].map((state, index) => {
-    const number = 74 + index;
-    const terminal = v2ReadyIssue(number, {
-      'Claim-State': state,
-      'Checkpoint-State': state,
-      'Checkpoint-At': '2026-09-01T03:00:00Z',
-    });
-    terminal.state = 'closed';
-    terminal.labels = [{ name: `work:${state}` }];
-    return terminal;
-  });
-  const refs = terminals.map((terminal, index) =>
-    restRef(`refs/heads/claim-v1/issue-${terminal.number}`, `${index + 2}`.repeat(40)),
-  );
-  const responses = defaultResponses();
-  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE]]) };
-  responses[`api:${CLAIM_REFS_ENDPOINT}`] = { stdout: JSON.stringify([refs]) };
-  for (const terminal of terminals) {
-    responses[`api:repos/example/registry/issues/${terminal.number}`] = {
-      stdout: JSON.stringify(terminal),
-    };
-    responses[`api:${commentEndpoint(terminal.number)}`] = {
-      stdout: JSON.stringify([[restCheckpointComment(terminal, 7400 + terminal.number)]]),
-    };
-  }
-
-  const result = runStatus(t, { responses, args: ['--json'] });
-  const report = JSON.parse(result.stdout);
-
-  assert.equal(result.exitCode, 0);
-  assert.equal(report.registry.maintainerQuestions.length, 0);
   assert.deepEqual(
-    report.registry.remoteClaims.refs.map((remote) => ({
-      issueNumber: remote.mapping.issueNumber,
-      disposition: remote.disposition,
-      currentOwnership: remote.currentOwnership,
-      lifecycleMonitoring: remote.lifecycleMonitoring,
-    })),
-    terminals.map(({ number }) => ({
-      issueNumber: number,
-      disposition: 'preserved-non-ownership',
-      currentOwnership: false,
-      lifecycleMonitoring: false,
-    })),
+    report.ready.map((row) => row.number),
+    [1],
   );
-  assert(
-    terminals.every(
-      ({ number }) => !report.registry.workItems.some((item) => item.number === number),
-    ),
-  );
-});
-
-test('implicit-v1 blocked and unowned terminal derived refs remain fail-closed mismatches', (t) => {
-  const records = ['blocked', 'done', 'abandoned'].map((state, index) => {
-    const record = claimIssue({ number: 76 + index, state });
-    record.body = record.body
-      .replace('Claim-Harness: pi', 'Claim-Harness: unclaimed')
-      .replace('Claim-Run-ID: run-123', 'Claim-Run-ID: unclaimed')
-      .replace('Claim-Agent: pi-sample', 'Claim-Agent: unclaimed')
-      .replace('Claim-Branch: test/sample', 'Claim-Branch: unclaimed')
-      .replace('Claim-Worktree: /fake/worktree', 'Claim-Worktree: unclaimed')
-      .replace('Claimed-At: 2026-08-29T18:00:00Z', 'Claimed-At: unclaimed')
-      .replace(`Check-In-By: ${FAR_FUTURE}`, 'Check-In-By: unclaimed');
-    if (state !== 'blocked') record.state = 'closed';
-    return record;
-  });
-  const refs = records.map(({ number }) =>
-    restRef(`refs/heads/claim-v1/issue-${number}`, 'd'.repeat(40)),
-  );
-  const responses = defaultResponses();
-  responses[`api:${ISSUES_ENDPOINT}`] = {
-    stdout: JSON.stringify([[PLAN_ISSUE, records[0]]]),
-  };
-  responses[`api:${CLAIM_REFS_ENDPOINT}`] = { stdout: JSON.stringify([refs]) };
-  for (const record of records.slice(1)) {
-    responses[`api:repos/example/registry/issues/${record.number}`] = {
-      stdout: JSON.stringify(record),
-    };
-    responses[`api:${commentEndpoint(record.number)}`] = {
-      stdout: JSON.stringify([[restCheckpointComment(record, 7600 + record.number)]]),
-    };
-  }
-
-  const result = runStatus(t, { responses, args: ['--json'] });
-  const report = JSON.parse(result.stdout);
-  const blocked = report.registry.workItems.find(({ number }) => number === 76);
-
-  assert.equal(result.exitCode, 2);
-  assert.equal(blocked.registrySchema.version, '1');
-  assert.equal(blocked.remoteClaim, undefined);
+  assert.equal(report.ready[0].integrationOwner, 'maintainer');
+  assert.deepEqual(report.ready[0].warnings, []);
   assert.deepEqual(
-    report.registry.maintainerQuestions
-      .filter(({ code }) => code === 'claim-ref-branch-mismatch')
-      .map(({ code }) => code),
-    records.map(() => 'claim-ref-branch-mismatch'),
+    report.blocked.map((row) => row.number),
+    [2, 3],
   );
-  assert(
-    report.registry.remoteClaims.refs.every(
-      ({ disposition }) => disposition === 'question' && disposition !== 'preserved-non-ownership',
-    ),
-  );
-  assert(
-    records.every(
-      ({ number }) => !result.invocations.includes(`gh api ${claimRefEndpoint(number)}`),
-    ),
-  );
+  assert.equal(report.plans[0].integrationOwner, 'maintainer');
 });
 
-test('closed reserved-ref issues fail closed on wrong labels and conflicting comments', (t) => {
-  const remote = {
-    ref: 'refs/heads/claim-v1/issue-73',
-    object: { type: 'commit', sha: 'a'.repeat(40) },
-  };
-  for (const [name, configure, expectedCode] of [
-    [
-      'wrong label',
-      (terminal, responses) => {
-        terminal.labels = [{ name: 'work:active' }];
-        responses[`api:${commentEndpoint(73)}`] = {
-          stdout: JSON.stringify([[restCheckpointComment(terminal)]]),
-        };
-      },
-      'body-label-state-mismatch',
-    ],
-    [
-      'conflicting comment',
-      (terminal, responses) => {
-        const competing = v2ActiveIssue(73, {
-          'Claim-Run-ID': 'competing-run',
-          'Claim-Agent': 'competing-agent',
-        });
-        responses[`api:${commentEndpoint(73)}`] = {
-          stdout: JSON.stringify([[restCheckpointComment(competing, 7301)]]),
-        };
-      },
-      'competing-ownership-comment',
-    ],
-  ]) {
-    const terminal = v2ActiveIssue(73, {
-      'Claim-State': 'done',
-      'Check-In-By': 'unclaimed',
-      'Checkpoint-State': 'done',
+test('status CLI reads pages over the default process buffer with mocked read-only gh and fails closed on bad JSON', (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'mn-board-cli-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const log = join(directory, 'requests.jsonl');
+  writeFileSync(
+    join(directory, 'gh'),
+    `#!${process.execPath}
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.MOCK_LOG, JSON.stringify(args) + '\\n');
+if (process.env.MOCK_MODE === 'bad-json') { process.stdout.write('{'); }
+else if (process.env.MOCK_MODE === 'offline') { process.stderr.write('host unavailable'); process.exitCode = 1; }
+else if (args[0] !== 'api' || args.length !== 2) { process.stderr.write('non-read request'); process.exitCode = 9; }
+else if (args[1].includes('/issues?') && args[1].endsWith('page=1')) {
+  const rows = Array.from({ length: 100 }, (_, index) => ({ number: index + 1, state: 'open', title: 'Work', labels: [{ name: 'work:ready' }], body: 'Scope-Paths: none\\nDepends-On: none\\n' + 'x'.repeat(20000) }));
+  process.stdout.write(JSON.stringify(rows));
+} else { process.stdout.write('[]'); }
+`,
+    { mode: 0o755 },
+  );
+  for (const mode of ['ok', 'bad-json', 'offline']) {
+    writeFileSync(log, '');
+    const result = spawnSync(process.execPath, ['tools/coordination-status.mjs', '--json'], {
+      encoding: 'utf8',
+      timeout: 10_000,
+      maxBuffer: 4 * 1024 * 1024,
+      env: { ...process.env, PATH: directory, MOCK_LOG: log, MOCK_MODE: mode },
     });
-    terminal.state = 'closed';
-    terminal.labels = [{ name: 'work:done' }];
-    const responses = defaultResponses();
-    responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE]]) };
-    responses[`api:${CLAIM_REFS_ENDPOINT}`] = { stdout: JSON.stringify([[remote]]) };
-    responses['api:repos/example/registry/issues/73'] = { stdout: JSON.stringify(terminal) };
-    configure(terminal, responses);
-    responses['api:repos/example/registry/issues/73'] = { stdout: JSON.stringify(terminal) };
-    const report = JSON.parse(runStatus(t, { responses, args: ['--json'] }).stdout);
-    assert(
-      report.registry.maintainerQuestions.some(
-        ({ issueNumber, code }) => issueNumber === 73 && code === expectedCode,
-      ),
-      name,
-    );
-  }
-});
-
-test('a closed active issue still blocks the #42 rollout invariant', (t) => {
-  const bootstrap = v2ActiveIssue(42, {
-    'Claim-Branch': 'arch/remote-reference-claim-primitive',
-  });
-  const closedActive = v2ActiveIssue(73);
-  closedActive.state = 'closed';
-  const remote = {
-    ref: 'refs/heads/claim-v1/issue-73',
-    object: { type: 'commit', sha: 'a'.repeat(40) },
-  };
-  const responses = defaultResponses();
-  responses[`api:${ISSUES_ENDPOINT}`] = {
-    stdout: JSON.stringify([[PLAN_ISSUE, bootstrap, closedActive]]),
-  };
-  responses[`api:${CLAIM_REFS_ENDPOINT}`] = { stdout: JSON.stringify([[remote]]) };
-  responses['api:repos/example/registry/issues/73'] = { stdout: JSON.stringify(closedActive) };
-  responses[`api:${commentEndpoint(73)}`] = {
-    stdout: JSON.stringify([[restCheckpointComment(closedActive, 7302)]]),
-  };
-  const report = JSON.parse(runStatus(t, { responses, args: ['--json'] }).stdout);
-  assert(
-    report.registry.maintainerQuestions.some(
-      ({ issueNumber, code }) => issueNumber === 73 && code === 'claim-primitive-rollout-blocked',
-    ),
-  );
-  const bootstrapItem = report.registry.workItems.find(({ number }) => number === 42);
-  assert(bootstrapItem.questions.some(({ code }) => code === 'claim-primitive-rollout-blocked'));
-});
-
-test('integration-main classification requires stable direct-ref and host compare evidence', (t) => {
-  const local = 'a'.repeat(40);
-  const remote = 'b'.repeat(40);
-  const stable = defaultResponses();
-  stable[`api:${MAIN_REF_ENDPOINT}`] = {
-    stdout: JSON.stringify(restRef('refs/heads/main', remote)),
-  };
-  stable[`api:${compareEndpoint(local, remote)}`] = {
-    stdout: JSON.stringify(restCompare(local, 'ahead', 1, 0)),
-  };
-  const stableReport = JSON.parse(runStatus(t, { responses: stable, args: ['--json'] }).stdout);
-  assert.equal(stableReport.local.integrationCheckout.status, 'fast-forward-lag');
-  assert.equal(stableReport.local.integrationCheckout.relationship, 'right-ahead');
-
-  const refRace = defaultResponses();
-  refRace[`api:${MAIN_REF_ENDPOINT}`] = {
-    sequence: [
-      { stdout: JSON.stringify(restRef('refs/heads/main', remote)) },
-      { stdout: JSON.stringify(restRef('refs/heads/main', 'c'.repeat(40))) },
-    ],
-  };
-  refRace[`api:${compareEndpoint(local, remote)}`] =
-    stable[`api:${compareEndpoint(local, remote)}`];
-  const refRaceReport = JSON.parse(runStatus(t, { responses: refRace, args: ['--json'] }).stdout);
-  assert.equal(refRaceReport.local.integrationCheckout.status, 'unavailable');
-
-  const compareRace = defaultResponses();
-  compareRace[`api:${MAIN_REF_ENDPOINT}`] = {
-    stdout: JSON.stringify(restRef('refs/heads/main', remote)),
-  };
-  compareRace[`api:${compareEndpoint(local, remote)}`] = {
-    sequence: [
-      { stdout: JSON.stringify(restCompare(local, 'ahead', 1, 0)) },
-      { stdout: JSON.stringify(restCompare(local, 'diverged', 1, 1)) },
-    ],
-  };
-  const compareRaceReport = JSON.parse(
-    runStatus(t, { responses: compareRace, args: ['--json'] }).stdout,
-  );
-  assert.equal(compareRaceReport.local.integrationCheckout.status, 'unavailable');
-
-  const malformed = defaultResponses();
-  malformed[`api:${MAIN_REF_ENDPOINT}`] = {
-    stdout: JSON.stringify(restRef('refs/heads/main', remote, 'tag')),
-  };
-  const malformedReport = JSON.parse(
-    runStatus(t, { responses: malformed, args: ['--json'] }).stdout,
-  );
-  assert.equal(malformedReport.local.integrationCheckout.status, 'unavailable');
-});
-
-test('status uses stable direct-ref and compare evidence and fails closed on races', (t) => {
-  const issue = v2ActiveIssue(61);
-  const checkpoint = 'a'.repeat(40);
-  const remote = 'b'.repeat(40);
-  const ref = 'refs/heads/claim-v1/issue-61';
-  const baseResponses = () => {
-    const responses = defaultResponses();
-    responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE, issue]]) };
-    responses[`api:${CLAIM_REFS_ENDPOINT}`] = {
-      stdout: JSON.stringify([[{ ref, object: { type: 'commit', sha: remote } }]]),
-    };
-    return responses;
-  };
-
-  const stable = baseResponses();
-  stable[`api:${claimRefEndpoint(61)}`] = { stdout: JSON.stringify(restRef(ref, remote)) };
-  stable[`api:${compareEndpoint(checkpoint, remote)}`] = {
-    stdout: JSON.stringify(restCompare(checkpoint, 'ahead', 1, 0)),
-  };
-  const stableReport = JSON.parse(runStatus(t, { responses: stable, args: ['--json'] }).stdout);
-  const stableItem = stableReport.registry.workItems.find(({ number }) => number === 61);
-  assert.equal(stableItem.remoteClaim.lifecycle.status, 'remote-ahead');
-  assert.equal(stableItem.remoteClaim.lifecycle.source, 'github-compare');
-  assert(
-    stableItem.questions.some(({ code }) => code === 'claim-lifecycle-remote-ahead'),
-    'remote-ahead must be an explicit maintainer question even when the remote commit is absent locally',
-  );
-
-  const refRace = baseResponses();
-  refRace[`api:${claimRefEndpoint(61)}`] = {
-    sequence: [
-      { stdout: JSON.stringify(restRef(ref, remote)) },
-      { stdout: JSON.stringify(restRef(ref, 'c'.repeat(40))) },
-    ],
-  };
-  refRace[`api:${compareEndpoint(checkpoint, remote)}`] =
-    stable[`api:${compareEndpoint(checkpoint, remote)}`];
-  const refRaceReport = JSON.parse(runStatus(t, { responses: refRace, args: ['--json'] }).stdout);
-  assert.equal(
-    refRaceReport.registry.workItems.find(({ number }) => number === 61).remoteClaim.lifecycle
-      .status,
-    'unavailable',
-  );
-
-  const compareRace = baseResponses();
-  compareRace[`api:${claimRefEndpoint(61)}`] = {
-    stdout: JSON.stringify(restRef(ref, remote)),
-  };
-  compareRace[`api:${compareEndpoint(checkpoint, remote)}`] = {
-    sequence: [
-      { stdout: JSON.stringify(restCompare(checkpoint, 'ahead', 1, 0)) },
-      { stdout: JSON.stringify(restCompare(checkpoint, 'diverged', 1, 1)) },
-    ],
-  };
-  const compareRaceReport = JSON.parse(
-    runStatus(t, { responses: compareRace, args: ['--json'] }).stdout,
-  );
-  assert.equal(
-    compareRaceReport.registry.workItems.find(({ number }) => number === 61).remoteClaim.lifecycle
-      .status,
-    'unavailable',
-  );
-
-  const malformed = baseResponses();
-  malformed[`api:${claimRefEndpoint(61)}`] = {
-    stdout: JSON.stringify(restRef(ref, remote, 'tag')),
-  };
-  const malformedReport = JSON.parse(
-    runStatus(t, { responses: malformed, args: ['--json'] }).stdout,
-  );
-  assert.equal(
-    malformedReport.registry.workItems.find(({ number }) => number === 61).remoteClaim.lifecycle
-      .status,
-    'unavailable',
-  );
-});
-
-test('same-host clean claim containment is the only local-ahead fallback', (t) => {
-  const issue = v2ActiveIssue(61);
-  const checkpoint = 'a'.repeat(40);
-  const remote = 'b'.repeat(40);
-  const ref = 'refs/heads/claim-v1/issue-61';
-  const responses = defaultResponses();
-  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE, issue]]) };
-  responses[`api:${CLAIM_REFS_ENDPOINT}`] = {
-    stdout: JSON.stringify([[{ ref, object: { type: 'commit', sha: remote } }]]),
-  };
-  responses[`api:${claimRefEndpoint(61)}`] = { stdout: JSON.stringify(restRef(ref, remote)) };
-  responses[`api:${compareEndpoint(checkpoint, remote)}`] = {
-    status: 1,
-    stderr: 'not found',
-  };
-  const worktrees = [
-    'worktree /fake/integration',
-    `HEAD ${'a'.repeat(40)}`,
-    'branch refs/heads/main',
-    '',
-    'worktree /fake/worktree',
-    `HEAD ${checkpoint}`,
-    'branch refs/heads/claim-v1/issue-61',
-    '',
-  ].join('\n');
-  const report = JSON.parse(
-    runStatus(t, {
-      responses,
-      args: ['--json'],
-      gitWorktrees: worktrees,
-      gitLocalBranches: `claim-v1/issue-61\t${checkpoint}\n`,
-    }).stdout,
-  );
-  const item = report.registry.workItems.find(({ number }) => number === 61);
-  assert.equal(item.remoteClaim.lifecycle.status, 'local-ahead');
-  assert.equal(item.remoteClaim.lifecycle.source, 'same-host-local-containment');
-});
-
-test('same-host scope fallback reads only stable committed immutable trees', (t) => {
-  const repository = mkdtempSync(join(tmpdir(), 'mn-scope-local-'));
-  t.after(() => rmSync(repository, { recursive: true, force: true }));
-  const git = (...args) => {
-    const result = spawnSync('git', ['-C', repository, ...args], { encoding: 'utf8' });
-    assert.equal(result.status, 0, result.stderr);
-    return result.stdout.trim();
-  };
-  git('init', '-q');
-  git('config', 'user.name', 'Scope Test');
-  git('config', 'user.email', 'scope@example.invalid');
-  mkdirSync(join(repository, 'tools'));
-  writeFileSync(join(repository, 'tools/a.mjs'), 'export const value = 1;\n');
-  git('add', 'tools/a.mjs');
-  git('commit', '-qm', 'base');
-  const base = git('rev-parse', 'HEAD');
-  writeFileSync(join(repository, 'tools/a.mjs'), 'export const value = 2;\n');
-  git('add', 'tools/a.mjs');
-  git('commit', '-qm', 'head');
-  const head = git('rev-parse', 'HEAD');
-
-  writeFileSync(join(repository, 'tools/a.mjs'), 'uncommitted content is not scope evidence\n');
-  assert.deepEqual(readLocalObservedAgainstMain(repository, base, head, base), {
-    status: 'complete',
-    paths: ['tools/a.mjs'],
-    count: 1,
-    baseCommit: base,
-    baseTree: git('rev-parse', `${base}^{tree}`),
-    headCommit: head,
-    headTree: git('rev-parse', `${head}^{tree}`),
-    source: 'same-host-local-immutable-tree',
-  });
-  assert.equal(readLocalObservedAgainstMain(repository, base, head, head).status, 'unavailable');
-  assert.equal(
-    readLocalObservedAgainstMain(repository, base, 'f'.repeat(40), base).status,
-    'unavailable',
-  );
-});
-
-test('missing, orphaned, malformed, and unsupported reserved-ref evidence fails closed', (t) => {
-  const cases = [
-    {
-      issue: v2ActiveIssue(73),
-      refs: [],
-      code: 'derived-claim-ref-missing',
-    },
-    {
-      issue: v2ReadyIssue(73),
-      refs: [
-        { ref: 'refs/heads/claim-v1/issue-73', object: { type: 'commit', sha: 'a'.repeat(40) } },
-      ],
-      code: 'orphaned-claim-ref',
-    },
-    {
-      issue: v2ReadyIssue(73),
-      refs: [
-        { ref: 'refs/heads/claim-v1/issue-073', object: { type: 'commit', sha: 'a'.repeat(40) } },
-      ],
-      code: 'malformed-claim-ref',
-    },
-    {
-      issue: v2ReadyIssue(73),
-      refs: [
-        { ref: 'refs/heads/claim-v2/issue-73', object: { type: 'commit', sha: 'a'.repeat(40) } },
-      ],
-      code: 'unsupported-claim-ref-version',
-    },
-  ];
-  for (const fixture of cases) {
-    const responses = defaultResponses();
-    responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE, fixture.issue]]) };
-    responses[`api:${CLAIM_REFS_ENDPOINT}`] = { stdout: JSON.stringify([fixture.refs]) };
-    const report = JSON.parse(runStatus(t, { responses, args: ['--json'] }).stdout);
-    assert(
-      report.registry.maintainerQuestions.some(({ code }) => code === fixture.code),
-      fixture.code,
-    );
-  }
-});
-
-test('only the exact #42 bootstrap branch bypasses derived-ref checks and competing ownership blocks rollout', (t) => {
-  const bootstrap = v2ActiveIssue(42, { 'Claim-Branch': 'arch/remote-reference-claim-primitive' });
-  {
-    const responses = defaultResponses();
-    responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE, bootstrap]]) };
-    const result = runStatus(t, { responses, args: ['--json'] });
+    assert.equal(result.status, mode === 'ok' ? 0 : 1, result.stderr);
     const report = JSON.parse(result.stdout);
-    assert.equal(result.exitCode, 0);
-    assert.equal(report.registry.workItems[0].remoteClaim.branchStatus, 'bootstrap');
-  }
-  {
-    const competing = v2ActiveIssue(73);
-    const responses = defaultResponses();
-    responses[`api:${ISSUES_ENDPOINT}`] = {
-      stdout: JSON.stringify([[PLAN_ISSUE, bootstrap, competing]]),
-    };
-    responses[`api:${CLAIM_REFS_ENDPOINT}`] = {
-      stdout: JSON.stringify([
-        [
-          {
-            ref: 'refs/heads/claim-v1/issue-73',
-            object: { type: 'commit', sha: 'a'.repeat(40) },
-          },
-        ],
-      ]),
-    };
-    const report = JSON.parse(runStatus(t, { responses, args: ['--json'] }).stdout);
-    assert.equal(
-      report.registry.maintainerQuestions.filter(
-        ({ code }) => code === 'claim-primitive-rollout-blocked',
-      ).length,
-      2,
-    );
+    assert.equal(report.coordinationKnown, mode === 'ok');
+    if (mode === 'ok') {
+      assert.equal(report.ready.length, 100);
+      const requests = readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
+      assert.equal(requests.length, 3);
+      assert.match(requests[1][1], /page=2$/);
+      assert.ok(requests.every((args) => args[0] === 'api' && args.length === 2));
+    } else assert.match(result.stderr, /Coordination unknown/);
   }
 });
 
-test('latest structured claim comment disagreements become maintainer questions', (t) => {
-  const responses = defaultResponses();
-  responses[`api:${commentEndpoint(9)}`] = {
-    stdout: JSON.stringify([
-      [
-        {
-          id: 500,
-          user: { login: 'maintainer' },
-          body: `Claim-State: active\nClaim-Agent: pi-sample\nCheck-In-By: ${FAR_FUTURE}\n`,
-          created_at: '2026-08-29T19:00:00Z',
-          updated_at: '2026-08-29T19:00:00Z',
-        },
-      ],
-      [
-        {
-          id: 501,
-          user: { login: 'maintainer' },
-          body: 'Claim-State: blocked\nClaim-Agent: another-agent\nCheck-In-By: 2999-02-01T00:00:00Z\n',
-          created_at: '2026-08-29T20:00:00Z',
-          updated_at: '2026-08-29T20:00:00Z',
-        },
-      ],
-    ]),
-  };
-  const result = runStatus(t, { responses, args: ['--json'] });
-  const report = JSON.parse(result.stdout);
-  const item = report.registry.workItems.find(({ number }) => number === 9);
-
-  assert.equal(result.exitCode, 2);
-  assert.equal(item.reconciliation, 'question');
-  assert(item.questions.filter(({ code }) => code === 'body-comment-mismatch').length >= 3);
-  assert.equal(item.triage, 'question');
-});
-
-test('unstructured claim comments fail closed instead of inferring ownership', (t) => {
-  const responses = defaultResponses();
-  responses[`api:${commentEndpoint(9)}`] = {
-    stdout: JSON.stringify([
-      [
-        {
-          id: 502,
-          user: { login: 'maintainer' },
-          body: 'Claimed by somebody; checkpoint later.',
-          created_at: '2026-08-29T20:00:00Z',
-          updated_at: '2026-08-29T20:00:00Z',
-        },
-      ],
-    ]),
-  };
-  const report = JSON.parse(runStatus(t, { responses, args: ['--json'] }).stdout);
-
-  assert(
-    report.registry.maintainerQuestions.some(({ code }) => code === 'unstructured-claim-comment'),
-  );
-});
-
-test('JSON retains explicitly reconciled historical claim comments as visible evidence', (t) => {
-  const reconciled = {
-    ...ACTIVE_CLAIM,
-    body: ACTIVE_CLAIM.body.replace(
-      'Reconciled-Claim-Comment-IDs: none',
-      'Reconciled-Claim-Comment-IDs: 500',
-    ),
-  };
-  const responses = defaultResponses();
-  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE, reconciled]]) };
-  responses[`api:${commentEndpoint(9)}`] = {
-    stdout: JSON.stringify([
-      [
-        {
-          id: 500,
-          user: { login: 'test-agent' },
-          body: 'Started work before structured comments existed.',
-          created_at: '2026-08-29T18:30:00Z',
-          updated_at: '2026-08-29T18:30:00Z',
-        },
-        {
-          id: 501,
-          user: { login: 'maintainer' },
-          body: [
-            'Claim-State: active',
-            'Claim-Harness: pi',
-            'Claim-Run-ID: run-123',
-            'Claim-Agent: pi-sample',
-            'Claim-Branch: test/sample',
-            'Claim-Worktree: /fake/worktree',
-            `Check-In-By: ${FAR_FUTURE}`,
-            'Checkpoint-At: 2026-08-29T18:00:00Z',
-            'Checkpoint-Commit: uncommitted',
-          ].join('\n'),
-          created_at: '2026-08-29T19:00:00Z',
-          updated_at: '2026-08-29T19:00:00Z',
-        },
-      ],
-    ]),
-  };
-  const result = runStatus(t, { responses, args: ['--json'] });
-  const report = JSON.parse(result.stdout);
-  const item = report.registry.workItems.find(({ number }) => number === 9);
-
-  assert.equal(result.exitCode, 0);
-  assert.equal(item.claimCommentResolution.status, 'valid');
-  assert.equal(item.claimCommentResolution.authority, 'maintainer-or-integration-owner');
-  assert.deepEqual(item.claimCommentResolution.reconciledIds, [500]);
-  assert.deepEqual(item.claimCommentResolution.unresolvedIds, [501]);
-  assert.equal(item.claimComments.find(({ id }) => id === 500).reconciliation, 'reconciled');
-  assert.equal(item.latestUnresolvedClaimComment.id, 501);
-});
-
-test('claim-bearing issues missing work labels stay visible and warn', (t) => {
-  const unlabeled = claimIssue({ number: 14, state: 'active', label: null });
-  const responses = defaultResponses();
-  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[unlabeled]]) };
-  const result = runStatus(t, { responses });
-
-  assert.equal(result.exitCode, 2);
-  assert.match(result.stdout, /#14 \[active; question\]/);
-  assert.match(result.stdout, /body-label-state-mismatch/);
-});
-
-test('blocked and review claims with expired or invalid deadlines both warn', (t) => {
-  const blocked = claimIssue({ number: 15, state: 'blocked', checkIn: LONG_PAST });
-  blocked.body = blocked.body
-    .replace('Claim-Branch: test/sample', 'Claim-Branch: test/blocked')
-    .replace('Claim-Worktree: /fake/worktree', 'Claim-Worktree: /remote/blocked');
-  const review = claimIssue({ number: 16, state: 'review', checkIn: 'not-a-date' });
-  review.body = review.body
-    .replace('Claim-Branch: test/sample', 'Claim-Branch: test/review')
-    .replace('Claim-Worktree: /fake/worktree', 'Claim-Worktree: /remote/review');
-  const responses = defaultResponses();
-  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[blocked, review]]) };
-  const report = JSON.parse(runStatus(t, { responses, args: ['--json'] }).stdout);
-
-  assert(
-    report.registry.maintainerQuestions.some(
-      ({ issueNumber, code }) => issueNumber === 15 && code === 'check-in-overdue',
-    ),
-  );
-  assert(
-    report.registry.maintainerQuestions.some(
-      ({ issueNumber, code }) => issueNumber === 16 && code === 'check-in-invalid',
-    ),
-  );
-});
-
-test('local branch and registered worktree contradictions are surfaced without repair', (t) => {
-  const mismatch = {
-    ...ACTIVE_CLAIM,
-    body: ACTIVE_CLAIM.body.replace(
-      'Claim-Worktree: /fake/worktree',
-      'Claim-Worktree: /claimed/elsewhere',
-    ),
-  };
-  const responses = defaultResponses();
-  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[mismatch]]) };
-  const report = JSON.parse(runStatus(t, { responses, args: ['--json'] }).stdout);
-  const item = report.registry.workItems[0];
-
-  assert.equal(item.localEvidence.status, 'contradiction');
-  assert(item.questions.some(({ code }) => code === 'branch-worktree-mismatch'));
-});
-
-test('locked and prunable porcelain evidence cannot report a matched worktree', (t) => {
-  for (const [marker, code] of [
-    ['locked worktree is in use', 'worktree-locked'],
-    ['prunable gitdir points to a missing location', 'worktree-prunable'],
-  ]) {
-    const gitWorktrees = [
-      'worktree /fake/worktree',
-      'HEAD abc1234',
-      'branch refs/heads/test/sample',
-      marker,
-      '',
-    ].join('\n');
-    const result = runStatus(t, { args: ['--json'], gitWorktrees });
-    const report = JSON.parse(result.stdout);
-    const item = report.registry.workItems.find(({ number }) => number === 9);
-
-    assert.equal(result.exitCode, 2);
-    assert.equal(item.localEvidence.status, 'contradiction');
-    assert(item.questions.some((question) => question.code === code));
-  }
-});
-
-test('an unreachable registry is coordination-unknown, never an empty board', (t) => {
-  const responses = defaultResponses();
-  responses[`api:${ISSUES_ENDPOINT}`] = { status: 1, stderr: 'dial tcp: no such host\n' };
-  const result = runStatus(t, { responses });
-
-  assertReportsUnknown(result, /dial tcp: no such host/);
-  assert.doesNotMatch(result.stdout, /^none$/m);
-});
-
-test('malformed paginated output is coordination-unknown', (t) => {
-  const responses = defaultResponses();
-  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify({ not: 'pages' }) };
-  const result = runStatus(t, { responses });
-
-  assertReportsUnknown(result, /invalid paginated response/);
-});
-
-test('impossible GitHub calendar timestamps fail closed', (t) => {
-  const responses = defaultResponses();
-  responses[`api:${ISSUES_ENDPOINT}`] = {
-    stdout: JSON.stringify([[{ ...ACTIVE_CLAIM, updated_at: '2026-02-30T19:08:12Z' }]]),
-  };
-  const result = runStatus(t, { responses, args: ['--json'] });
-  const report = JSON.parse(result.stdout);
-
-  assert.equal(result.exitCode, 2);
-  assert.equal(report.coordinationKnown, false);
-  assert.match(report.errors[0].message, /strict valid ISO instant/);
-});
-
-test('malformed issue records fail closed rather than dropping work', (t) => {
-  const responses = defaultResponses();
-  responses[`api:${ISSUES_ENDPOINT}`] = {
-    stdout: JSON.stringify([[{ ...ACTIVE_CLAIM, body: null }]]),
-  };
-  const result = runStatus(t, { responses, args: ['--json'] });
-  const report = JSON.parse(result.stdout);
-
-  assert.equal(result.exitCode, 2);
-  assert.equal(report.coordinationKnown, false);
-  assert.equal(report.registry, null);
-  assert.match(report.errors[0].message, /body must be a string/);
-});
-
-test('missing GitHub CLI is coordination-unknown', (t) => {
-  const result = runStatus(t, { gh: false });
-  assertReportsUnknown(result, /GitHub CLI is unavailable/);
-});
-
-test('status uses only read-only commands and does not change local files', (t) => {
-  const result = runStatus(t);
-
-  assert.equal(result.exitCode, 0);
-  assert.deepEqual(result.afterFiles, result.beforeFiles);
-  assert.equal(result.afterSentinel, result.beforeSentinel);
-  const gitInvocations = result.invocations.filter((entry) => entry.startsWith('git '));
-  assert.equal(gitInvocations.length, 9);
-  assert(
-    gitInvocations.every((entry) =>
-      entry.startsWith('git GIT_OPTIONAL_LOCKS=0 --no-optional-locks '),
-    ),
-  );
-  assert(
-    result.invocations.every(
-      (entry) =>
-        entry === 'git GIT_OPTIONAL_LOCKS=0 --no-optional-locks status --short --branch' ||
-        entry === 'git GIT_OPTIONAL_LOCKS=0 --no-optional-locks worktree list --porcelain' ||
-        entry.startsWith('git GIT_OPTIONAL_LOCKS=0 --no-optional-locks for-each-ref --format=') ||
-        entry.startsWith(
-          'git GIT_OPTIONAL_LOCKS=0 --no-optional-locks -C /fake/integration status ',
-        ) ||
-        entry.startsWith(
-          'git GIT_OPTIONAL_LOCKS=0 --no-optional-locks -C /fake/integration symbolic-ref ',
-        ) ||
-        entry.startsWith(
-          'git GIT_OPTIONAL_LOCKS=0 --no-optional-locks -C /fake/integration rev-parse ',
-        ) ||
-        entry.startsWith(
-          'git GIT_OPTIONAL_LOCKS=0 --no-optional-locks -C /fake/integration config ',
-        ) ||
-        entry.startsWith(
-          'git GIT_OPTIONAL_LOCKS=0 --no-optional-locks -C /fake/integration ls-files ',
-        ) ||
-        entry === 'gh --version' ||
-        entry === 'gh auth status' ||
-        entry.startsWith('gh repo view ') ||
-        entry.startsWith('gh api --paginate --slurp repos/') ||
-        entry.startsWith('gh api repos/'),
-    ),
-  );
-  assert(
-    result.invocations.every(
-      (entry) => !/\b(POST|PATCH|PUT|DELETE|create|edit|close|push|remove|prune)\b/i.test(entry),
-    ),
-    result.invocations.join('\n'),
-  );
-});
-
-function nextWorkResponses(issues, active = null) {
-  const responses = defaultResponses();
-  responses[`api:${ISSUES_ENDPOINT}`] = { stdout: JSON.stringify([[PLAN_ISSUE, ...issues]]) };
-  responses[`api:${CLAIM_REFS_ENDPOINT}`] = {
-    stdout: JSON.stringify([active ? [restRef(`refs/heads/claim-v1/issue-${active.number}`)] : []]),
-  };
-  if (active)
-    responses[`api:${commentEndpoint(active.number)}`] = {
-      stdout: JSON.stringify([[restCheckpointComment(active)]]),
-    };
-  const sha = 'a'.repeat(40);
-  const tree = 'b'.repeat(40);
-  const blob = 'c'.repeat(40);
-  responses[`api:repos/${REPOSITORY}/git/commits/${sha}`] = {
-    stdout: JSON.stringify({ sha, tree: { sha: tree } }),
-  };
-  responses[`api:repos/${REPOSITORY}/git/trees/${tree}?recursive=1`] = {
-    stdout: JSON.stringify({
-      sha: tree,
-      truncated: false,
-      tree: [
-        { path: '.github', mode: '040000', type: 'tree', sha: '6'.repeat(40) },
-        { path: '.github/coordination', mode: '040000', type: 'tree', sha: '7'.repeat(40) },
-        {
-          path: '.github/coordination/serializing-paths.v1.json',
-          mode: '100644',
-          type: 'blob',
-          sha: blob,
-        },
-      ],
-    }),
-  };
-  responses[`api:repos/${REPOSITORY}/git/blobs/${blob}`] = {
-    stdout: JSON.stringify({
-      sha: blob,
-      encoding: 'base64',
-      content: Buffer.from(SERIALIZING_SOURCE).toString('base64'),
-    }),
-  };
-  return responses;
-}
-
-test('computed parked opportunities do not supply standalone claim gate clearance', (t) => {
-  const ready = v2ReadyIssue(10, { 'Scope-Paths': 'docs/next.md' });
-  const proposed = v2ReadyIssue(9, {
-    'Scope-Paths': 'docs/proposal.md',
-    'Claim-State': 'proposed',
-    'Checkpoint-State': 'proposed',
-  });
-  proposed.labels = [{ name: 'work:proposed' }];
-  const active = v2ActiveIssue(73);
-  const responses = nextWorkResponses([ready, active, proposed], active);
-  const result = runStatus(t, { responses, args: ['--json'] });
-  const report = JSON.parse(result.stdout);
-  assert.equal(result.exitCode, 0);
-  assert.deepEqual(report.registry.nextWork.candidates, [9, 10]);
-  assert.equal(report.registry.workItems.find(({ number }) => number === 9).triage, 'proposed');
-  assert.equal(
-    report.registry.workItems.find(({ number }) => number === 10).scope.status,
-    'unavailable',
-  );
-  const selected = runStatus(t, { responses, args: ['--json', '--gate', 'claim:10'] });
-  assert.equal(selected.exitCode, 2);
-  assert.deepEqual(JSON.parse(selected.stdout).scopeGate, {
-    requested: 'claim:10',
-    status: 'unknown',
-    blockingFindingIds: [],
-  });
-  assert.deepEqual(JSON.parse(selected.stdout).registry.nextWork.candidates, [9, 10]);
-});
-
-test('new closed-closure errors are local advisory refusals and board-only failures, not gate mutations', (t) => {
-  const active = v2ActiveIssue(73);
-  const ready = v2ReadyIssue(10, { 'Scope-Paths': 'docs/next.md' });
-  const dependent = v2ReadyIssue(11, { 'Scope-Paths': 'docs/later.md', 'Depends-On': '#12' });
-  const done = (number, dependency) => ({
-    ...v2ReadyIssue(number, {
-      'Claim-State': 'done',
-      'Checkpoint-State': 'done',
-      'Checkpoint-At': LONG_PAST,
-      'Depends-On': `#${dependency}`,
-    }),
-    state: 'closed',
-    labels: [{ name: 'work:done' }],
-  });
-  const responses = nextWorkResponses(
-    [active, ready, dependent, done(12, 13), done(13, 12)],
-    active,
-  );
-  const result = runStatus(t, { responses, args: ['--json'] });
-  const report = JSON.parse(result.stdout);
-  assert.equal(result.exitCode, 2);
-  assert.deepEqual(report.warnings, []);
-  assert.deepEqual(report.registry.nextWork.candidates, [10]);
-  assert.equal(
-    report.registry.nextWork.items.find(({ number }) => number === 11).availability,
-    'unknown',
-  );
-  for (const number of [12, 13])
-    assert.equal(
-      result.invocations.filter((call) => call.endsWith(commentEndpoint(number))).length,
-      2,
-    );
-  const selected = runStatus(t, { responses, args: ['--json', '--gate', 'checkpoint:73'] });
-  assert.equal(selected.exitCode, 0);
-  assert.deepEqual(JSON.parse(selected.stdout).scopeGate, {
-    requested: 'checkpoint:73',
-    status: 'clear',
-    blockingFindingIds: [],
-  });
-  const human = runStatus(t, { responses });
-  assert.equal(human.exitCode, 2);
-  assert.match(human.stdout, /requested=board status=clear blockers=none exit=2/);
-  const race = structuredClone(responses);
-  race[`api:${commentEndpoint(13)}`] = {
-    sequence: [
-      { stdout: '[[]]' },
-      { stdout: JSON.stringify([[restCheckpointComment(done(13, 12), 12345, 'late comment')]]) },
+test('unknown work labels are not a ready state or delivered prerequisite, and huge fields stay bounded in human output', () => {
+  const report = buildReport({
+    issues: [
+      issue(1, ['work:ready', 'work:unexpected']),
+      issue(2, ['work:unexpected'], { state: 'closed' }),
+      issue(3, ['work:ready'], { dependsOn: '#2' }),
+      active(4, { agent: 'x'.repeat(2 * 1024 * 1024), scope: 'none' }),
     ],
-  };
-  const raced = runStatus(t, { responses: race, args: ['--json'] });
-  assert.equal(raced.exitCode, 2);
-  assert.equal(JSON.parse(raced.stdout).registry.nextWork.status, 'unknown');
-  assert.deepEqual(JSON.parse(raced.stdout).registry.nextWork.candidates, []);
-});
-
-test('legacy principal work is always visible without invented waiting ages or new gate warnings', (t) => {
-  const principal = claimIssue({ number: 20, state: 'blocked' });
-  principal.body = principal.body.replace(
-    /^(Claim-(?:Harness|Run-ID|Agent|Branch|Worktree)|Claimed-At|Check-In-By): .*$/gm,
-    '$1: unclaimed',
+    claimBranches: ['claim-v1/issue-4'],
+    now: NOW,
+  });
+  assert.deepEqual(report.ready, []);
+  assert.deepEqual(
+    report.unknown.map((row) => row.number),
+    [1],
   );
-  principal.body = principal.body.replace('Claim-Agent: unclaimed', 'Claim-Agent: Unclaimed');
-  const active = v2ActiveIssue(73);
-  const responses = nextWorkResponses([principal, active], active);
-  const result = runStatus(t, { responses, args: ['--json', '--gate', 'checkpoint:73'] });
-  const report = JSON.parse(result.stdout);
-  assert.equal(result.exitCode, 0);
-  assert.deepEqual(report.warnings, []);
-  assert.deepEqual(report.registry.nextWork.principalOwed, [20]);
-  const waiting = report.registry.nextWork.items.find(({ number }) => number === 20).liveness;
-  assert.equal(waiting.status, 'unknown');
-  assert.equal(waiting.ageMs, null);
-  const human = runStatus(t, { responses, args: ['--gate', 'checkpoint:73'] });
-  assert.equal(human.exitCode, 0);
-  assert.match(human.stdout, /#20 owner=maintainer waiting-age-ms=unknown waiting-status=unknown/);
-  assert(
-    human.stdout.indexOf('## Principal-owed work') < human.stdout.indexOf('## Computed next work'),
-  );
-  const ordinaryBoard = runStatus(t, { responses });
-  assert.equal(ordinaryBoard.exitCode, 0);
-  const unknown = runStatus(t, { responses: { ...responses, auth: { status: 1 } } });
-  assert.match(unknown.stdout, /Principal-owed work \(never expires\)\nunavailable/);
-});
-
-test('R1 advisory ownership signals refuse self and peers without changing selected gates', (t) => {
-  const active = v2ActiveIssue(73);
-  const peer = v2ReadyIssue(9, { 'Scope-Paths': 'docs/shared.md' });
-  const claimant = v2ReadyIssue(10, { 'Scope-Paths': 'docs/shared.md' });
-  for (const [narrative, expectedCandidates] of [
-    ['Claim after the full protocol.', [9, 10]],
-    ['I am taking ownership', []],
-  ]) {
-    const responses = nextWorkResponses([active, peer, claimant], active);
-    responses[`api:${commentEndpoint(10)}`] = {
-      stdout: JSON.stringify([
-        [restCheckpointComment(claimant, 10001, `${claimant.body}\n${narrative}`)],
-      ]),
-    };
-    for (const args of [[], ['--gate', 'checkpoint:73']]) {
-      const result = runStatus(t, { responses, args: ['--json', ...args] });
-      const report = JSON.parse(result.stdout);
-      assert.equal(result.exitCode, 0, narrative);
-      assert.deepEqual(report.warnings, []);
-      assert.equal(report.scopeGate.status, 'clear');
-      assert.deepEqual(report.registry.nextWork.candidates, expectedCandidates);
-      assert.equal(
-        report.registry.workItems.find(({ number }) => number === 10).triage,
-        'candidate',
-      );
-    }
-  }
-});
-
-test('R2 overlapping orphan scope never becomes advisory clearance or changes existing warning gates', (t) => {
-  const orphan = v2ReadyIssue(9, { 'Scope-Paths': 'docs/shared.md' });
-  const peer = v2ReadyIssue(10, { 'Scope-Paths': 'docs/shared.md' });
-  const disjoint = v2ReadyIssue(11, { 'Scope-Paths': 'docs/disjoint.md' });
-  const active = v2ActiveIssue(73);
-  const responses = nextWorkResponses([active, orphan, peer, disjoint], active);
-  responses[`api:${CLAIM_REFS_ENDPOINT}`] = {
-    stdout: JSON.stringify([
-      [restRef('refs/heads/claim-v1/issue-9'), restRef('refs/heads/claim-v1/issue-73')],
-    ]),
-  };
-  for (const args of [[], ['--gate', 'checkpoint:73']]) {
-    const result = runStatus(t, { responses, args: ['--json', ...args] });
-    const report = JSON.parse(result.stdout);
-    assert.equal(result.exitCode, 2);
-    assert(report.warnings.some(({ code }) => code === 'orphaned-claim-ref'));
-    assert.equal(report.scopeGate.status, 'unknown');
-    assert.deepEqual(report.registry.nextWork.candidates, [11]);
-    assert.equal(
-      report.registry.nextWork.items.find(({ number }) => number === 10).planningScope.status,
-      'blocked',
-    );
-  }
-});
-
-// Regression coverage for the inherited 1 MiB child-process buffer that silently turned
-// every gate `unknown` once the registry payload crossed it.
-const LEGACY_DEFAULT_MAX_BUFFER_BYTES = 1024 * 1024;
-
-test('subprocess reads use an explicit generous ceiling instead of the inherited default', () => {
-  assert.equal(SUBPROCESS_MAX_BUFFER_BYTES, 64 * 1024 * 1024);
-  assert.ok(SUBPROCESS_MAX_BUFFER_BYTES >= LEGACY_DEFAULT_MAX_BUFFER_BYTES * 32);
-
-  const oversized = LEGACY_DEFAULT_MAX_BUFFER_BYTES * 4;
-  const read = runSubprocess(process.execPath, [
-    '-e',
-    `process.stdout.write('x'.repeat(${oversized}))`,
-  ]);
-
-  assert.equal(read.error, undefined);
-  assert.equal(read.status, 0);
-  assert.equal(read.stdout.length, oversized);
-});
-
-test('a genuine buffer overrun fails closed with a distinct named error', () => {
-  const emitMoreThanFits = ['-e', "process.stdout.write('x'.repeat(4096))"];
-
-  for (const options of [{ maxBuffer: 64 }, { maxBuffer: 64, allowFailure: true }]) {
-    assert.throws(
-      () => runSubprocess(process.execPath, emitMoreThanFits, options),
-      (error) => {
-        assert.equal(error.code, BUFFER_EXCEEDED_CODE);
-        assert.match(error.message, /exceeded the 64-byte subprocess read limit \(ENOBUFS\)/);
-        assert.match(error.message, /fails closed and no gate result may be inferred/);
-        assert.match(error.message, /outgrown the configured buffer/);
-        return true;
-      },
-      `allowFailure must never soften a buffer overrun: ${JSON.stringify(options)}`,
-    );
-  }
-});
-
-test('an oversized registry payload reports the distinct buffer failure, not a bare ENOBUFS', (t) => {
-  const responses = defaultResponses();
-  responses[`api:${ISSUES_ENDPOINT}`] = {
-    stdoutBytes: SUBPROCESS_MAX_BUFFER_BYTES + LEGACY_DEFAULT_MAX_BUFFER_BYTES,
-  };
-
-  const result = runStatus(t, { responses });
-
-  assertReportsUnknown(
-    result,
-    new RegExp(`exceeded the ${SUBPROCESS_MAX_BUFFER_BYTES}-byte subprocess read limit`),
-  );
-  assert.match(result.stderr, /read the registry in smaller pages/);
-  assert.doesNotMatch(result.stdout, /claiming is safe/);
-});
-
-test('a registry far above the old default reads identically to the same registry below it', (t) => {
-  const baselineResponses = defaultResponses();
-  assert.ok(
-    Buffer.byteLength(baselineResponses[`api:${ISSUES_ENDPOINT}`].stdout) <
-      LEGACY_DEFAULT_MAX_BUFFER_BYTES,
-    'baseline registry must sit below the old default so the comparison is meaningful',
-  );
-
-  const oversizedResponses = defaultResponses();
-  oversizedResponses[`api:${ISSUES_ENDPOINT}`] = {
-    stdout: JSON.stringify([
-      [
-        PLAN_ISSUE,
-        ACTIVE_CLAIM,
-        restIssue({
-          number: 42,
-          title: 'Not coordinated work',
-          body: 'padding '.repeat(LEGACY_DEFAULT_MAX_BUFFER_BYTES / 2),
-          labels: ['question'],
-        }),
-      ],
-    ]),
-  };
-  assert.ok(
-    Buffer.byteLength(oversizedResponses[`api:${ISSUES_ENDPOINT}`].stdout) >
-      LEGACY_DEFAULT_MAX_BUFFER_BYTES * 3,
-    'oversized registry must clear the old default by a wide margin',
-  );
-
-  const baseline = runStatus(t, { responses: baselineResponses, args: ['--json'] });
-  const oversized = runStatus(t, { responses: oversizedResponses, args: ['--json'] });
-  const withoutTimestamp = (raw) => {
-    const report = JSON.parse(raw);
-    delete report.generatedAt;
-    return report;
-  };
-
-  assert.equal(baseline.exitCode, 0);
-  assert.equal(oversized.exitCode, 0);
-  assert.equal(oversized.stderr, baseline.stderr);
-  assert.deepEqual(withoutTimestamp(oversized.stdout), withoutTimestamp(baseline.stdout));
-  assert.deepEqual(oversized.invocations, baseline.invocations);
+  assert.deepEqual(report.blocked[0].blockedBy, [2]);
+  assert.ok(Buffer.byteLength(renderReport(report)) < 10_000);
 });
