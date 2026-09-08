@@ -6,7 +6,7 @@ Parallel work should increase throughput without hidden overlap, conflicting aut
 
 GitHub Issues are the canonical work registry because they are remote, branch-independent, auditable, and visible across harnesses, worktrees, and machines. A GitHub Project may add views later without replacing issues. Chat history, local session lists, worktrees, and harness-specific storage are supporting evidence, never the shared registry.
 
-Harness bridge files such as `CLAUDE.md` and `.github/copilot-instructions.md` only route agents to root `AGENTS.md`; they do not duplicate requirements or status. A harness that does not auto-discover `AGENTS.md` must use an equivalent thin bridge.
+Harness bridge files such as `CLAUDE.md` and `.github/copilot-instructions.md` only route agents to root `AGENTS.md`; they do not duplicate requirements or status. A harness that does not auto-discover `AGENTS.md` must use an equivalent thin bridge. Pi discovers `AGENTS.md` directly and therefore has no bridge file; do not add one. Verify discovery before adding a bridge for a new harness, and remove a bridge that its harness no longer needs.
 
 Every agent session begins by reading `AGENTS.md` and running:
 
@@ -83,20 +83,28 @@ Represent dependencies as a directed acyclic graph and group ready items into pa
 
 Do not split work merely to keep agents busy. Tasks are not safely parallel when they edit the same source, migration sequence, lockfile, generated artifact, architecture decision, or infrastructure state unless one task explicitly owns integration.
 
+Each coordinator may hold at most **eight** concurrently dispatched execution sessions. The scope gates serialize overlapping work, but disjoint work has no natural ceiling and non-blocking dispatch makes unbounded fan-out easy; the cap bounds how much unreviewed work one coordinator can accumulate. Count that coordinator's own active and review claims, not queued intent. This is a self-limit, not a repository-wide ceiling: total concurrency scales with the number of running coordinators, and the maintainer owns that total. The maintainer may raise or lower the per-coordinator cap for a specific effort; an agent may not.
+
 ## Coordinator and execution authority
 
-The primary or root agent session is the **coordinator**. It is coordination-only, even when a requested change is small. An **execution session** is a separate delegated subagent or maintainer-authorized agent session that performs one bounded repository change. The **integration checkout** is the worktree on the sole integration branch, `main`; it is not an implementation worktree.
+A primary or root agent session is a **coordinator**, sometimes called a supervisor session. Every coordinator is coordination-only, even when a requested change is small. Several coordinators may run concurrently, and no coordinator is privileged over another. A **dispatching coordinator** delegates bounded repository changes, holds the resulting claims, and reviews the returned work. A **planning or audit coordinator** reads, plans, and reports without dispatching, so it holds no claim and consumes no dispatch budget; its findings are evidence for the shared plan, not authority to act on them.
 
-The coordinator may:
+Concurrent coordinators share no local state. Every fact one coordinator needs about another's work—what is claimed, by whom, at what state, against which branch—comes from the GitHub registry and refs, never from a session list, worktree inspection, or harness memory. A coordinator that cannot prove something from shared records treats it as unknown and surfaces it, rather than inferring it from local evidence.
+
+An **execution session** is a separate delegated subagent that performs one bounded repository change; a maintainer-authorized standalone agent session is the fallback when the harness cannot delegate one. The **integration checkout** is the worktree on the sole integration branch, `main`; it is not an implementation worktree.
+
+A coordinator may:
 
 - inspect repository files, status, refs, worktrees, diffs, issue records, and check results with read-only operations;
 - plan outside tracked repository files and maintain shared issue plan, claim, checkpoint, and dependency metadata;
 - establish a claim, branch, and worktree for a named execution session, delegate the work, and review its commits and evidence;
 - perform a conflict-free Git integration of reviewed execution commits only when the designated integration owner has explicitly authorized that integration operation, and push or merge only when separately authorized under the version-control rules.
 
-The coordinator must not edit tracked repository files in any checkout, run writing format/fix operations as a substitute for delegation, create ordinary change commits, or implement or repair work in the integration checkout. A version-controlled plan or documentation edit is a repository change, not claim/plan metadata. Authorized integration may apply unchanged reviewed commits and create normal merge metadata; it does not permit hand-editing, conflict resolution, drive-by fixes, or unreviewed amendments in the target checkout. A conflict or needed correction returns to an execution session on its delegated branch.
+A coordinator must not edit tracked repository files in any checkout, run writing format/fix operations as a substitute for delegation, create ordinary change commits, or implement or repair work in the integration checkout. A version-controlled plan or documentation edit is a repository change, not claim/plan metadata. Authorized integration may apply unchanged reviewed commits and create normal merge metadata; it does not permit hand-editing, conflict resolution, drive-by fixes, or unreviewed amendments in the target checkout. A conflict or needed correction returns to an execution session on its delegated branch.
 
 Every repository change—including documentation, tests, generated artifacts, tooling, configuration, and implementation—must be performed by an execution session. Each delegated change has its own claimed bounded scope, short-lived typed branch based on the current integration target, and dedicated mutable worktree; the execution session edits, validates, and commits only there. Its output is reviewed and integrated into the target branch rather than recreated or edited directly in the integration checkout. Delegation grants no publication authority except the normal owned-branch push described in [Scoped owned-branch publication](#scoped-owned-branch-publication). It never grants permission to push another ref, open a pull request, merge, alter protected refs, or deploy; those operations retain their existing explicit authorization and integration-owner requirements.
+
+Delegation is non-blocking. A dispatching coordinator dispatches an execution session and stays responsive to the principal while it runs; it does not idle, tight-poll, or go silent waiting for a delegated result. A coordinator may run short read-only operations inline—status, scope gates, diffs, refs, check results. Anything long-running, and anything that writes, goes to an execution session. Reporting a delegated result is the coordinator's job when that result arrives, not a reason to stop working in the meantime.
 
 If the harness cannot create or delegate a subagent, the coordinator stops before changing repository files and asks the maintainer to start or authorize a separate execution session. Tool limitations, urgency, or a change's small size do not allow the coordinator to become the executor.
 
