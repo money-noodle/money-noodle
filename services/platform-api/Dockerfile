@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
-FROM node:22.22.0-alpine3.22@sha256:7aa86fa052f6e4b101557ccb56717cb4311be1334381f526fe013418fe157384 AS build
+FROM node:26.3.0-alpine3.22@sha256:c7932b9e5e337b0e733d6e16abc1b0e104759e8b05e59ed56586cce967d26dfe AS build
 
 WORKDIR /workspace
 RUN corepack enable && corepack prepare pnpm@11.24.0 --activate
@@ -14,7 +14,7 @@ COPY services/platform-api services/platform-api
 RUN pnpm nx run platform-api:build \
   && pnpm --filter @money-noodle/platform-api deploy --prod /runtime
 
-FROM node:22.22.0-alpine3.22@sha256:7aa86fa052f6e4b101557ccb56717cb4311be1334381f526fe013418fe157384 AS runtime
+FROM node:26.3.0-alpine3.22@sha256:c7932b9e5e337b0e733d6e16abc1b0e104759e8b05e59ed56586cce967d26dfe AS runtime
 
 ENV NODE_ENV=production
 ENV PORT=3001
