@@ -332,7 +332,11 @@ An unfinished agent checkpoints and either remains accurately active with a tick
 
 A dedicated worktree persists while its claim is agent-owned, because a missing dedicated worktree is one of the suspected-stale signals above. Retirement happens once the claim reaches `done` or `abandoned` and the work is in the integration branch.
 
-A coordinator retires worktrees as routine maintenance, not the execution session, which has usually ended before its work merges. Before removing one, prove the work is preserved: the branch’s commits must already be in the integration branch **by patch identity**, because squash merges make ancestry checks report merged work as unmerged. `git cherry <integration-branch> <branch>` reporting no `+` commits is that proof; `git merge-base --is-ancestor` alone is not. Confirm the working tree is clean and that no record holds the worktree; a preservation hold names its exact path and branch.
+A coordinator retires worktrees as routine maintenance, not the execution session, which has usually ended before its work merges. Before removing one, prove the work is preserved. Because pull requests are the only integration route, the authoritative proof is that the branch’s pull request is **merged** into the integration branch: `gh pr list --head <branch> --state merged` naming it. When no pull request exists, prove **content equality** instead — `git diff --quiet <integration-branch> <branch> -- <the branch’s changed paths>` must report no difference, which shows the integration branch already carries that work.
 
-Retiring a worktree never deletes its branch or reserved ref. Refs remain preserved evidence under the rules above. A worktree with unmerged commits, uncommitted changes, an agent-owned claim, or a preservation hold stays until the maintainer resolves it.
+Neither ancestry nor patch identity is sufficient proof on its own. Squash merges collapse a branch’s commits into one, so `git merge-base --is-ancestor` reports merged work as unmerged, and `git cherry` does the same for every branch that contributed more than one commit — its patch identities never match the single squashed commit. A `+` from `git cherry` is therefore a prompt to check the merged pull request, not evidence that work would be lost.
+
+Confirm the working tree is clean and that no record holds the worktree; a preservation hold names its exact path and branch.
+
+Retiring a worktree never deletes its branch or reserved ref. Refs remain preserved evidence under the rules above. A worktree whose work is not proved preserved by one of the two checks above, or that has uncommitted changes, an agent-owned claim, or a preservation hold, stays until the maintainer resolves it.
 
