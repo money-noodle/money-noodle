@@ -49,13 +49,37 @@ const REQUIRED_LABELS = [
 const ADVISORY =
   "Candidate output is triage evidence only; it never proves that claiming is safe or authorizes takeover, cleanup, integration, push, or deployment.";
 
-function run(command, args, { allowFailure = false, env = {} } = {}) {
+// Node's default child-process buffer is 1 MiB. The registry is read as one paginated,
+// slurped payload, so that inherited default silently turned a growing registry into
+// ENOBUFS and every gate into `unknown`. Read with a generous explicit ceiling instead,
+// and keep an overrun a named, diagnosable failure rather than a default nobody chose.
+// `maxBuffer` is a cap, not a preallocation, so the headroom costs nothing until used.
+export const SUBPROCESS_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+export const BUFFER_EXCEEDED_CODE = 'subprocess-output-buffer-exceeded';
+
+function bufferExceededError(command, args, limitBytes) {
+  const error = new Error(
+    `${command} ${args.join(' ')} failed: output exceeded the ${limitBytes}-byte subprocess read limit (ENOBUFS). ` +
+      'The coordination payload has outgrown the configured buffer; the read fails closed and no gate ' +
+      'result may be inferred from it. Raise the limit or read the registry in smaller pages.',
+  );
+  error.code = BUFFER_EXCEEDED_CODE;
+  return error;
+}
+
+function run(
+  command,
+  args,
+  { allowFailure = false, env = {}, maxBuffer = SUBPROCESS_MAX_BUFFER_BYTES } = {},
+) {
   const result = spawnSync(command, args, {
     encoding: "utf8",
     env: { ...process.env, ...env },
     timeout: 30_000,
     killSignal: 'SIGTERM',
+    maxBuffer,
   });
+  if (result.error?.code === 'ENOBUFS') throw bufferExceededError(command, args, maxBuffer);
   if (result.error || (!allowFailure && result.status !== 0)) {
     const detail =
       result.error?.message ||
@@ -65,6 +89,8 @@ function run(command, args, { allowFailure = false, env = {} } = {}) {
   }
   return result;
 }
+
+export { run as runSubprocess };
 
 function parseJson(text, context) {
   try {
@@ -328,6 +354,7 @@ function runGitBytes(args) {
     env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
     timeout: 30_000,
     killSignal: 'SIGTERM',
+    maxBuffer: SUBPROCESS_MAX_BUFFER_BYTES,
   });
   if (result.error) return { status: null, stdout: null };
   return { status: result.status, stdout: result.stdout };
