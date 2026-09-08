@@ -17,7 +17,7 @@ Use REST APIs described by canonical versioned OpenAPI documents. Validate reque
 3. Resolve cross-boundary and architecture-impacting decisions and update proposed or accepted visual architecture before production code; spike only a bounded uncertainty.
 4. Implement the smallest reversible vertical slice with explicit contracts.
 5. Test at the cheapest effective level, adding focused tests and negative cases at authority, tenant, data-quality, concurrency, and external-effect boundaries.
-6. Run every available affected-project and repository check; never weaken a gate merely to pass.
+6. Run focused checks while changing code, then the efficient affected-project and applicable repository checks before handoff; never weaken a required hosted CI gate merely to pass.
 7. Validate acceptance independently of the implementation path and record remaining uncertainty.
 8. Update the owning specifications, decisions, diagrams, status, and agent guidance whose truth changed.
 

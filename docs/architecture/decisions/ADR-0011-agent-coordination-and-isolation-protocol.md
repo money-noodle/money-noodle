@@ -2,180 +2,59 @@
 
 > **Status:** Working
 > **Date decided:** 2026-08-30
-> **Corrected:** 2026-09-08 — the mechanisms below were substantially simplified; read [Correction 2026-09-08](#correction-2026-09-08-the-protocol-was-simplified) before relying on any rule here.
 > **Owners:** Maintainer / platform foundation
-> **Related documents:** [`../../development/parallel-work.md`](../../development/parallel-work.md), [`../../../AGENTS.md`](../../../AGENTS.md)
+> **Related documents:** [`../../development/parallel-work.md`](../../development/parallel-work.md), [`../../../AGENTS.md`](../../../AGENTS.md), [`../../development/version-control.md`](../../development/version-control.md)
 > **Depends on:** none
 
 ## Context
 
-Money Noodle coordinates concurrent work through a public, cross-harness registry while keeping repository changes isolated in claimed branches and worktrees. The protocol must expose ownership and liveness, settle claim races, preserve reviewable evidence, prevent scope collisions, and keep integration and production authority separate from execution authority. A local harness transcript, worktree, or private note cannot provide that shared authority.
+Concurrent agents need a public, cross-harness record of work ownership and dependencies without making local sessions, worktrees, or transcripts authoritative. The protocol must settle the initial claim race, keep work isolated, make plans and blockers visible, and preserve the separation between implementation, integration, provider effects, and production approval.
 
-A review on 2026-08-30 found failure modes that the current process could not safely classify. Review work could be overdue without appearing stale, could have no deadline, and could retain a registered branch and worktree after both disappeared. Open work used inconsistent or missing dependency fields. Validation claims referred only to local branches and self-reported checks, while checkpoint formats varied. Missing, unclaimed, empty, and none-like values collapsed together, preventing a reader from distinguishing a valid empty value from a malformed record.
-
-The same review observed a claimed branch advancing between reads, a local integration branch diverging without detection, absolute local paths published in the registry without locality reconciliation, and overlapping hotspots discoverable only by manually reading an issue body. Most importantly, the coordination session that settled the first seven decisions held no claim, so its decisions initially existed only in private session output. These observations explain the protocol below; they are historical evidence, not assertions about current registry state.
-
-In this record, a **principal** is a person holding authority, an **agent** is an AI session executing bounded work, and a **workload identity** is a machine credential something runs as. “Human” and “AI” remain useful clarifiers; role-specific reviewer and event-envelope actor remain valid, while provider-specific dialect inside infrastructure code, literal provider identifiers, and quotations retain their source terminology.
-
-A read-only host review on 2026-08-31 found a temporary bootstrap gap. Organization membership reported only the maintainer; two repository outside collaborators had write permission, but neither raw permission nor outside-collaborator status established maintainer designation, eligibility, independence, or availability to review. `main` protection required the four contexts `affected projects and repository gates`, `secret scan`, `container platform-api`, and `container web`, one approval, stale-review dismissal, last-push approval, conversation resolution, and no force push or deletion. Branch-protection administrator enforcement was disabled, while the active default-branch `stable` ruleset had an always-allowed `OrganizationAdmin` bypass actor and separate pull-request controls.
-
-Pull request #49 had been merged personally by the maintainer without a review as commit `09d1827d05f9146046da58e5b21212093a49f509`; all four required checks passed for that merge commit in run 33356799551. This is historical evidence of the bootstrap problem, not reusable merge authority or proof that a future pull request satisfies the exact-current-head rule below. The `production` environment separately reported only the maintainer as required reviewer, `prevent_self_review=true`, and administrator bypass capability. Repository and production-environment Actions variables and secrets were empty and no provider delivery was enabled. An integration exception therefore must not weaken the independent production-approval boundary or claim that administrator enforcement has already been repaired.
+The earlier Working draft added gates, schema versions, evidence headers, reconciliation, and recovery machinery that exceeded the value of the coordination record. This Working decision is rewritten in place under the decision lifecycle rather than preserving contradictory historical rules.
 
 ## Decision
 
-Adopt the following eight coordination and isolation rules as one protocol. They define required behavior and safety boundaries, not an implementation design.
+GitHub Issues are the shared registry, and remote Git references provide the claim primitive. A claim is created only at `refs/heads/claim-v1/issue-<N>`; existing refs in that namespace remain current reservations where applicable and are never renamed or bulk-migrated. The creator is the claimant only after confirmed ref creation. A failed or ambiguous response does not establish ownership; issue bookkeeping remains a separate, non-atomic host update and partial results are preserved for explicit resolution.
 
-**The mechanisms in rules 3 through 7 were superseded on 2026-09-08.** Their goals stand; the machinery recorded below does not. Read [Correction 2026-09-08](#correction-2026-09-08-the-protocol-was-simplified) and then [`parallel-work.md`](../../development/parallel-work.md) for what is actually in force. The text of rules 1 through 8 is left unedited as the record of what was decided on 2026-08-30 and what the correction responded to.
+Work items declare scope and issue dependencies. The status tool is read-only and shows plans, lifecycle states including review and blocked work, current reservations, dependency problems, and advisory overlap. Incomplete or contradictory evidence remains unknown or warned, not ready. Scope overlap informs a planner's partitioning or ordering decision; Git can identify textual conflicts but cannot establish semantic safety.
 
-These rules are accepted direction, not current operating procedure. None of these rules changes present authorization or process until the work item or items implementing that rule are integrated and the governing guidance is updated. Until then, [`AGENTS.md`](../../../AGENTS.md) and [`docs/development/parallel-work.md`](../../development/parallel-work.md) as currently written govern.
+Planners share a parent plan and serialize edits to the same plan section. They may make only small, isolated in-scope edits on a dedicated topic branch and worktree; substantial or parallel work is delegated. Workers use their own claimed branch and worktree. Checkpoints are short and state the state, commit, next action, and blockers.
 
-### 1. Liveness is per state
+Focused local validation occurs during work, with combined validation before handoff when available. Required hosted checks remain exact-current-head requirements. Deployment verification is performed only for applicable, configured deployed components and is always labeled separately from local or CI validation.
 
-Agent-owed work requires a check-in deadline. Principal-owed work requires a waiting-since age, has no deadline, surfaces unconditionally at every session start and status request, and never expires. Parked work requires neither timestamp.
+Claim ownership provides no integration, merge, provider, deployment, cleanup, or exception authority. Pull requests remain the integration route. The integration checkout is not an implementation worktree; corrections return to the execution branch.
 
-A claimed record missing the timestamp required by its ownership state is a hard registry error. A blocked state with no owner is contradictory and belongs in proposed state instead of being represented as ownerless blocked work.
-
-### 2. Every dependency is a ticket
-
-Every dependency, including a decision owed by a principal, is represented by an issue reference or the explicit value `none`. Explanatory prose belongs in a non-parsed notes field. A human decision that blocks work therefore becomes its own issue.
-
-Availability is derived from those issue dependencies rather than asserted with a hand-maintained availability label. This makes the work graph machine-readable without treating prose as a dependency language.
-
-### 3. An agent pushes only its owned typed branch
-
-A current matching claim normally authorizes its agent to make a normal, non-force push only from the registered typed branch and worktree to the identically named remote branch. The authority is limited to checkpoint publication. It never permits a push to the integration branch, a tag, another claim's branch, or a differently named destination; force push, `--force-with-lease`, non-fast-forward update, history rewriting, ref deletion, and automatic cleanup remain forbidden. Pull requests remain the only integration route, and publication grants no pull-request, integration, merge, host-setting, provider, deployment, recovery, or cleanup authority.
-
-Before a push, the agent re-fetches the registry, refs, worktrees, and pull requests; requires zero coordination warnings and exact claim/branch/worktree/head agreement; and inspects outgoing paths for scope and public-source safety. A mismatch or unexpected remote head is a stop condition.
-
-Checkpoints retain explanatory narrative beneath a versioned machine-readable evidence header. The header carries the checkpoint state, exact full commit, derived changed-path count, conservative hosted-check verdict, immutable Actions run URL and its exact tested commit, security/tenant/provider/deployment impact flags, and residual-risk count. Verdicts distinguish `passed`, `pending`, `failed`, `cancelled`, `skipped`, `missing`, `unavailable`, and `mixed`; only all required checks succeeding for the exact checkpoint commit is `passed`. Before authorized publication creates a run, CI is `unavailable`. When a run exists, its tested commit must equal the checkpoint commit. Any branch-head change immediately invalidates the previous run and verdict and requires fresh evidence for the new exact head.
-
-This authority is not self-activating. It begins only after work item #40 is integrated and the governing guidance grants it. The #40 implementation branch cannot use the rule it introduces and requires separate explicit maintainer authorization before publication. A later unintegrated widening likewise cannot authorize its own push. The existing CI branch matrix remains unchanged, accepting higher short-term cost from container jobs on routine owned-branch pushes; changing that matrix is separate work.
-
-### 4. Malformed records fail closed on planning, not reporting
-
-Status reporting prints the readable board, places malformed entries in an unparseable section, and exits non-zero. It refuses to produce a candidate verdict from malformed evidence rather than hiding all readable information.
-
-The hard planning failure is scoped to the dependency closure of the work being considered. Structured records are validated when written as well as when read, so a malformed value is rejected close to its source and remains visible if encountered later.
-
-### 5. Creating the remote reference is the claim primitive
-
-Claim order is inverted: create the remote reference first, then immediately write the claim fields. Branch names derive from the work item. A contender that loses remote reference creation stops before mutating any registry record.
-
-A remote reference with no corresponding claim is a registry error, not available work. Releasing a held reference remains an explicitly authorized action; stale evidence never authorizes automatic release, deletion, or takeover. Claim-field writes after reference creation are still non-atomic, so disagreement remains a stop condition rather than something to infer away.
-
-### 6. The integration checkout is principal-operated and lifecycle is remotely verified
-
-The integration checkout mirrors the integration branch, contains no authored work, and is enforced by committed hooks. Integration testing occurs in a dedicated worktree on a scratch branch, not in that checkout. Pull requests are the only path into the integration branch.
-
-The claimed branch and checkpoint commit are verified against the remote with an explicit distinction between ordinary lag and contradiction. Absolute local filesystem paths leave the public registry and are replaced by a host label. Local process or filesystem evidence remains diagnostic and cannot override the registry or remote reference.
-
-### 7. Scope is declared, observed, and serialized
-
-A claim declares path globs that are cross-checked at claim time. The observed changed-path set is derived from actual branch differences and exposes scope creep rather than trusting the declaration alone.
-
-The repository maintains a serializing list for paths where a clean Git merge is not evidence of correctness. Collision on a serializing path is a hard stop routed to the owning work item; ordinary path overlap produces a warning for review. Neither result silently chooses one session's output.
-
-### 8. Durability is per decision, not per session
-
-A coordination decision is recorded when it settles, not when the session ends, because session end is not a reliable persistence hook. This per-decision rule also applies to a coordination session that holds no claim: it records the decision in the shared plan when it settles.
-
-Nothing is durable coordination output until it is in the shared registry. External or private documents, terminal transcripts, and harness session history can support work but cannot replace the registry record.
-
-These rules preserve the existing default-deny boundary. They do not authorize automatic takeover, release, abandonment, cleanup, conflict resolution, integration, merge, deployment, or provider effects, and they do not transfer recovery or production authority from a principal to an agent or workload identity.
-
-### Temporary sole-maintainer integration exception
-
-Until a second maintainer-designated, eligible, independent, and available reviewer exists, the maintainer acting personally as the human principal may use a narrow pull-request integration exception. It is not delegable to an agent, integration owner, workload identity, automation, collaborator, or other principal. An agent or workload identity cannot invoke it, request that it be invoked, infer it from an issue, assignment, green check, successful run, prior bypass, or broad instruction, or treat it as authority to merge.
-
-The exception waives only the unavailable independent-review gate, which comprises exactly two approval subgates: the required approving review and last-push approval. It may waive either or both only because the independent reviewer is unavailable; stale approval never qualifies, and stale-review dismissal remains in force. The pull request remains the only route into `main`; conversation resolution remains mandatory, while direct push, force push, history rewriting, any other protection bypass, and protection weakening remain forbidden. Before the maintainer uses the exception, every required check must have passed for the pull request's exact current head commit. Stale, missing, pending, cancelled, skipped-required, neutral-required, or failed check evidence does not qualify. Any head change invalidates all previous required-check and exception-evidence qualification; the checks must pass again and the exception evidence must identify the new exact head.
-
-Every exception merge leaves durable public evidence identifying the pull request, its exact qualifying head commit, the resulting `main` commit, the specific reason an independent eligible review was unavailable, the approval subgate or subgates waived, and the name, conclusion, and run reference for every required check on that exact head. A successful check, the evidence record, or a prior exception documents conditions; none grants an agent or workload identity authority to request, perform, or repeat the merge.
-
-The exception expires immediately when a second maintainer-designated eligible independent reviewer is added, or before provider delivery is enabled, whichever occurs first. Raw repository permission does not satisfy or defeat the designation rule by itself. Expiry immediately forbids another exception merge, but host-control retirement is not complete until separately authorized work enables branch-protection administrator enforcement, removes the active `OrganizationAdmin` ruleset bypass, and records verification of both changes. This decision performs none of those host changes and does not state that administrator enforcement is enabled.
-
-The exception never reaches production approval or provider authority. It cannot satisfy or bypass `prevent_self_review=true`, authorize environment administrator bypass, enable federation or provider inputs, invoke apply or rollback, deploy, or weaken any secret, tenant, audit, or funded-authority boundary. It becomes current operating policy only when the documentation and policy tests implementing work item #50 are integrated; it does not activate the deferred rules assigned to work items #39–#45.
+The sole-maintainer integration exception and every security, provider, tenant, audit, funded-authority, and production-approval control remain governed by [`version-control.md`](../../development/version-control.md#temporary-sole-maintainer-integration-exception). This ADR does not duplicate or weaken those conditions.
 
 ## Alternatives considered
 
-### Keep issue-first optimistic claims and prose-only reconciliation
+### Keep the former gate and reconciliation framework
 
-**Rejected.** Re-fetching before an issue edit narrows but does not settle the race, and inconsistent fields cannot support dependable liveness, dependency, locality, or scope conclusions. This alternative would become credible only if the registry offered one atomic operation covering claim ownership, the remote reference, and validated fields; no such operation is available.
+**Rejected.** It made ordinary coordination difficult to operate and did not change the need to stop on an ambiguous external mutation.
 
-### Delegate the approval exception to agents or integration owners
+### Treat declared scope or Git mergeability as safety proof
 
-**Rejected.** Execution and coordination evidence do not confer the maintainer's personal integration authority. Delegation would let a plan, assignment, green check, or automation path become a self-authorizing bypass and would collapse the separation between implementation, review, integration, and production approval. This alternative could be reconsidered only through a separately accepted authority design with independent principals and mechanically enforced non-self-approval; the temporary bootstrap exception is intentionally not that design.
+**Rejected.** Scope is a useful coordination signal and Git detects textual conflicts, but neither proves semantic correctness.
 
-### Make harness state or a long-running coordinator the authority
+### Rename existing claim refs during simplification
 
-**Rejected.** Harness state is local, proprietary, and unavailable to fresh sessions in other harnesses; a coordinator process also cannot promise action after it exits. Harnesses may supervise execution, but only the shared registry and remote Git evidence cross those boundaries. Reconsideration would require a shared, auditable, harness-neutral authority with at least the same fail-closed and public recovery properties.
+**Rejected.** A namespace change would split the claim mutex while live `claim-v1` reservations remain.
 
-### Require a pull request solely to publish checkpoint evidence
+### Delegate integration or production authority to claim holders
 
-**Rejected.** Immutable branch commits and branch-triggered CI runs can supply verifiable evidence without creating a review object for every checkpoint. Pull requests remain mandatory for integration. Reconsider this if branch CI cannot provide an immutable run reference tied to the claimed commit or if repository policy no longer runs the required checks on owned branch pushes.
-
-### Hide the board whenever one record is malformed
-
-**Rejected.** Suppressing readable evidence makes diagnosis and unrelated reporting worse. The accepted split—readable reporting with a non-zero exit and dependency-closure-scoped refusal to plan—keeps failures visible without treating partial evidence as safe. Reconsider only if partial display is shown to cause readers to mistake malformed or incomplete output for a candidate verdict.
+**Rejected.** A claim is implementation coordination, not human approval, integration authority, or provider authority.
 
 ## Consequences
 
 ### Positive
 
-- Ownership races move to remote Git's atomic reference creation rather than depending only on read recency.
-- Liveness, dependencies, checkpoint evidence, remote branch state, locality, and changed scope become independently classifiable.
-- Malformed evidence remains visible while candidate planning fails closed where that evidence matters.
-- Integration checkout drift and authored work gain explicit prevention and remote verification boundaries.
-- Serializing paths protect shared contracts and governed files where mergeability does not prove semantic safety.
-- Decisions from coordination-only and no-claim sessions become durable when settled rather than depending on a session-end ritual.
-- The sole-maintainer bootstrap gap has a narrow, reconstructable pull-request path without widening agent, workload, provider, or deployment authority.
-- Exact-current-head check evidence and explicit expiry make a prior successful bypass unusable as standing authority.
+- Initial ownership has one deterministic, atomic remote-reference boundary.
+- Existing reservations remain discoverable across harnesses.
+- Planners receive a small shared board and dependency graph without treating warnings as false certainty.
+- Validation and deployment evidence remain proportional and accurately labeled.
 
 ### Negative
 
-- Routine agent pushes publish work in progress to the public repository earlier. Secret-scanning push protection becomes an earlier boundary defense. The unchanged branch CI matrix continues to run container jobs on routine owned-branch pushes, consuming additional CI capacity until a separate change is accepted.
-- Reference creation and claim-field updates remain separate operations. Orphaned references and disagreements become registry errors requiring explicit resolution rather than being repaired automatically.
-- Principals must represent their blocking decisions as tickets and keep waiting-since evidence, increasing visible coordination overhead.
-- Strict schemas and required timestamps can stop planning for work that a person could otherwise interpret informally.
-- Host labels disclose less local detail than absolute paths but also provide less precise filesystem diagnostics.
-- Declared scope, observed diffs, and serializing paths add maintenance and can reduce concurrency; ordinary overlap warnings still require judgment.
-- A principal-operated integration checkout and separate scratch integration worktree use more local resources and add lifecycle steps.
-- Per-decision recording interrupts coordination work and requires judgment about when a decision has actually settled.
-- A temporary maintainer-only exception still depends on personal discipline until the second reviewer and host-control retirement conditions are complete.
-- Each exception merge adds evidence overhead, and expiry can halt integration before replacement review capacity or host controls are ready.
-
-## Correction 2026-09-08: the protocol was simplified
-
-This record stays **Working**. Under the lifecycle in [`README.md`](README.md#lifecycle), a Working record is corrected rather than replaced, so the decided rules above are left unedited and this section records what changed and why. Nothing here promotes any record to Settled.
-
-### What happened
-
-The rules above were implemented as roughly 15,590 lines of coordination tooling, configuration, and normative prose guarding roughly 1,418 lines of product code — an 11:1 process-to-product ratio on a platform with no deployment yet. `docs/development/parallel-work.md` reached 338 lines of dense normative text describing one-use phase-bound scope clearances, five-SHA agreement on branch bootstrap, orphan-ref reconciliation, integration-hold evidence blocks, a thirteen-field checkpoint evidence header, and a v1/v2 registry-schema duality.
-
-The machinery also failed on its own terms. `tools/coordination-status.mjs` grew past the default subprocess output buffer, so the status command that every gate depended on could not be read reliably and the gates it fed were effectively disabled (issue #110). A control that cannot run is not a control.
-
-Most of the removed mechanism re-proved what Git and GitHub already guarantee, or defined recovery protocols for partial-failure states whose correct resolution is "stop and ask the maintainer" — which is what an agent does anyway.
-
-### What was kept, and why
-
-- **Creating the remote reference is the claim** (rule 5). This is the one real atomic guarantee in the protocol: `POST /git/refs` either returns 201 or 422, and the loser mutates nothing. It is kept exactly, with the branch renamed from `claim-v1/issue-<N>` to `claim/issue-<N>`.
-- **Declared scope** (rule 7), as a `Scope-Paths` field with the same three-form path grammar. It is cheap to write and makes overlap visible.
-- **Every dependency is a ticket** (rule 2), so the work graph stays machine-readable and planners can build parallel waves.
-- **A read-only status board**, reporting active claims, ready work, blocked work, overlaps, and warnings.
-- **The owned-branch push limit** (rule 3) and every safety boundary: no direct push to `main`, no force push or history rewriting, pull requests as the only integration route, maintainer-only authorization for merges and provider or deployment effects, and the sole-maintainer integration exception remaining outside agent authority.
-- **Per-decision durability** (rule 8) and the principal-operated integration checkout (rule 6), minus its remote-lifecycle classification machinery.
-
-### What was removed
-
-Scope gates and the whole selected-gate concept (`--gate claim:`, `publication:`, `checkpoint:`, `integration-pr:`); one-use, phase-bound, operation-bound clearances; immutable-tree diffing and observed-scope-creep derivation; five-SHA bootstrap agreement; merge-base re-verification; integration holds; the serializing-paths configuration and its hard-stop routing; orphan-ref reconciliation and `Reconciled-Claim-Comment-IDs`; the `coordinationKnown` / `registry: null` fail-closed ceremony; triage, candidate-safety, liveness, and planning-scope enums; principal-wait accounting; the dry-run/apply writer duality; the registry-schema version field and v1/v2 duality; and the `Claim-Host`, `Claim-Harness`, `Claim-Run-ID`, `Check-In-By`, `Waiting-Since`, `Claim-Worktree`, `Shared-Hotspots`, and `Claim-State` fields. The thirteen-field checkpoint evidence header is replaced by four lines; CI results live in GitHub authoritatively and are no longer transcribed.
-
-Overlap between two active claims' declared scope is now a board **warning**, not a block. The planner narrows scope or serializes the work, and Git's own merge remains the backstop for conflicting edits.
-
-Self-activation clauses are gone. Rules that were written to become authority only after a specific issue was integrated are simply in force as written.
-
-### Consequences accepted
-
-- Declaration overlap no longer mechanically stops a push, so two agents can edit intersecting paths and discover it at merge time. This is the tradeoff for a protocol that runs at all.
-- Scope creep beyond a declaration is no longer detected automatically; review catches it.
-- Partial-failure states (ref created, issue update failed) are reported and left for a person instead of being reconciled by tooling. This is more manual and much smaller.
-- Liveness is a three-day age warning rather than an agent-set deadline, so a stalled claim is noticed later.
-- Cross-harness portability now rests on a much smaller schema, which is easier for another harness to implement and easier to keep correct.
+- Ref creation and issue updates can still leave partial states requiring a maintainer decision.
+- Advisory scope overlap and short checkpoints require planner judgment and review.
+- Retained refs and worktrees are preserved rather than automatically cleaned up.

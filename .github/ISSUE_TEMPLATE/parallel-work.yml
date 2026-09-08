@@ -1,5 +1,5 @@
 name: Parallel work item
-description: Create a schema-v2 claimable unit linked to one shared complex-task plan.
+description: Create a claimable unit linked to a shared plan.
 title: "Work: "
 labels:
   - work:proposed
@@ -8,106 +8,76 @@ body:
   - type: markdown
     attributes:
       value: |
-        GitHub enforces only the required inputs and choices in this form. Repository readers and the supported writer enforce the complete registry semantics. New records start proposed and unclaimed; use the claim protocol rather than editing ownership fields during creation.
-  - type: dropdown
-    id: registry_schema_version
-    attributes:
-      label: Registry-Schema-Version
-      description: Unsupported versions remain visible and fail closed.
-      options:
-        - "2"
-    validations:
-      required: true
+        New work starts proposed and unclaimed. Use the claim protocol rather than editing ownership during creation. Do not include local paths or sensitive information.
   - type: input
     id: parent_plan
     attributes:
       label: Parent-Plan
-      description: One parent issue reference.
-      placeholder: "#ISSUE"
+      description: Optional parent plan issue reference.
+      placeholder: "#ISSUE or none"
     validations:
-      required: true
+      required: false
   - type: textarea
     id: outcome_scope
     attributes:
       label: Outcome and scope
-      description: State one independently verifiable outcome, contracts, and explicit exclusions.
+      description: State one independently verifiable outcome and exclusions.
     validations:
       required: true
   - type: textarea
     id: scope_paths
     attributes:
       label: Scope-Paths
-      description: One repository-relative path or glob per line, or exactly none. Do not enter a local filesystem path.
+      description: Exact repository-relative paths, directory/**, root **, or none; one entry per line.
       placeholder: |
-        tools/example.mjs
         docs/example.md
+        .github/example/**
+    validations:
+      required: true
+  - type: input
+    id: depends_on
+    attributes:
+      label: Depends-On
+      description: Issue references or none.
+      value: none
     validations:
       required: true
   - type: textarea
-    id: dependencies_integration
+    id: dependency_notes
     attributes:
-      label: Dependencies and integration
-      description: Depends-On accepts only none or canonical issue references; prose belongs in Dependency-Notes.
-      value: |
-        Depends-On: none
-        Dependency-Notes: none
-        Integration-Owner: maintainer
-        Reconciled-Claim-Comment-IDs: none
+      label: Dependency-Notes
+      description: Optional dependency explanation.
+    validations:
+      required: false
+  - type: input
+    id: claim_agent
+    attributes:
+      label: Claim-Agent
+      description: Leave unclaimed until the claim tool succeeds.
+      value: unclaimed
     validations:
       required: true
-  - type: dropdown
-    id: claim_state
+  - type: input
+    id: claim_branch
     attributes:
-      label: Claim-State
-      description: Issue creation is parked. State transitions use the supported writer after integration.
-      options:
-        - proposed
+      label: Claim-Branch
+      description: Leave none until the claim tool creates the reservation.
+      value: none
     validations:
       required: true
-  - type: dropdown
-    id: claim_harness
+  - type: input
+    id: claimed_at
     attributes:
-      label: Claim-Harness
-      description: Issue creation does not establish a claim.
-      options:
-        - unclaimed
+      label: Claimed-At
+      description: Leave none until the claim tool succeeds.
+      value: none
     validations:
       required: true
-  - type: textarea
-    id: ownership_liveness
+  - type: input
+    id: integration_owner
     attributes:
-      label: Ownership and liveness
-      description: Preserve exact field names. Active/review work requires complete agent ownership and Check-In-By; blocked v2 work is principal-owned and requires Waiting-Since.
-      value: |
-        Claim-Run-ID: unclaimed
-        Claim-Agent: unclaimed
-        Claim-Branch: unclaimed
-        Claim-Host: unclaimed
-        Claimed-At: unclaimed
-        Check-In-By: unclaimed
-        Waiting-Since: unclaimed
-    validations:
-      required: true
-  - type: textarea
-    id: checkpoint
-    attributes:
-      label: Current checkpoint
-      description: Preserve this complete version-1 evidence header and add narrative below it.
-      value: |
-        Checkpoint-Evidence-Version: 1
-        Checkpoint-State: proposed
-        Checkpoint-At: unclaimed
-        Checkpoint-Commit: uncommitted
-        Checkpoint-Changed-Path-Count: 0
-        Checkpoint-Checks-Verdict: unavailable
-        Checkpoint-CI-Run: unavailable
-        Checkpoint-CI-Commit: unavailable
-        Checkpoint-Security-Impact: unknown
-        Checkpoint-Tenant-Impact: unknown
-        Checkpoint-Provider-Impact: unknown
-        Checkpoint-Deployment-Impact: unknown
-        Checkpoint-Residual-Risk-Count: 0
-        Next-Action: unclaimed
-        Blockers: none
+      label: Integration-Owner
+      description: Principal responsible for integration sequencing.
+      value: maintainer
     validations:
       required: true
