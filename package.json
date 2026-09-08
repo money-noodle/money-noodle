@@ -34,7 +34,7 @@
     "@nx/vite": "23.2.0",
     "@pb33f/openapi-changes": "0.2.11",
     "@redocly/cli": "2.51.1",
-    "@types/node": "26.4.1",
+    "@types/node": "22.19.11",
     "@vitejs/plugin-react": "6.1.1",
     "@vitest/coverage-v8": "4.1.11",
     "eslint": "10.9.1",
