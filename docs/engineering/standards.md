@@ -12,7 +12,7 @@ Use REST APIs described by canonical versioned OpenAPI documents. Validate reque
 
 ## Implementation workflow
 
-1. Inspect branch and status, run the coordination status command, review the decision lifecycle for records that have become production-proven, and read the shared plan, active worktrees and claims, routed current documents, accepted records, and relevant source; do not work from memory.
+1. Inspect branch and status, run `node tools/coordination-status.mjs` to see active claims and ready work, review the decision lifecycle for records that have become production-proven, and read the shared plan, routed current documents, accepted records, and relevant source; do not work from memory.
 2. Update the shared plan as needed, then state and claim the problem, scope, facts, assumptions, unknowns, acceptance criteria, dependencies, and risk.
 3. Resolve cross-boundary and architecture-impacting decisions and update proposed or accepted visual architecture before production code; spike only a bounded uncertainty.
 4. Implement the smallest reversible vertical slice with explicit contracts.
