@@ -7,6 +7,10 @@ cache/
 subagents/
 agent-memory/
 
+# Share only reviewed rules; cooldowns and recovery state stay private.
+/model-fallback/*
+!/model-fallback/config.json
+
 # Incidental machine-local state.
 *.local
 *.tmp
