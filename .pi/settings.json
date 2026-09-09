@@ -2,13 +2,24 @@
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-6-astra",
   "defaultThinkingLevel": "max",
-  "packages": ["npm:pi-subagents@0.66.0", "npm:pi-claude-code-provider@0.2.0"],
+  "modelThinkingLevels": {
+    "openai-codex/gpt-6-astra": "max",
+    "pi-claude-code-provider/opus": "max"
+  },
+  "packages": [
+    "npm:pi-subagents@0.66.0",
+    "npm:pi-claude-code-provider@0.2.0",
+    {
+      "source": "npm:pi-model-fallback@0.3.7",
+      "extensions": []
+    }
+  ],
   "subagents": {
     "projectRootResolution": "git-root",
     "agentOverrides": {
       "scout": {
-        "model": "openai-codex/gpt-5.6-luna",
-        "fallbackModels": ["pi-claude-code-provider/opus"],
+        "model": "pi-claude-code-provider/opus",
+        "fallbackModels": ["openai-codex/gpt-5.6-luna"],
         "thinking": "low",
         "defaultContext": "fresh"
       },

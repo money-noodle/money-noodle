@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "enabled": true,
+  "rules": [
+    {
+      "name": "astra-to-opus",
+      "matchModels": [
+        {
+          "provider": "openai-codex",
+          "model": "gpt-6-astra"
+        }
+      ],
+      "statuses": [429, 500, 502, 503, 504],
+      "fallback": {
+        "provider": "pi-claude-code-provider",
+        "model": "opus"
+      }
+    }
+  ]
+}
