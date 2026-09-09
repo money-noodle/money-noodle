@@ -2,34 +2,45 @@
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-6-astra",
   "defaultThinkingLevel": "max",
-  "packages": ["npm:pi-subagents@0.66.0"],
+  "packages": ["npm:pi-subagents@0.66.0", "npm:pi-claude-code-provider@0.2.0"],
   "subagents": {
     "projectRootResolution": "git-root",
     "agentOverrides": {
       "scout": {
         "model": "openai-codex/gpt-5.6-luna",
-        "thinking": "low"
+        "fallbackModels": ["pi-claude-code-provider/opus"],
+        "thinking": "low",
+        "defaultContext": "fresh"
       },
       "worker": {
-        "model": "openai-codex/gpt-5.6-terra",
-        "thinking": "medium"
+        "model": "pi-claude-code-provider/opus",
+        "fallbackModels": ["openai-codex/gpt-6-astra"],
+        "thinking": "medium",
+        "defaultContext": "fresh"
       },
       "delegate": {
-        "model": "openai-codex/gpt-5.6-terra",
-        "thinking": "medium"
+        "model": "pi-claude-code-provider/opus",
+        "fallbackModels": ["openai-codex/gpt-6-astra"],
+        "thinking": "medium",
+        "defaultContext": "fresh"
       },
       "researcher": {
-        "model": "openai-codex/gpt-5.6-terra",
-        "thinking": "medium"
+        "model": "pi-claude-code-provider/opus",
+        "fallbackModels": ["openai-codex/gpt-6-astra"],
+        "thinking": "medium",
+        "defaultContext": "fresh"
       },
       "reviewer": {
-        "model": "openai-codex/gpt-6-astra",
+        "model": "pi-claude-code-provider/opus",
+        "fallbackModels": ["openai-codex/gpt-6-astra"],
         "thinking": "high",
         "defaultContext": "fresh"
       },
       "oracle": {
-        "model": "openai-codex/gpt-6-astra",
-        "thinking": "max"
+        "model": "pi-claude-code-provider/opus",
+        "fallbackModels": ["openai-codex/gpt-6-astra"],
+        "thinking": "max",
+        "defaultContext": "fresh"
       }
     }
   }

@@ -2,20 +2,38 @@
 
 This policy applies to Pi. The flagship/max mandate belongs only to root or supervisor Pi sessions; execution children are explicitly exempt. The designated most-capable supervisor route is `openai-codex/gpt-6-astra:max`. Do not silently downgrade it or infer another route is more capable; change that designation only through a deliberate policy revision.
 
-For every native child task, the supervisor selects an exact `provider/id:level` route based on ambiguity, reasoning difficulty, impact, context and tool requirements, and verification strength. These are starting defaults, not hard enforcement, and the supervisor may override role defaults for a launch:
+For every native child task, the supervisor selects an exact `provider/id:level` route based on ambiguity, reasoning difficulty, impact, context and tool requirements, verification strength, and remaining provider capacity. Mix Claude and GPT children deliberately. Prefer qualified Opus for substantive work while Claude has capacity, preserving GPT capacity for continued work and the supervisor. These are starting defaults, not hard enforcement or benchmark evidence:
 
-| Task shape | Starting route |
-| --- | --- |
-| Lookup/recon | Luna low |
-| Mechanical edits/tests | Luna medium |
-| Ordinary implementation | Terra medium |
-| Difficult cross-cutting work/debugging | Astra high-xhigh |
-| Serious security, tenant, or financial review | Astra high-max |
+| Task shape | Starting route | Approved alternative when capacity or task fit warrants |
+| --- | --- | --- |
+| Lookup/recon | `openai-codex/gpt-5.6-luna:low` | `pi-claude-code-provider/opus:low` |
+| Mechanical edits/tests | `openai-codex/gpt-5.6-luna:medium` | `pi-claude-code-provider/opus:medium` |
+| Ordinary implementation, planning, research | `pi-claude-code-provider/opus:medium` | `openai-codex/gpt-6-astra:medium` (configured backup), or explicitly selected `openai-codex/gpt-5.6-terra:medium` |
+| Difficult cross-cutting work/debugging | `pi-claude-code-provider/opus:high` | `openai-codex/gpt-6-astra:high` or `:xhigh` |
+| Serious security, tenant, or financial review | `pi-claude-code-provider/opus:high` or `:max` | `openai-codex/gpt-6-astra:high` or `:max` |
 
-Use fresh context for serious independent review. Report a brief non-sensitive routing rationale and requested/resolved model, effective thinking, validation, and usage, or explicit unknowns. Never expose hidden reasoning or full transcripts. Clarification or missing evidence is not itself a capability problem. Children request escalation from the supervisor.
+## Native Claude transport and evidence
 
-Retained resumes keep their model contract. A model change requires a deliberate, bounded handoff after preserving state; never use a resume override to change it. Never blindly replay mutation work after a failure.
+`pi-claude-code-provider/opus` is a native Pi model-provider route, not an external `claude-code` agent. Pi owns tools, prompts, permissions, supervision, and lifecycle. Claude's injected identity or environment text does not change the child's bounded Pi role. Use only supplied Pi tools and the actual supervisor channel; never substitute Claude Agent/Task APIs, raw CLI delegation, or unmanaged Claude settings. Use async children with the provider extension available; an empty extension allowlist disables ambient provider loading. Missing providers or tools are infrastructure blockers, not permission to widen access.
 
-External CLI profiles have separate contracts: they do not accept native model or thinking overrides, and displayed inheritance does not prove a runner model. Stop and surface an unavailable approved route or supervisor mismatch rather than silently downgrading. This guidance and the startup defaults are not hard enforcement or benchmark evidence.
+Prefer fresh, bounded briefs; serious independent reviews must be fresh. Fork only when inherited history is necessary, including an explicitly scoped oracle consultation. A large context window is a ceiling, not a target. Use inline review returns unless an authorized artifact-writing or runtime-delivery path actually exists.
+
+Report a brief non-sensitive routing rationale, requested/resolved route, actual served model (`responseModel` for Claude), effective thinking, validation, and usage, or explicit unknowns. Opus is a moving alias: do not infer the served version from its name, the status badge, doctor diagnostics, or model self-identification. Requalify changed model mappings; a different served model on a retained run requires a contract decision. Never weaken verification or invent response aliases. Never expose hidden reasoning or full transcripts. Clarification or missing evidence is not itself a capability problem. Children request escalation from the supervisor.
+
+## Capacity and recovery
+
+Treat Claude's approximately five-hour replenishment and GPT's longer, potentially weekly limits as planning expectations, not verified remaining quota or guaranteed reset schedules. Provider-reported windows, restrictions, and reset instants win; either provider may impose additional limits. Keep observed availability and reset evidence in private session/mission state, not public source or registry records. Do not repeatedly probe a known-exhausted provider. After its reported reset, use the next bounded task to check availability; do not create a polling loop or automatic schedule.
+
+Start with at most two simultaneous Claude children per workflow; this is a supervisor scheduling convention, not an account-wide limiter. Use cheap capable GPT routes for small tasks and preserve Astra for work that needs it. Reduce optional fanout or defer nonurgent work when both budgets are constrained; keep the supervisor route unchanged. Unknown remaining quota stays unknown. Token counts and this provider's reported $0 cost do not measure remaining subscription capacity or authorize usage credits, API billing, or plan changes.
+
+Role settings declare one primary `model` and an ordered `fallbackModels` array; the separate `thinking` key supplies the default effort for every candidate. Scout uses Luna then Opus; the other five roles use Opus then Astra. Before launch, approve every exact provider/id:level candidate against the task's capability, context, tool, and authority requirements, especially for higher-risk work. A per-run model override does not clear the role's fallback chain or raise its backup thinking level; if the chain no longer fits, correct the authorized configuration before launch or stop. Report actual attempts and fallback reasons, not just the preferred route.
+
+The native package can skip unavailable or cached-excluded configured candidates and retry qualifying provider/model failures before any tool activity. This includes startup quota/rate-limit failures; it is not quota-only routing or proactive near-limit detection. After tool activity, these Claude/GPT profiles have no automatic cross-provider continuation. Never relabel a safeguard refusal, task failure, tool failure, context overflow, or outer deadline as a quota failure to force fallback. Permission-sensitive workflows may reject fallback chains; treat that as a blocker, not permission to change execution mode. An unavailable approved route or supervisor mismatch must be surfaced rather than silently downgraded.
+
+Known exhaustion should inform new launch choices without repeated probes. Cached model exclusions have their own expiry (24 hours by default), not the provider's reset time; verify that evidence before claiming Claude is eligible again. No custom quota monitor or reset scheduler is installed.
+
+Checkpoint meaningful findings, partial effects, validation, and next steps before a known wait and at coherent milestones. On quota or other failure, preserve the exact error, native handle/session, cwd/ref/head, diff, and available outputs; verify the prior writer has stopped and revalidate ownership before further mutation. Retained resumes keep their model/tool contract. Wait and resume the latest resumable handle on that same contract, or make a deliberate, bounded handoff to a new native child on an approved alternative. Never use a resume override to change the model, edit recovery descriptors, blindly replay mutation work, or start a competing writer. A new run ID does not adopt a claim. Use native completion delivery, not status-polling or sleep loops.
+
+External CLI profiles have separate contracts: they do not accept native model or thinking overrides, and displayed inheritance does not prove a runner model. Installing this provider does not change those profiles or authorize execution-mode fallback. See [Pi setup and qualification](README.md) for installation, the private 1M context opt-in, and validation limits.
 
 This policy grants no repository, claim, integration, production, or additional tool authority and does not expand any tool ceiling. Follow repository `AGENTS.md` and the current parallel-work authority for those protocols.
