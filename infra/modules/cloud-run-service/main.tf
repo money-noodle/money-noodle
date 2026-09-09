@@ -43,12 +43,16 @@ locals {
   base_env = {
     NODE_ENV                 = "production"
     MONEY_NOODLE_SERVICE     = var.service_name
-    MONEY_NOODLE_VERSION     = var.artifact_version
+    ARTIFACT_VERSION         = var.artifact_version
     MONEY_NOODLE_COMMIT      = var.source_commit
     MONEY_NOODLE_ENVIRONMENT = var.environment
   }
 
-  env = merge(local.base_env, local.telemetry_env, var.extra_env)
+  origin_env = var.platform_api_origin == null ? {} : {
+    PLATFORM_API_ORIGIN = var.platform_api_origin
+  }
+
+  env = merge(local.base_env, local.origin_env, local.telemetry_env, var.extra_env)
 }
 
 # Each service holds its own identity. ADR-0005 makes the blast radius explicit:

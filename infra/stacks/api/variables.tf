@@ -7,6 +7,11 @@ variable "service_name" {
   description = "Cloud Run service name."
   type        = string
   default     = "platform-api"
+
+  validation {
+    condition     = var.service_name == "platform-api"
+    error_message = "The API stack must identify its application as platform-api."
+  }
 }
 
 variable "runtime_service_account_id" {

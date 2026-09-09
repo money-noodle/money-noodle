@@ -12,6 +12,11 @@ variable "service_name" {
   description = "Cloud Run service name."
   type        = string
   default     = "web"
+
+  validation {
+    condition     = var.service_name == "web"
+    error_message = "The web stack must identify its application as web."
+  }
 }
 
 variable "runtime_service_account_id" {
@@ -64,7 +69,7 @@ variable "api_base_url_override" {
   default     = null
 
   validation {
-    condition     = var.api_base_url_override == null || startswith(coalesce(var.api_base_url_override, "https://"), "https://")
+    condition     = var.api_base_url_override == null || can(regex("^https://[^/@?#[:space:]]+/?$", var.api_base_url_override))
     error_message = "The API origin must be HTTPS. The web never falls back to a local process (`overview.md` failure rules)."
   }
 }
