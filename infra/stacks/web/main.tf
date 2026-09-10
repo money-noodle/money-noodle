@@ -87,12 +87,8 @@ module "service" {
   telemetry_endpoint = local.telemetry_endpoint
   trace_sample_ratio = var.trace_sample_ratio
 
-  extra_env = merge(
-    {
-      MONEY_NOODLE_API_BASE_URL = local.api_base_url
-    },
-    var.extra_env,
-  )
+  platform_api_origin = local.api_base_url
+  extra_env           = var.extra_env
 
   labels = var.labels
 }

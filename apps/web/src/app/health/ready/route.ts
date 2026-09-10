@@ -1,15 +1,14 @@
 import { randomUUID } from 'node:crypto';
 
-import { readArtifactVersion } from '../../../adapters/config/read-artifact-version';
-import { readPlatformApiOrigin } from '../../../adapters/platform-api/read-platform-api-origin';
+import { readRuntimeConfig } from '../../../adapters/config/read-runtime-config';
 
 export function GET() {
   try {
-    readPlatformApiOrigin(process.env.PLATFORM_API_ORIGIN, process.env.NODE_ENV);
+    const { service } = readRuntimeConfig(process.env);
     return Response.json({
-      service: 'web',
+      service: service.name,
       status: 'ready',
-      version: readArtifactVersion(process.env.ARTIFACT_VERSION),
+      version: service.version,
     });
   } catch {
     const requestId = randomUUID();

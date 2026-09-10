@@ -49,8 +49,13 @@ variable "image_digest" {
 }
 
 variable "artifact_version" {
-  description = "Attributable artifact version reported by the service and attached to every telemetry signal."
+  description = "Release label reported by the service, independently of its source SHA and image digest."
   type        = string
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$", var.artifact_version)) && var.artifact_version != "development"
+    error_message = "artifact_version must be a safe 1 to 64 character release label, not development."
+  }
 }
 
 variable "source_commit" {
@@ -67,6 +72,11 @@ variable "environment" {
   description = "Deployment environment name. Production is the only standing environment (`delivery.md`)."
   type        = string
   default     = "production"
+
+  validation {
+    condition     = var.environment == "production"
+    error_message = "Only production runtime configuration is supported by infrastructure."
+  }
 }
 
 variable "revision_suffix" {
@@ -207,14 +217,32 @@ variable "trace_sample_ratio" {
   }
 }
 
+variable "platform_api_origin" {
+  description = "Dedicated non-secret web API origin. Runtime validates the absolute credential-free, non-loopback HTTPS origin."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.platform_api_origin == null || can(regex("^https://[^/@?#[:space:]\\\\]+/?$", var.platform_api_origin))
+    error_message = "platform_api_origin must be an absolute credential-free HTTPS origin."
+  }
+}
+
 variable "extra_env" {
-  description = <<-EOT
-    Additional non-secret typed configuration, such as the API base URL the web
-    is configured with. Secret values never travel this way: they are mounted
-    from Secret Manager by the consuming service.
-  EOT
+  description = "Additional non-secret configuration; runtime contract, server port, contract path, telemetry and browser-public names are reserved."
   type        = map(string)
   default     = {}
+
+  validation {
+    condition = alltrue([
+      for name in keys(var.extra_env) : !contains([
+        "NODE_ENV", "PLATFORM_API_ORIGIN", "ARTIFACT_VERSION", "MONEY_NOODLE_COMMIT",
+        "MONEY_NOODLE_SERVICE", "MONEY_NOODLE_ENVIRONMENT", "MONEY_NOODLE_API_BASE_URL",
+        "MONEY_NOODLE_VERSION", "PORT", "PLATFORM_API_CONTRACT_PATH",
+      ], name) && !startswith(name, "OTEL_") && !startswith(name, "NEXT_PUBLIC_")
+    ])
+    error_message = "extra_env must not supply reserved runtime configuration names, even with identical values."
+  }
 }
 
 variable "deletion_protection" {

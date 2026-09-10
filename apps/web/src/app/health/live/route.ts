@@ -4,6 +4,6 @@ export function GET() {
   return Response.json({
     service: 'web',
     status: 'live',
-    version: readArtifactVersion(process.env.ARTIFACT_VERSION),
+    version: readArtifactVersion(process.env.ARTIFACT_VERSION, process.env.NODE_ENV),
   });
 }

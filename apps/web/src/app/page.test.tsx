@@ -5,6 +5,8 @@ import { PlatformPageContent } from '../presentation/platform-page-content';
 import RootLayout, { metadata } from './layout';
 import PlatformPage from './page';
 
+vi.mock('server-only', () => ({}));
+
 afterEach(() => {
   vi.unstubAllEnvs();
 });
@@ -33,6 +35,10 @@ describe('PlatformPage', () => {
   it('renders unknown without a stale source time when production configuration is invalid', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('PLATFORM_API_ORIGIN', 'not-an-origin');
+    vi.stubEnv('ARTIFACT_VERSION', 'release-1.2.3');
+    vi.stubEnv('MONEY_NOODLE_COMMIT', 'a'.repeat(40));
+    vi.stubEnv('MONEY_NOODLE_SERVICE', 'web');
+    vi.stubEnv('MONEY_NOODLE_ENVIRONMENT', 'production');
 
     const markup = renderToStaticMarkup(await PlatformPage());
 
