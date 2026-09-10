@@ -53,6 +53,58 @@ const readStack = (directory) =>
 
 const pinnedToolVersion = read(join(infraRoot, '.terraform-version')).trim();
 
+test('Delivery requires the runtime rendering bridge in credential-free checks for every consumed source', () => {
+  const workflow = read(join(repoRoot, '.github/workflows/delivery.yml'));
+  // Use the existing delivery policy guard's bounded, top-level job convention.
+  const checks = workflow.match(/\n {2}checks:\n([\s\S]*?)(?=\n {2}[a-z][a-z0-9-]*:\n|$)/)?.[1];
+  assert.ok(checks, 'checks job must exist');
+  const bridgeCommand = 'node infra/modules/cloud-run-service/tests/runtime-contract.mjs';
+  const bridge = checks.match(
+    /      - name: Prove evaluated production runtime compatibility\n([\s\S]*?)(?=\n      - |$)/,
+  )?.[1];
+  assert.equal(bridge?.trim(), `run: ${bridgeCommand}`);
+  assert.equal(checks.split(bridgeCommand).length, 2);
+  assert.doesNotMatch(checks, /continue-on-error:|id-token:|environment:/);
+  const bridgeIndex = checks.indexOf(bridgeCommand);
+  for (const command of ['pnpm install --frozen-lockfile', 'node tools/infra-check.mjs all']) {
+    const index = checks.indexOf(`run: ${command}`);
+    assert.ok(index >= 0 && index < bridgeIndex);
+  }
+  for (const event of ['pull_request', 'push']) {
+    const trigger = workflow.match(
+      new RegExp(`\\n {2}${event}:\\n([\\s\\S]*?)(?=\\n {2}[a-z_]+:|$)`),
+    )?.[1];
+    assert.ok(trigger, `${event} trigger must exist`);
+    for (const path of [
+      'infra/**',
+      'apps/web/**',
+      'services/platform-api/**',
+      'packages/platform-api-client/**',
+      'package.json',
+      'pnpm-workspace.yaml',
+      'pnpm-lock.yaml',
+    ]) {
+      assert.ok(trigger.includes(`      - '${path}'`), `${event} must cover ${path}`);
+    }
+  }
+});
+
+test('runtime rendering tests mock Google and override every declared remote-state read', () => {
+  for (const stack of ['web', 'api']) {
+    const directory = join(infraRoot, 'stacks', stack);
+    const source = readStack(directory);
+    const fixture = read(join(directory, 'tests/runtime-contract.tftest.hcl'));
+    assert.match(fixture, /mock_provider\s+"google"\s*\{/);
+    const reads = [...source.matchAll(/data\s+"terraform_remote_state"\s+"([a-z_]+)"/g)]
+      .map((match) => match[1])
+      .sort();
+    const overrides = [...fixture.matchAll(/target\s*=\s*data\.terraform_remote_state\.([a-z_]+)/g)]
+      .map((match) => match[1])
+      .sort();
+    assert.deepEqual(overrides, reads, `${stack} must override exactly every remote-state read`);
+  }
+});
+
 test('the infrastructure tree exists and is non-trivial', () => {
   assert.ok(tofuFiles.length > 0, 'expected OpenTofu configuration under infra/');
   assert.ok(stackDirectories.length >= 3, 'expected separate platform, web, and API stacks');

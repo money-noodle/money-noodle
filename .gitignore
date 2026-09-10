@@ -37,7 +37,11 @@ crash.*.log
 *.tfplan
 *.tfplan.json
 
-# Claude Code harness working directory. Agent worktrees and local overrides are
+# Dedicated linked worktrees live at the canonical primary checkout's
+# `.worktrees/` directory (docs/development/parallel-work.md). Keep them local.
+.worktrees/
+
+# Claude Code harness working directory. Harness storage and local overrides are
 # session-scoped and machine-specific, and the shared work registry is GitHub
 # Issues, never harness storage (docs/development/parallel-work.md). The contents
 # are ignored rather than the directory itself so a shared project settings file
@@ -53,3 +57,10 @@ crash.*.log
 *.log
 *.tsbuildinfo
 .pnpm-debug.log*
+
+# Shared session startup skill aliases only; keep other local skills private.
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/start-work
+!.claude/skills/start-plan
+!.claude/skills/start-debug

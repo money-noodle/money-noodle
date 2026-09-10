@@ -19,12 +19,24 @@ on:
       - 'infra/**'
       - 'tools/infra-*.mjs'
       - '.github/workflows/delivery.yml'
+      - 'apps/web/**'
+      - 'services/platform-api/**'
+      - 'packages/platform-api-client/**'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
+      - 'pnpm-lock.yaml'
   push:
     branches: ['main']
     paths:
       - 'infra/**'
       - 'tools/infra-*.mjs'
       - '.github/workflows/delivery.yml'
+      - 'apps/web/**'
+      - 'services/platform-api/**'
+      - 'packages/platform-api-client/**'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
+      - 'pnpm-lock.yaml'
   schedule:
     # Drift detection. Reads only; never corrects.
     - cron: '17 6 * * *'
@@ -116,6 +128,9 @@ jobs:
 
       - name: Format, validate, and test every module and stack
         run: node tools/infra-check.mjs all
+
+      - name: Prove evaluated production runtime compatibility
+        run: node infra/modules/cloud-run-service/tests/runtime-contract.mjs
 
       - name: Prove the checks reached no provider
         # `tofu init -backend=false` and mocked-provider tests cannot contact a

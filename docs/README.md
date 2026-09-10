@@ -17,9 +17,11 @@
 | Data, telemetry, audit, identity, and authorization | [`architecture/data-identity-observability.md`](architecture/data-identity-observability.md) |
 | Engineering and testing | [`engineering/standards.md`](engineering/standards.md) |
 | Delivery and operations | [`operations/delivery.md`](operations/delivery.md) |
+| Agent-operated production control plane and versioned operation catalog (decided, not implemented) | [`operations/production-control-plane.md`](operations/production-control-plane.md) |
 | Accepted first remote deployment composition and dated comparison evidence | [`operations/deployment-composition.md`](operations/deployment-composition.md) |
 | Version control and cutover | [`development/version-control.md`](development/version-control.md) |
-| Parallel planning, work claims, stale detection, and handoff | [`development/parallel-work.md`](development/parallel-work.md) |
+| Session roles, parallel planning, work claims, stale detection, and handoff | [`development/parallel-work.md`](development/parallel-work.md) |
+| Bounded child briefs, returns, capability ceilings, and native lifecycle | [`Delegation contract`](development/parallel-work.md#delegation-contract) |
 
 ## Dated evidence
 

@@ -12,12 +12,16 @@ Use REST APIs described by canonical versioned OpenAPI documents. Validate reque
 
 ## Implementation workflow
 
-1. Inspect branch and status, run the coordination status command, review the decision lifecycle for records that have become production-proven, and read the shared plan, active worktrees and claims, routed current documents, accepted records, and relevant source; do not work from memory.
+For lasting implementation work, execution supervisors and bounded implementation children apply this workflow. Planning supervisors apply its relevant orientation, contracts, acceptance, and handoff steps without manufacturing implementation work; human-directed debuggers may vary ordinary planning and sequencing for bounded diagnosis as defined in [`parallel-work.md`](../development/parallel-work.md#session-roles), while lasting fixes return to authorized isolated work.
+
+Use the [delegation contract](../development/parallel-work.md#delegation-contract) for child briefs, capability ceilings, inspectable returns, and recovery. Read-only acceptance work does not require source-writing authority.
+
+1. Inspect branch and status, run `node tools/coordination-status.mjs` to see active claims and ready work, review the decision lifecycle for records that have become production-proven, and read the shared plan, routed current documents, accepted records, and relevant source; do not work from memory.
 2. Update the shared plan as needed, then state and claim the problem, scope, facts, assumptions, unknowns, acceptance criteria, dependencies, and risk.
 3. Resolve cross-boundary and architecture-impacting decisions and update proposed or accepted visual architecture before production code; spike only a bounded uncertainty.
 4. Implement the smallest reversible vertical slice with explicit contracts.
 5. Test at the cheapest effective level, adding focused tests and negative cases at authority, tenant, data-quality, concurrency, and external-effect boundaries.
-6. Run every available affected-project and repository check; never weaken a gate merely to pass.
+6. Run focused checks while changing code, then the efficient affected-project and applicable repository checks before handoff; never weaken a required hosted CI gate merely to pass.
 7. Validate acceptance independently of the implementation path and record remaining uncertainty.
 8. Update the owning specifications, decisions, diagrams, status, and agent guidance whose truth changed.
 

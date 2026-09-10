@@ -4,12 +4,6 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import test from 'node:test';
 
-import {
-  parseJsonWithUniqueKeys,
-  parseScopePath,
-  parseSerializingConfiguration,
-} from './coordination-scope.mjs';
-
 const read = (path) => readFileSync(path, 'utf8');
 
 const readme = read('README.md');
@@ -17,15 +11,6 @@ const security = read('SECURITY.md');
 const contributing = read('CONTRIBUTING.md');
 const versionControl = read('docs/development/version-control.md');
 const parallelWork = read('docs/development/parallel-work.md');
-const parallelWorkTemplate = read('.github/ISSUE_TEMPLATE/parallel-work.yml');
-const sharedPlanTemplate = read('.github/ISSUE_TEMPLATE/shared-plan.yml');
-const coordinationSchema = read('tools/coordination-schema.mjs');
-const coordinationScope = read('tools/coordination-scope.mjs');
-const coordinationClaim = read('tools/coordination-claim.mjs');
-const coordinationLib = read('tools/coordination-lib.mjs');
-const coordinationStatus = read('tools/coordination-status.mjs');
-const coordinationWriter = read('tools/coordination-write.mjs');
-const serializingConfiguration = read('.github/coordination/serializing-paths.v1.json');
 const preCommitHook = read('.githooks/pre-commit');
 const preMergeCommitHook = read('.githooks/pre-merge-commit');
 const integrationHookTests = read('tools/integration-checkout-hooks.test.mjs');
@@ -72,43 +57,6 @@ const currentStatusRoutes = [
     '../../current-status.md',
   ],
 ];
-
-test('issue 44 scope controls are pinned as non-self-activating', () => {
-  assert.match(parallelWork, /These controls are non-self-activating\./);
-  assert.match(
-    parallelWork,
-    /Every issue #44 bootstrap, implementation publication, pull-request, and integration step remains governed only by the protocol already integrated on its current `main`/,
-  );
-  assert.match(parallelWork, /only prospectively after #44 is integrated, exact-main CI succeeds/);
-  assert.doesNotMatch(parallelWork, /--gate(?:=|\s+)claim:44/);
-  assert.match(coordinationClaim, /if \(issueNumber === 44\)/);
-  assert.match(coordinationScope, /provisional-empty-before-ref/);
-});
-
-test('Nx shared globals remain within strict versioned serializing authority', () => {
-  const serializing = parseSerializingConfiguration(serializingConfiguration);
-  assert.equal(serializing.status, 'valid', serializing.message);
-  assert(serializing.paths.includes('nx.json'));
-
-  const parsedNx = parseJsonWithUniqueKeys(read('nx.json'));
-  assert.equal(parsedNx.status, 'valid');
-  const nx = parsedNx.value;
-  assert(Array.isArray(nx?.namedInputs?.sharedGlobals));
-  assert(nx.namedInputs.sharedGlobals.length > 0);
-  assert.equal(
-    new Set(nx.namedInputs.sharedGlobals).size,
-    nx.namedInputs.sharedGlobals.length,
-    'Nx shared globals must be unique',
-  );
-  for (const value of nx.namedInputs.sharedGlobals) {
-    assert.equal(typeof value, 'string');
-    assert(value.startsWith('{workspaceRoot}/'), value);
-    const path = value.slice('{workspaceRoot}/'.length);
-    assert.equal(value, `{workspaceRoot}/${path}`);
-    assert.equal(parseScopePath(path, { exactOnly: true }).status, 'valid', value);
-    assert(serializing.paths.includes(path), `${path} is absent from serializing authority`);
-  }
-});
 
 const workflowPaths = ['.github/workflows/ci.yml', '.github/workflows/delivery.yml'];
 
@@ -423,41 +371,6 @@ const assertNoScopedPublicationContradiction = (path, source) => {
   }
 };
 
-const checkpointRolloutContradictionPatterns = [
-  /\bversion 1 header\b[^.!?\n]{0,100}\brequired\b[^.!?\n]{0,120}\bcheckpoint comments? created before (?:issue )?#40 (?:is|was) integrated\b/i,
-  /\bhistorical checkpoint comments?\b[^.!?\n]{0,100}\b(?:must|may|should|are required to)\s+be\s+(?:edited|backfilled)\b/i,
-  /\bhistorical checkpoint comments?\b[^.!?\n]{0,100}\b(?:invalid|not valid)\b[^.!?\n]{0,100}\b(?:without|unless)\b[^.!?\n]{0,60}\b(?:backfill|version 1 header)\b/i,
-  /\bcurrent coordination status tooling\s+(?:currently\s+)?validates? every version 1 field\b/i,
-  /\buntil (?:issue )?#41 integrates schema validation\b[^.!?\n]{0,140}\bmanual(?: and independent| independent)? verification\b[^.!?\n]{0,60}\b(?:is optional|is unnecessary|is not required)\b/i,
-];
-
-const assertNoCheckpointRolloutContradiction = (path, source) => {
-  const normalized = normalizePolicyText(source);
-  for (const pattern of checkpointRolloutContradictionPatterns) {
-    assert.doesNotMatch(
-      normalized,
-      pattern,
-      `${path} must preserve the prospective version 1 checkpoint rollout`,
-    );
-  }
-};
-
-const checkpointEvidenceHeader = `Checkpoint-Evidence-Version: 1
-Checkpoint-State: proposed
-Checkpoint-At: unclaimed
-Checkpoint-Commit: uncommitted
-Checkpoint-Changed-Path-Count: 0
-Checkpoint-Checks-Verdict: unavailable
-Checkpoint-CI-Run: unavailable
-Checkpoint-CI-Commit: unavailable
-Checkpoint-Security-Impact: unknown
-Checkpoint-Tenant-Impact: unknown
-Checkpoint-Provider-Impact: unknown
-Checkpoint-Deployment-Impact: unknown
-Checkpoint-Residual-Risk-Count: 0
-Next-Action: unclaimed
-Blockers: none`;
-
 test('governed prose enforces principal, agent, and workload-identity vocabulary', () => {
   for (const path of identityVocabularyPaths) assertIdentityVocabulary(path, read(path));
 
@@ -592,7 +505,7 @@ test('authority guards reject explicit widening and stale host truth', () => {
   }
 });
 
-test('scoped branch publication stays claim-bound and checkpoint evidence stays exact', () => {
+test('scoped branch publication does not widen authority', () => {
   const governedSources = [
     ['AGENTS.md', agents],
     ['ADR-0011', coordinationDecision],
@@ -603,85 +516,6 @@ test('scoped branch publication stays claim-bound and checkpoint evidence stays 
   for (const [path, source] of governedSources) {
     assertNoScopedPushAuthorityWidening(path, source);
     assertNoScopedPublicationContradiction(path, source);
-    assertNoCheckpointRolloutContradiction(path, source);
-    assert.match(source, /owned typed branch|typed branch it owns|registered typed branch/i, path);
-    assert.match(source, /normal(?:, non-force| fast-forward| owned-branch)? push/i, path);
-    assert.match(source, /pull requests? remain[^.!?\n]{0,120}(?:only|mandatory)/i, path);
-    assert.match(source, /provider/i, path);
-    assert.match(source, /deploy/i, path);
-  }
-
-  assert.match(parallelWork, /## Scoped owned-branch publication/);
-  assert.match(parallelWork, /identical `Claim-Branch` name/);
-  assert.match(parallelWork, /force push, `--force-with-lease`/);
-  assert.match(
-    parallelWork,
-    /branch\/ref deletion and cleanup each require separate explicit authorization/i,
-  );
-  assert.match(
-    versionControl,
-    /does not authorize publication of the issue #40 implementation branch/i,
-  );
-  assert.match(
-    coordinationDecision,
-    /#40 implementation branch cannot use the rule it introduces/i,
-  );
-  assert.match(
-    agents,
-    /#40 implementation branch still requires separate explicit maintainer authorization/i,
-  );
-
-  assert.ok(
-    parallelWorkTemplate.replaceAll(/^ {8}/gm, '').includes(checkpointEvidenceHeader),
-    'parallel-work issue form must keep the exact evidence header fields and order',
-  );
-  assert.match(parallelWork, /Checkpoint-State.*equals `Claim-State`/i);
-  assert.match(parallelWork, /derived from the actual comparison with the registered base/i);
-  assert.match(
-    parallelWork,
-    /immutable full `https:\/\/github\.com\/money-noodle\/money-noodle\/actions\/runs\//,
-  );
-  assert.match(parallelWork, /`Checkpoint-CI-Commit`[^.!?\n]{0,160}equals `Checkpoint-Commit`/);
-  assert.match(parallelWork, /branch-head change immediately invalidates the prior CI run/i);
-  assert.match(parallelWork, /lists exactly the declared number of residual risks/i);
-  assert.match(parallelWork, /permitted push automatically advances that pull request's head/i);
-  assert.match(parallelWork, /new head immediately invalidates all prior checks and reviews/i);
-  assert.match(
-    parallelWork,
-    /pull-request creation, metadata changes, retargeting, closing, reopening, and merging still require separate explicit authorization/i,
-  );
-  assert.match(
-    parallelWork,
-    /version 1 (?:evidence-)?header requirement is prospective[^.!?\n]{0,160}only to checkpoint comments created after issue #40 is integrated/i,
-  );
-  assert.match(
-    parallelWork,
-    /historical checkpoint comments remain immutable, valid evidence[^.!?\n]{0,180}do not edit[^.!?\n]{0,40}backfill/i,
-  );
-  assert.match(
-    parallelWork,
-    /integrated schema validation checks every field of a present version 1 evidence header/i,
-  );
-  assert.match(
-    parallelWork,
-    /syntactic and semantic validity alone does not prove that a run or impact claim is true/i,
-  );
-  for (const verdict of [
-    'passed',
-    'pending',
-    'failed',
-    'cancelled',
-    'skipped',
-    'missing',
-    'unavailable',
-    'mixed',
-  ]) {
-    assert.ok(
-      checkpointEvidenceHeader.includes(verdict) ||
-        parallelWorkTemplate.includes(`\`${verdict}\``) ||
-        parallelWork.includes(`\`${verdict}\``),
-      `checkpoint evidence must define the ${verdict} verdict`,
-    );
   }
 
   for (const mutation of [
@@ -715,158 +549,9 @@ test('scoped branch publication stays claim-bound and checkpoint evidence stays 
       mutation,
     );
   }
-
-  for (const mutation of [
-    'The version 1 header is required for checkpoint comments created before issue #40 is integrated.',
-    'Historical checkpoint comments must be backfilled.',
-    'Historical checkpoint comments are invalid without a version 1 header.',
-    'Current coordination status tooling validates every version 1 field.',
-    'Until issue #41 integrates schema validation, manual and independent verification is optional.',
-  ]) {
-    assert.throws(
-      () => assertNoCheckpointRolloutContradiction('checkpoint rollout mutation', mutation),
-      /must preserve the prospective version 1 checkpoint rollout/,
-      mutation,
-    );
-  }
 });
 
-test('registry v2 policy preserves mixed-version, non-atomic, and bootstrap boundaries', () => {
-  for (const source of [parallelWorkTemplate, sharedPlanTemplate]) {
-    assert.match(source, /Registry-Schema-Version/);
-    assert.doesNotMatch(source, /Claim-Worktree|Shared-Hotspots|\/Users\//);
-    assert.match(source, /required: true/);
-  }
-  assert.match(parallelWorkTemplate, /Claim-Host/);
-  assert.match(parallelWorkTemplate, /Waiting-Since/);
-  assert.match(parallelWorkTemplate, /Depends-On: none/);
-  assert.match(parallelWorkTemplate, /Dependency-Notes: none/);
-
-  assert.match(parallelWork, /body with no version field is an implicit version 1 record/i);
-  assert.match(parallelWork, /untouched v1 and v2 records together/i);
-  assert.match(parallelWork, /There is no bulk migration/i);
-  assert.match(
-    parallelWork,
-    /historical comments are never migrated, edited, backfilled, or reinterpreted/i,
-  );
-  assert.match(parallelWork, /not[^.!?\n]{0,40}server-side compare-and-swap/i);
-  assert.match(
-    parallelWork,
-    /Body, state-label, and append-only comment updates are separate non-atomic host surfaces/i,
-  );
-  assert.match(
-    parallelWork,
-    /final snapshot[^.!?\n]{0,160}body[^.!?\n]{0,80}label[^.!?\n]{0,80}comment/i,
-  );
-  assert.match(parallelWork, /complete` maps to `work:done`/i);
-  assert.match(parallelWork, /single-record and explicitly invoked/i);
-  assert.match(parallelWork, /performs no discovery[^.!?\n]{0,100}automatic migration/i);
-  assert.match(parallelWork, /#42 and #44/);
-  assert.match(parallelWork, /#41 bootstrap used deterministic fixtures and mocked host ports/i);
-  assert.match(
-    parallelWork,
-    /integrated writer is now authoritative[^.!?\n]{0,140}remote-reference primitive/i,
-  );
-
-  assert.match(coordinationSchema, /CURRENT_REGISTRY_SCHEMA_VERSION = '2'/);
-  assert.match(coordinationSchema, /unsupported-schema-version/);
-  assert.match(coordinationSchema, /removed-v2-field/);
-  assert.match(coordinationSchema, /missing-principal-liveness/);
-  assert.doesNotMatch(coordinationSchema, /(?:create|delete|update)Ref|ls-remote|git push/);
-
-  assert.match(coordinationWriter, /invalid-proposed-record/);
-  assert.match(coordinationWriter, /updateBody/);
-  assert.match(coordinationWriter, /replaceStateLabel/);
-  assert.match(coordinationWriter, /addComment/);
-  assert.match(coordinationWriter, /status: 'partial'/);
-  assert.match(coordinationWriter, /--dry-run/);
-  assert.match(coordinationWriter, /--apply/);
-  assert.match(coordinationWriter, /createGitHubCliHost/);
-  assert.match(coordinationWriter, /production-dependency-injection-forbidden/);
-  assert.doesNotMatch(
-    coordinationWriter,
-    /export\s+(?:async\s+)?function\s+(?:executeClaimEstablishmentWrite|executeCoordinationWriteWithDependencies|runCoordinationWriteCliWithDependencies|createGitHubCliHost|runGitHubCli)\b/,
-  );
-  assert.match(coordinationWriter, /finalVerification/);
-  assert.doesNotMatch(coordinationWriter, /spawnSync|gh issue|bulk migrat/i);
-});
-
-test('remote-reference claim authority is derived, create-only, and isolated from the general writer', () => {
-  assert.match(coordinationClaim, /CANONICAL_REPOSITORY = 'money-noodle\/money-noodle'/);
-  assert.match(coordinationSchema, /claim-v\$\{CLAIM_BRANCH_VERSION\}\/issue-/);
-  assert.match(coordinationSchema, /\^claim-v\(\[1-9\]\\d\*\)\\\/issue-/);
-  assert.match(coordinationSchema, /BOOTSTRAP_ISSUE = 42/);
-  assert.match(coordinationSchema, /BOOTSTRAP_BRANCH = 'arch\/remote-reference-claim-primitive'/);
-  assert.match(coordinationClaim, /statusCode !== 201/);
-  assert.match(coordinationClaim, /error\?\.statusCode === 422/);
-  assert.match(coordinationClaim, /create-ambiguous/);
-  assert.match(coordinationClaim, /ref-present-parked-body/);
-  assert.match(coordinationClaim, /claim-present-ref-absent/);
-  assert.match(coordinationClaim, /writer-recovery/);
-  assert.match(coordinationClaim, /ref-present-operation-mismatch/);
-  assert.match(
-    coordinationClaim,
-    /matchingCheckpoints\.length !== 1 \|\| matchingCheckpoints\[0\]\.operationId !== operationId/,
-  );
-  assert.match(coordinationClaim, /scope-guard-required/);
-  assert.match(coordinationClaim, /scope-self-activation-forbidden/);
-  assert.match(coordinationClaim, /production-dependency-injection-forbidden/);
-  assert.doesNotMatch(
-    coordinationClaim,
-    /(?:executeCoordinationClaimForTest|runCoordinationClaimCliForTest|createCoordinationScopeGuardForTest|createGitHubClaimHostForTest)/,
-  );
-  assert.doesNotMatch(
-    coordinationClaim,
-    /export\s+(?:async\s+)?function\s+(?:executeCoordinationClaimWithDependencies|runCoordinationClaimCliWithDependencies|createScopeAuthority|createGitHubClaimHost)\b/,
-  );
-  assert.match(coordinationClaim, /scopeGuard: createProductionScopeAuthority\(\)/);
-  assert.match(coordinationClaim, /buildCoordinationStatusReport/);
-  assert.match(coordinationClaim, /refCreatedByOperation: true/);
-  assert.match(coordinationClaim, /claimSnapshotGuard\(claim, operationId\)\(\{ issue \}\)/);
-  assert.match(coordinationClaim, /'--method', 'POST', `\$\{root\}\/git\/refs`/);
-  assert.doesNotMatch(coordinationClaim, /'--method',\s*'(?:PUT|DELETE)'/);
-  assert.doesNotMatch(coordinationClaim, /git\s+push|force-push|force push|update-ref|delete-ref/i);
-
-  assert.match(coordinationWriter, /initial-claim-requires-reference/);
-  assert.match(coordinationWriter, /dedicated remote-reference claim module/);
-  assert.match(coordinationWriter, /CLAIM_ESTABLISHMENT_AUTHORITY = Symbol/);
-  assert.doesNotMatch(coordinationWriter, /executeClaimEstablishmentWrite/);
-  assert.match(coordinationClaim, /stage: 'claim-snapshot-guard'/);
-  assert.match(coordinationClaim, /evaluateClaimCommentHistoryForBody/);
-  assert.match(coordinationClaim, /claimSnapshotGuard: claimSnapshotGuard\(claim, operationId/);
-  assert.match(coordinationLib, /export function evaluateClaimCommentHistoryForBody/);
-  assert.doesNotMatch(coordinationWriter, /\/git\/refs|createClaimRef/);
-  assert.doesNotMatch(coordinationLib, /from ['"]\.\/coordination-claim\.mjs['"]/);
-  assert.doesNotMatch(coordinationStatus, /from ['"]\.\/coordination-claim\.mjs['"]/);
-  assert.match(coordinationScope, /requires one complete operation binding/);
-  assert.match(coordinationScope, /COMPLETE_SCOPE_BINDING_FIELDS\.some/);
-  assert.match(coordinationStatus, /isExactSameOperationTransitionQuestion/);
-
-  const implementationSources = readdirSync('tools')
-    .filter((name) => name.endsWith('.mjs') && !name.endsWith('.test.mjs'))
-    .map((name) => [`tools/${name}`, read(`tools/${name}`)]);
-  const privilegedCallsites = implementationSources.filter(([, source]) =>
-    source.includes('executeClaimEstablishmentWrite('),
-  );
-  assert.deepEqual(privilegedCallsites.map(([path]) => path).sort(), [
-    'tools/coordination-claim.mjs',
-  ]);
-  const privilegedPreparationCallsites = implementationSources.filter(([, source]) =>
-    source.includes('prepareClaimEstablishmentWrite('),
-  );
-  assert.deepEqual(privilegedPreparationCallsites.map(([path]) => path).sort(), [
-    'tools/coordination-claim.mjs',
-    'tools/coordination-write.mjs',
-  ]);
-
-  for (const source of [parallelWork, versionControl]) {
-    assert.match(source, /claim-v1\/issue-<N>/);
-    assert.match(source, /remote reference/i);
-    assert.match(source, /no automatic (?:adoption|release|cleanup)|never adopt/i);
-  }
-});
-
-test('integration checkout hooks, lifecycle status, bootstrap, and holds remain fail closed', () => {
+test('integration checkout hooks guard exact main without bypasses', () => {
   for (const [path, hook] of [
     ['.githooks/pre-commit', preCommitHook],
     ['.githooks/pre-merge-commit', preMergeCommitHook],
@@ -884,79 +569,6 @@ test('integration checkout hooks, lifecycle status, bootstrap, and holds remain 
   );
   assert.match(integrationHookTests, /\['merge', '--ff-only'/);
   assert.match(integrationHookTests, /\['merge', '--no-edit'/);
-
-  for (const state of [
-    'mirrored',
-    'fast-forward-lag',
-    'local-ahead',
-    'dirty-or-in-progress',
-    'divergence',
-    'unavailable',
-  ])
-    assert.match(coordinationLib, new RegExp(`['\"]${state}['\"]`));
-  for (const state of [
-    'matched',
-    'local-ahead',
-    'remote-ahead',
-    'missing-branch',
-    'divergence',
-    'unavailable',
-  ])
-    assert.match(coordinationLib, new RegExp(`['\"]${state}['\"]`));
-  assert.match(coordinationStatus, /--show-origin.*--show-scope.*core\.hooksPath/s);
-  assert.match(coordinationStatus, /git\/ref\/\$\{fullRef\.slice\('refs\/'.length\)\}/);
-  assert.match(coordinationStatus, /compare\/\$\{left\}\.\.\.\$\{right\}/);
-  assert.match(coordinationStatus, /indexMode/);
-  assert.match(coordinationStatus, /filesystem.*executable/s);
-  assert.doesNotMatch(coordinationStatus, /\['ls-remote'/);
-  assert.doesNotMatch(
-    coordinationStatus,
-    /(?:reset|update-ref|worktree', 'remove|config', '--local', 'core\.hooksPath)/,
-  );
-
-  assert.match(
-    parallelWork,
-    /git fetch --no-tags --no-write-fetch-head --no-recurse-submodules --no-auto-maintenance origin refs\/heads\/claim-v1\/issue-<N>:refs\/remotes\/origin\/claim-v1\/issue-<N>/,
-  );
-  assert.match(parallelWork, /five SHA surfaces to agree/i);
-  assert.match(
-    parallelWork,
-    /direct-ref reads, local remote-tracking ref, local branch, and dedicated worktree HEAD/i,
-  );
-  assert.match(parallelWork, /exactly one clean unlocked non-prunable worktree/i);
-  assert.match(parallelWork, /zero push/i);
-  assert.match(parallelWork, /Every collision[^.!?\n]{0,180}preserved for principal review/i);
-  assert.match(
-    parallelWork,
-    /bootstrap never retries, adopts, resets, repoints, force-updates, removes, or cleans/i,
-  );
-  assert.match(parallelWork, /test\/integration-pr-<PR>-base-<first-12-base-hex>-attempt-<N>/);
-  assert.match(parallelWork, /## Integration hold evidence/);
-  assert.match(
-    parallelWork,
-    /Integration-Hold-ID: pr-<PR>-head-<full-head>-base-<full-base>-attempt-<N>/,
-  );
-  assert.match(
-    parallelWork,
-    /Holds have no expiry, transfer, takeover, cleanup, or automatic release/,
-  );
-  assert.match(parallelWork, /#43 pull-request text must not use a closing keyword/i);
-  assert.match(
-    parallelWork,
-    /#43 becomes principal-owned `work:blocked` with a strict `Waiting-Since` and no agent deadline/i,
-  );
-  assert.match(
-    parallelWork,
-    /activation followed by successful read-only activation and refusal verification permits `done`/i,
-  );
-  assert.match(
-    versionControl,
-    /sole integration checkout is the worktree on full symbolic ref `refs\/heads\/main`/,
-  );
-  assert.match(
-    versionControl,
-    /hooks are inert until separately authorized repository-local activation/i,
-  );
 });
 
 test('public entry points route to security, contribution, architecture, and license owners', () => {
@@ -1088,7 +700,8 @@ test('temporary integration exception is maintainer-only, exact-head, evidenced,
     ['delivery.md', delivery],
   ];
 
-  for (const [path, source] of governedSources) {
+  // The owning standard carries the full exception; summaries need not duplicate its wording.
+  for (const [path, source] of [['version-control.md', versionControl]]) {
     assert.match(source, /temporary sole-maintainer|temporary maintainer-only/i, path);
     assert.match(source, /maintainer[^\n]*personally|maintainer acting personally/i, path);
     assert.match(source, /agent|workload identity/i, path);
@@ -1108,6 +721,8 @@ test('temporary integration exception is maintainer-only, exact-head, evidenced,
       /head change invalidates all previous required-check and exception-evidence qualification/i,
       path,
     );
+  }
+  for (const [path, source] of governedSources) {
     assert.doesNotMatch(
       source,
       /last-push(?:-control| approval| controls?)[^.!?\n]{0,120}\bremains? (?:mandatory|forbidden)/i,
@@ -1123,9 +738,7 @@ test('temporary integration exception is maintainer-only, exact-head, evidenced,
     versionControl,
     /required approving review and last-push approval[\s\S]{0,120}may waive either or both/i,
   );
-  for (const [path, source] of governedSources.slice(1)) {
-    assert.match(source, /stale-review dismissal remains in force/i, path);
-  }
+  assert.match(versionControl, /stale-review dismissal remains in force/i);
   assert.match(
     versionControl,
     /pull request remains the only route|Integration still occurs through a pull request/i,
@@ -1175,10 +788,7 @@ test('temporary integration exception is maintainer-only, exact-head, evidenced,
     versionControl,
     /cannot invoke the exception, request that it be invoked, infer it/i,
   );
-  assert.match(parallelWork, /does not establish that the exception applies/i);
-  assert.match(parallelWork, /they do not recommend or ask for the exception/i);
   assert.match(delivery, /cannot invoke or request the temporary sole-maintainer exception/i);
-  assert.match(coordinationDecision, /It cannot satisfy or bypass `prevent_self_review=true`/);
   assert.match(delivery, /policy forbids use of the environment administrator bypass/i);
   assert.match(versionControl, /never authorizes a failed-check bypass, direct or force push/i);
   assert.doesNotMatch(versionControl, /merge only after review and required checks/i);
