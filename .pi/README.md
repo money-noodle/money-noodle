@@ -25,7 +25,9 @@ The provider doctor checks authentication, compatibility, and the proposal-bridg
 
 ## Main-session fallback
 
-The principal-approved main route is **Astra/max → Opus/max**, the reverse of the child defaults. [model-fallback/config.json](model-fallback/config.json) uses the upstream `version`, `enabled`, `rules`, `matchModels`, `statuses`, and `fallback` shape to match only `openai-codex/gpt-6-astra` on 429, 500, 502, 503, or 504. The fallback reference is the provider and bare `opus` ID, not a thinking-suffixed ID. `defaultThinkingLevel` and `modelThinkingLevels` in [settings.json](settings.json) set max for both main routes; explicit native child thinking still comes from each role.
+The principal-approved main route is **Astra/high → Opus/high**, the reverse of the child defaults. [model-fallback/config.json](model-fallback/config.json) uses the upstream `version`, `enabled`, `rules`, `matchModels`, `statuses`, and `fallback` shape to match only `openai-codex/gpt-6-astra` on 429, 500, 502, 503, or 504. The fallback reference is the provider and bare `opus` ID, not a thinking-suffixed ID. `defaultThinkingLevel` and `modelThinkingLevels` in [settings.json](settings.json) set high for both main routes; explicit native child thinking still comes from each role.
+
+High is the principal-requested workaround for reported trouble with max, not a reproduced provider defect or model-quality finding. For matching machine-wide startup defaults, separately set `defaultThinkingLevel` and the Astra/Opus entries in `modelThinkingLevels` to `high` in the user `~/.pi/agent/settings.json`, preserving unrelated settings and explicit child-role effort. Keep the user routing guidance consistent as well. Trusted project settings override user settings; changing only the user default does not override a project's per-model values. Persisted defaults do not change a running session or a retained child's contract. Settle active work before restarting, and verify the selected model and effective thinking; resumed sessions and explicit launch overrides may differ.
 
 The package entry has `extensions: []` to prevent unguarded automatic loading. [extensions/main-model-fallback.ts](extensions/main-model-fallback.ts) loads the unchanged package only outside marked native child processes. `pi-subagents@0.66.0` sets `PI_SUBAGENT_CHILD=1` before async ambient extensions load; the loader refuses any marker value. Foreground children do not load ambient extensions. Do not explicitly load the main-only loader or stock fallback entry in children, remove the package filter, or install an additional unguarded global copy. A child must retain its native candidate and resume contracts, not be switched back to Claude by the main-session extension.
 
@@ -104,7 +106,7 @@ The deterministic repository checks are `node --test tools/pi-routing.test.mjs t
 
 After installation or upstream changes, separately authorize and bound live qualification:
 
-- Check main-session fallback selection, max thinking on both routes, visible failures, cooldown/header handling, and no replay by the fallback extension. Keep simulated hooks distinct from real provider failures.
+- Check main-session fallback selection, high thinking on both routes, visible failures, cooldown/header handling, and no replay by the fallback extension. Keep simulated hooks distinct from real provider failures.
 - Check the served model and effective effort, then a proposal-only tool round trip; a text-only hello does not qualify the bridge.
 - Check actual async native child extension loading, tool ceilings, supervisor contact, inline output, and same-contract retained resume. A direct transport probe does not prove these lifecycle properties.
 - Check pre-tool fallback and cached exclusion behavior, quota/error and reset reporting, cancellation, partial-work preservation, and a deliberate post-tool alternate-provider handoff. Do not exhaust a subscription to manufacture a test.
