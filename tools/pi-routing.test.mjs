@@ -15,14 +15,26 @@ const jsonExamples = [...read('.pi/README.md').matchAll(/```json\n([\s\S]*?)\n``
 test('Pi pins the approved orchestrator and guards main fallback loading', () => {
   assert.equal(settings.defaultProvider, 'openai-codex');
   assert.equal(settings.defaultModel, 'gpt-6-astra');
-  assert.equal(settings.defaultThinkingLevel, 'max');
-  assert.deepEqual(settings.modelThinkingLevels, { [astra]: 'max', [claude]: 'max' });
+  assert.equal(settings.defaultThinkingLevel, 'high');
+  assert.deepEqual(settings.modelThinkingLevels, { [astra]: 'high', [claude]: 'high' });
   assert.deepEqual(settings.packages, [
     'npm:pi-subagents@0.66.0',
     'npm:pi-claude-code-provider@0.2.0',
     { source: 'npm:pi-model-fallback@0.3.7', extensions: [] },
   ]);
   assert.equal(settings.subagents.projectRootResolution, 'git-root');
+});
+
+test('main-session documentation agrees with high defaults without stale max requirements', () => {
+  const policy = read('.pi/APPEND_SYSTEM.md');
+  const setup = read('.pi/README.md');
+  const mainRoutes = policy.split('\n\n')[1];
+  assert.ok(mainRoutes.includes(`\`${astra}:high\``));
+  assert.ok(mainRoutes.includes(`\`${claude}:high\``));
+  assert.match(setup, /Astra\/high → Opus\/high/);
+  for (const text of [policy, setup]) {
+    assert.doesNotMatch(text, /flagship\/max|Astra\/max|Opus\/max|max thinking|set max for both/);
+  }
 });
 
 test('roles use ordered native backups with effort in the separate thinking key', () => {
@@ -78,7 +90,7 @@ test('the runtime prompt retains quota uncertainty, native boundaries, and safe 
   const policy = read('.pi/APPEND_SYSTEM.md');
   assert.match(policy, /Pi owns tools, prompts, permissions, supervision, and lifecycle/);
   assert.match(policy, /Main Pi uses GPT first, then Opus/);
-  assert.match(policy, /Both main routes use max thinking/);
+  assert.match(policy, /Both main routes default to high thinking/);
   assert.match(policy, /main-only project loader, not directly into children/);
   assert.match(policy, /it does not itself replay the failed prompt/);
   assert.match(policy, /Provider-reported windows, restrictions, and reset instants win/);

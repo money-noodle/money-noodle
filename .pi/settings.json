@@ -1,10 +1,10 @@
 {
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-6-astra",
-  "defaultThinkingLevel": "max",
+  "defaultThinkingLevel": "high",
   "modelThinkingLevels": {
-    "openai-codex/gpt-6-astra": "max",
-    "pi-claude-code-provider/opus": "max"
+    "openai-codex/gpt-6-astra": "high",
+    "pi-claude-code-provider/opus": "high"
   },
   "packages": [
     "npm:pi-subagents@0.66.0",
