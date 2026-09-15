@@ -8,6 +8,9 @@ Newest first. Keep entries to one or two sentences. If an entry needs a paragrap
 
 ## 2026
 
+- **2026-09-13** — The principal accepted the M1 catalog v2 and restricted workload-publication target, with separate artifact/forward/one-rollback consent slots and bounded existing-repository Git journal/witness custody; see [ADR-0010](ADR-0010-agent-operated-production-control-plane.md) and [ADR-0005](ADR-0005-delivery-trust-and-secret-custody.md). This is design acceptance, not host/provider enablement.
+- **2026-09-13** — Replace the fixed first-slice budget ceiling with dated #85 estimates, measured attribution and configurable alerts under [delivery cost policy](../../operations/delivery.md#cost-estimates-and-operational-bounds); alerts are not caps or spending authority, and unapplied legacy defaults await separate implementation.
+
 - **2026-09-08** — The coordination protocol uses an atomic `claim-v1` remote-reference claim, declared scope, an issue dependency graph, and a read-only status board; it removes scope gates, verbose evidence headers, and reconciliation machinery that did not improve ordinary coordination. See [`ADR-0011`](ADR-0011-agent-coordination-and-isolation-protocol.md).
 - **2026-08-30** — Agent coordination uses remote claim isolation, fail-closed planning, remotely verifiable lifecycle and scope evidence, and per-decision durability; see [`ADR-0011`](ADR-0011-agent-coordination-and-isolation-protocol.md).
 - **2026-08-30** — Free-tier and quota headroom is a derived figure, computed from Cloud Monitoring usage against the dated limits in `../../operations/deployment-composition.md`, because the provider exposes no clean free-tier-consumption API. Labeled as derived wherever it appears; weaker evidence than reported spend.

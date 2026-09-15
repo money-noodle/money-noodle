@@ -24,6 +24,8 @@ Planning supervisors share a parent plan and serialize edits to the same plan se
 
 Focused local validation occurs during work, with combined validation before handoff when available. Required hosted checks remain exact-current-head requirements. Deployment verification is performed only for applicable, configured deployed components and is always labeled separately from local or CI validation.
 
+The accepted [fixed-publisher delegation target](../../development/parallel-work.md#fixed-publisher-delegation-target) preserves accountable claimant ownership and one-writer isolation while delegating only an exact bounded publication to trusted-main GITHUB_TOKEN code. It is not installed authority: the current dedicated-worktree push path remains binding until reviewed integration and separate qualification, and cannot authorize its own widening. Interrupted publication reconciles exact parent/tree/diff and marker rather than reparenting or changing cosmetic authorship.
+
 Claim ownership provides no integration, merge, provider, deployment, cleanup, or exception authority. Pull requests remain the integration route. The integration checkout is not an implementation worktree; corrections return to the execution branch.
 
 The sole-maintainer integration exception and every security, provider, tenant, audit, funded-authority, and production-approval control remain governed by [`version-control.md`](../../development/version-control.md#temporary-sole-maintainer-integration-exception). This ADR does not duplicate or weaken those conditions.

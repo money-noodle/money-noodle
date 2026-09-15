@@ -38,7 +38,7 @@ Agents are intended technical operators for routine work through reviewed automa
 
 Humans retain explicit scoped approval of production effects, provider/domain account ownership, root recovery, break-glass custody, and responsibility for the protected production approval. One-time bootstrap and authorized recovery are bounded human procedures that must be reconciled into code and remote state, not alternative routine control planes.
 
-### Three separate workload identities
+### Runtime separation and purpose-specific operation identities
 
 | Workload identity | May | May not |
 | --- | --- | --- |
@@ -46,7 +46,11 @@ Humans retain explicit scoped approval of production effects, provider/domain ac
 | **Web workload identity** | Call the API origin, export telemetry | Read the registry, read infrastructure state, read any secret, reach a database, run jobs, hold provider authority |
 | **API workload identity** | Read only the secrets it is explicitly granted, export telemetry, serve requests | Write the registry, write infrastructure state, deploy anything, read another service's secrets or future schema |
 
-Developer access is separate from all three and is least-privilege. No workload identity in this design holds funded authority, because none exists in the current platform.
+This table describes the existing unapplied foundation identity split, not permission to reuse one mutation token for every M1 effect. The accepted [catalog v2](../../operations/production-control-plane.md#m1-catalog-v2--selected-not-enabled) further separates operation-specific executors, independent verification, journal writer, witness writer and the no-OIDC source publisher. No additional service or durable credential is selected. Developer access is separate and least-privilege. No workload identity in this design holds funded authority, because none exists in the current platform.
+
+### Sole-principal target and current safeguards
+
+The [staged delivery contract](../../operations/delivery.md#current-to-target-activation) replaces neither current environment gates nor host protections merely by being accepted. Restricted GITHUB_TOKEN publication must prove genuine workload author/pusher attribution; the principal remains human reviewer/merger, with independent agent technical review, exact-head checks and no bypass. CI admission is not production consent. After separately authorized qualification, the reviewed merge supplies separately consumed artifact, forward and one conditional rollback slot for its exact bundle, not broader operational authority.
 
 ### Artifact trust
 
@@ -56,7 +60,7 @@ Artifacts are built once from a reviewed commit and deployed **by digest**, neve
 
 A managed secret store is declared and reachable from the first apply even though the first slice stores nothing in it, so that the first capability needing a credential does not also have to invent custody. Every secret, when one exists, records owner, consuming workload identity, rotation interval, revocation procedure, and recovery path. Laptop environment files are never canonical. Secret values never enter Git, images, build logs, telemetry, status views, issue comments, pull requests, Actions summaries/artifacts/caches, commit metadata, prompts copied into public coordination, or agent handoffs.
 
-Runtime configuration that is genuinely non-secret is typed configuration, not a secret. Putting non-secrets in the secret store obscures which values actually matter.
+Runtime configuration that is genuinely non-secret remains typed configuration. Private native mappings (even when not credential payloads) use Actions environment Secrets for controlled runtime injection only under the [field-level custody inventory](../../operations/production-control-plane.md#field-level-custody-and-bounded-reconstruction); they never become a readable archive or recovery vault. Canonical M1 audit is sanitized Git/issue evidence, with explicit unknown-on-missing-history limits, not an additional private store. Operational secret payload custody and tenant/financial audit obligations remain unchanged.
 
 ### Browser boundary
 
@@ -101,25 +105,4 @@ Rejected. It contradicts default-deny and makes the CI workload identity the mos
 - Provider choice is constrained by federation support, which is exactly why this decision drove ADR-0004.
 - Attestation verification adds a CI step and a failure mode that can block an otherwise good deployment.
 
-## Validation
-
-Before this decision is considered implemented:
-
-1. no provider key exists in GitHub secrets, the repository, any image layer, or any workflow log;
-2. a workflow run on an unauthorized ref, and one from a fork, both **fail** to obtain deployment credentials;
-3. the deployer workload identity cannot read a value placed in the secret store for a runtime workload identity;
-4. the web workload identity cannot pull from the registry or read infrastructure state;
-5. the API workload identity cannot deploy a revision or write infrastructure state;
-6. deployment by a digest lacking valid provenance is rejected;
-7. a secret scan over the repository, images, and workflow logs finds nothing;
-8. rotating and revoking a test secret works and is observable, before any real secret exists.
-
-Negative tests are mandatory here. A test proving the pipeline *can* deploy proves nothing about who else can.
-
-## Revisit when
-
-- the selected provider changes its federation or attestation mechanism;
-- the first real operational secret is introduced, which will exercise custody for the first time;
-- identity, tenant data, or provider integrations are added, each of which adds workload identities;
-- funded authority is contemplated, which requires a separate and stricter authority design;
-- branch protection, repository visibility, public-contribution controls, deployment environments, or the deployment ref change.
+The owning [delivery acceptance](../../operations/delivery.md#first-release-acceptance-and-exposure-order) and [catalog fixtures](../../operations/production-control-plane.md#downstream-negative-fixture-contract) carry the remaining negative trust, provenance, custody, first-exposure and independent-verification requirements. They are future qualification, not evidence sufficient to mark this Working record Settled.

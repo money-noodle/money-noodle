@@ -40,6 +40,38 @@ An unintegrated widening of publication authority cannot authorize its own publi
 
 The CI branch matrix remains unchanged. Existing container jobs continue to run on routine owned-branch pushes, accepting the higher short-term CI cost; any matrix reduction requires a separate scoped change.
 
+## Restricted workload source publication target
+
+This is the principal-accepted #68 target, **not installed authority**. Today's dedicated-worktree push rule above remains current until reviewed policy is integrated and the publisher/host transition is separately authorized and qualified. It cannot authorize its own publication. [Claimant delegation](parallel-work.md#fixed-publisher-delegation-target) preserves ownership; [catalog v2](../operations/production-control-plane.md#m1-catalog-v2--selected-not-enabled) owns consent/expiry. No personal token, App key, alternate login or protection bypass is selected if the GITHUB_TOKEN route fails qualification: stop for a new decision.
+
+| Role | Accountable actor / evidence |
+| --- | --- |
+| Requester | Current named claimant, or explicitly delegated requester bound to that same claim and source permit |
+| Publisher | Fixed protected-main `.github/workflows/source-publication.yml` and pinned trusted helpers, using GITHUB_TOKEN |
+| Commit author | Genuine workload publication attributed by trusted run/API, exact parent/tree/diff and request marker; author text alone proves nothing |
+| Last reviewable pusher / PR creator | Publisher workload identity, proven by actual host event/API evidence, not a cosmetic author substitution |
+| Technical reviewer | Independent agent reviews exact candidate; not a second human and cannot approve/merge |
+| Human reviewer / merger | Principal reviews and merges after exact-head checks, stale/last-push approval and conversation controls; CI-run approval is separate |
+
+### Source request and algorithm
+
+One comment on the existing claim issue carries canonical ASCII JSON. Dispatch to the fixed main workflow accepts **only** `issueNumber`, `commentId`, `requestDigest`. Retrieve `GET /repos/{repo}/issues/comments/{commentId}` and independently verify the comment's issue association and authenticated requester, not just body identity text.
+
+Required request fields: `schemaVersion`, `requestId`, `claimant`, `delegationRef` (null only for direct claimant), `claimRef`, `expectedClaimSHA`, `controlSourceSHA`, `changesDigest`, `resultTreeSHA`, `approvedPaths`, `maxFiles`, `maxReplacementBytes`, `sourcePermissionRef`, `allowPRCreation`, `changes`, `issuedAt`, `expiresAt`, `requestDigest`. Each change has exact repository-relative regular-file `path`, `action` (add/replace/delete), `expectedOldBlobSHA` (null only for add), and `replacementBase64` (null only for delete). Use the catalog's canonical encoding; changes sorted by path, no duplicates. changesDigest hashes canonical change entries; requestDigest hashes the complete request except requestDigest itself, avoiding recursion.
+
+At most **16 files**, **32 KiB (32768 bytes) total decoded complete replacement contents**, and **48 KiB (49152 bytes) complete ASCII comment**. The replacement bound is not patch size. Count metadata and base64 expansion in the comment bound. Separately cap canonical request metadata at 4 KiB (4096 bytes), measured with each replacementBase64 string replaced by null; reject unknown fields. This leaves 16 KiB below the 65,536-character comment ceiling; #74 must qualify actual API acceptance. Larger replacements are intentionally unsupported, including existing files larger than the replacement cap. Reject rather than split a change across requests or add a broker. This does not cap today's owned-worktree workflow.
+
+1. Validate exact current claim/delegation, permit including explicit PR creation, original expiry, scope, old blobs, byte limits and digest. Reject protected refs, different claims, path traversal, symlinks, submodules, archives, arbitrary URLs, executable request content and shell interpolation. Treat submitted bytes as data, never commands.
+2. Reconcile an existing deterministic request marker first: exact parent, tree, actual diff, produced commit and matching PR. A matching author string, semantic no-op, unchanged tree or cosmetic follow-up commit atop already-pushed content cannot qualify as workload publication.
+3. Observe the existing claim head; it **must equal expectedClaimSHA**. Construct blobs/tree and one single-parent commit with an actual byte-level semantic change. Recheck ownership immediately before publication. Use Git blobs/trees/commits APIs, then `PATCH /repos/{repo}/git/refs/heads/claim-v1/issue-{N}` with `sha` and `force:false`. This is fast-forward exclusion, not an expected-old-SHA CAS. Conflict stops for a new reviewed request against the new head; never mechanically reparent/rebase.
+4. Open the expressly permitted PR using `POST /repos/{repo}/pulls`. Before retrying after a lost acknowledgment, reconcile exact head/base and marker; ambiguous results stop. Never retarget, merge, delete or force-push. A new head invalidates checks/reviews; resubmission cannot manufacture consent or genuine authorship.
+
+The publisher job has `contents:write`, `pull-requests:write`, `issues:read` and **no OIDC**. Only pinned trusted-main helpers and their reviewed dependency closure execute. Never install, build or execute PR/submitted source with the write token. These token permissions are not mechanically confined to one ref: fixed code and host controls are the trusted computing base.
+
+Keep the native `pull_request` opened/synchronize/reopened route in `ci.yml`. Token-created PR activity requires the principal's **Approve workflows to run** CI admission; token pushes alone do not supply checks. That click is **not production consent**. The manual main-only CI baseline is unrelated. #74 records actual review head, tested base, tested merge-ref relation and resulting main commit, with all four required checks (`affected projects and repository gates`, `secret scan`, `container platform-api`, `container web`), stale-review dismissal, genuine last-push approval and conversation resolution. Default PR checkout tests a merge ref; do not mislabel it as the reviewed head or use unrelated green checks. Public PR builds stay read-only/provider-free and never publish provider artifacts.
+
+The target flow has no integration protection bypass. The temporary exception below remains current only under its own conditions and must expire and have its host surfaces retired before provider enablement; agent technical review or workload attribution does not invoke it or manufacture human independence.
+
 ## Temporary sole-maintainer integration exception
 
 The following exception exists only while the organization has no second maintainer-designated, eligible, independent, and available reviewer. It belongs exclusively to the maintainer acting personally as the human principal. It cannot be delegated to an agent, integration owner, workload identity, automation, outside collaborator, or another principal. Raw write permission does not establish policy designation or availability.
@@ -81,6 +113,6 @@ Current hosted baseline evidence and the observed strict required-check attachme
 
 Use immutable annotated Semantic Versioning tags (`vMAJOR.MINOR.PATCH`) for accepted platform releases. The first accepted generation release may be `v2.0.0`; that product/API generation label does not name a branch. Tags supplement commit and deployment records and never move.
 
-A pull-request merge to protected `main` that satisfies the applicable integration policy is production authorization only after delivery is configured. Verify the resulting deployment, migrations, health, smoke checks, and telemetry before tagging a release. A commit or tag may be described as deployed only when [`../current-status.md`](../current-status.md) records dated remote deployment evidence.
+A qualifying pull-request merge supplies only the exact release permissions defined in the [delivery transition](../operations/delivery.md#current-to-target-activation), after that transition is configured and qualified; it is not general production authorization. Verify the resulting deployment, migrations, health, smoke checks, and telemetry before tagging a release. A commit or tag may be described as deployed only when [`../current-status.md`](../current-status.md) records dated remote deployment evidence.
 
 Rollback through delivery automation to a known digest and release record, never by moving tags or force-pushing shared history. Except for a normal owned-branch push that satisfies the scoped publication rule above, do not push, merge, publish, change visibility or Actions settings, release-tag, alter protected refs, invoke provider APIs, or trigger deployment unless explicitly authorized. When authorized, confirm remote CI/CD and hosting controls rather than assuming local success.

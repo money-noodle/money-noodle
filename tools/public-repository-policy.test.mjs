@@ -953,3 +953,282 @@ test('no workflow executes contributor source through pull_request_target', () =
   assert.match(ci, /^permissions:\n\s+contents: read$/m);
   assert.doesNotMatch(ci, /id-token:\s*write/);
 });
+
+// Documentation/source-contract evidence only. #70 implements the adapters and
+// executes the synthetic fault scenarios named here; no host/provider is called.
+const productionOperations = read('docs/operations/production-control-plane.md');
+const m1Catalog = productionOperations.split('## Broader v1 design')[0];
+const m1Publisher = versionControl
+  .split('## Restricted workload source publication target')[1]
+  .split('## Temporary sole-maintainer integration exception')[0];
+
+function assertClauses(source, clauses) {
+  for (const [name, pattern] of clauses) assert.match(source, pattern, name);
+}
+
+function assertClauseMutations(source, clauses) {
+  assertClauses(source, clauses);
+  for (const [name, pattern] of clauses) {
+    const mutated = source.replace(pattern, 'REMOVED POLICY CLAUSE');
+    assert.notEqual(mutated, source, `${name}: mutation must apply`);
+    assert.throws(() => assertClauses(mutated, [[name, pattern]]), { name: 'AssertionError' });
+  }
+}
+
+test('production-control-plane M1 matrix has exact supported operations, slots and bounded columns', () => {
+  const matrix = m1Catalog.split('| Operation | Approval;')[1].split('\n\n')[0];
+  const rows = matrix.split('\n').filter((line) => /^\| `/.test(line));
+  const expected = new Map([
+    ['status.read', 'none'],
+    ['deployment.read', 'none'],
+    ['drift.read', 'none'],
+    ['telemetry.diagnose', 'none'],
+    ['cost.read', 'none'],
+    ['workload.access.read', 'none'],
+    ['operation.evidence.read', 'none'],
+    ['source.publish', '`source-publication`'],
+    ['artifact.publish', '`artifact-publication`'],
+    ['service.deploy', '`release-forward`'],
+    ['service.rollback', '`release-rollback`'],
+    ['infrastructure.plan', 'none'],
+    ['infrastructure.apply', '`infrastructure-apply`'],
+    ['configuration.change', '`configuration-change`'],
+    ['workload.access.change', '`access-change`, optional `access-inverse`'],
+    ['telemetry.configuration.change', '`telemetry-change`'],
+    ['cost.control.change', '`cost-control-change`'],
+    ['bootstrap.initialize', '`bootstrap-initialize`'],
+  ]);
+  assert.equal(rows.length, expected.size);
+  for (const row of rows) {
+    const [operation, actors, bound, recovery, slot] = row
+      .split('|')
+      .slice(1, -1)
+      .map((s) => s.trim());
+    const id = operation.replaceAll('`', '');
+    assert.ok(expected.has(id), `unexpected operation ${id}`);
+    assert.equal(slot, expected.get(id), id);
+    assert.match(actors, /^(?:R0|H1|H2|HB|Source permit).*→/);
+    assert.match(bound, /; [ER]$/);
+    assert.ok(recovery.length > 10, `${id} needs explicit preconditions/recovery`);
+    expected.delete(id);
+  }
+  assert.equal(expected.size, 0);
+  assert.match(m1Catalog, /Other v1 operations remain \*\*non-invocable in M1\*\*/);
+  assert.match(m1Catalog, /every `secret\.\*` mutation/);
+  for (const operation of ['restore.execute', 'repair.execute', 'operation.evidence.export']) {
+    assert.ok(m1Catalog.includes(`\`${operation}\``));
+  }
+});
+
+test('production-control-plane consent clauses reject epoch/run reuse and enlarged vectors', () => {
+  assertClauseMutations(m1Catalog, [
+    [
+      'canonical key',
+      /grantKey = SHA256\(JCS\(\[repositoryIdentity, originalApprovalIdentity, permissionSlot\]\)\)/,
+    ],
+    ['epoch exclusion', /Epoch and workflow\/run\/attempt identity are excluded from the key/],
+    ['one rollback', /one conditional rollback permission per approved release bundle/],
+    ['no predecessor', /No verified predecessor means no rollback slot/],
+    [
+      'finite targets',
+      /rollback vector is fixed at approval, is a subset of the forward target vector, and cannot exceed two services/,
+    ],
+    ['original expiry', /Every external phase checks original expiry/],
+    ['immutable owner', /Reruns and new runs cannot adopt it/],
+    [
+      'tuple identity',
+      /deployableProject, buildTarget, outputPlatform, sourceSHA, configurationVersion, configurationDigest, builderIdentity, buildInvocation/,
+    ],
+    ['single digest', /maps to exactly one `artifactDigest`/],
+  ]);
+});
+
+test('production-control-plane journal schema preserves nonrecursive acknowledgment and finite reads', () => {
+  for (const field of [
+    'control/current.json',
+    'requests/{grantKey}.json',
+    'targets/{logicalIncarnation}.json',
+    'events/{eventId}.json',
+    'pendingIntent',
+    'witnessAck',
+    'consumedSlots',
+    'executorOwner',
+    'parentCommit',
+    'observedAt',
+    'realizedCounts',
+    'uncertainty',
+  ])
+    assert.ok(m1Catalog.includes(`\`${field}\``), field);
+  assertClauseMutations(m1Catalog, [
+    ['single global request', /at most one global active M1 provider request/],
+    ['no Git CAS', /GitHub has no expected-old-SHA parameter/],
+    ['no issue CAS', /Issue PATCH is not CAS/],
+    ['ack parent', /Append `witness-ack` event at sequence `n\+1`, sole parent `C`/],
+    ['no recursive witness', /Do not witness the acknowledgment/],
+    [
+      'pointer lag is intentional',
+      /latest event may be acknowledgment while pointer names the preceding intent/,
+    ],
+    ['comment lookup', /GraphQL `comments\(last:20\)` once/],
+    [
+      'finite request budget',
+      /40 GitHub requests, 512 KiB transferred, 120-second deadline, and 2 contention reevaluations/,
+    ],
+    ['finite document budget', /at most 8 snapshot\/event documents of 16 KiB each/],
+    ['evidence preserved', /never discard post-effect evidence/],
+  ]);
+});
+
+test('production-control-plane fault policy distinguishes absence, deletion, repair and restoration', () => {
+  assertClauseMutations(m1Catalog, [
+    ['missing witness', /Intent exists, witness absent \| Pending\/unknown; no token/],
+    ['lost acknowledgment', /Git or comment acknowledgment lost \| Read exact event\/pointer/],
+    ['confirmed deletion', /Previously confirmed witness missing\/inconsistent \| Block/],
+    [
+      'repair not authority',
+      /cannot change consent, expiry, original owner or revive a spent grant/,
+    ],
+    ['restoration', /approve new epoch through protected main/],
+    ['matched rollback limit', /journal and witness within the same epoch may be undetectable/],
+    ['no blind replay', /Never automatically repeat an ambiguous mutation/],
+    ['no cancellation fencing', /GitHub cancellation does not fence GCP/],
+    [
+      'quiescence and exclusion',
+      /authoritative quiescence and proof that the old owner cannot submit more calls/,
+    ],
+    ['new consent cannot unblock', /New approval cannot override uncertain in-flight effects/],
+  ]);
+});
+
+test('version-control publisher contract binds hostile, stale and oversized requests without authority widening', () => {
+  assertClauseMutations(m1Publisher, [
+    ['expected head', /must equal expectedClaimSHA/],
+    [
+      'byte and metadata caps',
+      /16 files\*\*, \*\*32 KiB \(32768 bytes\) total decoded complete replacement contents\*\*, and \*\*48 KiB \(49152 bytes\) complete ASCII comment/,
+    ],
+    ['no splitting', /Reject rather than split a change across requests/],
+    ['no semantic no-op', /semantic no-op, unchanged tree or cosmetic follow-up commit/],
+    ['no reparent', /never mechanically reparent\/rebase/],
+    [
+      'hostile data',
+      /path traversal, symlinks, submodules, archives, arbitrary URLs, executable request content and shell interpolation/,
+    ],
+    [
+      'read-only source data',
+      /Never install, build or execute PR\/submitted source with the write token/,
+    ],
+    ['no OIDC', /\*\*no OIDC\*\*/],
+    ['not consent', /That click is \*\*not production consent\*\*/],
+    ['no self-publication', /It cannot authorize its own publication/],
+    ['not human independence', /not a second human and cannot approve\/merge/],
+  ]);
+  for (const field of [
+    'issueNumber',
+    'commentId',
+    'requestDigest',
+    'expectedOldBlobSHA',
+    'resultTreeSHA',
+  ]) {
+    assert.ok(m1Publisher.includes(`\`${field}\``), field);
+  }
+  assert.match(
+    parallelWork,
+    /neither transfers the claim nor makes the publisher or supervisor another source writer/,
+  );
+});
+
+test('delivery contract preserves private-before-public order, status schema and current controls', () => {
+  const steps = [
+    '**Create private API.**',
+    '**Independently verify private API.**',
+    '**Expose API under separate H2.**',
+    '**Create and verify private web.**',
+    '**Expose web under separate H2.**',
+  ];
+  const positions = steps.map((step) => delivery.indexOf(step));
+  assert.ok(
+    positions.every(
+      (position, index) => position >= 0 && (index === 0 || position > positions[index - 1]),
+    ),
+  );
+  assertClauseMutations(delivery, [
+    ['ID token', /audience-bound ID token\*\*, not an Admin API access token/],
+    ['no invented rollback', /No predecessor means no rollback/],
+    ['explicit inverse', /previously explicit finite H2 inverse/],
+    ['source time', /same API-provided time/],
+    ['failure UI', /status unknown\*\*, with no invented available, zero-like or stale fallback/],
+    ['trace correlation', /shared W3C trace context and request ID/],
+    [
+      'current gates',
+      /current provider paths disabled and production reviewer\/self-review safeguards unchanged/,
+    ],
+    ['source not remote', /Local mocks do not satisfy these gates/],
+    ['repository-only', /Repository-only work has deployment not applicable/],
+  ]);
+  const wire = read('services/platform-api/openapi/platform-api.v1.yaml');
+  for (const field of ['state', 'asOf', 'service', 'schemaVersion', 'requestId']) {
+    assert.ok(wire.includes(field));
+    assert.ok(delivery.includes(field));
+  }
+  for (const bound of ['1–64', '1–128', '1500 ms', 'literal string `1`'])
+    assert.ok(delivery.includes(bound));
+});
+
+test('M1 custody and cost clauses disclose bounded reconstruction without weakening financial audit', () => {
+  assertClauseMutations(m1Catalog, [
+    [
+      'injection not archive',
+      /runtime injection only\*\*, not canonical audit, secret archive or recovery vault/,
+    ],
+    ['no private readback', /Secrets APIs have no value readback\/history/],
+    [
+      'missing private history',
+      /Missing required historical detail remains unknown and blocks only the affected operation/,
+    ],
+    [
+      'unrelated audit intact',
+      /No unrelated tenant, identity, financial audit\/accounting retention or reconstruction obligation is weakened/,
+    ],
+    ['custody inventory', /Writers \/ readers \/ deletion authority/],
+    ['bootstrap custody', /freshness, recovery and bootstrap custody/],
+  ]);
+  assert.match(delivery, /no current normative USD 30 ceiling/);
+  assert.match(delivery, /2026-09-09 revision-3 cost research/);
+  assert.match(delivery, /not a guaranteed spending cap/);
+  assert.match(delivery, /existing unapplied `infra\/modules\/budget-guardrail` USD 30/);
+  assert.match(currentStatus, /design contracts, not installed publisher\/journal\/witness/);
+  for (const id of ['0004', '0005', '0006', '0007', '0010', '0011']) {
+    const [, source] = decisionRecords.find(([path]) => path.includes(`ADR-${id}-`));
+    assert.match(source, /^> \*\*Status:\*\* Working$/m);
+    assert.doesNotMatch(source, /^## (?:Validation|Revisit when)$/m);
+  }
+});
+
+test('M1 downstream fixture inventory names measurable negative cases, not runtime qualification', () => {
+  const fixtures = m1Catalog.split('### Downstream negative fixture contract')[1];
+  const ids = [...fixtures.matchAll(/^\| ([a-z][a-z-]*) \|/gm)].map((match) => match[1]);
+  assert.deepEqual(ids, [
+    'slot-epoch',
+    'slot-vector',
+    'expiry',
+    'effect-bound',
+    'sibling-race',
+    'witness-ack',
+    'witness-missing',
+    'witness-deleted',
+    'lost-ack',
+    'audit-after-effect',
+    'matched-rollback',
+    'stale-publication',
+    'hostile-publication',
+    'oversized-publication',
+    'ambiguous-call',
+    'private-before-public',
+    'output-leak',
+  ]);
+  assert.match(fixtures, /zero mutation-token exchanges and zero provider submissions/);
+  assert.match(fixtures, /17 files, 32769 replacement bytes or 49153 ASCII comment bytes/);
+  assert.match(fixtures, /not functioning adapters supplied by documentation tests/);
+  assert.match(fixtures, /#74 must then prove actual publisher actor\/check\/host behavior/);
+});

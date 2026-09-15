@@ -2,13 +2,183 @@
 
 > **Status:** Working design authority under [`ADR-0010`](../architecture/decisions/ADR-0010-agent-operated-production-control-plane.md); not implemented, not applied, and not production authority
 > **Catalog ID:** `money-noodle.production-operations`
-> **Catalog version:** `1`
+> **Catalog version:** `2` (M1 subset); broader v1 design retained, non-invocable
 > **Prepared:** 2026-08-30 under GitHub issue #20
-> **Accepted:** 2026-09-07 by the maintainer
+> **Accepted:** v1 on 2026-09-07; M1 v2 direction on 2026-09-13 by the principal
 > **Owning decision:** [`ADR-0010`](../architecture/decisions/ADR-0010-agent-operated-production-control-plane.md)
 > **Related authority:** [`delivery.md`](delivery.md), [`../architecture/data-identity-observability.md`](../architecture/data-identity-observability.md)
 
-This document is the normative catalog for routine production operations. It designs machine-readable control surfaces; it does not create one. Acceptance settled that design and authorizes implementation through reviewed code and pipeline changes; it granted no provider or production authority and built nothing. No authorization service, bounded administrative job, operation audit store, payload-blind secret ingress, Google Cloud resource, production deployment, operational secret, agent credential, or real-money authority currently exists, and no operation below has ever run.
+This document is the normative catalog for routine production operations. The M1 v2 section is the current first-release contract; broader v1 material below is design context only and cannot authorize an M1 call. It designs machine-readable control surfaces; it does not create one. Acceptance settled that design and authorizes implementation through reviewed code and pipeline changes; it granted no provider or production authority and built nothing. No M1 publisher, journal, witness or provider operation is enabled by this document. Current implementation and deployment truth belongs to [current status](../current-status.md); no real-money authority exists.
+
+## M1 catalog v2 — selected, not enabled
+
+The principal accepted the [#68 engineering packet on 2026-09-13](https://github.com/money-noodle/money-noodle/issues/68#issuecomment-5656747952). This section owns M1 effect authority, schemas, custody and recovery. It narrows the broader v1 design below; it does not activate any operation. Unknown fields, versions, operations, targets or unbounded effects deny. The current workflow and host gates remain unchanged pending the [delivery transition](delivery.md#current-to-target-activation).
+
+### Supported effects and stable slots
+
+Every row uses `money-noodle.production-operations/v2`. `E` is the original consent's finite `expiresAt`, never refreshed by retry, epoch, configuration change or recovery. `R` is the original finite read-scope validity. Reads have zero provider mutation effects, finite pages/bytes/time and source/as-of; failure is unknown, not healthy or zero. `infrastructure.plan` permits only separately declared native lock bookkeeping, never an apply. Actual private targets, numeric effect limits, read budgets and expiry are supplied and approved in #75; a missing bound denies the operation.
+
+| Operation | Approval; executor → independent verification source | Target/effect bound; expiry | Preconditions and recovery | Stable permission slot |
+| --- | --- | --- | --- | --- |
+| `status.read` | R0; status reader → authoritative response | Fixed health/status paths; R | Exact scope; unknown on failure | none |
+| `deployment.read` | R0; provider reader → Service/revision state | Approved service vector; R | Known incarnation; unknown on failure | none |
+| `drift.read` | R0; drift reader → desired/provider comparison | Enumerated stacks; R | Consistent snapshot; report only | none |
+| `telemetry.diagnose` | R0; telemetry reader → correlated signals | Fixed query/window/cardinality; R | Redaction; no export | none |
+| `cost.read` | R0; cost reader → billing observation | Approved scope/window; R | Source/as-of; missing is not zero | none |
+| `workload.access.read` | R0; IAM reader → effective policy | Enumerated policies; R | Unknown blocks dependent changes | none |
+| `operation.evidence.read` | R0; Git reader → journal/witness | Exact indexed documents; R | Inconsistency blocks | none |
+| `source.publish` | Source permit; fixed publisher → Git/PR reader | At most 16 files, one fast-forward commit, one PR; E | [Publication contract](../development/version-control.md#restricted-workload-source-publication-target); reconcile or stop | `source-publication` |
+| `artifact.publish` | H1 separate slot; registry writer → registry/provenance reader | Finite image/platform tuple vector; E | Qualifying reviewed build; unknown blocks | `artifact-publication` |
+| `service.deploy` | H1 forward; service executor → separate GCP/probe reader | One forward vector, at most 2 services; E | Exact digests/configuration/state; block or granted rollback | `release-forward` |
+| `service.rollback` | H1 conditional; service executor → separate GCP/probe reader | One predecessor vector, at most 2 services; E | Verified predecessors; no invented fallback | `release-rollback` |
+| `infrastructure.plan` | R0; non-apply planner → plan/state comparator | One stack; declared lock bookkeeping only; R | Consistent state; no raw publication; discard stale plan | none |
+| `infrastructure.apply` | H1, H2 if destructive; stack executor → provider/state reader | One saved plan, finite resource/action counts; E | Lock/state/recovery; ambiguity blocks | `infrastructure-apply` |
+| `configuration.change` | H1; configurator → config/behavior reader | Finite exact keys/targets; E | Expected version; inverse only if explicitly granted | `configuration-change` |
+| `workload.access.change` | H2; IAM executor → separate IAM/probe reader | Finite bindings and explicit conditional inverse; E | Fresh etag; no self-grant; otherwise block | `access-change`, optional `access-inverse` |
+| `telemetry.configuration.change` | H1; telemetry configurator → telemetry reader | Finite exporters/retention/settings; E | Redaction/cost verification; degraded is not healthy | `telemetry-change` |
+| `cost.control.change` | H2; cost configurator → cost reader | Finite policies/notification tests; E | No payment authority or implicit shutdown | `cost-control-change` |
+| `bootstrap.initialize` | HB; principal → independent readers | One genesis/witness initialization plus enumerated human state/federation resources; E | Exact later manifest; reconcile partial effects | `bootstrap-initialize` |
+
+There is **one conditional rollback permission per approved release bundle**, not one per target, transport call, retry or epoch. A release bundle has separate artifact-publication, release-forward and (only with verified predecessors) release-rollback slots. The rollback vector is fixed at approval, is a subset of the forward target vector, and cannot exceed two services. No verified predecessor means no rollback slot; partial failure does not mint a smaller new grant. Source publication is a separate permit, not artifact publication, HB or production consent. Ancillary journal/witness bookkeeping creates no provider grant.
+
+Other v1 operations remain **non-invocable in M1**, including `incident.state.read`, `job.state.read`, `data.quality.read`, `backup.read`, `secret.metadata.read`, `operation.evidence.export`, `schema.migrate`, `schedule.change`, `schedule.run`, `reconciliation.run`, `repair.execute`, `backup.create`, `restore.execute`, `drift.reconcile`, every `secret.*` mutation, `incident.mitigation.execute` and `dns.certificate.cutover`. The broader secret/break-glass design below is retained, not an M1 adapter or permission. An unlisted inverse, deletion, restore or sensitive export requires separately accepted authority, not a recovery shortcut.
+
+### Consent, artifact and owner binding
+
+The fixed trusted-main helpers evaluate grants; M1 adds no authorization service. The original principal's source permit, explicit operation approval, or qualifying reviewed merge supplies consent. The [qualified merge](delivery.md#current-to-target-activation) can supply only the explicitly identified release slots, without a second routine deployment approval. It does not supply infrastructure, configuration, IAM, telemetry, cost, secret or bootstrap authority. Agent technical review is not human consent.
+
+Canonical encoding is RFC 8785 JSON canonicalization over allowlisted JSON values, UTF-8 bytes, no duplicate keys, no unknown fields, finite integers for counts, UTC RFC 3339 timestamps, lowercase SHA-256 hex digests and full Git object IDs. Public identifiers are bounded ASCII strings; sizes below include their encoding. Null means explicitly absent, never wildcard. Arrays representing sets are sorted and duplicate-free before digesting. A digest of a secret value or a low-entropy private identifier is not sanitization and must not be published.
+
+`grantKey = SHA256(JCS([repositoryIdentity, originalApprovalIdentity, permissionSlot]))`.
+
+`repositoryIdentity` is the fixed public repository identity binding established at bootstrap and independently compared to the immutable host repository identity (native numeric IDs remain private). `originalApprovalIdentity` is the immutable consent record identity: for a merge, the repository/PR, exact approved head and resulting protected-main commit; for explicit consent, the original issue/comment ID plus canonical consent digest. Edits invalidate the record; they never renew it. Epoch and workflow/run/attempt identity are excluded from the key. Operation, configuration or target changes cannot recreate a spent key; changed consent needs a genuinely new principal decision, and cannot override unresolved effects. The same original consent cannot be relabeled with a new approval identity by a retry.
+
+Each consent contains `requestId`, `approvalRef`, `principal`, `requester`, `catalog`, `version`, `operation`, `permissionSlot`, `environment`, `executorClass`, `verifierClass`, `repositoryIdentity`, `originalApprovalIdentity`, `issuedAt`, `notBefore`, `expiresAt`, `reasonRef`, `policyDigest`, `controlSourceSHA`, `controlDependencyDigest`, `sourceSHA`, `inputDigest`, `planDigest` (null when inapplicable), `targetVector`, `artifactVector`, `effectBounds`, `readBounds`, `transportPhases`, `recovery`, `verificationContractDigest`, and `recoveryContractDigest`. The target vector contains exact objects `{logicalIncarnation, configurationVersion, expectedSafeVersions, intendedSafeVersions, actionCounts}`. artifactVector contains the exact tuple/digest objects defined below (empty only for a non-artifact effect); readBounds is `{maxPages, maxBytes, timeoutSeconds, validUntil}`. effectBounds maps allowlisted action IDs to finite maximum counts. transportPhases is the ordered finite list of `{phaseId, actionId, targetIds, maxSubmissions}`; no ambiguous submission is repeated even if a transport limit remains. recovery is null or `{condition, permissionSlot, targetVector, expiresAt}` referring to the separately approved slot, never an implicit new slot. Recovery has its own exact conditional vector and original expiry; it never implies a general inverse.
+
+Each artifactVector entry is `{tuple, artifactDigest}`. For artifact publication, each tuple is `(deployableProject, buildTarget, outputPlatform, sourceSHA, configurationVersion, configurationDigest, builderIdentity, buildInvocation)` and maps to exactly one `artifactDigest`. Forward and rollback bind that tuple/digest plus target incarnation, expected revision/configuration/traffic and exact destination. Web/API may have different digests. A different build invocation, source, platform, configuration or digest is not an equivalent retry. Verify provenance, SBOM and scans before deployment; a mutable tag or version label is not a digest. `ARTIFACT_VERSION` remains the public release label under #69, not a claim that the label is the source SHA or image digest.
+
+`executorOwner = {workflowPath, workflowSHA, runId, runAttempt, jobId}` is immutable from admission. Reruns and new runs cannot adopt it. For human-only HB genesis, executorOwner instead has the disjoint exact form `{principal, bootstrapInvocationId, controlSourceSHA}` and cannot be converted into a workflow owner. The executor identity class and verifier class must equal the catalog row. Every external phase checks original expiry, exact bindings, owner exclusion and expected versions before token exchange and again immediately before submission. Expiry prohibits new submissions, including rollback, but never suppresses read-only post-effect evidence. Target configuration versions never silently rebind native resources.
+
+### Indexed journal schema and nonrecursive witness
+
+Selected design: `refs/heads/operation-journal-v1` in this existing repository, from a metadata-only root containing no application files or `.github/workflows`. Never merge it into `main`, trigger delivery from it, routinely rewrite it or delete it. No journal or witness is created by this policy. Git history is canonical sanitized evidence; the designated issue/comment witness is independently permissioned corroboration, not another database or immutable store.
+
+Before genesis, the protected-main exact HB manifest and principal consent record hold the sanitized initialization intent, fixed bootstrap owner, epoch and original expiry. Human initialization creates only the enumerated journal root/witness; the genesis event and request snapshot record `bootstrap-initialize` as spent and link that original consent. Lost creation acknowledgments are reconciled by exact identity/content reads, never repeated on an assumption of absence. Independently confirm genesis/witness acknowledgment before any ordinary mutation or further bootstrap state/federation phase. A partial initialization stays blocked for separately authorized reconciliation; it cannot mint a second HB invocation. No uncreated journal is presumed to authorize its own creation.
+
+All documents use `schemaVersion: 1`; required fields are exact, and an unknown schema fails closed. Event IDs are unique bounded ASCII identifiers; snapshots reference exact events, not time-inferred ordering. A sequence is a strictly increasing integer per epoch for every journal event, including acknowledgment events. The previous event/commit link is null only at authorized genesis. An event records its parent commit, never its own containing commit (avoiding a hash cycle). eventType is one of `genesis`, `intent`, `witness-ack`, `submission`, `observation`, `verification`, `abandonment`, `restoration`; phase uses the state vocabulary below. outcome is `pending`, `unknown` or a listed terminal state. errorClass is an allowlisted stable code, never raw provider text. A restoration event records separately approved epoch authority and previous safe anchor, never revives old grants.
+
+| Path/record | Required fields in addition to schemaVersion | Semantics |
+| --- | --- | --- |
+| `control/current.json` | `epoch`, `sequence`, `latestEventId`, `activeRequestId`, `pendingIntent`, `witness` | One global active M1 provider request. Nullable pendingIntent is `{eventId, sequence}`. Nullable witness is the last confirmed `{epoch, sequence, eventId, journalCommit, commentId}`. |
+| `requests/{grantKey}.json` | `grantKey`, `consent`, `executorOwner`, `consumedSlots`, `phase`, `latestEventId`, `outstandingIntent`, `uncertainty` | Consent and owner immutable; spent slots never cleared. outstandingIntent identifies exact external phase/action vector or null after verified closure. |
+| `targets/{logicalIncarnation}.json` | `logicalIncarnation`, `configurationVersion`, `expectedSafeVersions`, `observedSafeVersions`, `ownerRequestId`, `blockedReason`, `latestEventId`, `observedAt` | Unknown observations explicit; a target stays blocked until authoritative reconciliation plus old-owner exclusion. |
+| `events/{eventId}.json` | `eventId`, `epoch`, `sequence`, `previousEventId`, `parentCommit`, `eventType`, `requestId`, `grantKey`, `consentDigest`, `executorOwner`, `permissionSlot`, `phase`, `causationId`, `intendedCounts`, `realizedCounts`, `observations`, `outcome`, `errorClass`, `uncertainty`, `occurredAt`, `recordedAt`, `witnessAck` | Immutable, never replaced. Observations contain safe comparison result, source class and as-of; unknown count is null, not zero. witnessAck is null except on acknowledgment. |
+| Witness comment | `epoch`, `sequence`, `eventId`, `journalCommit`, `grantKey`, `executorOwner` | Binds one exact durable intent commit; immutable by policy. Duplicate matching comments add no authority. |
+| Witness issue-body pointer | `epoch`, `sequence`, `eventId`, `journalCommit`, `commentId` | Current corroborated intent only, mutable; never treated as canonical audit or Git CAS. |
+
+The event's referenced immutable consent supplies catalog/operation, principal/approval, original validity, policy/control/source/input/artifact/plan bindings, target/effect vector and verification/recovery contract. Each event can therefore be joined by fixed references without scanning history. Every event also stores the grant-bound input/artifact/plan comparisons needed for its phase in observations; a verifier never treats executor-produced success text as evidence. `consumedSlots` maps stable slot IDs to `{grantKey, admissionEventId}`; the slot is spent at admission, before external effects, and remains spent on failure or abandonment.
+
+Transition protocol (fixed serialized journal/witness workflows, no implicit owner transfer):
+
+1. Read journal head `H`; fetch indexed snapshots and required event with `GET /repos/{repo}/contents/{path}?ref={H}`. Read the designated witness issue-body pointer and comment directly by ID. Validate the exact previous acknowledgment relation, epoch, consent key, expiry, finite bounds, expected state and no outstanding competing owner. Allow at most one global active M1 provider request, including publication; source publication has its separate claim serialization.
+2. Append intent event at sequence `n`, atomically updating control/request/target snapshots with pending intent and spent slot. Create blobs, `POST .../git/trees` with `base_tree`, then `POST .../git/commits` with sole parent `H`, and `PATCH .../git/refs/heads/operation-journal-v1` with `sha` and `force:false`. Concurrent sibling commits cannot both fast-forward. A loser rereads/re-evaluates; never mechanically reparent an admission. GitHub has no expected-old-SHA parameter.
+3. Read back stable head and exact event commit `C`. The independently permissioned witness writer checks expected previous pointer, appends the comment for `(epoch,n,event,C,grantKey,owner)`, reads it back, then updates and confirms the compact issue-body pointer. Issue PATCH is not CAS; unexpected pointer changes block. One fixed serialized witness writer is part of the trusted boundary.
+4. Append `witness-ack` event at sequence `n+1`, sole parent `C`, atomically clearing pendingIntent and setting control.witness to the confirmed pointer. `witnessAck` contains that pointer; its causationId names the intent. This acknowledgment changes no consent, spent state or executor owner. **Do not witness the acknowledgment** or advance the issue pointer to its commit. For mutation, require head to be this exact acknowledgment, whose parent/event and witness comment/pointer match the intent. The next intent builds on that acknowledgment and obtains a fresh witness. Thus latest event may be acknowledgment while pointer names the preceding intent, without recursion.
+5. Only after journal plus witness confirmation may the original owner exchange a mutation token. Repeat durable intent and corroboration before each external phase. Record submission/observation/verification as append-only events with atomic snapshot updates; evidence-only events never authorize a call. Before another call a new intent/ack relation must be established. Completion releases the global slot only after quiescence and old-owner exclusion; an abandoned or unknown call does not release it by timeout.
+
+| Job | Permission ceiling |
+| --- | --- |
+| Journal writer | `contents:write`; no issues/provider mutation |
+| Witness writer | `contents:read`, `issues:write`; no Git/provider mutation |
+| Provider executor | Repository reads; operation-specific federated mutation identity |
+| Verifier | Repository reads; separate GCP read-only identity and bounded probe permission |
+
+These repository tokens exceed individual refs/issues. Fixed workflows, pinned complete executable dependencies, host protections and administrators are the **trusted computing base**, not mechanically ref-scoped token containment. Git append-only policy and witness corroboration do not prove provider fencing or distributed exactly-once execution.
+
+Per ordinary transition: at most 8 snapshot/event documents of 16 KiB each, witness pointer/comment at most 4 KiB each, 40 GitHub requests, 512 KiB transferred, 120-second deadline, and 2 contention reevaluations. Counts include retries/readback; abort on the first exhausted budget or rate-limit failure. A lost comment acknowledgment may inspect GraphQL `comments(last:20)` once, never scan all comments/history; absence proves nothing. These are design limits, not benchmark results. Admission limits stop new mutations, never discard post-effect evidence: fixed evidence-only reconciliation appends observations in separately bounded batches under the same limits without exchanging a mutation token.
+
+### Faults and interrupted calls
+
+States are `requested → admitted/spent → intent-corroborated → submitted → observed → verified`; failures become `blocked`, `unverified` or `failed`. Recovery terminals are `rolled-back-and-verified` or `recovered-and-verified`, retaining independent observation. `completed` and a green workflow are not verified production outcomes.
+
+| Observation | Required response |
+| --- | --- |
+| Intent exists, witness absent | Pending/unknown; no token. Absence may be indistinguishable from deleted evidence. |
+| Git or comment acknowledgment lost | Read exact event/pointer and at most the bounded recent-comment window; reconcile matching result, never infer no effect from absence. Matching duplicates grant nothing extra. |
+| Previously confirmed witness missing/inconsistent | Block; never recreate it and infer execution authority. |
+| Witness pointer updated but ack missing | Original owner may append exact acknowledgment after readback; no provider call before it. New runs can only record facts, not adopt owner. |
+| Audit append fails after effect | Keep spent slot and outstanding intent; block target/global admission; append later observations only. |
+| Evidence-only repair | Fixed code may corroborate existing facts or record abandonment; cannot change consent, expiry, original owner or revive a spent grant. |
+| Authorized restoration | Pause mutations first, independently assess old authority/uncertainty, approve new epoch through protected main. Old grants remain invalid/spent; new epoch alone is not new consent. |
+
+Matching rollback of **journal and witness within the same epoch may be undetectable** under trusted-host/admin assumptions; main need not also roll back. No exact historical reconstruction or rollback-detection guarantee is claimed. Restoration pauses mutations, not a healthy application.
+
+Never automatically repeat an ambiguous mutation. Bounded reads and pure computation may repeat. Enumerate necessary transport phases separately from permission cardinality; requests/targets cannot multiply consent. Reconciliation requires:
+
+| Operation | Authoritative observations |
+| --- | --- |
+| Artifact publication | Manifest/digest lookup plus provenance; exact project/platform/source/configuration/builder/build-invocation tuple maps to one digest. |
+| Cloud Run create/update/traffic | Exact Service and known Operation; native name/UID, generation, observed generation, terminal condition, reconciling, etag, revision/digest and traffic comparisons. CreateService/UpdateService Operation metadata and response are typed Service. |
+| IAM | `getIamPolicy`, expected etag, exact intended delta. Stale etag requires new planning, never overwrite. |
+| OpenTofu apply | Original saved-plan digest, state lineage/serial and native lock plus independent provider observation. Lost plan before apply aborts; uncertain apply is never blindly repeated. |
+
+A matching resource GET does not exclude an outstanding asynchronous call. GitHub cancellation does not fence GCP. Verified terminal/continuation requires **authoritative quiescence and proof that the old owner cannot submit more calls**. New approval cannot override uncertain in-flight effects. Pin federation, impersonation and token-exchange chains so mutation identities cannot self-mint, extend authority or grant access. #76 must test actual mint/submission lifetime bounds, clock skew and asynchronous completion. Target-specific `operations.list` discovery/filter/drain guarantees remain unproven; unsupported exclusion stays blocked, not an invitation to build a generic drain/replay engine.
+
+### Field-level custody and bounded reconstruction
+
+The accepted M1 limitation expressly refines the prior private-reference/exact-reconstruction promises in this catalog and its linked general audit standard **for M1 production-operation evidence only**. Canonical records preserve sanitized intent/consent/causation and allowlisted observations, not every private external identifier or raw plan. Missing required historical detail remains unknown and blocks only the affected operation (global provider serialization may consequently pause new mutations). No unrelated tenant, identity, financial audit/accounting retention or reconstruction obligation is weakened. There is no additional vault, object archive, repository or control service. Existing GCS OpenTofu state is infrastructure state, not an operation audit archive; telemetry and GitHub Deployment statuses are not canonical audit (prior Deployment statuses expire after 90 days).
+
+The following inventory is exhaustive for the M1 fields above and associated private inputs. Public means permanently copyable, not harmless by masking. A public logical ID is a deliberately assigned opaque label, never a native account/resource identifier. Retention is class-specific: `durable` means no routine expiry/deletion or history rewrite of canonical consent/events/spent indexes during M1; snapshots supersede in Git without deleting history. `run` means bounded trusted execution memory/private temporary files only, erased on completion/expiry; lost runtime material is unknown, not reconstructed from logs. `configured` means until separately authorized replacement/removal, not historical readback. No new numeric archival promise is made.
+
+| Fields / purpose and consumer | Sensitivity; permitted storage/injection | Writers / readers / deletion authority | Retention; freshness, recovery and bootstrap custody |
+| --- | --- | --- | --- |
+| Source request schemaVersion, requestId, claimant, delegationRef, claimRef, expectedClaimSHA, controlSourceSHA, changesDigest, resultTreeSHA, approvedPaths, maxFiles, maxReplacementBytes, sourcePermissionRef, allowPRCreation, issuedAt, expiresAt, requestDigest; changes path/action/expectedOldBlobSHA/replacementBase64; result marker/commit/PR; publisher input and reconciliation | Public source data only; one same-issue comment and Git/PR result, no private input transport | Current claimant/delegate submits; fixed publisher reads/writes exact permitted ref/PR; public readers; deletion/cleanup separately authorized, never automatic | durable request/result evidence under claim preservation; validate current ownership/head and original expiry; HB does not grant source publication |
+| repositoryIdentity, originalApprovalIdentity, requestId, approvalRef, principal, requester, reasonRef; attribute consent | Public safe identity/references; original issue/comment and journal consent | Principal supplies consent; fixed journal writer indexes; public readers; no routine deletion | durable; recheck immutable host identity privately and exact consent digest; principal enumerates genesis binding before HB |
+| catalog, version, operation, permissionSlot, environment, executorClass, verifierClass, issuedAt, notBefore, expiresAt; evaluate authorization | Public; consent/journal | Principal approves; fixed writer; public readers; no routine deletion | durable; original times never renewed; principal supplies original HB window |
+| policyDigest, controlSourceSHA, controlDependencyDigest, sourceSHA, verificationContractDigest, recoveryContractDigest; pin executable policy | Public; reviewed Git and journal | Reviewed source authors then fixed writer; public/verifier readers; no routine deletion | durable; exact protected-main policy/helper and full executable dependency closure; initial control artifact is Git source, not new OCI runner |
+| inputDigest, planDigest, configurationDigest; equality checks | Public only for an explicitly allowlisted non-sensitive representation; private full-input/plan digests stay run-private | Trusted planner/executor; independent comparator reads privately; no public raw-value hash; executor erases run copy | durable safe comparison/digest, run private detail; lost saved plan aborts before apply; principal retains HB inputs privately for that execution, not in an invented archive |
+| artifactVector, tuple, buildTarget, deployableProject, outputPlatform, builderIdentity, buildInvocation, artifactDigest, sourceSHA; artifact provenance | Public safe tuple and digest; Git/provenance/registry allowlisted evidence, never private registry URL | Qualified builder/registry writer; independent provenance reader; artifact removal needs separate authority | durable tuple/evidence; artifact retention explicitly bounded in operation manifest; missing predecessor/artifact blocks rollback |
+| logicalIncarnation, configurationVersion, targetVector, effectBounds, readBounds, transportPhases, recovery, expectedSafeVersions, intendedSafeVersions, observedSafeVersions; scope and compare effects | Public safe labels/counts/version comparisons; journal | Fixed writer from approved manifest/verifier; public readers; no routine deletion/rebinding | durable; private mapping must match version and provider observation at each phase; HB establishes first mapping |
+| grantKey, consumedSlots, executorOwner, phase, outstandingIntent, ownerRequestId, blockedReason; ownership/spending | Public safe workflow/run IDs and indexes; journal | Fixed journal writer; admission/verifier/public readers; no routine deletion | durable; immutable owner and spent state survive epochs; HB initializes empty indexes only once |
+| schemaVersion, eventId, eventType, epoch, sequence, latestEventId, previousEventId, parentCommit, causationId, consentDigest, pendingIntent; causal chain | Public; journal events/snapshots | Fixed journal writer; verifier/public; no routine deletion | durable; exact indexed links checked, not timestamp inference; HB records genesis and epoch authority |
+| activeRequestId, witness, witnessAck, journalCommit, commentId; corroboration | Public; Git plus designated issue/body/comments | Journal writer writes ack; separate witness writer writes comment/pointer; public reads; no routine deletion | durable comments/history, current mutable pointer; missing/inconsistent blocks; principal enumerates designated witness and initialization in HB |
+| intendedCounts, realizedCounts, observations, source class, observedAt, occurredAt, recordedAt, outcome, errorClass, uncertainty; verification | Public allowlisted comparison and timestamps only; journal | Independent reader observes, fixed writer records; public readers; no routine deletion | durable; explicit observation validity/window from manifest; unknown is not zero; HB verifier records sanitized observations |
+| Native repository IDs, project/billing/resource/operation names and UIDs, private service URLs, IAM members/etags, federation mappings, notification addresses; bind actual effect | Private operational inputs, not necessarily secret payloads; Actions environment Secrets inject to fixed trusted jobs only, or principal-held HB execution input | Principal configures/replaces/removes; designated trusted executor/reader gets minimum needed; agents/public never read values | configured injection plus run copies; Secrets APIs have no value readback/history; version-bound mapping cannot be silently replaced; missing old detail blocks affected recovery |
+| Raw saved plan/state, lineage/serial, full native responses; apply and reconcile | Private; saved plan/run memory, existing locked versioned GCS state after bootstrap; no Git, Actions logs/artifacts/caches | Enumerated stack workload writes state, separately scoped reader verifies; principal approves retention/removal; no routine agent deletion | run plan; state retention/versioning under ADR-0006; native lock/current state plus provider verification; initial human state migrated under exact HB procedure |
+| OIDC, access and audience-bound verifier ID tokens; authenticate bounded calls | Private ephemeral process memory, never Git, logs, artifacts, dispatch or durable Secrets | Trusted federation exchange only; exact executor or verifier consumer; expire/revoke under grant | run and bounded mint/submission lifetime; no self-extension; #76 proves exclusion; no durable provider credential at bootstrap |
+| Account ownership, MFA, recovery material and external secret payloads; irreducible trust root / future runtime use | Private principal custody; payloads only approved managed secret boundary, never M1 journal or Actions input archive | Principal retains ownership/recovery; future secret roles remain non-invocable in M1 | Existing ownership/recovery policy unchanged; no new store selected; principal attests HB custody safely without publishing payloads |
+
+Actions environment Secrets are **runtime injection only**, not canonical audit, secret archive or recovery vault. Masking is not a disclosure guarantee. Approval and bootstrap must enumerate who can write/inject/read each private field and verify output allowlisting before mutation; no uncreated audit store authorizes its own creation. Private account/recovery custody remains the principal's existing responsibility, not a new repository store. If that input cannot be supplied safely, the corresponding HB/ordinary operation stays blocked.
+
+### Downstream negative fixture contract
+
+These are measurable requirements for #70 provider-disabled adapters and #71–#73 assembly, not functioning adapters supplied by documentation tests. Every denial fixture asserts zero mutation-token exchanges and zero provider submissions unless a prior effect is explicitly part of the fixture; then it asserts no additional submission, spent state retained and no verified-success result.
+
+| Fixture ID | Synthetic input/fault | Required result |
+| --- | --- | --- |
+| slot-epoch | Same original consent/slot, new epoch/run/configuration | Same grant key; deny second consumption |
+| slot-vector | Two targets, two transport phases, repeated attempt | At most one forward and one conditional rollback vector; no per-target grants |
+| expiry | now equals expiresAt, or notBefore is future | Deny; no renewal by retry or inverse |
+| effect-bound | Third service, missing finite count, extra action or changed tuple digest | Deny whole request |
+| sibling-race | Two children of same journal head | At most one fast-forward admission; loser reevaluates, no reparent |
+| witness-ack | Intent C, pointer to C, ack child A | Accept corroboration at A without witnessing A; next intent must parent A |
+| witness-missing | Intent exists but no witness ever confirmed | Pending/unknown, zero calls |
+| witness-deleted | Previously confirmed witness disappears | Block; recreated comment cannot restore authority |
+| lost-ack | Git/comment response lost; exact matching readback or last:20 inconclusive | Reconcile matching evidence only; inconclusive stays unknown, no duplicate effect |
+| audit-after-effect | Submission succeeded, append failed | Spent/outstanding retained; evidence-only repair cannot adopt owner |
+| matched-rollback | Journal and witness both reverted within epoch | Do not assert detection; document trusted-host limitation |
+| stale-publication | Current claim head differs from expectedClaimSHA | Stop/resubmit; no reparent or publication |
+| hostile-publication | Symlink/submodule/path escape/URL/archive/shell payload, no-op tree or forged bot author | Reject without executing source or claiming workload attribution |
+| oversized-publication | 17 files, 32769 replacement bytes or 49153 ASCII comment bytes, or 4097 metadata bytes | Reject; 16/32768/49152 boundary still requires all other checks; no splitting workaround |
+| ambiguous-call | Lost mutation response, matching GET, cancelled run but unproven quiescence/exclusion | Block; no automatic mutation replay, even with new approval |
+| private-before-public | API/web exposure before respective independent private verification | Deny IAM grant; no predecessor means no rollback; only explicit H2 inverse can correct access |
+| output-leak | Synthetic marker in raw plan, private mapping, response or token | No marker or derived secret verifier in public logs/artifacts/evidence; safe error only |
+
+#74 must then prove actual publisher actor/check/host behavior; #75 approves exact costed manifests; #76 proves bootstrap and token/exclusion bounds; #8 proves remote journeys and #77 accepts the milestone. API assumptions and mocks never substitute for those later qualifications. None is a prerequisite to writing provider-disabled policy/source.
+
+## Broader v1 design — not an M1 invocation surface
+
+The following surfaces, rows, audit and secret/break-glass requirements preserve the accepted broader design for later separately authorized work. For overlapping operations, the v2 supported-effects, custody and fault contracts above exclusively govern M1. In particular the v1 rollback/retry language cannot create an M1 permission, and its private-audit references do not select an additional store.
 
 ## Invariants and actors
 
@@ -16,7 +186,7 @@ Humans retain account and billing ownership, recovery, break-glass custody, and 
 
 | Actor | Responsibility | Must not do |
 | --- | --- | --- |
-| Human approver | Accept one bounded production effect or an exact scheduled charter; retain account/recovery authority | Delegate approval implicitly, disclose secret payloads, approve an unbounded shell |
+| Human principal | Accept one bounded production effect or an exact scheduled charter; retain account/recovery authority | Delegate approval implicitly, disclose secret payloads, approve an unbounded shell |
 | Agent operator | Prepare intent/plan, request a grant, invoke an allowlisted interface, verify through a read path, report redacted evidence | Approve, merge without instruction, hold a durable credential, receive a secret payload, improvise a provider command |
 | Authorization service | Validate permission and bind a grant to exact operation inputs, plan, state, expiry, nonce, and recovery | Broaden scope after approval or treat authentication as approval |
 | Execution workload | Use one purpose-specific short-lived identity to perform the granted operation | Reuse the grant, exceed catalog effects, approve, expose credentials or values |
@@ -48,13 +218,13 @@ No browser, issue, prompt, repository file, commit metadata, Actions log/summary
 | `SC` | Human-approved versioned schedule/reconciliation charter. Each conforming invocation needs no live approval; changing scope, code, cadence, identity, limits, or effects needs a new `H1` grant. |
 | `HB` | Human-only bootstrap or break-glass authority. Never an agent credential or standing routine grant. |
 
-A mutation grant contains: grant and request IDs; catalog ID/version and operation ID; environment; tenant/resource targets; requester and approver principals; executor identity class; safe normalized parameters or their digest; source/artifact/plan digest; expected resource/config/schema versions; allowed effects and maximum cardinality; idempotency key; concurrency/lease scope; issued/not-before/expiry times; single-use nonce; verification contract; rollback or forward-recovery contract; and reason/change reference. Raw values, credentials, provider state, account identifiers, and secret material are excluded.
+A mutation grant contains: grant and request IDs; catalog ID/version and operation ID; environment; tenant/resource targets; requester and authorizing principal; executor identity class; safe normalized parameters or their digest; source/artifact/plan digest; expected resource/config/schema versions; allowed effects and maximum cardinality; idempotency key; concurrency/lease scope; issued/not-before/expiry times; single-use nonce; verification contract; rollback or forward-recovery contract; and reason/change reference. Raw values, credentials, provider state, account identifiers, and secret material are excluded.
 
 The authorization service compares this envelope with current policy and state immediately before token exchange and again before commit where an operation has phases. Authentication, repository write access, a green plan, an issue assignment, or a previous grant is never approval. The executor cannot widen a target set or substitute a new plan after approval.
 
 ### Catalog completeness and versioning
 
-`money-noodle.production-operations/v1` is an allowlist. An interface rejects an unknown operation ID, catalog version, field, target type, or effect. A new routine read or mutation requires a reviewed catalog version, compatible machine-readable schema, purpose-specific permissions, negative tests, and an implementation/rollback transition. Removing or narrowing an operation is compatible after callers have migrated; broadening effects, approval, identity, or target semantics requires a new catalog version.
+`money-noodle.production-operations/v1` describes the broader design allowlist, not the invocable M1 subset. An interface rejects an unknown operation ID, catalog version, field, target type, or effect. A new routine read or mutation requires a reviewed catalog version, compatible machine-readable schema, purpose-specific permissions, negative tests, and an implementation/rollback transition. Removing or narrowing an operation is compatible after callers have migrated; broadening effects, approval, identity, or target semantics requires a new catalog version.
 
 The tables below cover the known routine classes. In the **Evidence** column, `AE` means the durable operation audit envelope defined later; `RA` means an authorized read/access record and trace. Public reports contain only safe evidence references.
 
@@ -120,12 +290,12 @@ Terminal states are `verified`, `rolled-back-and-verified`, `recovered-and-verif
 
 ## Audit and evidence contract
 
-The audit system is durable, append-only, access-controlled, tamper-evident, and never sampled. It is separate from logs, traces, job summaries, and the operational read models proposed elsewhere.
+The broader audit design is durable, append-only, access-controlled, tamper-evident, and never sampled. M1 uses the explicitly bounded sanitized Git journal/witness contract above; it does not promise a private external-reference archive or complete private reconstruction. It is separate from logs, traces, job summaries, and the operational read models proposed elsewhere.
 
 Each operation chain records, as applicable:
 
 - event ID, event/ingestion UTC times, catalog ID/version, operation and phase;
-- request and grant IDs, requester, human approver, execution workload, verifier, tenant/resource scope, reason, grant expiry and policy version;
+- request and grant IDs, requester, authorizing principal, execution workload, verifier, tenant/resource scope, reason, grant expiry and policy version;
 - source commit, artifact, normalized-input, plan, expected-state and authorization digests;
 - idempotency key, lease/fencing generation, attempt, checkpoints, and causation/parent/correlation IDs;
 - safe target classes, before/after versions, declared maximum and realized effect counts, outcome and stable error class;
@@ -175,7 +345,7 @@ The exceptions are exhaustive for version 1. An operation not listed here does n
 | Root recovery, MFA, recovery channels and custody (`trust-root.recovery-own`) | `HX`; `HB`; human recovery identity | Recovery material must remain outside agent/public systems | Human-custodied and periodically tested privately; use is an incident with private audit and access review. |
 | Initial project and billing link (`bootstrap.project-link`) | `HX`; `HB`; human owner identity | Federation and remote state do not yet exist | One minimum project/link; maintainer confirms effective ownership/billing privately; bootstrap imports/declares it and verifies clean drift. |
 | Initial state, deployer and federation (`bootstrap.federation-execute`) | `HX`; `HB`; human bootstrap identity | The pipeline cannot authenticate as an identity or store state before they exist | Exact reviewed plan and one execution; migrate local state, remove local artifacts, verify restore and negative federation tests; private `AE`. |
-| Protected production approval (`authorization.approve`) | Protected host/authorization service; human approver | Accountable consent cannot be delegated to the execution workload | Exact, expiring, single-use grant; requester/executor cannot self-approve; authorization decision is appended before token exchange. |
+| Protected production approval (`authorization.approve`) | Protected host/authorization service; authorizing principal | Accountable consent cannot be delegated to the execution workload | Exact, expiring, single-use grant; requester/executor cannot self-approve; authorization decision is appended before token exchange. |
 | External payload entry before `SI` exists (`secret.version.ingress.manual`) | `HX`; `H2`; human value custodian | The value cannot pass through an agent or public workflow | Direct protected provider UI, one bound version and private receipt; metadata-only automation verifies consumer refresh. Retire when `SI` is validated. |
 | Domain registrar ownership and recovery (`trust-root.domain-own`) | `HX`; `HB`; human domain owner | Registrar recovery precedes managed DNS authority | Human custody and private recovery test; ordinary records/certificates remain in reviewed code and `dns.certificate.cutover`. |
 | Break-glass (`break-glass.execute`) | `HX`; `HB`; separate human emergency identity | Normal control plane is unavailable and delay would cause greater harm | Exact incident scope, maximum 60 minutes, strong auth, private `AE`, no secret export; independent verification plus immediate drift/code/state reconciliation and subsequent review. |
@@ -222,85 +392,10 @@ The agent may prepare options and later verify redacted state but cannot receive
 
 ## Control-plane views
 
-Every element in these diagrams is decided design rather than a running component, unless it is already present in the accepted delivery foundation. Dotted relationships involving ADR-0009 show coordination, not acceptance of that proposal.
-
-```mermaid
-flowchart LR
-    human["Human approver<br/>account and recovery authority"]
-    agent["Agent operator<br/>plan, request, invoke, verify, report"]
-    auth["Authorization service<br/>exact expiring single-use grant"]
-
-    subgraph execute["Short-lived execution identities"]
-        cd["Reviewed CI/CD<br/>artifacts and IaC"]
-        jobs["Bounded administrative jobs<br/>migration, repair, restore, secrets"]
-    end
-
-    reads["Scoped operational API / read jobs<br/>read-only verifier path"]
-    provider["Provider and authoritative platform state<br/>external"]
-    audit["Durable append-only audit<br/>private evidence"]
-    ingress["Private payload-blind secret ingress"]
-    secrets["Managed secret store"]
-    runtime["Least-privilege runtime consumers"]
-    proposedReadModel["ADR-0009 administrative read model<br/>proposed independently"]
-
-    agent -->|"safe intent and plan"| auth
-    human -->|"exact scoped approval"| auth
-    auth -->|"one operation grant"| cd
-    auth -->|"one operation grant"| jobs
-    cd --> provider
-    jobs --> provider
-    provider --> reads
-    proposedReadModel -.-> reads
-    agent -->|"independent observation"| reads
-
-    human -->|"external value, never via agent"| ingress
-    ingress --> secrets
-    jobs -->|"generate/version metadata only"| secrets
-    secrets --> runtime
-
-    auth --> audit
-    cd --> audit
-    jobs --> audit
-    reads --> audit
-    agent -->|"redacted report reference"| audit
-```
-
-```mermaid
-sequenceDiagram
-    actor Human as Human approver
-    participant Agent as Agent operator
-    participant Auth as Authorization service
-    participant Exec as CI or bounded job
-    participant State as Authoritative/provider state
-    participant Read as Independent read path
-    participant Audit as Durable audit
-
-    Agent->>Auth: Submit catalog operation, safe input digest, plan, expected state, recovery
-    Auth-->>Human: Present exact scope, effects, expiry, verification and recovery
-    Human->>Auth: Approve exact request
-    Auth->>Audit: Append approval decision
-    Auth-->>Exec: Single-use expiring grant
-    Exec->>Auth: Revalidate plan/state/scope and consume nonce
-    Exec->>State: Execute with short-lived purpose identity
-    Exec->>Audit: Append attempts, effects and result
-    Agent->>Read: Observe through read-only identity
-    Read->>State: Read authoritative/provider state
-    Read-->>Agent: Source/as-of and safe observed versions
-    Agent->>Audit: Append intended-recorded-observed verification
-
-    alt verification passes
-        Agent-->>Human: Verified result and redacted evidence reference
-    else verification fails or is unavailable
-        Agent->>Exec: Invoke cataloged rollback/recovery or block
-        Exec->>Audit: Append recovery and terminal state
-        Agent-->>Human: Unverified/blocked result; never success
-    end
-```
+The [architecture overview](../architecture/overview.md#agent-operated-production-control-plane-decided-not-implemented) owns the current M1 identity, journal/witness and custody diagrams. They show selected design, not installed controls. Broader administrative jobs and secret ingress remain outside M1; ADR-0008/0009 remain Proposed.
 
 ## Acceptance and implementation handoff
 
-The maintainer accepted ADR-0010 and this catalog on 2026-09-07, moving both from Proposed to Working. Working is not Settled: nothing here has been proven by running, and the platform has no production deployment against which it could be. Acceptance granted no provider or production authority and created no component.
+ADR-0010 and this catalog remain Working, not Settled. #68 supplies policy and source-contract tests, not functioning adapters. #70 implements provider-disabled schemas, indexed journal/witness transitions, fixed publication and independent verification contracts. #71–#73 assemble build-once artifacts, bounded telemetry and affected delivery/recovery. #74 qualifies the actual host transition, #75 approves exact operations, #76 performs enumerated human bootstrap and proves token bounds, and #8/#77 supply remote evidence and acceptance. The broader #21/#22 operation/secret surfaces are not pulled into M1.
 
-Implementation work must still build machine-readable catalog schemas, authorization storage and evaluation, purpose-specific identities, durable audit, independent read paths, secret ingress and generation, and every negative case it claims to support. Remote validation must exercise denial, concurrency, stale-plan, failed-verification, recovery, and payload non-exposure before any operation is called routine. Until then no operation ID in this document is invocable.
-
-Two prerequisites named by ADR-0010 are still unmet and are not resolved by acceptance: a distinct eligible production approver, which [`../current-status.md`](../current-status.md) records as absent because the protected `production` environment lists only the maintainer as reviewer with `prevent_self_review=true`, and the constrained bootstrap runner that would reduce the maintainer-executed procedure in [`../../infra/bootstrap.md`](../../infra/bootstrap.md).
+No journal/ref/witness creation, protection change, credential, provider operation or deployment is authorized by catalog acceptance. Current production environment safeguards remain binding until the separately authorized and verified transition in [delivery](delivery.md#current-to-target-activation). Repository-only completion has deployment **not applicable**; local documentation tests cannot prove host or provider behavior.

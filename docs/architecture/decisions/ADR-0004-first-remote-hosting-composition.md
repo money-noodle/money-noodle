@@ -31,7 +31,7 @@ Deploy each accepted project in **`us-west1` (Oregon)** as a scale-to-zero manag
 
 The comparison came down to one criterion. Cloud Run's ecosystem is the only one examined in which the delivery pipeline can authenticate without a long-lived cloud credential stored in GitHub; the alternative's documented CI pattern stores an API key at rest. That is decided in [`ADR-0005`](ADR-0005-delivery-trust-and-secret-custody.md), but it is the reason this ADR selects this provider. Revision-based per-service rollback is the secondary reason.
 
-At first-slice scale the compute for both candidates falls inside published free tiers, so cost did not decide this. The load balancer's ≈`$18.25`/month is accepted as the price of a production-grade entry point rather than shipping on a preview-stage feature.
+The dated comparison assumed low compute inside published free tiers; actual eligibility and usage remain unknown, so it was not a total-cost guarantee. The load balancer's ≈`$18.25`/month is accepted as the price of a production-grade entry point rather than shipping on a preview-stage feature.
 
 ## Alternatives considered
 
@@ -75,7 +75,7 @@ Accepted as the interim validation entry point, not the target domain state. It 
 
 - The pipeline can authenticate without a long-lived cloud key, which is the property this decision was optimised for.
 - Rollback is per service, immediate, and requires no rebuild, directly satisfying an accepted quality attribute.
-- Compute, registry, DNS queries, state storage, logging, tracing, and uptime checks all fall inside published free allotments at first-slice scale.
+- Dated cost estimates inform selection but cannot prove free-tier eligibility, measured spend or an upper bound; current cost qualification uses #85 research and exact operation manifests.
 - Web-to-API traffic within one region is not charged, so the accepted two-deployment boundary costs nothing in transfer.
 - The application artifact contract is unchanged, so a later provider change is a composition change, not a code change.
 
@@ -90,31 +90,8 @@ Accepted as the interim validation entry point, not the target domain state. It 
 
 ## Maintainer inputs and remaining bootstrap values
 
-The maintainer selected Google Cloud, confirmed maintainer ownership and root recovery, accepted a USD 30 monthly ceiling with alerts at 50%, 80%, and 100%, selected `us-west1`, stated that EU residency is not required for this slice, confirmed ownership of `noodle.money`, accepted the target public names, and selected interim `*.run.app` validation. The repository remains private during the rebuild.
+The maintainer selected Google Cloud, confirmed maintainer ownership and root recovery, initially accepted a fixed budget that the 2026-09-13 M1 direction replaces with the [current cost policy](../../operations/delivery.md#cost-estimates-and-operational-bounds), selected `us-west1`, stated that EU residency is not required for this slice, confirmed ownership of `noodle.money`, accepted the target public names, and selected interim `*.run.app` validation. [Current status](../../current-status.md) owns repository visibility and host truth.
 
 Implementation still needs non-secret project, billing-account, and workload-identity identifiers supplied through the reviewed bootstrap process. DNS delegation access must be confirmed before domain cutover, but it does not block interim validation. No account or resource is created by accepting this record.
 
-## Validation
-
-Before this decision is considered implemented:
-
-1. both images deploy from one reviewed commit by digest, and each service reports its own artifact version;
-2. `/health/live` and `/health/ready` pass independently for each service;
-3. `GET /v1/platform/status` returns a schema-valid v1 response through the public entry point;
-4. the web renders the API-provided source time;
-5. a forced API failure makes the remote web render `unknown` and never `available`;
-6. one service is rolled back to its prior revision while the other is left untouched and stays healthy;
-7. TLS is issued and renews without a scheduled human action;
-8. a budget alert fires against a stated ceiling;
-9. cold-start, latency, and error evidence is recorded with as-of time, sample, and largest validity threat before any quantitative objective is proposed.
-
-Local checks cannot satisfy any of these.
-
-## Revisit when
-
-- the alternative provider ships OIDC workload-identity federation for CI, which would remove the decisive argument;
-- Cloud Run domain mappings reach general availability with production support, which would remove the load balancer cost;
-- the maintainer adopts an EU data-residency requirement;
-- measured evidence resolves whether the alternative's warm window is billed;
-- the platform's second or third deployable project changes the free-tier arithmetic materially;
-- a workload needs streaming, long-running execution, or a scale ceiling this runtime cannot meet.
+The owning [delivery qualification](../../operations/delivery.md#foundation-denial-and-recovery-qualification) retains the remote health, trust, state isolation/restore and recovery checks. They require separately authorized provider evidence, not local source checks; this record remains Working.
