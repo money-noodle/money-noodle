@@ -12,6 +12,14 @@ For every native child task, the supervisor selects an exact `provider/id:level`
 | Difficult cross-cutting work/debugging | `pi-claude-code-provider/opus:high` | `openai-codex/gpt-6-astra:high` or `:xhigh` |
 | Serious security, tenant, or financial review | `pi-claude-code-provider/opus:high` or `:max` | `openai-codex/gpt-6-astra:high` or `:max` |
 
+## Async delegation and chat responsiveness
+
+Use async/background by default for top-level delegation, including final reviews, validation gates, and oracle checks. Set `async: true` explicitly when launching delegated work. Set `async: false` only when the parent genuinely must block or the principal explicitly requests it; needing a review or gate result alone is not a blocking reason. State the reason for a blocking exception.
+
+After launch, continue independent in-scope work only until its next dependency barrier, then yield control to keep the main chat responsive. Ordinary async subagents notify the parent natively; do not call `bg_wait`, sleep, or poll status merely to wait for them. Consume the completed result before dependent work or acceptance; yielding is not completion or permission to abandon supervision.
+
+These are defaults, not forced execution policy. Leave `forceTopLevelAsync` unset or false and keep `bg_wait` available for provider, detached, or other background work without native completion notifications when a same-turn result is genuinely required. Existing headless completion, launch permissions, ownership, and retained-child contracts remain unchanged.
+
 ## Main-session fallback
 
 `pi-model-fallback` is loaded through the main-only project loader, not directly into children. Its approved rule switches Astra to Opus on matching 429/5xx signals and records a visible model change; it does not itself replay the failed prompt. Plain-text quota errors without a recognized status can remain unmatched. Preserve the failure and partial effects, verify the actual route and effective thinking against the approved high default, and continue only within existing authority. Do not assume changing the supervisor's model changes any child's retained contract or transfers its ownership. Persistent cooldowns are availability hints, not proof of remaining quota; inspect status and reset only when warranted. See [Pi setup and qualification](README.md#main-session-fallback) for exact settings, runtime state, and limitations.

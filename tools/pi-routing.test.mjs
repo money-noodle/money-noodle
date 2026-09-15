@@ -37,6 +37,27 @@ test('main-session documentation agrees with high defaults without stale max req
   }
 });
 
+test('async guidance preserves explicit blocking without disabling completion delivery', () => {
+  const policy = read('.pi/APPEND_SYSTEM.md');
+  const setup = read('.pi/README.md');
+  assert.match(policy, /Use async\/background by default for top-level delegation/);
+  assert.match(policy, /including final reviews, validation gates, and oracle checks/);
+  assert.match(policy, /Set `async: false` only when the parent genuinely must block/);
+  assert.match(policy, /needing a review or gate result alone is not a blocking reason/);
+  assert.match(policy, /yield control to keep the main chat responsive/);
+  assert.match(policy, /Ordinary async subagents notify the parent natively/);
+  assert.match(policy, /do not call `bg_wait`, sleep, or poll status merely to wait/);
+  assert.match(policy, /Consume the completed result before dependent work or acceptance/);
+  assert.match(policy, /Leave `forceTopLevelAsync` unset or false/);
+  assert.match(policy, /keep `bg_wait` available/);
+  assert.match(setup, /`"asyncByDefault": true`/);
+  assert.match(setup, /`~\/\.pi\/agent\/extensions\/subagent\/config\.json`/);
+  assert.match(setup, /does not read this option from user or project `settings\.json`/);
+  assert.match(setup, /do not add an ignored `subagents\.asyncByDefault` key/);
+  assert.match(setup, /Settle active children before restarting or reloading Pi/);
+  assert.match(setup, /does not change a retained child's contract/);
+});
+
 test('roles use ordered native backups with effort in the separate thinking key', () => {
   const expected = {
     scout: [claude, 'openai-codex/gpt-5.6-luna', 'low'],
