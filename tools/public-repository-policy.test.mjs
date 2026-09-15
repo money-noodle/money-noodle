@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import test from 'node:test';
 
@@ -1043,6 +1044,179 @@ test('production-control-plane consent clauses reject epoch/run reuse and enlarg
   ]);
 });
 
+// This serializer is only a checker for the documented ASCII/integer fixture,
+// not a general JCS implementation or an operation adapter.
+function canonicalConsentFixture(value) {
+  if (value === null || typeof value === 'boolean') return JSON.stringify(value);
+  if (typeof value === 'string') {
+    assert.match(value, /^[\x20-\x7e]*$/);
+    return JSON.stringify(value);
+  }
+  if (typeof value === 'number') {
+    assert.ok(Number.isSafeInteger(value));
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map(canonicalConsentFixture).join(',')}]`;
+  assert.equal(typeof value, 'object');
+  return `{${Object.keys(value)
+    .sort()
+    .map((key) => `${canonicalConsentFixture(key)}:${canonicalConsentFixture(value[key])}`)
+    .join(',')}}`;
+}
+
+const fixtureDigest = (value) =>
+  createHash('sha256').update(canonicalConsentFixture(value), 'utf8').digest('hex');
+
+test('production-control-plane explicit consent reconstructs without digest cycles', () => {
+  const example = m1Catalog
+    .split('#### Canonical explicit-consent example')[1]
+    .split('Each artifactVector entry')[0];
+  const canonical = example.match(/```json\n([^\n]+)\n```/)[1];
+  const consent = JSON.parse(canonical);
+  assert.equal(canonicalConsentFixture(consent), canonical);
+  const fields = [
+    ...m1Catalog
+      .match(/Each consent contains ([\s\S]*?)\. The target vector/)[1]
+      .matchAll(/`([^`]+)`/g),
+  ]
+    .map((match) => match[1])
+    .sort();
+  assert.deepEqual(Object.keys(consent).sort(), fields, 'example must be the complete envelope');
+  const expected = Object.fromEntries(
+    [
+      ...example.matchAll(
+        /^\| (approvalBodyDigest|consentDigest|grantKey) \| `([a-f0-9]{64})` \|$/gm,
+      ),
+    ].map((match) => [match[1], match[2]]),
+  );
+  assert.equal(Object.keys(expected).length, 3);
+
+  const checkExample = (input) => {
+    const { originalApprovalIdentity, ...consentBody } = input;
+    assert.deepEqual(originalApprovalIdentity, {
+      kind: 'explicit',
+      approvalRef: consentBody.approvalRef,
+      approvalBodyDigest: fixtureDigest(consentBody),
+    });
+    assert.equal(fixtureDigest(consentBody), expected.approvalBodyDigest);
+    assert.equal(fixtureDigest(input), expected.consentDigest);
+    assert.equal(
+      fixtureDigest([input.repositoryIdentity, originalApprovalIdentity, input.permissionSlot]),
+      expected.grantKey,
+    );
+    assert.notEqual(expected.approvalBodyDigest, expected.consentDigest);
+    for (const field of [
+      'epoch',
+      'executorOwner',
+      'runId',
+      'grantKey',
+      'approvalBodyDigest',
+      'consentDigest',
+    ]) {
+      assert.ok(!Object.hasOwn(input, field), `${field} cannot enter consentBody`);
+    }
+  };
+  checkExample(consent);
+  checkExample(Object.fromEntries(Object.entries(consent).reverse()));
+  for (const mutate of [
+    (input) => {
+      input.principal = 'different-principal';
+    },
+    (input) => {
+      input.approvalRef.commentId = 3;
+    },
+    (input) => {
+      input.expiresAt = '2026-09-13T02:00:00Z';
+    },
+    (input) => {
+      input.originalApprovalIdentity.approvalBodyDigest = expected.consentDigest;
+    },
+    (input) => {
+      input.consentDigest = expected.consentDigest;
+    },
+    (input) => {
+      input.epoch = 2;
+    },
+  ]) {
+    const changed = structuredClone(consent);
+    mutate(changed);
+    assert.throws(() => checkExample(changed), { name: 'AssertionError' });
+  }
+  assertClauseMutations(m1Catalog, [
+    ['nonrecursive projection', /minus only originalApprovalIdentity/],
+    ['body identity preimage', /approvalBodyDigest = SHA256\(JCS\(consentBody\)\)/],
+    ['completed envelope preimage', /consentDigest = SHA256\(JCS\(consent\)\)/],
+    [
+      'envelope digest outside identity',
+      /outside\*\* consent, never inside originalApprovalIdentity/,
+    ],
+  ]);
+  assert.match(
+    m1Publisher,
+    /requestDigest hashes the complete request except requestDigest itself/,
+  );
+});
+
+function assertEvidencePreservingSequence(source) {
+  assert.doesNotMatch(
+    source,
+    /next intent must parent A|The next intent builds on that acknowledgment/,
+  );
+  const sequence = source
+    .split('#### Evidence-preserving sequence fixture')[1]
+    .split('| Job | Permission ceiling |')[0];
+  const rows = sequence
+    .split('\n')
+    .filter((line) => /^\| [ASOVIB] \|/.test(line))
+    .map((line) =>
+      line
+        .split('|')
+        .slice(1, -1)
+        .map((cell) => cell.trim()),
+    );
+  assert.deepEqual(
+    rows.map((row) => row[0]),
+    ['A', 'S', 'O', 'V', 'I', 'B'],
+  );
+  let parent = 'C';
+  for (const [
+    index,
+    [commit, actualParent, type, sequenceNumber, ackEvent, ackSequence, witnessedCommit],
+  ] of rows.entries()) {
+    assert.equal(actualParent, parent, `${commit} must preserve the current head`);
+    assert.equal(Number(sequenceNumber), 11 + index);
+    assert.equal(ackEvent, commit === 'B' ? 'b' : 'a');
+    assert.equal(Number(ackSequence), commit === 'B' ? 16 : 11);
+    assert.equal(witnessedCommit, commit === 'B' ? 'I' : 'C');
+    assert.notEqual(witnessedCommit, commit, 'ack must not witness its own commit');
+    assert.equal(
+      type,
+      ['witness-ack', 'submission', 'observation', 'verification', 'intent', 'witness-ack'][index],
+    );
+    parent = commit;
+  }
+  assert.match(source, /Resolve control\.lastAcknowledgment directly/);
+  assert.match(source, /bounded pair of indexed event reads, not an ancestry\/history scan/);
+  assert.match(source, /next intent must have the current coherent head as its sole parent/);
+  assert.match(sequence, /at most seven snapshot\/event documents/);
+}
+
+test('production-control-plane next intent preserves intervening evidence and indexed acknowledgment', () => {
+  assertEvidencePreservingSequence(m1Catalog);
+  for (const [before, after] of [
+    ['| I | V | intent |', '| I | A | intent |'],
+    ['| S | A | submission | 12 | a |', '| S | A | submission | 12 | s |'],
+    ['| A | C | witness-ack | 11 | a | 11 | C |', '| A | C | witness-ack | 11 | a | 11 | A |'],
+  ]) {
+    const mutated = m1Catalog.replace(before, after);
+    assert.notEqual(mutated, m1Catalog);
+    assert.throws(() => assertEvidencePreservingSequence(mutated), { name: 'AssertionError' });
+  }
+  assert.throws(() => assertEvidencePreservingSequence(`${m1Catalog}\nnext intent must parent A`), {
+    name: 'AssertionError',
+  });
+});
+
 test('production-control-plane journal schema preserves nonrecursive acknowledgment and finite reads', () => {
   for (const field of [
     'control/current.json',
@@ -1050,6 +1224,7 @@ test('production-control-plane journal schema preserves nonrecursive acknowledgm
     'targets/{logicalIncarnation}.json',
     'events/{eventId}.json',
     'pendingIntent',
+    'lastAcknowledgment',
     'witnessAck',
     'consumedSlots',
     'executorOwner',
