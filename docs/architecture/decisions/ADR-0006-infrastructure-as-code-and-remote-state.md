@@ -44,14 +44,14 @@ State lives in dedicated **Google Cloud Storage** buckets in the maintainer-owne
 - **encryption at rest**, provider-managed at minimum;
 - **object versioning enabled from the first apply**, not retrofitted;
 - **locking on every operation that writes state** — native backend locking where the backend offers it, otherwise conditional-write lockfile locking, which must be proven by test rather than assumed;
-- **access restricted to the deployer workload identity** from ADR-0005; developers do not hold standing write access to state;
+- **access restricted to operation-specific stack workloads and separately scoped verification readers** under ADR-0005/catalog v2; developers do not hold standing write access to state;
 - **a tested restore**, exercised at least once before the first production apply.
 
 State is never committed to Git, never printed in logs or CI output, and never copied to a laptop. State may contain values that are sensitive even when no secret was ever declared, so it is treated as sensitive by default.
 
 ### Pipeline behaviour
 
-- Pull requests run `plan` for affected stacks and publish the plan for review. A plan is evidence, not authorization.
+- Pull requests run provider-free validation only, without identity or private state. A trusted-main non-apply planner may produce a private saved plan under catalog v2; publish only allowlisted sanitized comparisons/digests, never raw plan/state. A plan is evidence, not authorization.
 - `apply` runs only from the pipeline on the authorized ref, using federated short-lived credentials, with **deployment concurrency serialized** so two applies to one stack cannot interleave.
 - Drift is detected on a schedule and surfaced as a reported condition. **Drift is never auto-corrected silently**: a difference between reviewed desired state and observed reality is information the maintainer must see.
 - A manual provider change is an exception that must be reconciled back into code, and the drift report is how it becomes visible.
@@ -101,24 +101,4 @@ Rejected. It is explicitly forbidden, and it makes concurrent work by more than 
 - Serialized applies slow parallel work whenever two changes touch the same stack.
 - State is sensitive and must be handled as such forever, including in backups and in incident response.
 
-## Validation
-
-Before this decision is considered implemented:
-
-1. the exact tool version is pinned and identical locally and in CI;
-2. `plan` runs on pull requests for affected stacks and publishes reviewable output;
-3. `apply` runs only from the pipeline, on the authorized ref, with federated credentials;
-4. two concurrent applies to one stack are proven to **block**, not to interleave — this is a mandatory negative test;
-5. state object versioning is enabled and a restore from a prior version is exercised;
-6. an out-of-band console change is detected and reported as drift, and is not auto-corrected;
-7. applying the web stack demonstrably does not lock or modify the API stack;
-8. no state content appears in logs, artifacts, CI output, or the repository;
-9. a from-scratch reconstruction into a disposable scope succeeds, proving the code is the source of truth.
-
-## Revisit when
-
-- the hosting provider decision changes, since the backend follows it;
-- infrastructure grows past the point where HCL's abstraction limits are the real constraint;
-- a second standing environment is introduced, which changes stack and state layout;
-- the selected backend gains or loses native locking;
-- OpenTofu and Terraform diverge enough that configuration compatibility no longer holds.
+The owning [delivery qualification](../../operations/delivery.md#foundation-denial-and-recovery-qualification) retains the remote health, trust, state isolation/restore and recovery checks. They require separately authorized provider evidence, not local source checks; this record remains Working.

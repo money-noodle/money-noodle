@@ -25,7 +25,7 @@ Each deployment carries its own service identity, and every signal carries the a
 
 ### Backend
 
-Use **Google Cloud's native OpenTelemetry-compatible backend** for the first slice, reached over OTLP, because it requires no additional account, no additional credential, no additional trust boundary, and — at first-slice volume — falls inside published free allotments.
+Use **Google Cloud's native OpenTelemetry-compatible backend** for the first slice, reached over OTLP, because it requires no additional account, no additional credential, no additional trust boundary, and keeps the initial integration narrow. Actual allowance eligibility and total cost remain unmeasured.
 
 This is deliberately the **weakest-commitment** choice in the composition. It is selected because it is the cheapest to reverse, not because it is the best long-term backend. That judgement requires measured volume, cardinality, and query-pattern evidence that does not yet exist.
 
@@ -35,7 +35,7 @@ The maintainer accepts the Pre-GA OTLP metric-ingestion path for this financiall
 
 The following exist before the first remote deployment, not after the first surprising bill:
 
-- a **USD 30 monthly budget ceiling** covering the first-slice project, with alerts at USD 15, USD 24, and USD 30 (50%, 80%, and 100%);
+- dated estimates, measured service/revision/operation/SKU cost attribution and configurable actual/forecast alerts under the owning [cost policy](../../operations/delivery.md#cost-estimates-and-operational-bounds), using #85’s 2026-09-09 research as incomplete synthetic evidence, not an invoice, allowance or spending authority; no fixed USD 30 ceiling remains normative;
 - **ingestion volume, span count, log volume, and metric cardinality are themselves observed**, so telemetry cost is visible in the same place as telemetry;
 - **explicit retention configuration** starting at the accepted defaults — 7 to 14 days debug logs, 3 to 7 days detailed traces, 30 to 90 days operational metrics — never left at a provider default;
 - **head sampling configured but effectively unity at first-slice volume**, with the sampling decision propagated through trace context so it can be lowered later without re-instrumenting;
@@ -44,7 +44,7 @@ The following exist before the first remote deployment, not after the first surp
 
 ### What telemetry is not
 
-Telemetry is **not** audit and **not** accounting. `data-identity-observability.md` requires those to be durable, access-controlled, tamper-evident, and never silently sampled, and they expire on a different policy. The first slice produces neither, because it has no state-changing, privileged, funded, authorization, ownership, or resource-lifecycle action. **No audit obligation may be satisfied by a telemetry backend**, then or later. Establishing that separation now prevents the far more expensive mistake of discovering later that an accounting record was a log line that expired.
+Telemetry is **not** audit and **not** accounting. `data-identity-observability.md` requires those to be durable, access-controlled, tamper-evident, and never silently sampled, and they expire on a different policy. The status request itself produces neither financial accounting nor consequential application audit, but M1 delivery operations do produce the separate sanitized journal/witness evidence specified by [catalog v2](../../operations/production-control-plane.md#field-level-custody-and-bounded-reconstruction). **No audit obligation may be satisfied by a telemetry backend**, then or later. Establishing that separation now prevents the far more expensive mistake of discovering later that an accounting record was a log line that expired.
 
 ### Failure behaviour
 
@@ -78,7 +78,7 @@ Rejected. The payload-retention policy is explicitly unresolved, and a default t
 
 - Instrumentation is portable by construction; the backend is the only replaceable part.
 - No additional account, credential, or trust boundary is added for the first slice.
-- Cost is inside published free allotments at first-slice volume and is observable as it grows.
+- Cost must be measured and attributable; free allotments remain conditional, shared and subject to unknown usage.
 - Retention, sampling, and cardinality are explicit configuration from day one rather than discovered defaults.
 - The audit and accounting boundary is established before there is any consequential action to record.
 
@@ -87,27 +87,7 @@ Rejected. The payload-retention policy is explicitly unresolved, and a default t
 - The provider's native backend is a weaker query and correlation experience than a dedicated vendor.
 - Colocating telemetry with the workloads it observes means a provider-wide incident can impair the evidence needed to diagnose it.
 - Pre-GA ingestion paths carry a stated support risk.
-- Free allotments are per account, so they will be consumed faster as projects are added, and the first real bill will arrive without warning unless the budget alert is in place first.
+- Shared allowance scope varies by SKU, and other usage can exhaust it; alerts are not hard caps and require independent notification verification.
 - Dashboards, alert rules, and retention policy are the parts that do **not** migrate if the backend changes later.
 
-## Validation
-
-Before this decision is considered implemented:
-
-1. one browser request produces a single trace spanning web and API with a shared trace ID and the generated request ID;
-2. both services report their artifact version and deployment identity on every signal;
-3. no request body, response body, credential, header outside the allowlist, or personal data appears in any signal — verified by a deliberate negative test that sends a marker value and proves it is absent;
-4. retention is explicitly configured for each signal class and matches the accepted starting defaults;
-5. ingestion volume and cardinality are themselves observable;
-6. a budget alert is configured and proven to fire against a test threshold;
-7. a forced telemetry outage does not change request behaviour and does not trigger a rollback;
-8. the forced-API-failure smoke path is visible as a distinct, attributable failure in traces;
-9. measured monthly ingestion volume, span count, and cost are recorded with as-of time and largest validity threat before any backend is called permanent.
-
-## Revisit when
-
-- measured ingestion volume, cardinality, or query needs justify a dedicated vendor;
-- the hosting provider decision changes, since the backend follows it;
-- identity, tenant data, or personal data enter any signal path, which changes the redaction requirement from theoretical to enforced;
-- the first durable audit or accounting requirement appears, which needs its own separate design and must not reuse this one;
-- a Pre-GA ingestion path changes launch stage in either direction.
+The [delivery acceptance](../../operations/delivery.md#status-rendering-and-trace-evidence) owns cross-service trace, marker-redaction, forced-failure and telemetry-outage checks; its [cost policy](../../operations/delivery.md#cost-estimates-and-operational-bounds) owns measured attribution, retention bounds and alert qualification. Existing unapplied budget defaults and unsupported trace/metric retention configuration are gaps, not satisfied policy. No provider or deployment evidence exists to promote this record.

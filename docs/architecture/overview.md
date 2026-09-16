@@ -67,7 +67,7 @@ The endpoint is intentionally read-only, identity-free, tenant-free, database-fr
 
 ### Public contract boundary
 
-The exact wire schema is finalized with the OpenAPI implementation, but its accepted semantic minimum is:
+The implemented API-owned OpenAPI schema is v1. Its full release acceptance is owned by [delivery](../operations/delivery.md#status-rendering-and-trace-evidence); the semantic boundary is:
 
 - `state`: `available`, `degraded`, or `maintenance`;
 - `asOf`: UTC RFC 3339 source time;
@@ -210,7 +210,7 @@ flowchart LR
 
     subgraph platformStack["stacks/platform"]
         registry["Artifact Registry"]
-        budget["USD 30 budget<br/>50 / 80 / 100% alerts"]
+        budget["Unapplied legacy budget defaults<br/>not current spending authority"]
         secrets["Secret Manager boundary<br/>declared, empty"]
         retention["Log retention"]
     end
@@ -238,8 +238,7 @@ dependency is what lets the API be applied while the web is running.
 
 ### Delivery gates
 
-Provider authority is reached through two independent gates, then three further
-authorization gates before anything is applied.
+This diagram shows the existing disabled source gates, not the selected M1 replacement. Configuration gates are evaluated before token exchange; no current path authenticates without them. The [staged transition](../operations/delivery.md#current-to-target-activation) must be separately qualified before these gates change.
 
 ```mermaid
 flowchart TB
@@ -255,17 +254,17 @@ flowchart TB
     typed{"Gate 5 — typed APPLY-TO-PRODUCTION<br/>plus INFRA_APPLY_AUTHORIZED"}
     apply["tofu apply, serialized, lock-timeout"]
 
-    job --> cond
+    job --> varGate
+    varGate -->|set| envGate --> typed --> cond
     cond -->|fork, pull request, tag,<br/>other branch, other workflow,<br/>other repository| refused
     cond -->|satisfied| pset
     pset --> token
-    token --> varGate
     varGate -->|unset today| refused
-    varGate -->|set| envGate --> typed --> apply
+    token --> apply
 ```
 
-As committed, gate 3 is unset, so no path reaches a provider at all. Drift
-detection reads on a schedule and never corrects; destroy is available to no
+As committed, gate 3 is unset, so no path reaches a provider at all. This view is the apply path; drift
+detection uses its separately declared scheduled read path and never corrects; destroy is available to no
 workflow.
 
 ### Trust boundaries
@@ -347,47 +346,69 @@ flowchart LR
 
 ### Agent-operated production control plane (decided, not implemented)
 
-This boundary is **decided architecture, not an implemented system**. Working [`ADR-0010`](decisions/ADR-0010-agent-operated-production-control-plane.md) and the catalog it owns in [`production-control-plane.md`](../operations/production-control-plane.md) hold the versioned operation catalog, approval envelope, operation evidence, bootstrap/break-glass bounds, and payload-blind secret lifecycle. Every element labelled *decided, not built* below does not exist: acceptance created no project, workload identity, store, or deployment, none of them appears in the source/deployment map, and none carries provider or production authority. Existing CI/CD, provider, runtime, and managed-secret boundaries remain as shown in the accepted deployment diagrams above.
+The selected M1 design under Working [ADR-0010](decisions/ADR-0010-agent-operated-production-control-plane.md) uses fixed trusted-main workflows, the existing-repository sanitized Git journal and a separately permissioned issue witness. No publisher, journal, witness or replacement grant enforcement is installed by this policy. [Catalog v2](../operations/production-control-plane.md#m1-catalog-v2--selected-not-enabled) owns schemas, finite effects, immutable owner, bounded custody and interrupted-call rules; [delivery](../operations/delivery.md#current-to-target-activation) owns staged activation and first-release acceptance. Current source gates above stay disabled/unchanged. Broader administrative jobs/secret ingress remain non-invocable in M1; no additional service, store, repository or durable credential is selected.
 
 ```mermaid
 flowchart LR
-    human["Human principal<br/>account, approval, recovery"]
-    agent["Agent operator<br/>plan, request, invoke, verify"]
-    auth["Authorization service<br/>exact expiring grant<br/>decided, not built"]
+    claimant["Claimant in dedicated worktree<br/>exact bounded request comment"]
+    publisher["TARGET fixed main publisher<br/>GITHUB_TOKEN, no OIDC<br/>submitted source is data"]
+    principal["Principal<br/>CI admission, review and merge<br/>separate exact effect consent"]
+    checks["Read-only PR checks<br/>independent agent technical review"]
+    main["Protected main<br/>qualified exact release bundle"]
+    journal["TARGET operation-journal-v1<br/>sanitized event + snapshot commits<br/>contents-write job"]
+    witness["TARGET designated issue witness<br/>issues-write job; mutable pointer<br/>not canonical audit"]
+    executor["TARGET fixed delivery executor<br/>one immutable run owner<br/>operation-specific federation"]
+    reader["TARGET independent read identity<br/>provider state + bounded ID-token probes"]
+    provider["GCP state<br/>not yet provisioned"]
+    inputs["Private runtime inputs<br/>Actions environment Secrets injection only<br/>not archive or recovery vault"]
+    state["Separate GCS OpenTofu state<br/>unapplied; not audit archive"]
 
-    subgraph execution["Purpose-specific short-lived execution"]
-        ci["Reviewed CI/CD<br/>accepted foundation"]
-        admin["Bounded administrative jobs<br/>decided, not built"]
-    end
-
-    reads["Scoped read-only operational APIs/jobs<br/>decided, not built"]
-    state["Provider + authoritative platform state<br/>external / future"]
-    audit["Append-only operation audit<br/>decided, not built; not telemetry"]
-    ingress["Private payload-blind ingress<br/>decided, not built"]
-    secretStore["Managed secret store<br/>accepted empty boundary"]
-    runtime["Runtime consumers<br/>least privilege"]
-
-    agent -->|"safe intent + plan digest"| auth
-    human -->|"one scoped approval"| auth
-    auth --> ci
-    auth --> admin
-    ci --> state
-    admin --> state
-    state --> reads
-    agent -->|"independent read-only observation"| reads
-
-    human -->|"external payload, never through agent"| ingress
-    ingress --> secretStore
-    admin -->|"generate/version inside boundary"| secretStore
-    secretStore --> runtime
-
-    auth --> audit
-    ci --> audit
-    admin --> audit
-    reads --> audit
+    claimant --> publisher --> checks --> principal --> main
+    main --> journal
+    journal -->|intent commit| witness
+    witness -->|confirmed pointer; nonrecursive ack| journal
+    journal -->|corroborated intent and spent slot| executor
+    inputs --> executor
+    inputs --> reader
+    executor --> provider
+    executor --> state
+    provider --> reader
+    reader -->|allowlisted observations only| journal
 ```
 
-Under the decided design, an operation absent from the catalog is denied rather than routed to a shell, provider console, laptop, or generic administrative endpoint. A human authorizes the exact effect; the agent coordinates technical execution; a separate workload identity performs it; and verification reads authoritative/provider-observed state rather than trusting workflow success. Secret values take the ingress/store path and never cross the agent, OpenTofu plan/state, or public automation boundary. These rules bind the implementation and remote validation still to be done; nothing running enforces them today, and the distinct eligible production reviewer the design requires does not exist yet.
+Repository tokens are not mechanically ref/issue scoped; fixed workflows, complete pinned dependencies, host protections and administrators form the trusted computing base. Matching journal/witness rollback within one epoch may be undetectable. Missing private mappings/history stay unknown and block only affected operations; the catalog explicitly limits M1 reconstruction without weakening tenant or financial audit. New epochs, retries or GitHub cancellation do not fence provider effects or renew consent.
+
+```mermaid
+sequenceDiagram
+    actor Principal
+    participant Journal as Journal writer
+    participant Witness as Separate witness writer
+    participant Execute as Original execution owner
+    participant Provider as Cloud Run / IAM
+    participant Verify as Separate reader
+    Principal->>Journal: Exact original consent, finite slots and expiry
+    Journal->>Journal: Intent C + atomic snapshots; slot spent
+    Journal->>Witness: Confirm exact epoch/sequence/event/commit
+    Witness->>Witness: Append comment; update/read back pointer to C
+    Witness-->>Journal: Exact confirmed pointer
+    Journal->>Journal: Ack A parent C; do not witness A
+    Journal-->>Execute: Corroborated intent; no owner transfer
+    Execute->>Provider: Private API creation (no public IAM)
+    Verify->>Provider: Read state + audience-bound ID-token probe
+    Verify->>Journal: Private API verified; anonymous denied
+    Principal->>Journal: Separate finite H2 API exposure
+    Note over Journal,Execute: Fresh intent/witness/ack before each external phase
+    Execute->>Provider: Exact API IAM delta, expected etag
+    Verify->>Journal: Effective policy + public API verified
+    Execute->>Provider: Granted private web creation
+    Verify->>Journal: Private rendering against public API verified
+    Principal->>Journal: Separate finite H2 web exposure
+    Execute->>Provider: Exact web IAM delta, expected etag
+    Verify->>Journal: Public rendering and policy verified
+    Note over Execute,Verify: Ambiguous effects block; no automatic replay<br/>quiescence plus old-owner exclusion required
+```
+
+Every depicted effect still needs its own catalog grant and phase intent; arrows do not grant authority. First creation has no predecessor rollback. An access correction requires a previously explicit H2 inverse. The API/web runtime boundary remains unchanged: web uses the public API normally and gains no ID-token feature.
 
 ### Proposal only: administrative observability (not current architecture)
 
@@ -396,7 +417,7 @@ Under the decided design, an operation absent from the catalog is denied rather 
 ```mermaid
 flowchart LR
     subgraph gcp["Accepted Google Cloud context — proposed connections have no current authority"]
-        budget["ACCEPTED CONTEXT<br/>Budget guardrail<br/>USD 30 ceiling, implemented and unapplied"]
+        budget["ACCEPTED CONTEXT<br/>Unapplied budget configuration<br/>legacy defaults, not a spending cap"]
         topic["PROPOSED ONLY<br/>Pub/Sub budget topic"]
         metrics["ACCEPTED CONTEXT<br/>Cloud Monitoring usage metrics"]
         runState["ACCEPTED CONTEXT<br/>Cloud Run revision and health state"]
@@ -422,7 +443,7 @@ Only if both proposals were separately accepted, became Working, and were implem
 
 The workspace, projects, status contract, generated client, web presentation/API adapter, API inner layers/HTTP/deployment adapters, health routes, and container definitions below exist. `infra/` now exists as reviewable, statically validated configuration; **no provider resource has been applied**, and the outstanding items before an apply can be trusted are listed in [`../../infra/README.md`](../../infra/README.md).
 
-No row below is proposed. The administrative-observability proposal-only subsection above is illustrative, is outside this map, and confers no source, storage, job, identity, provider, infrastructure, or deployment authority. `jobs/` does not exist, and neither the administrative ingestion unit, its read model, nor its API operations are represented here, because [`ADR-0009`](decisions/ADR-0009-administrative-observability-surface.md) is Proposed rather than Working. The authorization service, bounded administrative operations, operation audit, and secret ingress decided in Working [`ADR-0010`](decisions/ADR-0010-agent-operated-production-control-plane.md) are absent for a different reason: that decision settled their boundary shape without creating any of them. Rows are added when projects exist, not when they are decided or merely proposed. [`../current-status.md`](../current-status.md) owns current host, validation, and deployment truth.
+No row below is proposed. The administrative-observability proposal-only subsection above is illustrative, is outside this map, and confers no source, storage, job, identity, provider, infrastructure, or deployment authority. `jobs/` does not exist, and neither the administrative ingestion unit, its read model, nor its API operations are represented here, because [`ADR-0009`](decisions/ADR-0009-administrative-observability-surface.md) is Proposed rather than Working. The fixed M1 publisher/journal/witness workflows and the broader administrative operations and secret ingress decided in Working [`ADR-0010`](decisions/ADR-0010-agent-operated-production-control-plane.md) are absent for a different reason: that decision settled their boundary shape without creating any of them. Rows are added when projects exist, not when they are decided or merely proposed. [`../current-status.md`](../current-status.md) owns current host, validation, and deployment truth.
 
 | Path | Project/deployment | Boundary and ownership |
 | --- | --- | --- |
@@ -492,17 +513,7 @@ The detailed decision is in [`ADR-0002`](decisions/ADR-0002-openapi-and-generate
 
 The foundation implements root and Nx targets for format checks, lint, type checks, tests/coverage, contracts, builds, and containers; [`../engineering/standards.md`](../engineering/standards.md) owns the exact command contract. CI runs affected targets plus repository documentation/coordination, dependency, secret, provenance/SBOM, and image-vulnerability gates. Contract changes additionally run generation-drift, semantic lint, consumer compile, and backward-compatibility checks.
 
-Remote validation follows this order:
-
-1. build and test both artifacts in CI from the same reviewed commit;
-2. scan dependencies, secrets, containers, and generated SBOMs;
-3. attest and publish immutable artifacts;
-4. apply reviewed idempotent infrastructure changes through the pipeline;
-5. deploy the compatible API artifact and verify readiness plus the public status contract;
-6. deploy the web artifact and verify it displays the API-provided source time;
-7. run a smoke test that also forces API failure or an invalid fixture and verifies the web reports `unknown`;
-8. report deployment, artifact, config, health, smoke, and telemetry verification to the commit;
-9. roll back automatically when safe, otherwise halt with the declared recovery path.
+Remote validation must follow the owning [first-release acceptance and exposure order](../operations/delivery.md#first-release-acceptance-and-exposure-order): verified immutable artifacts, private API verification, separate H2 API exposure, private web verification against that API, then separate H2 web exposure and public journey/trace evidence. Compatible later affected releases follow API-before-web ordering where coordination is required, and consume only their exact granted forward/conditional rollback vectors. No predecessor or ambiguous effect creates recovery authority.
 
 Infrastructure commands are `node tools/infra-check.mjs {fmt,validate,test,all}`, also exposed as the Nx targets `infra:infra-fmt`, `infra:infra-validate`, and `infra:infra-test`. They are deliberately outside the `lint`/`typecheck`/`test`/`contract`/`build` set so `pnpm check` stays runnable without OpenTofu installed; the static guards that need no provider tooling run inside `pnpm check` through `tools/infra-policy.test.mjs` and `tools/infra-delivery-policy.test.mjs`. `.github/workflows/delivery.yml` owns publication, the gated apply, drift detection, and rollback, and is separate from `ci.yml`.
 
@@ -542,7 +553,7 @@ The maintainer accepted the first-slice choices on 2026-08-29 and revised the re
 4. the public platform availability card as the first vertical slice, with no identity, database, or tenant behavior;
 5. portable OCI images as both deployment artifacts;
 6. Google Cloud Run and Artifact Registry in `us-west1`, federated GitHub Actions trust, OpenTofu with GCS state, Secret Manager, and Google Cloud telemetry;
-7. a maintainer-owned provider account, USD 30 monthly ceiling with 50/80/100 percent alerts, and no EU-residency requirement for this first slice;
+7. a maintainer-owned provider account and no EU-residency requirement for this first slice; current [cost policy](../operations/delivery.md#cost-estimates-and-operational-bounds) replaces the initial fixed ceiling with dated estimates, measured attribution and configurable alerts (historical estimates remain dated evidence);
 8. interim public `*.run.app` validation, followed by a separately reviewed `noodle.money` and public `api.noodle.money` cutover that preserves existing Vercel DNS until authorized;
 9. intentionally publishing the one-root MIT-licensed source snapshot while keeping the development-history archive private, with protected `main`, untrusted-fork controls, and a full-history secret-scan baseline required before ordinary merges resume;
 10. accepting Pre-GA OTLP metric ingestion only under the financially inert first-slice controls in ADR-0007;
@@ -555,7 +566,7 @@ Proceed through bounded dependent work:
 
 1. implement the status contract, generated client operation, API use case/adapters, web presentation adapter/card, failure behavior, health probes, and trace propagation;
 2. implement the accepted OpenTofu stacks and federated delivery workflow without touching existing Vercel DNS;
-3. deploy compatible API first and web second to interim `*.run.app` URLs, then validate health, normal and forced-failure smoke paths, trace correlation, budget alerting, and independent rollback;
+3. qualify the staged M1 host/bootstrap gates, then follow private-before-public API/web creation and separately authorized remote journey, cost/trace and bounded recovery validation;
 4. decide and execute the `noodle.money` cutover separately after interim evidence and protected-`main` prerequisites are satisfied.
 
 Shared plan #2 owns the work graph and integration order. Architecture acceptance does not itself prove implementation or deployment.

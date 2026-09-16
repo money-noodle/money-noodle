@@ -2,7 +2,7 @@
 
 > **Status:** Working
 > **Date proposed:** 2026-08-30
-> **Date accepted:** 2026-09-07
+> **Date accepted:** 2026-09-07; M1 refinement accepted 2026-09-13
 > **Owners:** Platform operations; accepted by maintainer
 > **Evidence:** none — decision and catalog only; no control-plane component is implemented, applied, or remotely validated
 > **Related architecture:** [`../overview.md`](../overview.md)
@@ -25,7 +25,13 @@ Proposed ADR-0008 and ADR-0009 are coordinated but remain independent. If ADR-00
 
 A human retains provider and domain account ownership, root recovery, break-glass custody, and explicit approval of production effects. An agent may prepare a plan, request a grant, initiate an authorized operation, observe it, independently verify the result, and report redacted evidence. The agent cannot approve its own request or infer authorization from issue assignment, repository write access, a green check, or a prior operation.
 
-Execution uses a separate, short-lived workload identity selected by the operation catalog. The approval binds one catalog operation and version, environment, targets, parameter and plan digests, expected state, maximum effects, expiry, recovery path, and single-use nonce. The executor rejects missing, expired, replayed, stale, or broader grants before obtaining mutation authority. A protected-branch merge may be the human grant for the exact automatic forward deployment it names; it is not standing approval for infrastructure, migration, repair, restore, secret, access, cost, or DNS operations.
+Execution uses a separate, short-lived workload identity selected by the operation catalog. The approval binds one catalog operation and version, environment, targets, parameter and plan digests, expected state, maximum effects, expiry, recovery path, and single-use nonce. The executor rejects missing, expired, replayed, stale, or broader grants before obtaining mutation authority. After the separately qualified [delivery transition](../../operations/delivery.md#current-to-target-activation), a qualifying protected-branch merge may supply the separately consumed artifact publication, exact forward vector and one conditional predecessor rollback vector named in its release bundle; it is not standing approval for infrastructure, migration, repair, restore, secret, access, cost, or DNS operations.
+
+### M1 selection within the broader design
+
+For M1, [catalog v2](../../operations/production-control-plane.md#m1-catalog-v2--selected-not-enabled) selects fixed trusted-main workflows and existing-repository sanitized `operation-journal-v1` plus a separately permissioned issue witness. No authorization service, database, additional archive, repository, recovery vault or durable credential is selected. Stable consent slots exclude epochs/retries from grant uniqueness; one global active provider request and immutable execution owner bound the initial design. Lost or ambiguous effects never automatically replay; provider quiescence and old-owner exclusion are required. Matching same-epoch journal/witness rollback may be undetectable under the trusted-host/admin assumption.
+
+The field-level custody inventory expressly limits M1 historical reconstruction: Actions environment Secrets inject private runtime inputs only, have no historical value readback, and are not audit custody. Missing required private detail stays unknown and blocks the affected operation. This is not a relaxation of tenant or financial audit/accounting requirements. Broader v1 operations below remain designed but non-invocable in M1, including secret lifecycle, restore, repair and sensitive export.
 
 ### Three control surfaces, not one generic administrative path
 
@@ -39,7 +45,7 @@ Unknown operations and unbounded shell, console, database, state, or provider ac
 
 Workflow success is not proof of the intended effect. After execution, the operator verifies through a separately permissioned read path and provider-observed or authoritative application state. Verification records the observation source and as-of time and compares intended, recorded, and observed state. Failed or unavailable verification leaves the operation `unverified` or `blocked`; it never reports success and triggers the cataloged rollback, forward-recovery, or reconciliation path.
 
-Every consequential request, authorization decision, execution attempt, external effect, verification, recovery action, and terminal result is linked in durable, append-only, tamper-evident audit. Public coordination and CI summaries contain only redacted evidence references and safe digests. Telemetry may help diagnosis but does not satisfy audit.
+Every consequential request, authorization decision, execution attempt, external effect, verification, recovery action, and terminal result is linked in durable, append-only, tamper-evident audit. M1 public Git/issue records contain only the explicitly allowlisted sanitized envelope and safe digests; private external references are not promised a new archive. Telemetry may help diagnosis but does not satisfy audit.
 
 ### Secret payloads take a separate data path
 
@@ -73,9 +79,9 @@ Break-glass is a human-custodied, incident-bound, strongly authenticated session
 
 **Rejected.** A generic operator endpoint is an undocumented alternative control plane. Each operation needs a schema, scope, idempotency and concurrency rule, verification, recovery, and evidence contract before its identity receives authority.
 
-### Put secret values in workflow inputs, repository secrets, or OpenTofu variables
+### Put secret payloads in public workflow inputs or OpenTofu variables
 
-**Rejected.** Workflow inputs and runner contexts can reach logs and agent-visible process state, while infrastructure state remains sensitive indefinitely. Payload-blind ingress and in-boundary generation keep orchestration separate from secret custody.
+**Rejected.** Public inputs and runner contexts can leak payloads; infrastructure state remains sensitive indefinitely. The selected M1 environment-Secrets use is private operational-input injection to fixed trusted code, not operational secret lifecycle or audit/archive custody. Broader payload-blind ingress and in-boundary generation remain separate, non-invocable M1 design.
 
 ### Allow emergency console access without a catalog entry
 
@@ -93,9 +99,9 @@ Break-glass is a human-custodied, incident-bound, strongly authenticated session
 
 ### Negative
 
-- The control plane needs an authorization-grant store, operation registry, purpose-specific workload identities, durable audit, and independently permissioned verification paths that do not yet exist.
+- M1 needs fixed journal/witness/admission workflows, purpose-specific workload identities and independently permissioned readers that do not yet exist. Its bounded sanitized reconstruction cannot recover missing private historical inputs.
 - Some operations need multiple phases and consumer acknowledgements, making rotation, migration, and restore slower than a direct provider command.
-- A distinct eligible production approver and requester/executor identity are operational prerequisites; the current protected environment is not usable when one actor would initiate and self-approve.
+- The current protected environment remains unusable when one actor initiates and self-approves. The sole-principal target needs a separately qualified replacement grant and genuine workload-publication path; policy acceptance does not change host settings.
 - Payload-blind external secret ingress is a new protected surface whose compromise would bypass the agent boundary even though it would not expose the value to the agent.
 - The minimized initial bootstrap still includes human technical execution until the constrained-runner controls are implemented and proven.
 - Accepting this record grants no current provider or production authority. Nothing described here is implemented, applied, or remotely validated; implementation and remote validation remain separate work that has not started.

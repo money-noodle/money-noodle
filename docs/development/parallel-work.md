@@ -152,6 +152,14 @@ The integration owner manages contracts, merge order, compatibility, and accepta
 
 A dedicated worktree persists while agent-owned. Cleanup is separately authorized. Do not infer content preservation from ancestry or `git cherry`; use the merged pull request or a reviewed content comparison appropriate to the changed paths.
 
+## Fixed-publisher delegation target
+
+The accepted M1 design permits an accountable claimant to delegate **publication only** to the fixed GITHUB_TOKEN publisher specified in [version control](version-control.md#restricted-workload-source-publication-target). It is not installed or current publication authority. The current dedicated-worktree push path above remains binding until reviewed integration and separate transition qualification; no unintegrated widening authorizes its own publication.
+
+The delegation names the existing issue, claimant, claim ref, expected head, exact resulting tree/change digest, approved paths, explicit PR-creation permission and original expiry. It neither transfers the claim nor makes the publisher or supervisor another source writer. The claimant prepares the candidate only in its dedicated worktree and freezes competing publication while the request is outstanding. No branch may be claimed, adopted, retargeted or repointed by the publisher.
+
+On interruption, preserve request/comment digest, expected head, tree, produced commit and PR evidence; reconcile the exact marker/parent/tree/diff through reads before another publication. Missing acknowledgment is not proof of no change. A stale head or ownership change stops for a fresh authorized request, never reparenting, force-push or cosmetic commit. An ambiguous result remains blocked; a new run does not inherit a provider executor owner. Resume local work only after the authoritative claim/ref result is understood, without resetting or overwriting unpublished content. This preserves the one-writer discipline rather than adding a coordination controller.
+
 ## The temporary integration exception is not agent authority
 
 [`version-control.md`](version-control.md#temporary-sole-maintainer-integration-exception) exclusively owns the temporary sole-maintainer exception, including its exact approval, check, evidence, expiry, provider, security, tenant, audit, and funded-authority conditions. Only the maintainer acting personally as the human principal may use it. It is never agent, planner, integration-owner, workload-identity, automation, or collaborator authority.
