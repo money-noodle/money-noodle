@@ -3,7 +3,7 @@
   "enabled": true,
   "rules": [
     {
-      "name": "astra-to-opus",
+      "name": "astra-to-fable",
       "matchModels": [
         {
           "provider": "openai-codex",
@@ -13,7 +13,7 @@
       "statuses": [429, 500, 502, 503, 504],
       "fallback": {
         "provider": "pi-claude-code-provider",
-        "model": "opus"
+        "model": "fable"
       }
     }
   ]
