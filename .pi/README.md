@@ -39,6 +39,16 @@ The committed rules and ignored runtime state live at `.pi/model-fallback/config
 
 The 0.3.7 error parser requires recognizable HTTP-status text or a response hook. For example, the observed plain `Codex error: The usage limit has been reached` message alone does **not** trigger fallback. Do not claim universal quota recovery or reclassify a safeguard refusal to force switching. Installation, offline hook tests, and catalog metadata do not establish live provider or child-lifecycle qualification.
 
+## Async delegation defaults
+
+[APPEND_SYSTEM.md](APPEND_SYSTEM.md#async-delegation-and-chat-responsiveness) owns the project supervisor/orchestrator guidance: prefer async delegation and yield to native completion notifications, while retaining explicit blocking exceptions. Keep the matching section in the user `~/.pi/agent/APPEND_SYSTEM.md` consistent; a trusted project's append file replaces the user file, rather than merging both.
+
+To make the machine-wide runtime default explicit, merge `"asyncByDefault": true` into the top level of `~/.pi/agent/extensions/subagent/config.json`, preserving unrelated keys. The pinned `pi-subagents@0.66.0` already defaults this option to true and does not read this option from user or project `settings.json`; do not add an ignored `subagents.asyncByDefault` key. The user-scoped runtime default also applies to project launches. Project-specific behavior is expressed in the linked instructions and explicit launch parameters, not a separate project runtime override.
+
+Leave `forceTopLevelAsync` unset or false; do not disable `waitTool`. Explicit `async: false` remains available for a genuinely required blocking exception. Async defaults alone cannot guarantee a responsive main chat if the caller explicitly blocks, waits, or runs other long tools inline. Ordinary async completion notifications need neither blocking waits nor polling.
+
+Settle active children before restarting or reloading Pi to load the updated configuration and instructions. This does not change a retained child's contract. Verify the effective configuration and the next authorized launch; source-contract tests do not prove live responsiveness, completion delivery, or survival after process exit.
+
 ## Mixed-provider routing
 
 [APPEND_SYSTEM.md](APPEND_SYSTEM.md) owns the routing, capacity, and recovery policy. All six native child roles prefer Fable: scout uses low thinking with Luna as backup; worker, delegate, and researcher use medium with Astra as backup; reviewer uses the same order at high, and oracle at max. All six start fresh unless a launch explicitly needs a fork. These are native provider choices, not duplicate role profiles or a change of execution harness.
