@@ -11,16 +11,16 @@ const read = (path) => readFileSync(new URL(path, root), 'utf8');
 
 // Offline wrapper/configuration contracts only. The upstream extension is injected,
 // never imported here: CI does not install Pi, access accounts, or start children.
-test('main fallback has only the exact approved Astra-to-Opus rule', () => {
+test('main fallback has only the exact approved Astra-to-Fable rule', () => {
   assert.deepEqual(JSON.parse(read('.pi/model-fallback/config.json')), {
     version: 1,
     enabled: true,
     rules: [
       {
-        name: 'astra-to-opus',
+        name: 'astra-to-fable',
         matchModels: [{ provider: 'openai-codex', model: 'gpt-6-astra' }],
         statuses: [429, 500, 502, 503, 504],
-        fallback: { provider: 'pi-claude-code-provider', model: 'opus' },
+        fallback: { provider: 'pi-claude-code-provider', model: 'fable' },
       },
     ],
   });

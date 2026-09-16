@@ -5,7 +5,7 @@ import test from 'node:test';
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const settings = JSON.parse(read('.pi/settings.json'));
 const roles = settings.subagents.agentOverrides;
-const claude = 'pi-claude-code-provider/opus';
+const claude = 'pi-claude-code-provider/fable';
 const astra = 'openai-codex/gpt-6-astra';
 const jsonExamples = [...read('.pi/README.md').matchAll(/```json\n([\s\S]*?)\n```/g)].map((match) =>
   JSON.parse(match[1]),
@@ -31,9 +31,12 @@ test('main-session documentation agrees with high defaults without stale max req
   const mainRoutes = policy.split('\n\n')[1];
   assert.ok(mainRoutes.includes(`\`${astra}:high\``));
   assert.ok(mainRoutes.includes(`\`${claude}:high\``));
-  assert.match(setup, /Astra\/high → Opus\/high/);
+  assert.match(setup, /Astra\/high → Fable\/high/);
   for (const text of [policy, setup]) {
-    assert.doesNotMatch(text, /flagship\/max|Astra\/max|Opus\/max|max thinking|set max for both/);
+    assert.doesNotMatch(
+      text,
+      /flagship\/max|Astra\/max|Opus\/max|Fable\/max|max thinking|set max for both/,
+    );
   }
 });
 
@@ -110,7 +113,7 @@ test('the documented 1M opt-in changes only private Opus context metadata', () =
 test('the runtime prompt retains quota uncertainty, native boundaries, and safe recovery', () => {
   const policy = read('.pi/APPEND_SYSTEM.md');
   assert.match(policy, /Pi owns tools, prompts, permissions, supervision, and lifecycle/);
-  assert.match(policy, /Main Pi uses GPT first, then Opus/);
+  assert.match(policy, /Main Pi uses GPT first, then Fable/);
   assert.match(policy, /Both main routes default to high thinking/);
   assert.match(policy, /main-only project loader, not directly into children/);
   assert.match(policy, /it does not itself replay the failed prompt/);
