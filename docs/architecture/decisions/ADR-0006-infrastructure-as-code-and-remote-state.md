@@ -37,6 +37,8 @@ infra/
 
 Web and API hold **separate state**, so applying one cannot lock, mutate, or break the other. Values crossing stacks pass as explicit declared inputs or by reading a published output, never by one stack reaching into another's internals.
 
+Separate state is not by itself separate authority. Each declared resource's create, update and delete operations are owned by exactly one named execution identity under one catalog v2 row, recorded in [`tools/delivery/execution-identities.mjs`](../../../tools/delivery/execution-identities.mjs) and enforced statically against the committed configuration. Bootstrap resources are human-executed because they establish the deployer's own authority; ordinary stack shape belongs to the stack executor; telemetry, cost and access bindings are separately approved operations rather than incidental resources in whichever stack happens to declare them. Adding a resource without an owner fails the gate.
+
 ### State backend
 
 State lives in dedicated **Google Cloud Storage** buckets in the maintainer-owned account and selected `us-west1` region, separated by stack, with:
