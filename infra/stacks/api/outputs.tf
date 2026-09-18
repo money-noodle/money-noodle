@@ -34,3 +34,8 @@ output "configured_revision_suffix" {
   description = "Revision suffix in desired state, preserved during traffic-only rollback."
   value       = module.service.configured_revision_suffix
 }
+
+output "contract_public_invoker_members" {
+  description = "Members holding `roles/run.invoker` publicly. Empty until the separately reviewed exposure step is applied."
+  value       = module.service.public_invoker_members
+}

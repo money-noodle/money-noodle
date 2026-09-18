@@ -58,6 +58,18 @@ variable "rollback_revision" {
   default     = null
 }
 
+variable "allow_unauthenticated" {
+  description = <<-EOT
+    Whether `allUsers` may invoke this service. Default false, because the
+    accepted exposure order creates the service privately, verifies it
+    independently, and only then exposes it as a separate reviewed step. Turning
+    this on is that separate step; it must never be part of the apply that
+    creates the service.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "api_base_url_override" {
   description = <<-EOT
     Explicit API origin, overriding the value read from the API stack's published

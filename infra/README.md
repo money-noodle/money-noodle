@@ -135,6 +135,42 @@ denial for an accidental reason is a denial that disappears with the next edit.
   policy administration is revisited with the first real secret.
 - **Any destroy path in automation.** Removing a resource is a reviewed code
   change.
+- **Any public service on creation.** See the exposure order below.
+
+## Exposure order: create private, verify, then expose
+
+`docs/operations/delivery.md` requires a stricter order for first creation than
+for an ordinary release: create the service with no public IAM, verify it
+independently with a separate read-only identity and an audience-bound ID
+token, and only then expose it. Exposure is a distinct reviewed step, because a
+service that is public the moment it exists cannot be verified before it is
+reachable.
+
+The configuration follows that order in two steps:
+
+1. **Create private.** `allow_unauthenticated` defaults to `false` in
+   `modules/cloud-run-service` and in both the `api` and `web` stacks, and the
+   delivery workflow supplies no value for it. So the apply that creates a
+   service declares no `allUsers` binding at all — not a binding that is later
+   narrowed. The least-privilege service-to-service grant
+   (`authorised_invoker_members`) exists independently, so the web can reach a
+   still-private API, and closing public access later does not break the web.
+2. **Expose.** Setting `allow_unauthenticated = true` is a separate reviewed
+   change, applied after the private service has been verified. It adds exactly
+   `allUsers`/`roles/run.invoker` through the single `public` resource. Each
+   stack publishes `contract_public_invoker_members`, so whether a service is
+   public is answerable from state rather than from a provider console.
+
+There is one writer of that binding, no `ignore_changes`, and no `import`
+block: an exposure that was never reviewed shows up as drift instead of being
+adopted as desired state. `tests/exposure.tftest.hcl` in the module and in both
+stacks asserts the creating plan produces no public binding, and
+`tools/infra-policy.test.mjs` asserts the defaults, the single writer, and that
+no workflow input can collapse create and expose into one apply.
+
+This covers the *configuration* half of the accepted order. The independent
+verification between the two steps, and the separate approval that authorises
+the exposure operation, are operational gates and are not expressible here.
 
 ## Delivery input and rollback contract
 

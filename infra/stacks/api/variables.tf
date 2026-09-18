@@ -54,9 +54,15 @@ variable "rollback_revision" {
 }
 
 variable "allow_unauthenticated" {
-  description = "Whether `allUsers` may invoke, matching the accepted public `api.noodle.money` target."
+  description = <<-EOT
+    Whether `allUsers` may invoke this service. Default false, because the
+    accepted exposure order creates the service privately, verifies it
+    independently, and only then exposes it as a separate reviewed step. The
+    accepted public `api.noodle.money` target is the end state, not the state
+    the creating apply may produce.
+  EOT
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "authorised_invoker_members" {

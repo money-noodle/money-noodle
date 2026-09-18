@@ -61,9 +61,12 @@ module "service" {
   # The web calls the API server-side with a bounded timeout and no retry fan-out.
   request_timeout_seconds = 15
 
-  # Public on the interim `*.run.app` URL, matching the accepted target of a
-  # public `api.noodle.money`. The least-privilege service-to-service grant below
-  # exists regardless, so closing public access later does not also break the web.
+  # Created private. Public invocation on the interim `*.run.app` URL is the
+  # accepted end state, but it is applied as a separate reviewed step after the
+  # private service has been independently verified. The least-privilege
+  # service-to-service grant below exists regardless, so the web can reach the
+  # API while the API is still private, and closing public access later does not
+  # break the web.
   allow_unauthenticated      = var.allow_unauthenticated
   authorised_invoker_members = var.authorised_invoker_members
 
