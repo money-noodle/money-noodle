@@ -18,6 +18,8 @@ on:
     paths:
       - 'infra/**'
       - 'tools/infra-*.mjs'
+      - 'tools/delivery/**'
+      - 'tools/delivery-control-policy.test.mjs'
       - '.github/workflows/delivery.yml'
       - 'apps/web/**'
       - 'services/platform-api/**'
@@ -30,6 +32,8 @@ on:
     paths:
       - 'infra/**'
       - 'tools/infra-*.mjs'
+      - 'tools/delivery/**'
+      - 'tools/delivery-control-policy.test.mjs'
       - '.github/workflows/delivery.yml'
       - 'apps/web/**'
       - 'services/platform-api/**'
@@ -125,6 +129,11 @@ jobs:
 
       - name: Static infrastructure and delivery policy guards
         run: node --test tools/infra-policy.test.mjs tools/infra-delivery-policy.test.mjs
+
+      - name: Provider-disabled delivery control policy guards
+        # Grant, journal and witness adapter behaviour. No provider, no
+        # credential, no network: see `tools/delivery/README.md`.
+        run: node --test tools/delivery-control-policy.test.mjs
 
       - name: Format, validate, and test every module and stack
         run: node tools/infra-check.mjs all
