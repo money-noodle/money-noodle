@@ -479,3 +479,140 @@ test('no DNS resource is declared, so Vercel remains authoritative for noodle.mo
     }
   }
 });
+
+/* ------------------------------------------------------- private-before-public */
+
+// `docs/operations/delivery.md` requires a stricter order for first creation:
+// create the service privately, verify it independently with a separate
+// read-only identity and an audience-bound token, and only then expose it as a
+// separate reviewed step. A hardcoded `true`, or a default of `true`, would make
+// the apply that creates a service the apply that publishes it — and a service
+// that is public on creation cannot be verified before it is reachable.
+
+test('a service is created private and exposed only as a separate reviewed step', () => {
+  const moduleVariables = read(join(infraRoot, 'modules', 'cloud-run-service', 'variables.tf'));
+  const moduleBlock = moduleVariables.match(
+    /variable "allow_unauthenticated" \{([\s\S]*?)\n\}/,
+  )?.[1];
+  assert.ok(moduleBlock, 'the service module must declare allow_unauthenticated');
+  assert.match(
+    moduleBlock,
+    /default\s*=\s*false/,
+    'the service module must default to a private service',
+  );
+
+  for (const stack of ['api', 'web']) {
+    const variables = read(join(infraRoot, 'stacks', stack, 'variables.tf'));
+    const block = variables.match(/variable "allow_unauthenticated" \{([\s\S]*?)\n\}/)?.[1];
+    assert.ok(block, `the ${stack} stack must declare allow_unauthenticated as a reviewed input`);
+    assert.match(
+      block,
+      /default\s*=\s*false/,
+      `the ${stack} stack must default to a private service, so its first apply creates nothing public`,
+    );
+
+    const main = read(join(infraRoot, 'stacks', stack, 'main.tf'));
+    assert.match(
+      main,
+      /allow_unauthenticated\s*=\s*var\.allow_unauthenticated/,
+      `the ${stack} stack must pass the reviewed variable rather than a literal`,
+    );
+    assert.doesNotMatch(
+      main,
+      /allow_unauthenticated\s*=\s*true/,
+      `the ${stack} stack hardcodes public access, so a single apply would both create and expose the service`,
+    );
+  }
+});
+
+test('no pipeline run can expose a service while creating it', () => {
+  // Exposure must be a distinct, reviewed change. If the delivery workflow could
+  // supply the value, a create and an expose would collapse into one dispatch.
+  const delivery = read(join(repoRoot, '.github', 'workflows', 'delivery.yml'));
+  assert.ok(
+    !delivery.includes('allow_unauthenticated'),
+    'the delivery workflow must supply no public-access value; exposure is a separate reviewed change, not a workflow input',
+  );
+});
+
+test('the public invoker binding has one writer and no suppressed drift', () => {
+  const competing = [
+    /resource\s+"google_cloud_run_v2_service_iam_policy"/,
+    /resource\s+"google_cloud_run_v2_service_iam_binding"/,
+    /resource\s+"google_cloud_run_service_iam_policy"/,
+    /resource\s+"google_cloud_run_service_iam_binding"/,
+  ];
+
+  const declarations = [];
+  for (const path of tofuFiles) {
+    const source = read(path);
+    for (const pattern of competing) {
+      assert.ok(
+        !pattern.test(source),
+        `${relative(path)} declares a second writer of the invoker policy. Two writers make who may invoke ambiguous, and a whole-policy resource can silently drop the least-privilege service-to-service grant.`,
+      );
+    }
+    assert.ok(
+      !/\nimport\s*\{/.test(source),
+      `${relative(path)} declares an import block. Adopting an out-of-band IAM binding would make an exposure that was never reviewed look like desired state.`,
+    );
+    if (/resource\s+"google_cloud_run_v2_service_iam_member"\s+"public"/.test(source)) {
+      declarations.push(path);
+    }
+  }
+
+  assert.equal(
+    declarations.length,
+    1,
+    'exactly one resource may grant public invocation, so exposure is reviewable in one place',
+  );
+
+  const block = read(declarations[0]).match(
+    /resource\s+"google_cloud_run_v2_service_iam_member"\s+"public"\s*\{([\s\S]*?)\n\}/,
+  )?.[1];
+  assert.ok(block, 'expected the public invoker binding to be readable');
+  assert.ok(
+    !/ignore_changes/.test(block),
+    'the public binding must not ignore changes; drift in who may invoke has to be visible',
+  );
+  assert.match(
+    block,
+    /count\s*=\s*var\.allow_unauthenticated\s*\?\s*1\s*:\s*0/,
+    'the public binding must exist only when the reviewed input asks for it',
+  );
+  assert.match(block, /member\s*=\s*"allUsers"/, 'the public binding must add exactly `allUsers`');
+});
+
+test('an HCL test proves a created service carries no allUsers binding', () => {
+  for (const [label, path] of [
+    [
+      'the service module',
+      join(infraRoot, 'modules', 'cloud-run-service', 'tests', 'exposure.tftest.hcl'),
+    ],
+    ['the api stack', join(infraRoot, 'stacks', 'api', 'tests', 'exposure.tftest.hcl')],
+    ['the web stack', join(infraRoot, 'stacks', 'web', 'tests', 'exposure.tftest.hcl')],
+  ]) {
+    assert.ok(existsSync(path), `${label} must carry an exposure test`);
+    const source = read(path);
+    assert.match(
+      source,
+      /mock_provider "google" \{\}/,
+      `${label}'s exposure test must mock the provider and reach no provider API`,
+    );
+    assert.match(
+      source,
+      /== 0\n/,
+      `${label}'s exposure test must assert that creation produces no public binding`,
+    );
+    assert.match(
+      source,
+      /allow_unauthenticated = true/,
+      `${label}'s exposure test must also cover the separate exposure step`,
+    );
+    assert.match(
+      source,
+      /"allUsers"/,
+      `${label}'s exposure test must assert the exposed member is exactly allUsers`,
+    );
+  }
+});

@@ -42,3 +42,8 @@ output "source_commit" {
   description = "Reviewed commit the running artifact was built from."
   value       = var.source_commit
 }
+
+output "public_invoker_members" {
+  description = "Members holding `roles/run.invoker` through the public binding. Empty means the service is private; derived from the declared resource, not from the input."
+  value       = google_cloud_run_v2_service_iam_member.public[*].member
+}

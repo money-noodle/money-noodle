@@ -201,8 +201,13 @@ resource "google_cloud_run_v2_service" "service" {
   }
 }
 
-# Public invocation for the interim `*.run.app` entry point. Held in a variable
-# so that making a service private later is a reviewed change to one value.
+# Public invocation for the interim `*.run.app` entry point, and the only writer
+# of that binding. `var.allow_unauthenticated` defaults to false, so the apply
+# that creates a service cannot also expose it: exposure is a later, separately
+# reviewed change to one value, applied once the private service has been
+# independently verified. There is deliberately no `ignore_changes` and no
+# competing policy or binding resource, so the reviewed desired state stays the
+# single source of truth for who may invoke.
 resource "google_cloud_run_v2_service_iam_member" "public" {
   count = var.allow_unauthenticated ? 1 : 0
 

@@ -183,7 +183,12 @@ variable "ingress" {
 }
 
 variable "allow_unauthenticated" {
-  description = "Whether `allUsers` may invoke. True for the interim public `*.run.app` entry point."
+  description = <<-EOT
+    Whether `allUsers` may invoke. False creates a private service. The accepted
+    exposure order is create private, verify independently, then expose as a
+    separate reviewed step, so this stays false through the apply that creates a
+    service and is turned on only afterwards.
+  EOT
   type        = bool
   default     = false
 }

@@ -77,8 +77,11 @@ module "service" {
 
   request_timeout_seconds = 30
 
-  # The public entry point for the first remote validation.
-  allow_unauthenticated = true
+  # Created private. The web is the intended public entry point for the first
+  # remote validation, but exposing it is a separate reviewed step taken after
+  # the private service has been independently verified, never part of the apply
+  # that creates it.
+  allow_unauthenticated = var.allow_unauthenticated
 
   # The web reads no secret. ADR-0005: the web workload identity may not read the
   # registry, infrastructure state, or any secret.
