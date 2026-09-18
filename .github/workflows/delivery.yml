@@ -237,6 +237,83 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # Repository variables are not secrets, so GitHub masks none of their
+      # values. Register every configured account identifier as a masked value,
+      # which redacts provider output reaching the raw log, and write the same
+      # rules to disk for text that reaches a job summary, which is never
+      # masked. An unset variable contributes no rule, so a provider-disabled
+      # run redacts nothing and still succeeds.
+      - name: Mask account identifiers and write the redaction rules
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_PROJECT_NUMBER: ${{ vars.GCP_PROJECT_NUMBER }}
+          GCP_BILLING_ACCOUNT_ID: ${{ vars.GCP_BILLING_ACCOUNT_ID }}
+          GCP_STATE_BUCKET_PREFIX: ${{ vars.GCP_STATE_BUCKET_PREFIX }}
+          GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON: ${{ vars.GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/redact-account-identifiers.py" <<'PY'
+          # Replaces every configured account identifier in each named file with
+          # its placeholder. Rules arrive longest value first, so redacting a
+          # short identifier cannot leave the tail of a longer one behind. A
+          # missing file is not an error: a failed render has nothing to redact.
+          import json
+          import sys
+          from pathlib import Path
+
+          rules = json.loads(Path(sys.argv[1]).read_text())
+          for name in sys.argv[2:]:
+              target = Path(name)
+              if not target.exists():
+                  continue
+              text = target.read_text()
+              for value, placeholder in rules:
+                  text = text.replace(value, placeholder)
+              target.write_text(text)
+          PY
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          # The state-bucket prefix is the only account-chosen part of a derived
+          # bucket name, so redacting it also redacts every "<prefix>-<stack>"
+          # bucket while leaving the public stack name readable.
+          NAMED = (
+              ('GCP_BILLING_ACCOUNT_ID', '<billing-account-id>'),
+              ('GCP_PROJECT_ID', '<project-id>'),
+              ('GCP_PROJECT_NUMBER', '<project-number>'),
+              ('GCP_STATE_BUCKET_PREFIX', '<state-bucket-prefix>'),
+          )
+
+          candidates = [
+              (os.environ.get(name, '').strip(), placeholder) for name, placeholder in NAMED
+          ]
+
+          raw = os.environ.get('GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON', '').strip()
+          try:
+              addresses = json.loads(raw) if raw else []
+          except ValueError:
+              addresses = []
+          if isinstance(addresses, list):
+              candidates += [
+                  (str(address).strip(), '<budget-alert-address>') for address in addresses
+              ]
+
+          # A value this short would match unrelated plan text. Every real
+          # identifier is far longer, so a shorter one is a misconfiguration
+          # rather than a usable rule.
+          rules = sorted(
+              ((value, placeholder) for value, placeholder in candidates if len(value) >= 4),
+              key=lambda rule: len(rule[0]),
+              reverse=True,
+          )
+
+          Path(os.environ['RUNNER_TEMP'], 'account-redactions.json').write_text(json.dumps(rules))
+          for value, _ in rules:
+              print(f'::add-mask::{value}')
+          PY
+
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 11.24.0
@@ -355,6 +432,83 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # Repository variables are not secrets, so GitHub masks none of their
+      # values. Register every configured account identifier as a masked value,
+      # which redacts provider output reaching the raw log, and write the same
+      # rules to disk for text that reaches a job summary, which is never
+      # masked. An unset variable contributes no rule, so a provider-disabled
+      # run redacts nothing and still succeeds.
+      - name: Mask account identifiers and write the redaction rules
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_PROJECT_NUMBER: ${{ vars.GCP_PROJECT_NUMBER }}
+          GCP_BILLING_ACCOUNT_ID: ${{ vars.GCP_BILLING_ACCOUNT_ID }}
+          GCP_STATE_BUCKET_PREFIX: ${{ vars.GCP_STATE_BUCKET_PREFIX }}
+          GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON: ${{ vars.GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/redact-account-identifiers.py" <<'PY'
+          # Replaces every configured account identifier in each named file with
+          # its placeholder. Rules arrive longest value first, so redacting a
+          # short identifier cannot leave the tail of a longer one behind. A
+          # missing file is not an error: a failed render has nothing to redact.
+          import json
+          import sys
+          from pathlib import Path
+
+          rules = json.loads(Path(sys.argv[1]).read_text())
+          for name in sys.argv[2:]:
+              target = Path(name)
+              if not target.exists():
+                  continue
+              text = target.read_text()
+              for value, placeholder in rules:
+                  text = text.replace(value, placeholder)
+              target.write_text(text)
+          PY
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          # The state-bucket prefix is the only account-chosen part of a derived
+          # bucket name, so redacting it also redacts every "<prefix>-<stack>"
+          # bucket while leaving the public stack name readable.
+          NAMED = (
+              ('GCP_BILLING_ACCOUNT_ID', '<billing-account-id>'),
+              ('GCP_PROJECT_ID', '<project-id>'),
+              ('GCP_PROJECT_NUMBER', '<project-number>'),
+              ('GCP_STATE_BUCKET_PREFIX', '<state-bucket-prefix>'),
+          )
+
+          candidates = [
+              (os.environ.get(name, '').strip(), placeholder) for name, placeholder in NAMED
+          ]
+
+          raw = os.environ.get('GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON', '').strip()
+          try:
+              addresses = json.loads(raw) if raw else []
+          except ValueError:
+              addresses = []
+          if isinstance(addresses, list):
+              candidates += [
+                  (str(address).strip(), '<budget-alert-address>') for address in addresses
+              ]
+
+          # A value this short would match unrelated plan text. Every real
+          # identifier is far longer, so a shorter one is a misconfiguration
+          # rather than a usable rule.
+          rules = sorted(
+              ((value, placeholder) for value, placeholder in candidates if len(value) >= 4),
+              key=lambda rule: len(rule[0]),
+              reverse=True,
+          )
+
+          Path(os.environ['RUNNER_TEMP'], 'account-redactions.json').write_text(json.dumps(rules))
+          for value, _ in rules:
+              print(f'::add-mask::{value}')
+          PY
+
       - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
         with:
           tofu_version: ${{ env.TOFU_VERSION }}
@@ -410,17 +564,11 @@ jobs:
           # Rendered without values that state may hold; the binary plan is never
           # uploaded as an artifact.
           tofu show -no-color stack.tfplan > plan.txt
-          # Notification destinations are account data, not review evidence.
-          # Redact them before the plan reaches logs or a job summary.
-          python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          path = Path('plan.txt')
-          text = path.read_text()
-          for address in json.loads(os.environ['TF_VAR_budget_alert_email_addresses']):
-              text = text.replace(address, '<budget-alert-address>')
-          path.write_text(text)
-          PY
+          # Account identifiers and notification destinations are account data,
+          # not review evidence. A job summary is not masked, so redact the
+          # rendered text before it is published.
+          python3 "$RUNNER_TEMP/redact-account-identifiers.py" \
+            "$RUNNER_TEMP/account-redactions.json" plan.txt
           {
             echo "### Plan for \`$STACK\`"
             echo '```'
@@ -463,6 +611,83 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # Repository variables are not secrets, so GitHub masks none of their
+      # values. Register every configured account identifier as a masked value,
+      # which redacts provider output reaching the raw log, and write the same
+      # rules to disk for text that reaches a job summary, which is never
+      # masked. An unset variable contributes no rule, so a provider-disabled
+      # run redacts nothing and still succeeds.
+      - name: Mask account identifiers and write the redaction rules
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_PROJECT_NUMBER: ${{ vars.GCP_PROJECT_NUMBER }}
+          GCP_BILLING_ACCOUNT_ID: ${{ vars.GCP_BILLING_ACCOUNT_ID }}
+          GCP_STATE_BUCKET_PREFIX: ${{ vars.GCP_STATE_BUCKET_PREFIX }}
+          GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON: ${{ vars.GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/redact-account-identifiers.py" <<'PY'
+          # Replaces every configured account identifier in each named file with
+          # its placeholder. Rules arrive longest value first, so redacting a
+          # short identifier cannot leave the tail of a longer one behind. A
+          # missing file is not an error: a failed render has nothing to redact.
+          import json
+          import sys
+          from pathlib import Path
+
+          rules = json.loads(Path(sys.argv[1]).read_text())
+          for name in sys.argv[2:]:
+              target = Path(name)
+              if not target.exists():
+                  continue
+              text = target.read_text()
+              for value, placeholder in rules:
+                  text = text.replace(value, placeholder)
+              target.write_text(text)
+          PY
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          # The state-bucket prefix is the only account-chosen part of a derived
+          # bucket name, so redacting it also redacts every "<prefix>-<stack>"
+          # bucket while leaving the public stack name readable.
+          NAMED = (
+              ('GCP_BILLING_ACCOUNT_ID', '<billing-account-id>'),
+              ('GCP_PROJECT_ID', '<project-id>'),
+              ('GCP_PROJECT_NUMBER', '<project-number>'),
+              ('GCP_STATE_BUCKET_PREFIX', '<state-bucket-prefix>'),
+          )
+
+          candidates = [
+              (os.environ.get(name, '').strip(), placeholder) for name, placeholder in NAMED
+          ]
+
+          raw = os.environ.get('GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON', '').strip()
+          try:
+              addresses = json.loads(raw) if raw else []
+          except ValueError:
+              addresses = []
+          if isinstance(addresses, list):
+              candidates += [
+                  (str(address).strip(), '<budget-alert-address>') for address in addresses
+              ]
+
+          # A value this short would match unrelated plan text. Every real
+          # identifier is far longer, so a shorter one is a misconfiguration
+          # rather than a usable rule.
+          rules = sorted(
+              ((value, placeholder) for value, placeholder in candidates if len(value) >= 4),
+              key=lambda rule: len(rule[0]),
+              reverse=True,
+          )
+
+          Path(os.environ['RUNNER_TEMP'], 'account-redactions.json').write_text(json.dumps(rules))
+          for value, _ in rules:
+              print(f'::add-mask::{value}')
+          PY
+
       - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
         with:
           tofu_version: ${{ env.TOFU_VERSION }}
@@ -498,15 +723,11 @@ jobs:
           tofu plan -input=false -lock-timeout=5m -refresh-only -detailed-exitcode -no-color > drift.txt
           status=$?
           set -e
-          python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          path = Path('drift.txt')
-          text = path.read_text()
-          for address in json.loads(os.environ['TF_VAR_budget_alert_email_addresses']):
-              text = text.replace(address, '<budget-alert-address>')
-          path.write_text(text)
-          PY
+          # Account identifiers and notification destinations are account data,
+          # not review evidence. A job summary is not masked, so redact the
+          # rendered text before it is published.
+          python3 "$RUNNER_TEMP/redact-account-identifiers.py" \
+            "$RUNNER_TEMP/account-redactions.json" drift.txt
           case "$status" in
             0) echo "No drift detected in $STACK." ;;
             2)
@@ -555,6 +776,83 @@ jobs:
       TF_VAR_budget_alert_email_addresses: ${{ vars.GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # Repository variables are not secrets, so GitHub masks none of their
+      # values. Register every configured account identifier as a masked value,
+      # which redacts provider output reaching the raw log, and write the same
+      # rules to disk for text that reaches a job summary, which is never
+      # masked. An unset variable contributes no rule, so a provider-disabled
+      # run redacts nothing and still succeeds.
+      - name: Mask account identifiers and write the redaction rules
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_PROJECT_NUMBER: ${{ vars.GCP_PROJECT_NUMBER }}
+          GCP_BILLING_ACCOUNT_ID: ${{ vars.GCP_BILLING_ACCOUNT_ID }}
+          GCP_STATE_BUCKET_PREFIX: ${{ vars.GCP_STATE_BUCKET_PREFIX }}
+          GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON: ${{ vars.GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/redact-account-identifiers.py" <<'PY'
+          # Replaces every configured account identifier in each named file with
+          # its placeholder. Rules arrive longest value first, so redacting a
+          # short identifier cannot leave the tail of a longer one behind. A
+          # missing file is not an error: a failed render has nothing to redact.
+          import json
+          import sys
+          from pathlib import Path
+
+          rules = json.loads(Path(sys.argv[1]).read_text())
+          for name in sys.argv[2:]:
+              target = Path(name)
+              if not target.exists():
+                  continue
+              text = target.read_text()
+              for value, placeholder in rules:
+                  text = text.replace(value, placeholder)
+              target.write_text(text)
+          PY
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          # The state-bucket prefix is the only account-chosen part of a derived
+          # bucket name, so redacting it also redacts every "<prefix>-<stack>"
+          # bucket while leaving the public stack name readable.
+          NAMED = (
+              ('GCP_BILLING_ACCOUNT_ID', '<billing-account-id>'),
+              ('GCP_PROJECT_ID', '<project-id>'),
+              ('GCP_PROJECT_NUMBER', '<project-number>'),
+              ('GCP_STATE_BUCKET_PREFIX', '<state-bucket-prefix>'),
+          )
+
+          candidates = [
+              (os.environ.get(name, '').strip(), placeholder) for name, placeholder in NAMED
+          ]
+
+          raw = os.environ.get('GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON', '').strip()
+          try:
+              addresses = json.loads(raw) if raw else []
+          except ValueError:
+              addresses = []
+          if isinstance(addresses, list):
+              candidates += [
+                  (str(address).strip(), '<budget-alert-address>') for address in addresses
+              ]
+
+          # A value this short would match unrelated plan text. Every real
+          # identifier is far longer, so a shorter one is a misconfiguration
+          # rather than a usable rule.
+          rules = sorted(
+              ((value, placeholder) for value, placeholder in candidates if len(value) >= 4),
+              key=lambda rule: len(rule[0]),
+              reverse=True,
+          )
+
+          Path(os.environ['RUNNER_TEMP'], 'account-redactions.json').write_text(json.dumps(rules))
+          for value, _ in rules:
+              print(f'::add-mask::{value}')
+          PY
 
       - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
         with:
@@ -678,6 +976,83 @@ jobs:
       TF_VAR_api_state_bucket: ${{ format('{0}-api', vars.GCP_STATE_BUCKET_PREFIX) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # Repository variables are not secrets, so GitHub masks none of their
+      # values. Register every configured account identifier as a masked value,
+      # which redacts provider output reaching the raw log, and write the same
+      # rules to disk for text that reaches a job summary, which is never
+      # masked. An unset variable contributes no rule, so a provider-disabled
+      # run redacts nothing and still succeeds.
+      - name: Mask account identifiers and write the redaction rules
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_PROJECT_NUMBER: ${{ vars.GCP_PROJECT_NUMBER }}
+          GCP_BILLING_ACCOUNT_ID: ${{ vars.GCP_BILLING_ACCOUNT_ID }}
+          GCP_STATE_BUCKET_PREFIX: ${{ vars.GCP_STATE_BUCKET_PREFIX }}
+          GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON: ${{ vars.GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/redact-account-identifiers.py" <<'PY'
+          # Replaces every configured account identifier in each named file with
+          # its placeholder. Rules arrive longest value first, so redacting a
+          # short identifier cannot leave the tail of a longer one behind. A
+          # missing file is not an error: a failed render has nothing to redact.
+          import json
+          import sys
+          from pathlib import Path
+
+          rules = json.loads(Path(sys.argv[1]).read_text())
+          for name in sys.argv[2:]:
+              target = Path(name)
+              if not target.exists():
+                  continue
+              text = target.read_text()
+              for value, placeholder in rules:
+                  text = text.replace(value, placeholder)
+              target.write_text(text)
+          PY
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          # The state-bucket prefix is the only account-chosen part of a derived
+          # bucket name, so redacting it also redacts every "<prefix>-<stack>"
+          # bucket while leaving the public stack name readable.
+          NAMED = (
+              ('GCP_BILLING_ACCOUNT_ID', '<billing-account-id>'),
+              ('GCP_PROJECT_ID', '<project-id>'),
+              ('GCP_PROJECT_NUMBER', '<project-number>'),
+              ('GCP_STATE_BUCKET_PREFIX', '<state-bucket-prefix>'),
+          )
+
+          candidates = [
+              (os.environ.get(name, '').strip(), placeholder) for name, placeholder in NAMED
+          ]
+
+          raw = os.environ.get('GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON', '').strip()
+          try:
+              addresses = json.loads(raw) if raw else []
+          except ValueError:
+              addresses = []
+          if isinstance(addresses, list):
+              candidates += [
+                  (str(address).strip(), '<budget-alert-address>') for address in addresses
+              ]
+
+          # A value this short would match unrelated plan text. Every real
+          # identifier is far longer, so a shorter one is a misconfiguration
+          # rather than a usable rule.
+          rules = sorted(
+              ((value, placeholder) for value, placeholder in candidates if len(value) >= 4),
+              key=lambda rule: len(rule[0]),
+              reverse=True,
+          )
+
+          Path(os.environ['RUNNER_TEMP'], 'account-redactions.json').write_text(json.dumps(rules))
+          for value, _ in rules:
+              print(f'::add-mask::{value}')
+          PY
 
       - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
         with:
