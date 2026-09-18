@@ -376,6 +376,73 @@ test('a self-issued grant is refused', () => {
   );
 });
 
+test('the human bootstrap row is approver and executor by design, and stays exempt', () => {
+  // `bootstrap.initialize` reads "HB; principal -> independent readers": the
+  // principal executes it personally. Separation comes from the independent
+  // verifiers and the enumerated manifest, not from a second actor, so the
+  // self-issue rule must not deny the one row defined to have that property.
+  const genesis = rebuild({
+    operation: 'bootstrap.initialize',
+    permissionSlot: 'bootstrap-initialize',
+    executorClass: 'principal',
+    verifierClass: 'independent-readers',
+    principal: 'synthetic-principal',
+    requester: 'synthetic-principal',
+    effectBounds: { 'initialize-journal': 1 },
+    targetVector: [
+      {
+        actionCounts: { 'initialize-journal': 1 },
+        configurationVersion: 'genesis-1',
+        expectedSafeVersions: { journal: 'none' },
+        intendedSafeVersions: { journal: 'genesis' },
+        logicalIncarnation: 'synthetic-journal-1',
+      },
+    ],
+    transportPhases: [
+      {
+        actionId: 'initialize-journal',
+        maxSubmissions: 1,
+        phaseId: 'genesis',
+        targetIds: ['synthetic-journal-1'],
+      },
+    ],
+  });
+
+  const humanOwner = {
+    principal: 'synthetic-principal',
+    bootstrapInvocationId: 'hb-1',
+    controlSourceSHA: 'd'.repeat(40),
+  };
+
+  const decision = decide({
+    consent: genesis.consent,
+    execution: execution({ actor: 'synthetic-principal', executorOwner: humanOwner }),
+    ledger: ledger({ corroboration: null }),
+  });
+  assert.equal(decision.allowed, true, JSON.stringify(decision.refusal ?? {}));
+  // Human-executed: there is no token of any kind to exchange.
+  assert.equal(decision.tokenClass, 'none');
+  assert.equal(decision.mayExchangeMutationToken, false);
+
+  // The workflow owner form cannot be substituted for the human one.
+  assertRefused(
+    decide({
+      consent: genesis.consent,
+      execution: execution({ actor: 'synthetic-principal' }),
+      ledger: ledger({ corroboration: null }),
+    }),
+    'executor-owner-stale',
+    'catalog.executor-owner',
+  );
+
+  // And the exemption is narrow: an ordinary row with the same actor is refused.
+  assertRefused(
+    decide({ execution: execution({ actor: 'synthetic-principal' }) }),
+    'self-issued-consent',
+    'catalog.no-self-grant',
+  );
+});
+
 test('a missing or unknown consent field denies rather than defaulting', () => {
   for (const field of CONSENT_FIELDS) {
     const consent = clone(EXAMPLE.consent);

@@ -595,6 +595,11 @@ export class Journal {
               witnessConfirmed: Boolean(this.#control.witness),
             }
           : null,
+      // The journal records what happened; it does not yet index which
+      // predecessors an independent verifier confirmed. Returning an empty list
+      // means a rollback is refused until a caller supplies that evidence
+      // explicitly, which is the safe direction: no verified predecessor means
+      // no rollback slot.
       verifiedPredecessors: [],
     };
   }

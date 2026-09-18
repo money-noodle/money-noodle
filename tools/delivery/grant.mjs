@@ -463,7 +463,15 @@ function checkOwner(row, consent, execution) {
   return null;
 }
 
-function checkSelfIssue(consent, execution) {
+function checkSelfIssue(row, consent, execution) {
+  // The human bootstrap is the one row where approver and executor are the same
+  // person by design: the catalog's own `bootstrap.initialize` row reads
+  // "HB; principal → independent readers". Separation there comes from the
+  // independent verifiers and the enumerated once-only manifest, not from a
+  // second actor. Applying the self-issue rule to it would deny the row for a
+  // property it is defined to have.
+  if (row.approvalClass === 'HB') return null;
+
   if (consent.principal === consent.requester) {
     return refuse(
       'catalog.no-self-grant',
@@ -748,6 +756,13 @@ function checkReplay(consent, grantKey, ledger, row) {
 
 function checkCorroboration(row, consent, ledger) {
   if (!row.mutating) return null;
+  // Genesis is the one mutation that cannot be preceded by journal and witness
+  // corroboration, because it is what creates them. The catalog resolves the
+  // circularity the other way round: no uncreated journal authorises its own
+  // creation, so the authority for genesis is the protected-main exact HB
+  // manifest and the principal's consent record, checked above, and the genesis
+  // event records `bootstrap-initialize` as spent once it exists.
+  if (row.approvalClass === 'HB') return null;
   const corroboration = ledger.corroboration ?? null;
   if (!corroboration) {
     return refuse(
@@ -826,7 +841,7 @@ export function evaluateGrant({ consent, execution, ledger = {}, expected = {}, 
     checkValidity(consent, evaluatedAt) ??
     checkTrustConjunction(row, execution) ??
     checkOwner(row, consent, execution) ??
-    checkSelfIssue(consent, execution) ??
+    checkSelfIssue(row, consent, execution) ??
     checkScope(row, consent);
   if (decision) return decision;
 
