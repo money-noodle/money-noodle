@@ -10,7 +10,9 @@
 // authorization, which is issue #14's final acceptance criterion.
 
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -647,4 +649,255 @@ test('the workflow authorised for delivery is the one that exists', () => {
     /name\s*=\s*"deleted-v2-branch"[\s\S]*?ref\s*=\s*"refs\/heads\/v2"/,
     'the trust suite must retain a negative case proving the deleted v2 branch is denied',
   );
+});
+
+/* ------------------------------------------------- account-identifier redaction */
+
+// Repository variables are not secrets, so GitHub masks none of their values.
+// Once #76 sets them, the billing account id, project id, project number and
+// state-bucket prefix would otherwise be rendered verbatim into a public job
+// summary by `tofu show`, and into a public log by `tofu apply`. These guards
+// assert that every identifier the workflow feeds to a provider has a
+// redaction rule, and they execute the workflow's own redaction programs
+// rather than only matching their text.
+
+const MASK_STEP = 'Mask account identifiers and write the redaction rules';
+const RULES_FILE = 'account-redactions.json';
+const REDACTOR_FILE = 'redact-account-identifiers.py';
+
+// An identifier short or generic enough to match unrelated plan text is more
+// dangerous as a rule than as output, so a few variables are deliberately not
+// redacted. Every entry needs a reason a reviewer can check.
+const unredactedVariables = new Map([
+  ['GCP_REGISTRY_HOST', 'a fixed public regional endpoint, not account data'],
+  ['GCP_REGISTRY_REPOSITORY', 'a generic repository name that would match unrelated plan text'],
+  [
+    'GCP_WORKLOAD_IDENTITY_PROVIDER',
+    'a resource name that grants nothing without a conforming token, and whose project number is covered by its own rule',
+  ],
+  ['GCP_DEPLOYER_SERVICE_ACCOUNT', 'an identity address that grants nothing without federation'],
+  ['INFRA_APPLY_AUTHORIZED', 'a typed authorization flag, not an identifier'],
+  ['PRODUCTION_ENVIRONMENT_REVIEWERS_VERIFIED', 'a typed verification flag, not an identifier'],
+]);
+
+// Returns the body of the masking step in the named job.
+function maskStep(jobName) {
+  const job = deliveryJobs().find(({ name }) => name === jobName);
+  assert.ok(job, `expected a ${jobName} job`);
+  const body = job.body.match(
+    new RegExp(`\\n {6}- name: ${MASK_STEP}\\n([\\s\\S]*?)(?=\\n {6}- |$)`),
+  )?.[1];
+  assert.ok(body, `job "${jobName}" has no "${MASK_STEP}" step`);
+  return body;
+}
+
+// Lifts a shell heredoc out of a `run: |` block and removes the workflow's
+// indentation, giving the exact program the runner executes.
+function heredoc(body, opener) {
+  const source = body.match(new RegExp(`${opener} <<'PY'\\n([\\s\\S]*?)\\n {10}PY\\n`))?.[1];
+  assert.ok(source, `expected a ${opener} heredoc`);
+  return `${source
+    .split('\n')
+    .map((line) => (line.startsWith(' '.repeat(10)) ? line.slice(10) : line))
+    .join('\n')}\n`;
+}
+
+// Writes the masking step's two programs into a scratch directory and returns
+// the rules the builder produces for the given repository-variable values.
+function buildRules(variables) {
+  const body = maskStep('plan');
+  const directory = mkdtempSync(join(tmpdir(), 'delivery-redaction-'));
+  const builder = join(directory, 'build-rules.py');
+  const redactor = join(directory, REDACTOR_FILE);
+  writeFileSync(builder, heredoc(body, 'python3 -'));
+  writeFileSync(redactor, heredoc(body, `cat > "\\$RUNNER_TEMP/${REDACTOR_FILE}"`));
+
+  const result = spawnSync('python3', [builder], {
+    encoding: 'utf8',
+    env: { RUNNER_TEMP: directory, ...variables },
+  });
+  assert.equal(
+    result.error?.code,
+    undefined,
+    'python3 must be available; this workflow redacts with it, so a silently skipped guard is worse than none',
+  );
+  assert.equal(result.status, 0, `the rule builder failed: ${result.stderr}`);
+
+  return {
+    directory,
+    redactor,
+    rulesPath: join(directory, RULES_FILE),
+    rules: JSON.parse(readFileSync(join(directory, RULES_FILE), 'utf8')),
+    masked: [...result.stdout.matchAll(/::add-mask::(.*)/g)].map(([, value]) => value),
+  };
+}
+
+test('every job that reaches a provider masks its account identifiers', () => {
+  const privileged = deliveryJobs().filter(({ body }) => /id-token:\s*write/.test(body));
+  assert.ok(privileged.length >= 4, 'expected several jobs to exchange a provider token');
+
+  for (const job of privileged) {
+    const body = maskStep(job.name);
+    assert.match(
+      body,
+      /::add-mask::/,
+      `job "${job.name}" must register account identifiers as masked values, or provider output reaches the public log verbatim`,
+    );
+    assert.ok(
+      body.includes(`Path(os.environ['RUNNER_TEMP'], '${RULES_FILE}')`),
+      `job "${job.name}" must persist the redaction rules for text that reaches a job summary`,
+    );
+  }
+
+  const checks = deliveryJobs().find(({ name }) => name === 'checks');
+  assert.ok(
+    !checks.body.includes(MASK_STEP),
+    'the static check job reaches no provider and needs no masking step',
+  );
+});
+
+test('every account identifier fed to OpenTofu has a redaction rule', () => {
+  const { rules } = buildRules({
+    GCP_PROJECT_ID: 'project-id-value',
+    GCP_PROJECT_NUMBER: '418273645901',
+    GCP_BILLING_ACCOUNT_ID: '01A2B3-4C5D6E-7F8901',
+    GCP_STATE_BUCKET_PREFIX: 'state-bucket-prefix-value',
+    GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON: '["alerts@example.test"]',
+  });
+  const ruled = new Set(rules.map(([, placeholder]) => placeholder));
+  const builder = heredoc(maskStep('plan'), 'python3 -');
+
+  // Every repository variable that reaches OpenTofu as a TF_VAR_*, plus the
+  // project id that reaches the registry reference, must be redacted or
+  // explicitly and justifiably exempt.
+  const fedToTofu = new Set();
+  for (const [, expression] of delivery.matchAll(/\n\s+TF_VAR_[a-z_]+:([^\n]*)/g)) {
+    for (const [, name] of expression.matchAll(/vars\.([A-Z0-9_]+)/g)) fedToTofu.add(name);
+  }
+  assert.ok(fedToTofu.size >= 4, 'expected several repository variables to reach OpenTofu');
+  fedToTofu.add('GCP_PROJECT_ID');
+
+  for (const name of fedToTofu) {
+    if (unredactedVariables.has(name)) continue;
+    assert.ok(
+      builder.includes(`'${name}'`),
+      `${name} reaches a provider but has no redaction rule; add one or record why it is safe in unredactedVariables`,
+    );
+  }
+
+  for (const placeholder of [
+    '<billing-account-id>',
+    '<project-id>',
+    '<project-number>',
+    '<state-bucket-prefix>',
+    '<budget-alert-address>',
+  ]) {
+    assert.ok(ruled.has(placeholder), `the rule set must produce ${placeholder}`);
+  }
+});
+
+test('redaction replaces the longest identifier first and leaves no tail behind', () => {
+  // A state-bucket prefix is commonly a prefix of the project id. Replacing the
+  // shorter value first would leave "<state-bucket-prefix>-42" in the summary,
+  // which still discloses the project id.
+  const identifiers = {
+    GCP_PROJECT_ID: 'money-noodle-prod-42',
+    GCP_PROJECT_NUMBER: '418273645901',
+    GCP_BILLING_ACCOUNT_ID: '01A2B3-4C5D6E-7F8901',
+    GCP_STATE_BUCKET_PREFIX: 'money-noodle-prod',
+    GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON: '["alerts@example.test"]',
+  };
+  const { directory, redactor, rulesPath, rules, masked } = buildRules(identifiers);
+
+  const lengths = rules.map(([value]) => value.length);
+  assert.deepEqual(
+    lengths,
+    [...lengths].sort((left, right) => right - left),
+    'rules must be ordered longest value first',
+  );
+
+  const values = [
+    'money-noodle-prod-42',
+    '418273645901',
+    '01A2B3-4C5D6E-7F8901',
+    'money-noodle-prod',
+    'alerts@example.test',
+  ];
+  for (const value of values) {
+    assert.ok(masked.includes(value), `${value} must be registered with ::add-mask::`);
+  }
+
+  const plan = join(directory, 'plan.txt');
+  writeFileSync(
+    plan,
+    [
+      '  + billing_account = "01A2B3-4C5D6E-7F8901"',
+      '  + project         = "money-noodle-prod-42"',
+      '  + projects        = ["projects/418273645901"]',
+      '  + bucket          = "money-noodle-prod-platform"',
+      '  + email           = "alerts@example.test"',
+      '  + image           = "us-west1-docker.pkg.dev/money-noodle-prod-42/platform/web"',
+      '',
+    ].join('\n'),
+  );
+
+  const applied = spawnSync('python3', [redactor, rulesPath, plan], { encoding: 'utf8' });
+  assert.equal(applied.status, 0, `the redactor failed: ${applied.stderr}`);
+
+  const redacted = readFileSync(plan, 'utf8');
+  for (const value of values) {
+    assert.ok(
+      !redacted.includes(value),
+      `${value} survived redaction and would be published in a job summary`,
+    );
+  }
+  assert.ok(
+    redacted.includes('"<project-id>"') && redacted.includes('"<state-bucket-prefix>-platform"'),
+    'each identifier must be replaced by its own placeholder',
+  );
+});
+
+test('redaction tolerates unset variables so a provider-disabled run stays green', () => {
+  const { rules, masked, redactor, rulesPath, directory } = buildRules({});
+  assert.deepEqual(rules, [], 'an unconfigured repository must produce no redaction rule');
+  assert.deepEqual(masked, [], 'an unconfigured repository must mask nothing');
+
+  const plan = join(directory, 'plan.txt');
+  writeFileSync(plan, 'No changes. Your infrastructure matches the configuration.\n');
+  const applied = spawnSync('python3', [redactor, rulesPath, plan], { encoding: 'utf8' });
+  assert.equal(applied.status, 0, `the redactor must succeed with no rules: ${applied.stderr}`);
+  assert.equal(
+    readFileSync(plan, 'utf8'),
+    'No changes. Your infrastructure matches the configuration.\n',
+  );
+
+  // A malformed address list must not fail the step either; it yields no rule.
+  const malformed = buildRules({ GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON: 'not-json' });
+  assert.deepEqual(malformed.rules, [], 'a malformed address list must contribute no rule');
+});
+
+test('rendered plan and drift text is redacted before it reaches a job summary', () => {
+  for (const [jobName, file] of [
+    ['plan', 'plan.txt'],
+    ['drift', 'drift.txt'],
+  ]) {
+    const job = deliveryJobs().find(({ name }) => name === jobName);
+    const render = job.body.indexOf(`> ${file}`);
+    const redact = job.body.indexOf(`"$RUNNER_TEMP/${RULES_FILE}" ${file}`);
+    const summary = job.body.indexOf('GITHUB_STEP_SUMMARY');
+
+    assert.ok(render !== -1, `job "${jobName}" must render ${file}`);
+    assert.ok(
+      redact > render,
+      `job "${jobName}" must redact ${file} after rendering it and before publishing it`,
+    );
+    assert.ok(
+      summary > redact,
+      `job "${jobName}" writes ${file} to a job summary before redacting it`,
+    );
+    assert.ok(
+      !job.body.includes("os.environ['TF_VAR_budget_alert_email_addresses']"),
+      `job "${jobName}" must use the shared redaction rules, not an inline address-only pass`,
+    );
+  }
 });
