@@ -70,7 +70,7 @@ The publisher job has `contents:write`, `pull-requests:write`, `issues:read` and
 
 Keep the native `pull_request` opened/synchronize/reopened route in `ci.yml`. Token-created PR activity requires the principal's **Approve workflows to run** CI admission; token pushes alone do not supply checks. That click is **not production consent**. The manual main-only CI baseline is unrelated. #74 records actual review head, tested base, tested merge-ref relation and resulting main commit, with all four required checks (`affected projects and repository gates`, `secret scan`, `container platform-api`, `container web`), stale-review dismissal, genuine last-push approval and conversation resolution. Default PR checkout tests a merge ref; do not mislabel it as the reviewed head or use unrelated green checks. Public PR builds stay read-only/provider-free and never publish provider artifacts.
 
-The target flow has no integration protection bypass. The temporary exception below remains current only under its own conditions and must expire and have its host surfaces retired before provider enablement; agent technical review or workload attribution does not invoke it or manufacture human independence.
+The target flow has no integration protection bypass. The temporary exception below remains current only under its own conditions; retirement of its host surfaces follows agent identity (#156), not provider enablement. Agent technical review or workload attribution does not invoke it or manufacture human independence.
 
 ## Temporary sole-maintainer integration exception
 
@@ -87,7 +87,7 @@ The exception may waive **only** the unavailable independent-review gate. That g
 
 Pull request #49 was merged personally by the maintainer without a review as commit `09d1827d05f9146046da58e5b21212093a49f509`; main CI run 33356799551 passed all four required checks for that merge commit. This is historical evidence for the bootstrap exception, not general authority and not a substitute for exact-current-head evidence on another pull request.
 
-The exception expires immediately when a second maintainer-designated eligible independent reviewer is added, or before provider delivery is enabled, whichever happens first. Once either condition is reached, another exception merge is forbidden without waiting for a documentation update. Retirement of the host bypass surface is separately complete only after authorized host-control work:
+By the principal's 2026-09-18 decision (#74), the maintainer remains the sole reviewer for M1: agents author work, the maintainer reviews and merges it, and no second reviewer is added. The exception continues while the maintainer is the only eligible reviewer and does not expire at provider enablement. It expires immediately when a second maintainer-designated eligible independent reviewer is added; from then on another exception merge is forbidden without waiting for a documentation update. Retirement of the host bypass surface is separately complete only after authorized host-control work:
 
 1. enables branch-protection administrator enforcement;
 2. removes the active `OrganizationAdmin` bypass actor from the default-branch `stable` ruleset; and
@@ -95,7 +95,9 @@ The exception expires immediately when a second maintainer-designated eligible i
 
 Expiry can precede host-control retirement; it still forbids use of the exception. This documentation does not perform those setting changes and must not be read as claiming that administrator enforcement is enabled.
 
-The exception never authorizes a failed-check bypass, direct or force push, provider authentication, environment administrator bypass, production self-review, apply, rollback, deployment, or any weakening of `prevent_self_review=true`. Provider delivery must remain disabled until the exception has expired and the retirement controls above are complete. See [`../operations/delivery.md`](../operations/delivery.md) for the independent production boundary and [`../architecture/decisions/ADR-0011-agent-coordination-and-isolation-protocol.md`](../architecture/decisions/ADR-0011-agent-coordination-and-isolation-protocol.md) for the decision rationale.
+The exception never authorizes a failed-check bypass, direct or force push, provider authentication, apply, rollback, deployment, or any weakening of `prevent_self_review=true`.
+
+The `production` environment keeps the maintainer as its only required reviewer with `prevent_self_review=true` (#74 decision, 2026-09-18). A deployment the maintainer did not initiate is approved through the ordinary environment review. A deployment initiated by the maintainer's own merge to `main` cannot be self-approved; for that case only, the maintainer personally may use the environment administrator bypass as the production consent. The bypass is never available to an agent, workload identity or automation, is never requested or assumed by one, applies to one exact waiting deployment at a time, and is used only after the four required checks passed on the merged head. GitHub's deployment review history is the durable record of each use. This path retires together with the host bypass surfaces above once agents publish under their own identity (#156). See [`../operations/delivery.md`](../operations/delivery.md) for the independent production boundary and [`../architecture/decisions/ADR-0011-agent-coordination-and-isolation-protocol.md`](../architecture/decisions/ADR-0011-agent-coordination-and-isolation-protocol.md) for the decision rationale.
 
 ## Public repository controls
 
