@@ -29,15 +29,19 @@ describe('readRuntimeConfig and createConfiguredServer', () => {
   });
   it.each(Object.keys(production))(
     'refuses missing and empty %s before reading files or constructing a server',
-    (key) => {
+    async (key) => {
       for (const value of [undefined, '']) {
-        expect(() =>
+        // The composition is async now that telemetry is initialized before the
+        // server exists, so configuration refusal surfaces as a rejection. It is
+        // still refused before the contract file is read: the deliberately
+        // nonexistent path below would throw a different error if it were.
+        await expect(
           createConfiguredServer({
             ...production,
             [key]: value,
             PLATFORM_API_CONTRACT_PATH: 'nonexistent.yaml',
           }),
-        ).toThrow(key);
+        ).rejects.toThrow(key);
       }
     },
   );
@@ -65,7 +69,7 @@ describe('readRuntimeConfig and createConfiguredServer', () => {
     ).toThrow();
   });
   it('composes actual HTTP probes and the unchanged schema without listening or leaking source', async () => {
-    const { server } = createConfiguredServer(production);
+    const { server } = await createConfiguredServer(production);
     try {
       for (const path of ['/health/live', '/health/ready', '/v1/platform/status']) {
         const response = await server.inject({ method: 'GET', url: path });
