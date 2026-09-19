@@ -20,6 +20,8 @@ on:
       - 'tools/infra-*.mjs'
       - 'tools/delivery/**'
       - 'tools/delivery-control-policy.test.mjs'
+      - 'tools/release/**'
+      - 'tools/release.test.mjs'
       - 'tools/verify-boundary-rules.mjs'
       - 'eslint.config.mjs'
       - '.github/workflows/delivery.yml'
@@ -36,6 +38,8 @@ on:
       - 'tools/infra-*.mjs'
       - 'tools/delivery/**'
       - 'tools/delivery-control-policy.test.mjs'
+      - 'tools/release/**'
+      - 'tools/release.test.mjs'
       - 'tools/verify-boundary-rules.mjs'
       - 'eslint.config.mjs'
       - '.github/workflows/delivery.yml'
@@ -331,6 +335,86 @@ jobs:
             echo '- qualified head: this workflow run'"'"'s commit'
             echo "- required checks proven: ${#required[@]}"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # Release vector. Declared manifests in, one ordered forward vector out.
+  # ---------------------------------------------------------------------------
+  #
+  # "CI computes the affected dependency graph from declared manifests and
+  # changed contracts; it does not guess from runtime traffic." So this job runs
+  # the workspace's own project graph over the range this push introduced, maps
+  # the affected projects onto the deployment each one declares in its
+  # `project.json`, and emits the ordered vector `deploy` follows.
+  #
+  # It decides which services are candidates. It authorises none of them: no
+  # OIDC token, no environment, no provider input, nothing to exchange.
+  release-plan:
+    name: release vector
+    needs: checks
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      count: ${{ steps.vector.outputs.count }}
+      plan: ${{ steps.vector.outputs.plan }}
+      units: ${{ steps.vector.outputs.units }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 11.24.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Fails closed, because there is no safe default. "Assume everything
+      # changed" redeploys a service this commit did not touch, and "assume
+      # nothing changed" silently deploys nothing while reporting success.
+      - name: Establish the reviewed predecessor of this push
+        id: range
+        env:
+          PREVIOUS_HEAD: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$PREVIOUS_HEAD" =~ ^[0-9a-f]{40}$ ]] || [[ "$PREVIOUS_HEAD" =~ ^0+$ ]]; then
+            echo 'This push declares no previous main commit; the affected range is undecidable.' >&2
+            exit 1
+          fi
+          git cat-file -e "${PREVIOUS_HEAD}^{commit}" 2>/dev/null || {
+            echo 'The declared previous commit is not present in this checkout.' >&2
+            exit 1
+          }
+          git merge-base --is-ancestor "$PREVIOUS_HEAD" HEAD || {
+            echo 'The declared previous commit is not an ancestor of this head.' >&2
+            exit 1
+          }
+          echo "base=$PREVIOUS_HEAD" >> "$GITHUB_OUTPUT"
+
+      - name: Compute the affected projects from the declared project graph
+        env:
+          NX_BASE: ${{ steps.range.outputs.base }}
+        run: pnpm nx show projects --affected --base="$NX_BASE" --head=HEAD --json > affected.json
+
+      # Refuses rather than guesses: an affected project nothing declares, an
+      # ambiguous manifest set, or more targets than the catalog row allows
+      # produces no vector at all. See `tools/release/affected-services.mjs`.
+      - name: Plan the ordered forward vector
+        id: vector
+        run: node tools/release/plan-release.mjs --affected affected.json
+
+      - name: Remove the intermediate affected set
+        if: always()
+        run: rm -f affected.json
 
   # ---------------------------------------------------------------------------
   # Build once, test and scan that build, publish that exact digest, attest.
@@ -645,6 +729,327 @@ jobs:
           subject-name: ${{ steps.build.outputs.image }}
           subject-digest: ${{ steps.publish.outputs.digest }}
           push-to-registry: true
+
+  # ---------------------------------------------------------------------------
+  # Deploy. The qualifying merge is the deployment; the environment gate is
+  # still the production decision.
+  # ---------------------------------------------------------------------------
+  #
+  # This is the missing piece of the CD path. `apply` deploys a stack a person
+  # typed a phrase for; this deploys the vector the merge itself produced, with
+  # no `workflow_dispatch` anywhere in its guard. What it does not do is decide:
+  # `environment: production` still holds the run at the maintainer's gate, and
+  # nothing here can approve, request or assume that approval (#74).
+  #
+  # Three properties this job is built around.
+  #
+  #   * Nothing is rebuilt for promotion. The digest behind this commit's
+  #     published tag is deployed only after `gh attestation verify` binds it to
+  #     this repository, this exact signer workflow and this source commit.
+  #   * The order is the declared order, and verification is between the steps
+  #     rather than after them. A failed API verification stops the job before
+  #     web is touched, which is what "leaves the candidate blocked, leaves
+  #     unaffected services untouched" means in practice.
+  #   * It is forward only. `service.rollback` needs a verified predecessor,
+  #     which cannot exist before a first deployment, so no path here names a
+  #     rollback revision or spends a recovery slot. Recovery is #155.
+  deploy:
+    name: deploy release vector
+    needs: [checks, authorization, qualify, publish, release-plan]
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.qualify.outputs.qualified_head == github.sha &&
+      needs.release-plan.outputs.count != '0' &&
+      needs.authorization.outputs.federation_configured == 'true' &&
+      needs.authorization.outputs.provider_configured == 'true' &&
+      needs.authorization.outputs.apply_authorized == 'true' &&
+      needs.authorization.outputs.environment_reviewers_verified == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TF_VAR_bootstrap_state_bucket: ${{ format('{0}-bootstrap', vars.GCP_STATE_BUCKET_PREFIX) }}
+      TF_VAR_platform_state_bucket: ${{ format('{0}-platform', vars.GCP_STATE_BUCKET_PREFIX) }}
+      TF_VAR_api_state_bucket: ${{ format('{0}-api', vars.GCP_STATE_BUCKET_PREFIX) }}
+      TF_VAR_project_number: ${{ vars.GCP_PROJECT_NUMBER }}
+      TF_VAR_billing_account_id: ${{ vars.GCP_BILLING_ACCOUNT_ID }}
+      TF_VAR_budget_alert_email_addresses: ${{ vars.GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Mask account identifiers and write the redaction rules
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_PROJECT_NUMBER: ${{ vars.GCP_PROJECT_NUMBER }}
+          GCP_BILLING_ACCOUNT_ID: ${{ vars.GCP_BILLING_ACCOUNT_ID }}
+          GCP_STATE_BUCKET_PREFIX: ${{ vars.GCP_STATE_BUCKET_PREFIX }}
+          GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON: ${{ vars.GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/redact-account-identifiers.py" <<'PY'
+          # Replaces every configured account identifier in each named file with
+          # its placeholder. Rules arrive longest value first, so redacting a
+          # short identifier cannot leave the tail of a longer one behind. A
+          # missing file is not an error: a failed render has nothing to redact.
+          import json
+          import sys
+          from pathlib import Path
+
+          rules = json.loads(Path(sys.argv[1]).read_text())
+          for name in sys.argv[2:]:
+              target = Path(name)
+              if not target.exists():
+                  continue
+              text = target.read_text()
+              for value, placeholder in rules:
+                  text = text.replace(value, placeholder)
+              target.write_text(text)
+          PY
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          # The state-bucket prefix is the only account-chosen part of a derived
+          # bucket name, so redacting it also redacts every "<prefix>-<stack>"
+          # bucket while leaving the public stack name readable.
+          NAMED = (
+              ('GCP_BILLING_ACCOUNT_ID', '<billing-account-id>'),
+              ('GCP_PROJECT_ID', '<project-id>'),
+              ('GCP_PROJECT_NUMBER', '<project-number>'),
+              ('GCP_STATE_BUCKET_PREFIX', '<state-bucket-prefix>'),
+          )
+
+          candidates = [
+              (os.environ.get(name, '').strip(), placeholder) for name, placeholder in NAMED
+          ]
+
+          raw = os.environ.get('GCP_BUDGET_ALERT_EMAIL_ADDRESSES_JSON', '').strip()
+          try:
+              addresses = json.loads(raw) if raw else []
+          except ValueError:
+              addresses = []
+          if isinstance(addresses, list):
+              candidates += [
+                  (str(address).strip(), '<budget-alert-address>') for address in addresses
+              ]
+
+          # A value this short would match unrelated plan text. Every real
+          # identifier is far longer, so a shorter one is a misconfiguration
+          # rather than a usable rule.
+          rules = sorted(
+              ((value, placeholder) for value, placeholder in candidates if len(value) >= 4),
+              key=lambda rule: len(rule[0]),
+              reverse=True,
+          )
+
+          Path(os.environ['RUNNER_TEMP'], 'account-redactions.json').write_text(json.dumps(rules))
+          for value, _ in rules:
+              print(f'::add-mask::{value}')
+          PY
+
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          tofu_wrapper: false
+
+      - id: deploy-auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+          audience: money-noodle-delivery
+          token_format: access_token
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ vars.GCP_REGISTRY_HOST }}
+          username: oauth2accesstoken
+          password: ${{ steps.deploy-auth.outputs.access_token }}
+
+      # Every digest for the whole vector is resolved and verified before any of
+      # it is deployed, so a half-deployed vector cannot be the way an
+      # unverifiable artifact is discovered.
+      - name: Resolve and verify the artifacts this commit published
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REGISTRY: ${{ vars.GCP_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REGISTRY_REPOSITORY }}
+          RELEASE_PLAN: ${{ needs.release-plan.outputs.plan }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+            echo 'A full source commit is required.' >&2
+            exit 1
+          }
+          artifacts="$RUNNER_TEMP/release-artifacts.json"
+          printf '{}' > "$artifacts"
+
+          for unit in $(jq -r '.vector[].unit' <<< "$RELEASE_PLAN"); do
+            name="$(jq -r --arg unit "$unit" '.vector[] | select(.unit == $unit) | .image' <<< "$RELEASE_PLAN")"
+            image="$REGISTRY/$name"
+            # The tag is a lookup, never the thing deployed. What is deployed is
+            # the digest behind it, and only after provenance binds that digest
+            # to this repository, this signer workflow and this source commit.
+            digest="$(docker buildx imagetools inspect "$image:$SOURCE_COMMIT" --format '{{.Manifest.Digest}}')"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+              echo "No deployable digest was published for $unit; a tag is not deployable." >&2
+              exit 1
+            }
+            gh attestation verify "oci://${image}@${digest}" \
+              --repo "${{ github.repository }}" \
+              --signer-workflow "${{ github.repository }}/.github/workflows/delivery.yml" \
+              --source-digest "$SOURCE_COMMIT" \
+              --source-ref refs/heads/main \
+              --deny-self-hosted-runners \
+              --predicate-type https://slsa.dev/provenance/v1
+            jq --arg unit "$unit" --arg digest "$digest" '.[$unit] = $digest' "$artifacts" > "$artifacts.next"
+            mv "$artifacts.next" "$artifacts"
+          done
+
+          echo "Verified $(jq -r 'length' "$artifacts") artifact(s) against this commit's provenance."
+
+      # --- api, then its verification, then web ---------------------------------
+      #
+      # Declared order, enforced by position. Steps run in sequence and a failed
+      # step ends the job, so web is only reached once the API it depends on has
+      # been deployed and independently probed.
+      - name: Deploy api
+        if: contains(fromJSON(needs.release-plan.outputs.units), 'api')
+        working-directory: infra/stacks/api
+        env:
+          STATE_BUCKET_PREFIX: ${{ vars.GCP_STATE_BUCKET_PREFIX }}
+          TF_VAR_artifact_version: git-${{ github.sha }}
+          TF_VAR_source_commit: ${{ github.sha }}
+          TF_VAR_revision_suffix: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          TF_VAR_image_digest="$(jq -er '.api' "$RUNNER_TEMP/release-artifacts.json")"
+          export TF_VAR_image_digest
+          tofu init -input=false \
+            -backend-config="bucket=${STATE_BUCKET_PREFIX}-api" \
+            -backend-config="prefix=stacks/api"
+          # Plan and apply the same plan file, so what was planned is what runs.
+          tofu plan -input=false -lock-timeout=5m -out=stack.tfplan
+          tofu apply -input=false -lock-timeout=5m -auto-approve stack.tfplan
+          rm -f stack.tfplan
+
+      - id: deploy-api-service
+        name: Read the deployed api service URI
+        if: contains(fromJSON(needs.release-plan.outputs.units), 'api')
+        working-directory: infra/stacks/api
+        run: |
+          set -euo pipefail
+          echo "uri=$(tofu output -raw contract_service_uri)" >> "$GITHUB_OUTPUT"
+
+      # The service is created private, so an anonymous probe is refused. Mint a
+      # short-lived ID token for the same federated deployer, bound to this
+      # service as its audience. The action masks the token.
+      - id: deploy-api-probe-auth
+        if: contains(fromJSON(needs.release-plan.outputs.units), 'api')
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+          audience: money-noodle-delivery
+          create_credentials_file: false
+          token_format: id_token
+          id_token_audience: ${{ steps.deploy-api-service.outputs.uri }}
+
+      - name: Verify api health and the published contract
+        if: contains(fromJSON(needs.release-plan.outputs.units), 'api')
+        env:
+          SERVICE_URI: ${{ steps.deploy-api-service.outputs.uri }}
+          PROBE_ID_TOKEN: ${{ steps.deploy-api-probe-auth.outputs.id_token }}
+        run: |
+          set -euo pipefail
+          # The header is read from stdin so the token is never a process argument.
+          for path in /health/live /health/ready; do
+            code="$(printf 'Authorization: Bearer %s\n' "$PROBE_ID_TOKEN" |
+              curl -sS -o /dev/null -w '%{http_code}' --retry 6 --retry-delay 5 \
+                --retry-all-errors --max-time 20 -H @- "${SERVICE_URI}${path}")"
+            [[ "$code" == '200' ]] || { echo "${path} returned ${code}" >&2; exit 1; }
+          done
+          printf 'Authorization: Bearer %s\n' "$PROBE_ID_TOKEN" |
+            curl -sSf --max-time 20 -H @- "${SERVICE_URI}/v1/platform/status" |
+            jq -e '.state and .asOf and .schemaVersion == "1"' > /dev/null
+
+      - name: Deploy web
+        if: contains(fromJSON(needs.release-plan.outputs.units), 'web')
+        working-directory: infra/stacks/web
+        env:
+          STATE_BUCKET_PREFIX: ${{ vars.GCP_STATE_BUCKET_PREFIX }}
+          TF_VAR_artifact_version: git-${{ github.sha }}
+          TF_VAR_source_commit: ${{ github.sha }}
+          TF_VAR_revision_suffix: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          TF_VAR_image_digest="$(jq -er '.web' "$RUNNER_TEMP/release-artifacts.json")"
+          export TF_VAR_image_digest
+          tofu init -input=false \
+            -backend-config="bucket=${STATE_BUCKET_PREFIX}-web" \
+            -backend-config="prefix=stacks/web"
+          tofu plan -input=false -lock-timeout=5m -out=stack.tfplan
+          tofu apply -input=false -lock-timeout=5m -auto-approve stack.tfplan
+          rm -f stack.tfplan
+
+      - id: deploy-web-service
+        name: Read the deployed web service URI
+        if: contains(fromJSON(needs.release-plan.outputs.units), 'web')
+        working-directory: infra/stacks/web
+        run: |
+          set -euo pipefail
+          echo "uri=$(tofu output -raw contract_service_uri)" >> "$GITHUB_OUTPUT"
+
+      - id: deploy-web-probe-auth
+        if: contains(fromJSON(needs.release-plan.outputs.units), 'web')
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+          audience: money-noodle-delivery
+          create_credentials_file: false
+          token_format: id_token
+          id_token_audience: ${{ steps.deploy-web-service.outputs.uri }}
+
+      - name: Verify web health
+        if: contains(fromJSON(needs.release-plan.outputs.units), 'web')
+        env:
+          SERVICE_URI: ${{ steps.deploy-web-service.outputs.uri }}
+          PROBE_ID_TOKEN: ${{ steps.deploy-web-probe-auth.outputs.id_token }}
+        run: |
+          set -euo pipefail
+          for path in /health/live /health/ready; do
+            code="$(printf 'Authorization: Bearer %s\n' "$PROBE_ID_TOKEN" |
+              curl -sS -o /dev/null -w '%{http_code}' --retry 6 --retry-delay 5 \
+                --retry-all-errors --max-time 20 -H @- "${SERVICE_URI}${path}")"
+            [[ "$code" == '200' ]] || { echo "${path} returned ${code}" >&2; exit 1; }
+          done
+
+      # The record is the ordered vector, what was left alone and what was
+      # verified. It names no service URI, digest or account identifier, because
+      # a job summary is public and is never masked.
+      - name: Record the ordered vector and its verification
+        env:
+          RELEASE_PLAN: ${{ needs.release-plan.outputs.plan }}
+        run: |
+          set -euo pipefail
+          {
+            echo '### Deployed release vector'
+            echo
+            echo "- source commit: \`${{ github.sha }}\`"
+            echo "- operation: \`$(jq -r '.operation' <<< "$RELEASE_PLAN")\`"
+            echo "- permission slots: \`$(jq -r '.permissionSlots | join(", ")' <<< "$RELEASE_PLAN")\`"
+            echo "- ordered vector: $(jq -r '[.vector[].unit] | join(" then ")' <<< "$RELEASE_PLAN")"
+            echo "- left unchanged: $(jq -r 'if (.unaffected | length) == 0 then "none" else (.unaffected | join(", ")) end' <<< "$RELEASE_PLAN")"
+            echo '- verified per step: readiness and liveness, plus the published contract for the API'
+            echo '- predecessor evidence: none, so no rollback permission exists or was minted'
+            echo "- workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------------
   # Plan. Evidence, never authorisation.
