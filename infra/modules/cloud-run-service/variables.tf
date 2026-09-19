@@ -211,6 +211,12 @@ variable "telemetry_endpoint" {
   default     = null
 }
 
+variable "telemetry_quota_project" {
+  description = "Quota project for the Telemetry API. Null uses this service's own project. Never a credential."
+  type        = string
+  default     = null
+}
+
 variable "trace_sample_ratio" {
   description = "Head sampling ratio, propagated through trace context so it can be lowered later without re-instrumenting."
   type        = number
@@ -244,6 +250,7 @@ variable "extra_env" {
         "NODE_ENV", "PLATFORM_API_ORIGIN", "ARTIFACT_VERSION", "MONEY_NOODLE_COMMIT",
         "MONEY_NOODLE_SERVICE", "MONEY_NOODLE_ENVIRONMENT", "MONEY_NOODLE_API_BASE_URL",
         "MONEY_NOODLE_VERSION", "PORT", "PLATFORM_API_CONTRACT_PATH",
+        "GOOGLE_CLOUD_QUOTA_PROJECT",
       ], name) && !startswith(name, "OTEL_") && !startswith(name, "NEXT_PUBLIC_")
     ])
     error_message = "extra_env must not supply reserved runtime configuration names, even with identical values."

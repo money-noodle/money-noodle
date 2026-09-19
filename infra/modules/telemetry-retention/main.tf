@@ -37,7 +37,23 @@ resource "google_logging_project_bucket_config" "debug" {
   location       = var.region
   bucket_id      = var.debug_bucket_id
   retention_days = var.debug_log_retention_days
-  description    = "Debug-severity application logs, retained for a shorter window than operational logs."
+  description    = "Debug-severity application logs. Retention is explicit and must not be shorter than the copy the _Default bucket still holds."
+
+  lifecycle {
+    # A sink routes a copy; it does not stop the `_Default` sink from keeping
+    # its own. While that copy exists, configuring a shorter window here would
+    # be a retention claim the routing does not deliver — exactly the
+    # "second longer-lived copy" the accepted policy forbids. Making the claim
+    # true needs a separately authorized `_Default` exclusion, which this module
+    # deliberately does not create.
+    precondition {
+      condition = (
+        var.debug_excluded_from_default_bucket ||
+        var.debug_log_retention_days >= var.log_retention_days
+      )
+      error_message = "Debug retention shorter than operational retention is not delivered while _Default keeps its own copy. Either match the operational window or record a separately authorized exclusion."
+    }
+  }
 }
 
 resource "google_logging_project_sink" "debug" {

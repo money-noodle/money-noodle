@@ -14,7 +14,10 @@ output "retention_policy" {
     debug_logs = {
       days       = var.debug_log_retention_days
       configured = var.debug_log_retention_days != null
-      note       = "Routed to a separate log bucket so a shorter window is expressible."
+      note       = var.debug_excluded_from_default_bucket ? "Routed to a separate log bucket and excluded from _Default, so this window is the only copy." : "Routed to a separate log bucket AND still copied to _Default, so the effective window is the longer of the two. The accepted policy puts both at 14 days precisely so the two agree."
+      effective_days = var.debug_log_retention_days == null ? var.log_retention_days : (
+        var.debug_excluded_from_default_bucket ? var.debug_log_retention_days : max(var.debug_log_retention_days, var.log_retention_days)
+      )
     }
     audit_logs = {
       days       = 400
@@ -24,12 +27,12 @@ output "retention_policy" {
     traces = {
       days       = 30
       configured = false
-      note       = "UNVERIFIED against a live project: Cloud Trace retention is not exposed as a configurable field by this provider. The accepted 3-to-7-day target for detailed traces is therefore not met by configuration and is carried as an open item, not as a satisfied requirement."
+      note       = "Google's documented 30-day _Trace retention, accepted on 2026-09-15 as a deliberate exception to the former 3-to-7-day target. It is provider behaviour, not an IaC-configurable deletion guarantee, and no live aging has been observed."
     }
     metrics = {
-      days       = null
+      days       = 730
       configured = false
-      note       = "UNVERIFIED against a live project: Cloud Monitoring metric retention is not exposed as a configurable field by this provider. The accepted 30-to-90-day operational-metric target is carried as an open item."
+      note       = "Google's documented 24 months for OTLP metrics with progressive downsampling: original frequency for one week, one-minute intervals for the next five weeks, then ten-minute intervals. Accepted as provider behaviour on 2026-09-15; not 24 months of full-resolution detail and not a configurable TTL."
     }
   }
 }

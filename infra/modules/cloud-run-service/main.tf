@@ -38,6 +38,11 @@ locals {
     # be lowered later without re-instrumenting (ADR-0007).
     OTEL_TRACES_SAMPLER     = "parentbased_traceidratio"
     OTEL_TRACES_SAMPLER_ARG = tostring(var.trace_sample_ratio)
+    # Google's Telemetry API requires a quota project alongside the workload
+    # identity's own roles. It is a project identifier, not a credential: the
+    # exporter sends it as `x-goog-user-project`, and no token ever appears in
+    # an `OTEL_*` variable.
+    GOOGLE_CLOUD_QUOTA_PROJECT = var.telemetry_quota_project == null ? var.project_id : var.telemetry_quota_project
   }
 
   base_env = {
@@ -68,10 +73,17 @@ resource "google_service_account" "runtime" {
 # Telemetry export is the only project-level authority a runtime identity holds
 # in the first slice. Writing telemetry is not reading anything.
 resource "google_project_iam_member" "runtime_telemetry" {
+  # `telemetry.writer` and `serviceusage.serviceUsageConsumer` are what Google's
+  # current Telemetry API documentation requires for OTLP ingestion with a quota
+  # project; the three older per-signal roles remain for the classic ingestion
+  # paths. These are desired configuration in unapplied source: this module
+  # grants nothing, and an actual grant is a separately authorized operation.
   for_each = var.telemetry_endpoint == null ? toset([]) : toset([
     "roles/cloudtrace.agent",
     "roles/logging.logWriter",
     "roles/monitoring.metricWriter",
+    "roles/serviceusage.serviceUsageConsumer",
+    "roles/telemetry.writer",
   ])
 
   project = var.project_id
