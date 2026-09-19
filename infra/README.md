@@ -27,10 +27,11 @@ infra/
     budget-guardrail/
     telemetry-retention/
   stacks/
-    bootstrap/              state buckets, deployer, federation. Applied once, by hand.
+    bootstrap/              state buckets, deployer, federation, and the two
+                            runtime identities. Applied by hand, by the maintainer.
     platform/               registry, budget, telemetry retention, secret boundary
-    api/                    the API Cloud Run service and its own workload identity
-    web/                    the web Cloud Run service and its own workload identity
+    api/                    the API Cloud Run service, running as the identity bootstrap published
+    web/                    the web Cloud Run service, running as the identity bootstrap published
 ```
 
 Each stack holds **separate state** under its own bucket and prefix, so applying
@@ -130,6 +131,11 @@ denial for an accidental reason is a denial that disappears with the next edit.
   v1 product. Interim validation targets `*.run.app`. A guard fails the build if
   a DNS, domain-mapping, load-balancer, or serverless-NEG resource appears.
 - **Any long-lived cloud credential.** Federation only.
+- **Any identity or project-IAM authority in the pipeline.** The deployer can
+  administer Cloud Run and push images; it cannot create a service account, grant
+  a project role, or read a secret. Runtime identities and their project-level
+  telemetry grants are created by the maintainer-applied bootstrap stack and
+  consumed by the service stacks (#178).
 - **Any secret value.** The store is declared empty. The deployer has no Secret
   Manager administrative role because that role could grant itself value access;
   policy administration is revisited with the first real secret.
@@ -187,6 +193,15 @@ The bootstrap gives the deployer `roles/billing.costsManager` on exactly the
 selected billing account because project IAM cannot create a billing-account
 budget. It grants no billing administration or payment authority.
 
+Since #178 the deployer holds `roles/run.admin` rather than `roles/run.developer`.
+A service is created private and its named invokers — the web runtime identity on
+the API, and the post-apply verifier on both — are service-level
+`roles/run.invoker` bindings, which `run.developer` cannot set. The role is
+confined to Cloud Run: it grants no project IAM and no identity administration,
+and the deployer still holds no role that could create, delete or re-grant an
+identity. A first `api` or `web` plan therefore contains Cloud Run resources and
+service-level bindings only.
+
 ## Outstanding before an apply can be trusted
 
 These are honest gaps, not oversights. None can be closed without a provider.
@@ -219,7 +234,9 @@ These are honest gaps, not oversights. None can be closed without a provider.
    `OTEL_EXPORTER_OTLP_PROTOCOL = http/protobuf`, `OTEL_SERVICE_NAME`,
    `OTEL_RESOURCE_ATTRIBUTES` (service, version, environment, image digest and
    source commit as distinct facts), parent-based head sampling at unity, and
-   `GOOGLE_CLOUD_QUOTA_PROJECT`. The runtime identity declares
+   `GOOGLE_CLOUD_QUOTA_PROJECT`. The runtime identity itself, and the roles
+   below, are declared by `stacks/bootstrap` since #178; the module consumes the
+   published email. The runtime identity declares
    `roles/cloudtrace.agent`, `roles/logging.logWriter`,
    `roles/monitoring.metricWriter`, `roles/serviceusage.serviceUsageConsumer`
    and `roles/telemetry.writer` — the last two are what Google's current

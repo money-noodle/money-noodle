@@ -38,7 +38,11 @@ variable "deployer_roles" {
   EOT
   type        = list(string)
   default = [
-    "roles/run.developer", # deploy revisions and reassign traffic; not run.admin
+    # Cloud Run administration, not `run.developer`. A service is created private
+    # and its named invokers are service-level `roles/run.invoker` bindings, which
+    # `run.developer` cannot set. The role is confined to Cloud Run: it grants no
+    # project IAM, no identity administration and nothing outside the service.
+    "roles/run.admin",
     # Registry administration, not writer: the platform stack creates the image
     # repository and sets its repository-level IAM, which writer cannot do. The
     # role is confined to Artifact Registry and also covers pushing images.
@@ -75,6 +79,92 @@ variable "deployer_roles" {
       ], role)
     ]) == 0
     error_message = "The deployer must not be able to read secret values that runtime workloads consume (ADR-0005). It manages containers, not contents."
+  }
+}
+
+variable "runtime_service_accounts" {
+  description = <<-EOT
+    Runtime identity account id per deployable service, keyed by the Cloud Run
+    service name that service's stack declares.
+
+    These are created by this maintainer-applied stack rather than by the
+    delivery pipeline. Creating a service account needs
+    `iam.serviceAccounts.create` and granting it a project role needs
+    `resourcemanager.projects.setIamPolicy`; the deployer role validation above
+    refuses both, so the pipeline could not create them without becoming the most
+    powerful identity in the platform (ADR-0005, 2026-09-19 amendment).
+  EOT
+  type        = map(string)
+  default = {
+    "platform-api" = "platform-api-runtime"
+    "web"          = "web-runtime"
+  }
+
+  validation {
+    condition = alltrue([
+      for account_id in values(var.runtime_service_accounts) :
+      can(regex("^[a-z]([-a-z0-9]{4,28}[a-z0-9])$", account_id))
+    ])
+    error_message = "Each runtime account id must be 6 to 30 characters, lowercase, starting with a letter."
+  }
+
+  validation {
+    condition = (
+      length(distinct(values(var.runtime_service_accounts))) ==
+      length(var.runtime_service_accounts)
+    )
+    error_message = "Each service must hold its own runtime identity. A shared one makes blast radius conventional rather than mechanical (ADR-0005)."
+  }
+}
+
+variable "runtime_telemetry_roles" {
+  description = <<-EOT
+    Project roles granted to every runtime identity. Telemetry export is the only
+    project-level authority a runtime identity holds in the first slice: writing
+    telemetry is not reading anything and not deploying anything.
+
+    `telemetry.writer` and `serviceusage.serviceUsageConsumer` are what Google's
+    current Telemetry API documentation requires for OTLP ingestion with a quota
+    project; the three older per-signal roles remain for the classic ingestion
+    paths.
+  EOT
+  type        = list(string)
+  default = [
+    "roles/cloudtrace.agent",
+    "roles/logging.logWriter",
+    "roles/monitoring.metricWriter",
+    "roles/serviceusage.serviceUsageConsumer",
+    "roles/telemetry.writer",
+  ]
+
+  validation {
+    condition = alltrue([
+      for role in var.runtime_telemetry_roles : anytrue([
+        for prefix in [
+          "roles/cloudtrace.",
+          "roles/logging.",
+          "roles/monitoring.",
+          "roles/serviceusage.",
+          "roles/telemetry.",
+        ] : startswith(role, prefix)
+      ])
+    ])
+    error_message = "A runtime identity may hold only telemetry write authority at project level (ADR-0005)."
+  }
+
+  validation {
+    condition = length([
+      for role in var.runtime_telemetry_roles : role
+      if contains([
+        "roles/owner",
+        "roles/editor",
+        "roles/logging.admin",
+        "roles/monitoring.admin",
+        "roles/serviceusage.serviceUsageAdmin",
+        "roles/telemetry.admin",
+      ], role)
+    ]) == 0
+    error_message = "A runtime identity must not hold an administrative role. It writes telemetry and does nothing else."
   }
 }
 

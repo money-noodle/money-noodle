@@ -1,18 +1,18 @@
 mock_provider "google" {}
 
 variables {
-  project_id                 = "example-project"
-  region                     = "us-west1"
-  service_name               = "web"
-  runtime_service_account_id = "example-runtime"
-  repository_url             = "us-west1-docker.pkg.dev/example-project/platform"
-  image_name                 = "web"
-  image_digest               = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-  artifact_version           = "release-1.2.3"
-  source_commit              = "1111111111111111111111111111111111111111"
-  container_port             = 3000
-  cpu                        = "1"
-  memory                     = "512Mi"
+  project_id                    = "example-project"
+  region                        = "us-west1"
+  service_name                  = "web"
+  runtime_service_account_email = "example-runtime@example-project.iam.gserviceaccount.com"
+  repository_url                = "us-west1-docker.pkg.dev/example-project/platform"
+  image_name                    = "web"
+  image_digest                  = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  artifact_version              = "release-1.2.3"
+  source_commit                 = "1111111111111111111111111111111111111111"
+  container_port                = 3000
+  cpu                           = "1"
+  memory                        = "512Mi"
 }
 
 run "production_mode_cannot_be_downgraded" {

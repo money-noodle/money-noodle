@@ -1672,6 +1672,10 @@ jobs:
       contents: read
       id-token: write
     env:
+      # The service stacks read their runtime identity and the post-apply
+      # verifier from the bootstrap stack's published contract (#178), so every
+      # provider job that plans or applies one supplies its bucket.
+      TF_VAR_bootstrap_state_bucket: ${{ format('{0}-bootstrap', vars.GCP_STATE_BUCKET_PREFIX) }}
       TF_VAR_platform_state_bucket: ${{ format('{0}-platform', vars.GCP_STATE_BUCKET_PREFIX) }}
       TF_VAR_api_state_bucket: ${{ format('{0}-api', vars.GCP_STATE_BUCKET_PREFIX) }}
     steps:

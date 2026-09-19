@@ -11,18 +11,18 @@
 mock_provider "google" {}
 
 variables {
-  project_id                 = "example-project"
-  region                     = "us-west1"
-  service_name               = "example-service"
-  runtime_service_account_id = "example-runtime"
-  repository_url             = "us-west1-docker.pkg.dev/example-project/platform"
-  image_name                 = "example"
-  image_digest               = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-  artifact_version           = "1.2.3"
-  source_commit              = "1111111111111111111111111111111111111111"
-  container_port             = 3000
-  cpu                        = "1"
-  memory                     = "512Mi"
+  project_id                    = "example-project"
+  region                        = "us-west1"
+  service_name                  = "example-service"
+  runtime_service_account_email = "example-runtime@example-project.iam.gserviceaccount.com"
+  repository_url                = "us-west1-docker.pkg.dev/example-project/platform"
+  image_name                    = "example"
+  image_digest                  = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  artifact_version              = "1.2.3"
+  source_commit                 = "1111111111111111111111111111111111111111"
+  container_port                = 3000
+  cpu                           = "1"
+  memory                        = "512Mi"
 }
 
 run "a_normal_deployment_serves_the_newest_revision" {
@@ -141,7 +141,7 @@ run "telemetry_is_absent_until_an_endpoint_is_configured" {
 
   # Telemetry is opt-in per deployment. With no endpoint the container carries no
   # OTEL variables at all, rather than half-configured ones that would fail at
-  # runtime — and the telemetry IAM grants are skipped with them.
+  # runtime.
   assert {
     condition = length([
       for entry in google_cloud_run_v2_service.service.template[0].containers[0].env :

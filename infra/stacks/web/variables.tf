@@ -8,6 +8,11 @@ variable "api_state_bucket" {
   type        = string
 }
 
+variable "bootstrap_state_bucket" {
+  description = "State bucket holding the bootstrap stack's published contract, read to learn the runtime and deployer identities. Supplied at apply; never committed."
+  type        = string
+}
+
 variable "service_name" {
   description = "Cloud Run service name."
   type        = string
@@ -17,12 +22,6 @@ variable "service_name" {
     condition     = var.service_name == "web"
     error_message = "The web stack must identify its application as web."
   }
-}
-
-variable "runtime_service_account_id" {
-  description = "Account id for the web's own runtime identity, mechanically distinct from the API's."
-  type        = string
-  default     = "web-runtime"
 }
 
 variable "image_name" {

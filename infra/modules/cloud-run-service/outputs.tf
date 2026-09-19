@@ -9,8 +9,8 @@ output "uri" {
 }
 
 output "runtime_service_account_email" {
-  description = "This service's own runtime identity."
-  value       = google_service_account.runtime.email
+  description = "This service's own runtime identity, as supplied by the bootstrap stack's published contract."
+  value       = var.runtime_service_account_email
 }
 
 output "latest_ready_revision" {
@@ -60,11 +60,11 @@ output "telemetry_env" {
   value       = local.telemetry_env
 }
 
-output "telemetry_roles" {
+output "authorised_invoker_members" {
   description = <<-EOT
-    Roles the runtime identity is declared to hold for telemetry export. Desired
-    configuration in unapplied source: this module grants nothing, and an actual
-    grant is a separately authorized operation.
+    Members holding service-level `roles/run.invoker` on this service, derived
+    from the declared bindings rather than restated from the input. Service-level
+    only: no member here holds a project role.
   EOT
-  value       = sort([for grant in google_project_iam_member.runtime_telemetry : grant.role])
+  value       = sort([for entry in google_cloud_run_v2_service_iam_member.authorised_invokers : entry.member])
 }

@@ -116,10 +116,43 @@ tofu apply bootstrap.tfplan
 
 This creates: the four state buckets (versioned, private, non-force-destroyable),
 the deployer service account, the workload identity pool and its GitHub provider,
-the impersonation binding, and a billing-account `roles/billing.costsManager`
-binding for that deployer. The maintainer running bootstrap therefore needs
-permission to set billing-account IAM. The grant manages cost visibility and
+the impersonation binding, a billing-account `roles/billing.costsManager` binding
+for that deployer, and **one runtime service account per deployable service with
+its project-level telemetry grants**. The maintainer running bootstrap therefore
+needs permission to set billing-account IAM. The grant manages cost visibility and
 budgets; it does not administer the billing account or payment instruments.
+
+The runtime identities are here, not in the service stacks, because creating a
+service account needs `iam.serviceAccounts.create` and granting it a project role
+needs `resourcemanager.projects.setIamPolicy`. Giving the delivery deployer
+either would make CI the most powerful identity in the platform, which ADR-0005
+refuses. The service stacks read the published emails and manage only Cloud Run
+resources and service-level bindings.
+
+### Re-applying bootstrap after the #178 change
+
+A project bootstrapped before this change has the deployer, federation and state
+buckets already. Re-applying the stack with the same variables plans exactly this
+delta — no destroys, and nothing outside identity and the deployer's own roles:
+
+| Change | Address | Why |
+| --- | --- | --- |
+| add | `google_service_account.runtime["platform-api"]` | The API runtime identity, previously asked of the pipeline |
+| add | `google_service_account.runtime["web"]` | The web runtime identity, previously asked of the pipeline |
+| add | `google_project_iam_member.runtime_telemetry["platform-api:roles/cloudtrace.agent"]` and its four siblings | The API's telemetry write grants |
+| add | `google_project_iam_member.runtime_telemetry["web:roles/cloudtrace.agent"]` and its four siblings | The web's telemetry write grants |
+| add | `google_project_iam_member.deployer["roles/run.admin"]` | Cloud Run administration, so the deployer can set service-level invoker bindings |
+| destroy | `google_project_iam_member.deployer["roles/run.developer"]` | Replaced by `roles/run.admin`; `run.developer` cannot bind a service invoker |
+
+Twelve adds and one destroy. The destroy removes a project role binding, not an
+identity: the deployer service account itself is unchanged, and the replacement
+binding is added in the same apply. Read the plan before applying it, and confirm
+it contains no state-bucket, federation or billing change.
+
+Re-apply before the first `api` apply. The service stacks read
+`contract_runtime_service_account_emails` from this stack's state, so a service
+plan against a bootstrap state that predates this change fails at `init` with a
+missing output rather than deploying something unintended.
 
 ## Step 3 — migrate bootstrap's own state into the bucket it created
 
@@ -211,7 +244,12 @@ because the web reads the API's published origin, and a compatible API must exis
 first.
 
 Each is first a `workflow_dispatch` plan and then an apply with the stack named
-and, for apply, the confirmation phrase typed. The web and API additionally
+and, for apply, the confirmation phrase typed. A first `api` plan contains Cloud
+Run resources and service-level IAM bindings only — one
+`google_cloud_run_v2_service` and one `google_cloud_run_v2_service_iam_member`
+per authorised invoker. If it contains a `google_service_account` or a
+`google_project_iam_member`, the bootstrap re-apply above has not happened and
+the apply will fail on `iam.serviceAccounts.create`. The web and API additionally
 require an `image_digest` and full `source_commit` from the same completed
 publish run. Delivery verifies the digest's signed provenance against that exact
 source commit and signer workflow; the commit is also the artifact version
@@ -235,7 +273,10 @@ Record the date, what was restored, and how it was verified.
 - It does not create DNS records, a load balancer, or a custom domain mapping.
 - It does not create a secret **value**. The secret store is declared empty; the
   first slice needs no operational secret.
-- It does not grant the deployer owner, editor, or any secret-reading role.
+- It does not grant the deployer owner, editor, or any secret-reading role, and
+  it grants no identity-administration role: the deployer may *act as* the
+  runtime identities (`roles/iam.serviceAccountUser`) but may not create, delete
+  or re-grant them.
 - It does not enable any funded authority, because none exists in the current platform.
 
 ## Reconciliation
