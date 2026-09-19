@@ -1416,3 +1416,85 @@ test('M1 downstream fixture inventory names measurable negative cases, not runti
   assert.match(fixtures, /not functioning adapters supplied by documentation tests/);
   assert.match(fixtures, /#74 must then prove actual publisher actor\/check\/host behavior/);
 });
+
+// The release-artifact chain must not become a way for an untrusted pull
+// request to gain authority it does not otherwise have (#71).
+test('no fork or pull-request job gains authority through the release chain', () => {
+  const ci = read('.github/workflows/ci.yml');
+  const deliveryWorkflow = read('.github/workflows/delivery.yml');
+
+  // The job a fork's pull request actually runs builds and scans an image and
+  // receives nothing else.
+  const containers = ci.match(/\n  containers:\n([\s\S]*?)(?=\n  [a-z][a-z0-9-]*:\n|$)/)?.[1];
+  assert.ok(containers, 'ci.yml must still define the container job');
+  assert.match(
+    containers,
+    /permissions:\n {6}contents: read\n/,
+    'the container job must declare read-only repository permission explicitly',
+  );
+  assert.doesNotMatch(containers, /id-token:\s*write/);
+  assert.doesNotMatch(containers, /attestations:\s*write/);
+  assert.doesNotMatch(containers, /contents:\s*write/);
+  assert.doesNotMatch(containers, /environment:/);
+  assert.doesNotMatch(
+    containers,
+    /google-github-actions\/auth|docker\/login-action/,
+    'a pull-request container build must never authenticate to a provider or a registry',
+  );
+
+  // Qualification reads check results. It is the only new job in the release
+  // chain and it holds no token that could publish, deploy or mutate.
+  const qualify = deliveryWorkflow.match(
+    /\n  qualify:\n([\s\S]*?)(?=\n  [a-z][a-z0-9-]*:\n|$)/,
+  )?.[1];
+  assert.ok(qualify, 'delivery.yml must define the release qualification job');
+  assert.match(qualify, /permissions:\n {6}contents: read\n {6}checks: read\n/);
+  assert.doesNotMatch(qualify, /id-token:\s*write/);
+  assert.doesNotMatch(qualify, /attestations:\s*write/);
+  assert.doesNotMatch(qualify, /environment:/);
+  assert.match(
+    qualify,
+    /github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'/,
+    'qualification runs only for a push to protected main, never for a pull request',
+  );
+
+  // Publication itself stays unreachable from a pull request.
+  const publish = deliveryWorkflow.match(
+    /\n  publish:\n([\s\S]*?)(?=\n  [a-z][a-z0-9-]*:\n|$)/,
+  )?.[1];
+  assert.ok(publish, 'delivery.yml must still define the publish job');
+  assert.match(publish, /github\.event_name == 'push'/);
+  assert.match(publish, /github\.ref == 'refs\/heads\/main'/);
+  assert.match(
+    publish,
+    /needs\.authorization\.outputs\.federation_configured == 'true'/,
+    'publication stays guarded on separately recorded provider authorization',
+  );
+
+  // Registry creation is a prior bootstrap operation, so publication never
+  // creates the repository it publishes into.
+  assert.doesNotMatch(
+    deliveryWorkflow,
+    /gcloud artifacts repositories create|artifacts repositories create/,
+    'the release chain must not create its own registry: that is a bootstrap operation',
+  );
+});
+
+test('the image acceptance probes use reserved synthetic values, never a real service', () => {
+  for (const path of workflowPaths) {
+    const workflow = read(path);
+    // RFC 2606 reserves `.invalid`; the probe can never reach a real host.
+    for (const [, origin] of workflow.matchAll(/PLATFORM_API_ORIGIN='([^']+)'/g)) {
+      assert.match(
+        origin,
+        /^https:\/\/[a-z0-9-]+\.invalid$/,
+        `${path} must probe a reserved origin, not a real service`,
+      );
+    }
+    assert.doesNotMatch(
+      workflow,
+      /https:\/\/[a-z0-9-]+\.[a-z0-9-]+\.run\.app/,
+      `${path} must not name a concrete service URL`,
+    );
+  }
+});

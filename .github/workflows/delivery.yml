@@ -219,18 +219,135 @@ jobs:
           fi
 
   # ---------------------------------------------------------------------------
-  # Build once, publish by digest, attest provenance.
+  # Release qualification. Reads evidence; grants nothing.
   # ---------------------------------------------------------------------------
+  #
+  # `ci.yml` owns the repository gates, container builds and secret scan, and
+  # GitHub gives no way for one workflow's job to `needs:` another workflow's.
+  # Without this gate `publish` runs on any push to `main` whether or not those
+  # checks passed for that commit, which is exactly how an untested commit
+  # becomes a published artifact.
+  #
+  # Qualification is bound to `github.sha` and to nothing else. A check run
+  # attached to a different head cannot qualify this one, so a head change
+  # invalidates prior qualification by construction rather than by timing. The
+  # `infrastructure checks` required check is this workflow's own `checks` job,
+  # which `publish` already depends on directly; requiring it here as well would
+  # make the run wait on itself.
+  #
+  # This job reads check results with the default repository token. It touches no
+  # provider, holds no OIDC token, and can approve nothing.
+  qualify:
+    name: release qualification
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      qualified_head: ${{ steps.required.outputs.qualified_head }}
+    steps:
+      - name: Require every required check to have passed on this exact head
+        id: required
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+          # The required checks owned by `ci.yml`. Renaming one here without
+          # renaming the job detaches the gate, so the policy suite asserts both
+          # names agree.
+          REQUIRED_CHECKS: |
+            affected projects and repository gates
+            container platform-api
+            container web
+            secret scan
+        run: |
+          set -euo pipefail
+
+          mapfile -t required < <(printf '%s' "$REQUIRED_CHECKS" | sed '/^[[:space:]]*$/d')
+          [[ "${#required[@]}" -gt 0 ]] || {
+            echo 'No required checks are declared; refusing to qualify a release on no evidence.' >&2
+            exit 1
+          }
+
+          deadline=$(( SECONDS + 20 * 60 ))
+          while :; do
+            runs="$(
+              gh api --paginate \
+                -H 'Accept: application/vnd.github+json' \
+                "repos/${REPOSITORY}/commits/${HEAD_SHA}/check-runs?per_page=100" \
+                --jq '.check_runs[] | [.name, .status, (.conclusion // "pending"), .head_sha] | @tsv'
+            )"
+
+            waiting=()
+            for name in "${required[@]}"; do
+              line="$(awk -F'\t' -v wanted="$name" '$1 == wanted' <<< "$runs" | tail -n 1)"
+              if [[ -z "$line" ]]; then
+                waiting+=("$name")
+                continue
+              fi
+
+              status="$(cut -f2 <<< "$line")"
+              conclusion="$(cut -f3 <<< "$line")"
+              head="$(cut -f4 <<< "$line")"
+
+              # Stale evidence is evidence for another commit. Refuse it rather
+              # than letting a passing run from a previous head carry a release.
+              if [[ "$head" != "$HEAD_SHA" ]]; then
+                echo "Required check \"$name\" is attached to a different head; qualification is per-commit." >&2
+                exit 1
+              fi
+              if [[ "$status" != 'completed' ]]; then
+                waiting+=("$name")
+                continue
+              fi
+              # Anything that is not an outright success denies: failure,
+              # cancellation, timeout, neutral, skipped and action_required alike.
+              if [[ "$conclusion" != 'success' ]]; then
+                echo "Required check \"$name\" concluded \"$conclusion\" for this head." >&2
+                exit 1
+              fi
+            done
+
+            [[ "${#waiting[@]}" -eq 0 ]] && break
+
+            if (( SECONDS >= deadline )); then
+              echo "Required evidence never completed for this head: ${waiting[*]}." >&2
+              exit 1
+            fi
+            sleep 20
+          done
+
+          echo "qualified_head=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          {
+            echo '### Release qualification'
+            echo
+            echo '- qualified head: this workflow run'"'"'s commit'
+            echo "- required checks proven: ${#required[@]}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # Build once, test and scan that build, publish that exact digest, attest.
+  # ---------------------------------------------------------------------------
+  #
+  # Order is the control. The candidate is built locally, proven to serve its
+  # runtime contract, and scanned — all before the registry is reached. Only the
+  # digest that survived is pushed, and the published digest is compared against
+  # the tested one, so a second build cannot quietly replace the qualified
+  # artifact.
   publish:
     name: publish ${{ matrix.project }}
-    needs: [checks, authorization]
+    needs: [checks, authorization, qualify]
     if: >-
       needs.authorization.outputs.federation_configured == 'true' &&
       needs.authorization.outputs.provider_configured == 'true' &&
       github.event_name == 'push' &&
-      github.ref == 'refs/heads/main'
+      github.ref == 'refs/heads/main' &&
+      needs.qualify.outputs.qualified_head == github.sha
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     permissions:
       contents: read
       id-token: write # OIDC token for federation
@@ -241,8 +358,16 @@ jobs:
         include:
           - project: platform-api
             image: platform-api
+            service: platform-api
+            port: '3001'
+            contract_path: /v1/platform/status
+            contract_expect: '"schemaVersion":"1"'
           - project: web
             image: web
+            service: web
+            port: '3000'
+            contract_path: /
+            contract_expect: '<!DOCTYPE html'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -332,13 +457,148 @@ jobs:
           node-version-file: .node-version
           cache: pnpm
 
+      # Attestations are part of the image index, so loading a built image
+      # locally needs the containerd image store. Without it the candidate could
+      # only be inspected after publication, which is the ordering this job
+      # exists to avoid.
+      - name: Enable Docker containerd image store
+        uses: docker/setup-docker-action@77e84dbf09b47d1e29270283c22f16145aa85ca1 # v5
+        with:
+          daemon-config: |
+            {
+              "features": {
+                "containerd-snapshotter": true
+              }
+            }
+
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Install exact dependencies
         run: pnpm install --frozen-lockfile
 
-      # Short-lived credentials by OIDC exchange. No provider key is stored in
-      # GitHub, in the repository, in an image, or on any machine (ADR-0005).
+      # Built locally, not pushed. Nothing reaches the registry until the
+      # candidate has served its runtime contract and passed its scan.
+      - name: Build the release candidate with provenance and SBOM
+        id: build
+        env:
+          REPOSITORY: ${{ vars.GCP_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REGISTRY_REPOSITORY }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          SOURCE_REF: ${{ github.ref }}
+          BUILD_WORKFLOW: ${{ github.workflow_ref }}
+          BUILD_RUN: ${{ github.run_id }}/${{ github.run_attempt }}
+          ARTIFACT_VERSION: git-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          image="$REPOSITORY/${{ matrix.image }}"
+          docker buildx build \
+            --load \
+            --provenance=true \
+            --attest=type=sbom,generator=docker.io/docker/buildkit-syft-scanner@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9 \
+            --build-arg SOURCE_REPOSITORY="$SOURCE_REPOSITORY" \
+            --build-arg SOURCE_COMMIT="$SOURCE_COMMIT" \
+            --build-arg SOURCE_REF="$SOURCE_REF" \
+            --build-arg BUILD_WORKFLOW="$BUILD_WORKFLOW" \
+            --build-arg BUILD_RUN="$BUILD_RUN" \
+            --build-arg ARTIFACT_VERSION="$ARTIFACT_VERSION" \
+            --file ${{ matrix.project == 'web' && 'apps/web' || 'services/platform-api' }}/Dockerfile \
+            --tag "$image:${{ github.sha }}" \
+            --metadata-file metadata.json \
+            .
+          digest="$(jq -r '."containerimage.digest"' metadata.json)"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Build did not report a digest." >&2
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "artifact_version=$ARTIFACT_VERSION" >> "$GITHUB_OUTPUT"
+
+      # Image-level acceptance against the exact digest that will be scanned and
+      # promoted. The runtime contract injected here is the one the deployment
+      # injects, so an image that cannot start under it fails before publication
+      # rather than after a Cloud Run revision has been created.
+      - name: Prove the candidate digest serves its runtime contract
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          ARTIFACT_VERSION: ${{ steps.build.outputs.artifact_version }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          SERVICE_NAME: ${{ matrix.service }}
+          SERVICE_PORT: ${{ matrix.port }}
+          CONTRACT_PATH: ${{ matrix.contract_path }}
+          CONTRACT_EXPECT: ${{ matrix.contract_expect }}
+        run: |
+          set -euo pipefail
+          reference="$IMAGE@$DIGEST"
+
+          # A reserved-for-testing origin: the probe must never depend on, or
+          # reach, a real service (RFC 2606).
+          container="$(
+            docker run --detach --rm \
+              --env NODE_ENV=production \
+              --env MONEY_NOODLE_SERVICE="$SERVICE_NAME" \
+              --env MONEY_NOODLE_ENVIRONMENT=production \
+              --env MONEY_NOODLE_COMMIT="$SOURCE_COMMIT" \
+              --env ARTIFACT_VERSION="$ARTIFACT_VERSION" \
+              --env PLATFORM_API_ORIGIN='https://platform-api.invalid' \
+              --publish "127.0.0.1:0:${SERVICE_PORT}" \
+              "$reference"
+          )"
+          trap 'docker stop "$container" >/dev/null 2>&1 || true' EXIT
+
+          # The image declares its own HEALTHCHECK, so wait for that verdict
+          # rather than inventing a second definition of healthy.
+          health='starting'
+          for _ in $(seq 1 60); do
+            health="$(docker inspect --format '{{.State.Health.Status}}' "$container")"
+            [[ "$health" == 'healthy' ]] && break
+            if [[ "$health" == 'unhealthy' ]]; then
+              echo 'The release candidate reported itself unhealthy.' >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          if [[ "$health" != 'healthy' ]]; then
+            echo 'The release candidate never became healthy under the production runtime contract.' >&2
+            exit 1
+          fi
+
+          port="$(docker port "$container" "${SERVICE_PORT}/tcp" | head -n 1 | sed 's/.*://')"
+          ready="$(curl --fail --silent --show-error "http://127.0.0.1:${port}/health/ready")"
+          grep -Fq '"status":"ready"' <<< "$ready"
+          # An attributable version, not merely a process that answers.
+          grep -Fq "\"version\":\"$ARTIFACT_VERSION\"" <<< "$ready"
+
+          contract="$(curl --fail --silent --show-error "http://127.0.0.1:${port}${CONTRACT_PATH}")"
+          grep -Fq "$CONTRACT_EXPECT" <<< "$contract"
+
+          # The artifact must name the commit it was built from, so a digest can
+          # be traced to its source without an external lookup.
+          revision="$(
+            docker image inspect \
+              --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$reference"
+          )"
+          if [[ "$revision" != "$SOURCE_COMMIT" ]]; then
+            echo 'The candidate image does not carry this run'"'"'s source commit.' >&2
+            exit 1
+          fi
+
+          echo "The candidate digest served its runtime contract and names this source commit."
+
+      # Scanning gates publication. A HIGH or CRITICAL finding stops the release
+      # here, with nothing in the registry to withdraw.
+      - name: Scan the candidate digest before publication
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.build.outputs.image }}@${{ steps.build.outputs.digest }}
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+
+      # Short-lived credentials by OIDC exchange, obtained only once the
+      # candidate has qualified. No provider key is stored in GitHub, in the
+      # repository, in an image, or on any machine (ADR-0005).
       - id: auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
@@ -353,42 +613,33 @@ jobs:
           username: oauth2accesstoken
           password: ${{ steps.auth.outputs.access_token }}
 
-      - name: Build and push by digest with provenance and SBOM
-        id: build
+      # Push the artifact that was tested and scanned, then prove the registry
+      # holds that exact digest. A rebuild between test and publication would
+      # produce a different digest and stop here.
+      - name: Publish the tested digest and prove it is the one in the registry
+        id: publish
         env:
-          REPOSITORY: ${{ vars.GCP_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REGISTRY_REPOSITORY }}
+          IMAGE: ${{ steps.build.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
-          image="$REPOSITORY/${{ matrix.image }}"
-          docker buildx build \
-            --push \
-            --provenance=true \
-            --attest=type=sbom,generator=docker.io/docker/buildkit-syft-scanner@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9 \
-            --file ${{ matrix.project == 'web' && 'apps/web' || 'services/platform-api' }}/Dockerfile \
-            --tag "$image:${{ github.sha }}" \
-            --metadata-file metadata.json \
-            .
-          digest="$(jq -r '."containerimage.digest"' metadata.json)"
-          if [[ "$digest" != sha256:* ]]; then
-            echo "Build did not report a digest." >&2
+          docker push "$IMAGE:${{ github.sha }}"
+
+          published="$(
+            docker buildx imagetools inspect "$IMAGE:${{ github.sha }}" \
+              --format '{{.Manifest.Digest}}'
+          )"
+          if [[ "$published" != "$DIGEST" ]]; then
+            echo 'The published digest is not the digest that was tested and scanned.' >&2
             exit 1
           fi
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          echo "image=$image" >> "$GITHUB_OUTPUT"
-
-      - name: Scan the published image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: ${{ steps.build.outputs.image }}@${{ steps.build.outputs.digest }}
-          exit-code: '1'
-          ignore-unfixed: true
-          severity: HIGH,CRITICAL
+          echo "digest=$published" >> "$GITHUB_OUTPUT"
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ steps.build.outputs.image }}
-          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-digest: ${{ steps.publish.outputs.digest }}
           push-to-registry: true
 
   # ---------------------------------------------------------------------------
