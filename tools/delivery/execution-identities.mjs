@@ -125,6 +125,16 @@ export const RESOURCE_OPERATIONS = Object.freeze({
     'bootstrap.initialize',
     'Billing-account access is owned by the account holder; no workload identity may extend its own billing authority.',
   ),
+  'stacks/bootstrap:google_service_account.runtime': own(
+    'bootstrap-principal',
+    'bootstrap.initialize',
+    'Each service’s runtime identity is maintainer-applied so web and API hold separate least-privilege identities the pipeline cannot create or replace.',
+  ),
+  'stacks/bootstrap:google_project_iam_member.runtime_telemetry': own(
+    'bootstrap-principal',
+    'bootstrap.initialize',
+    'Telemetry export is the runtime identity’s only project-level permission, and project-level grants are never the deployer’s to make.',
+  ),
   'modules/state-bucket:google_storage_bucket.state': own(
     'bootstrap-principal',
     'bootstrap.initialize',
@@ -205,16 +215,6 @@ export const RESOURCE_OPERATIONS = Object.freeze({
   ),
 
   // --- Per-service stacks: release and the separate exposure seam. ---
-  'modules/cloud-run-service:google_service_account.runtime': own(
-    'stack-executor',
-    'infrastructure.apply',
-    'Each service’s runtime identity is declared infrastructure so web and API hold separate least-privilege identities.',
-  ),
-  'modules/cloud-run-service:google_project_iam_member.runtime_telemetry': own(
-    'stack-executor',
-    'infrastructure.apply',
-    'Telemetry export is the runtime identity’s only project-level permission and is declared with the identity it belongs to.',
-  ),
   'modules/cloud-run-service:google_secret_manager_secret_iam_member.runtime_secret_access': own(
     'stack-executor',
     'infrastructure.apply',

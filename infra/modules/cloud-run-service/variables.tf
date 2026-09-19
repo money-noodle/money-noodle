@@ -18,13 +18,25 @@ variable "service_name" {
   }
 }
 
-variable "runtime_service_account_id" {
-  description = "Account id for this service's own runtime identity. Distinct per service, so blast radius is mechanical rather than conventional."
+variable "runtime_service_account_email" {
+  description = <<-EOT
+    Email of this service's own runtime identity, which the maintainer-applied
+    bootstrap stack creates and publishes.
+
+    The module consumes an existing identity rather than creating one. Creating a
+    service account and granting it a project role are identity and project-IAM
+    administration, which the delivery deployer deliberately does not hold
+    (ADR-0005, 2026-09-19 amendment). An address is not a credential: holding it
+    grants nothing, and acting as it still requires `iam.serviceAccountUser`.
+  EOT
   type        = string
 
   validation {
-    condition     = can(regex("^[a-z]([-a-z0-9]{4,28}[a-z0-9])$", var.runtime_service_account_id))
-    error_message = "runtime_service_account_id must be 6 to 30 characters, lowercase, starting with a letter."
+    condition = can(regex(
+      "^[a-z]([-a-z0-9]{4,28}[a-z0-9])@[a-z]([-a-z0-9]{4,28}[a-z0-9])\\.iam\\.gserviceaccount\\.com$",
+      var.runtime_service_account_email
+    ))
+    error_message = "runtime_service_account_email must be a Google service account email. A bare account id, a user principal, or `allUsers` is not a runtime identity."
   }
 }
 
@@ -206,7 +218,7 @@ variable "accessible_secret_ids" {
 }
 
 variable "telemetry_endpoint" {
-  description = "OTLP endpoint. Null disables telemetry configuration and the telemetry IAM grants with it."
+  description = "OTLP endpoint. Null disables telemetry configuration entirely, rather than half-configuring it."
   type        = string
   default     = null
 }

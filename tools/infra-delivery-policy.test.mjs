@@ -2344,3 +2344,106 @@ test('the repository gate discovers the nested release suite', () => {
     }
   }
 });
+
+// ---------------------------------------------------------------------------
+// Runtime identities are maintainer-applied; the pipeline consumes them (#178).
+//
+// The first authorized service deploy planned seven resources for `api` and
+// failed on the first, with `IAM_PERMISSION_DENIED` on
+// `iam.serviceAccounts.create`. The deployer holds no identity administration
+// and no project IAM by design, so the identities moved to the bootstrap stack
+// the maintainer applies. These guards keep the two halves consistent.
+// ---------------------------------------------------------------------------
+
+/** The `.tf` sources of one stack or module under `infra/`. */
+function infraSource(...segments) {
+  const directory = join(repoRoot, 'infra', ...segments);
+  return readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.tf'))
+    .map((entry) => read(join(directory, entry.name)))
+    .join('\n');
+}
+
+test('every job that plans a service stack supplies the bootstrap contract bucket', () => {
+  // The `api` and `web` stacks read their runtime identity and their post-apply
+  // verifier from the bootstrap stack's published outputs. A job that runs
+  // `tofu` against either stack without that bucket fails at init rather than at
+  // review time, so the input is required wherever a service stack is reached.
+  for (const jobName of ['deploy', 'plan', 'drift', 'apply', 'rollback']) {
+    const job = deliveryJobs().find(({ name }) => name === jobName);
+    assert.ok(job, `expected a ${jobName} job`);
+    assert.ok(
+      job.body.includes('TF_VAR_bootstrap_state_bucket'),
+      `${jobName} runs OpenTofu against a service stack but supplies no bootstrap state bucket`,
+    );
+  }
+});
+
+test('the post-apply probe identity may invoke the private service it probes', () => {
+  // A service is created private. The probe mints an audience-bound ID token for
+  // one identity, and without a matching service-level `run.invoker` binding in
+  // source the probe answers 403 for a reason no reviewer can see in the diff.
+  const probeIdentities = new Set(
+    [...delivery.matchAll(/id: [a-z-]*probe-auth\n([\s\S]*?)(?=\n {6}- |$)/g)].map(([, body]) =>
+      body.match(/service_account: (\S[^\n]*)/)?.[1]?.trim(),
+    ),
+  );
+  assert.ok(probeIdentities.size > 0, 'expected at least one audience-bound probe');
+  assert.deepEqual(
+    [...probeIdentities],
+    ['${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}'],
+    'every post-apply probe must authenticate as one identity, so exactly one binding has to exist in source',
+  );
+
+  for (const stack of ['api', 'web']) {
+    const source = infraSource('stacks', stack);
+    assert.ok(
+      source.includes('contract_deployer_service_account_email'),
+      `the ${stack} stack must read the post-apply verifier from the bootstrap contract`,
+    );
+
+    // The binding itself, not merely the value being in scope. Losing this line
+    // is what makes the probe 403 on a service that is otherwise healthy.
+    const derived = source.match(/authorised_invoker_members = ([\s\S]*?)\n\n/)?.[1];
+    assert.ok(derived, `the ${stack} stack must derive its invoker set in one place`);
+    assert.ok(
+      derived.includes('"serviceAccount:${local.deployer}"'),
+      `the ${stack} stack must grant its post-apply verifier a service-level invoker binding, or the audience-bound probe is refused`,
+    );
+    assert.match(
+      source,
+      /authorised_invoker_members\s*=\s*local\.authorised_invoker_members/,
+      `the ${stack} stack must pass its derived invoker set to the service module`,
+    );
+  }
+
+  // Service-level only. The binding that carries this is a Cloud Run service
+  // member; a project-level `run.invoker` would grant invocation of every
+  // service in the project, including ones that do not exist yet.
+  const cloudRun = infraSource('modules', 'cloud-run-service');
+  assert.match(
+    cloudRun,
+    /resource "google_cloud_run_v2_service_iam_member" "authorised_invokers"/,
+    'named invokers must be bound on the service, never at project level',
+  );
+  assert.ok(
+    !/resource\s+"google_project_iam_member"/.test(cloudRun),
+    'the service module must declare no project IAM at all',
+  );
+});
+
+test('the web runtime identity remains the API authorised invoker', () => {
+  // The least-privilege service-to-service path predates this change and must
+  // survive it. It now reaches the API from the bootstrap contract rather than
+  // from the web stack, which is what keeps `api` appliable before `web` exists.
+  const api = infraSource('stacks', 'api');
+  assert.match(
+    api,
+    /local\.runtime_identities\["web"\]/,
+    'the API must still authorise the web runtime identity to invoke it',
+  );
+  assert.ok(
+    !/data\.terraform_remote_state\.web\b/.test(api),
+    'the API must not read the web stack; that cycle is what the bootstrap contract avoids',
+  );
+});

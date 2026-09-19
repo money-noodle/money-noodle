@@ -119,6 +119,44 @@ resource "google_project_iam_member" "deployer" {
   depends_on = [google_project_service.bootstrap]
 }
 
+# Each deployable service's own runtime identity, created here rather than by
+# the delivery pipeline.
+#
+# ADR-0005's 2026-09-19 amendment: creating a service account needs
+# `iam.serviceAccounts.create`, and granting it a project role needs
+# `resourcemanager.projects.setIamPolicy`. The deployer role validation above
+# refuses both, so asking the pipeline to create these identities would have
+# meant granting CI identity and project-IAM administration — exactly the broad
+# authority this stack exists to withhold. Identities and their project-level
+# grants are a maintainer-applied bootstrap concern; the pipeline consumes them
+# and manages only Cloud Run resources and service-level bindings.
+resource "google_service_account" "runtime" {
+  for_each = var.runtime_service_accounts
+
+  project      = var.project_id
+  account_id   = each.value
+  display_name = "${each.key} runtime"
+  description  = "Runtime identity for the ${each.key} Cloud Run service. Default-deny: it holds no project role beyond the telemetry write roles granted here."
+
+  depends_on = [google_project_service.bootstrap]
+}
+
+# Telemetry export is the only project-level authority a runtime identity holds
+# in the first slice. Writing telemetry is not reading anything and not deploying
+# anything, and `var.runtime_telemetry_roles` is validated to keep it that way.
+resource "google_project_iam_member" "runtime_telemetry" {
+  for_each = {
+    for pair in setproduct(keys(var.runtime_service_accounts), var.runtime_telemetry_roles) :
+    "${pair[0]}:${pair[1]}" => { service = pair[0], role = pair[1] }
+  }
+
+  project = var.project_id
+  role    = each.value.role
+  member  = "serviceAccount:${google_service_account.runtime[each.value.service].email}"
+
+  depends_on = [google_project_service.bootstrap]
+}
+
 # Project IAM cannot authorize a billing-account budget. This separate binding
 # is the narrow billing scope the platform stack needs for the accepted USD 25
 # alert budget; it grants no billing-account administration or payment authority.

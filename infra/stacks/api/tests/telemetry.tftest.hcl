@@ -15,11 +15,25 @@ override_data {
   }
 }
 
+override_data {
+  target = data.terraform_remote_state.bootstrap
+  values = {
+    outputs = {
+      contract_deployer_service_account_email = "delivery-deployer@example-project.iam.gserviceaccount.com"
+      contract_runtime_service_account_emails = {
+        "platform-api" = "platform-api-runtime@example-project.iam.gserviceaccount.com"
+        "web"          = "web-runtime@example-project.iam.gserviceaccount.com"
+      }
+    }
+  }
+}
+
 variables {
-  platform_state_bucket = "example-platform-state"
-  image_digest          = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
-  artifact_version      = "release-1.2.3+api"
-  source_commit         = "3333333333333333333333333333333333333333"
+  platform_state_bucket  = "example-platform-state"
+  bootstrap_state_bucket = "example-bootstrap-state"
+  image_digest           = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+  artifact_version       = "release-1.2.3+api"
+  source_commit          = "3333333333333333333333333333333333333333"
 }
 
 run "telemetry_configuration_is_explicit_and_credential_free" {
@@ -72,28 +86,7 @@ run "telemetry_configuration_is_explicit_and_credential_free" {
   }
 }
 
-run "the_runtime_identity_holds_only_telemetry_write_authority" {
-  command = plan
-
-  assert {
-    condition = alltrue([
-      for role in [
-        "roles/cloudtrace.agent",
-        "roles/logging.logWriter",
-        "roles/monitoring.metricWriter",
-        "roles/serviceusage.serviceUsageConsumer",
-        "roles/telemetry.writer",
-      ] : contains(module.service.telemetry_roles, role)
-    ])
-    error_message = "The runtime identity must declare exactly the telemetry write roles the Telemetry API documents."
-  }
-
-  # Writing telemetry is not reading anything and not deploying anything.
-  assert {
-    condition = length([
-      for role in module.service.telemetry_roles : role
-      if !startswith(role, "roles/cloudtrace.") && !startswith(role, "roles/logging.") && !startswith(role, "roles/monitoring.") && !startswith(role, "roles/serviceusage.") && !startswith(role, "roles/telemetry.")
-    ]) == 0
-    error_message = "The runtime identity must hold no authority beyond telemetry write and its quota consumer role."
-  }
-}
+# The runtime identity's project-level telemetry roles are no longer granted
+# here. They are granted by the maintainer-applied bootstrap stack, and asserted
+# in `infra/stacks/bootstrap/tests/bootstrap.tftest.hcl`, because a service apply
+# must need no project-IAM authority at all (ADR-0005, 2026-09-19 amendment).

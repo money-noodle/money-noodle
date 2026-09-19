@@ -38,11 +38,38 @@ data "terraform_remote_state" "api" {
   }
 }
 
+# The bootstrap stack's published contract carries the identities the maintainer
+# applied: this service's own runtime identity and the federated deployer.
+# Reading them here is what lets this apply need no identity or project-IAM
+# authority (ADR-0005, 2026-09-19 amendment).
+data "terraform_remote_state" "bootstrap" {
+  backend = "gcs"
+
+  config = {
+    bucket = var.bootstrap_state_bucket
+    prefix = "stacks/bootstrap"
+  }
+}
+
 locals {
   project_id         = data.terraform_remote_state.platform.outputs.contract_project_id
   region             = data.terraform_remote_state.platform.outputs.contract_region
   registry_url       = data.terraform_remote_state.platform.outputs.contract_registry_url
   telemetry_endpoint = data.terraform_remote_state.platform.outputs.contract_telemetry_endpoint
+
+  deployer = data.terraform_remote_state.bootstrap.outputs.contract_deployer_service_account_email
+
+  # Keyed by this stack's own pinned service name, so the web cannot be wired to
+  # run as the API's identity: `var.service_name` is validated to one value.
+  runtime_service_account_email = (
+    data.terraform_remote_state.bootstrap.outputs.contract_runtime_service_account_emails[var.service_name]
+  )
+
+  # Service-level `roles/run.invoker`, never a project role. The web is created
+  # private and has no service-to-service caller; the one member is the post-apply
+  # verifier. `delivery.yml` mints an ID token for the deployer with this service
+  # as its audience, and a private service refuses it without this binding.
+  authorised_invoker_members = ["serviceAccount:${local.deployer}"]
 
   # A non-secret typed configuration value, not a secret. Putting it in the
   # secret store would obscure which values actually matter (ADR-0005).
@@ -55,10 +82,10 @@ locals {
 module "service" {
   source = "../../modules/cloud-run-service"
 
-  project_id                 = local.project_id
-  region                     = local.region
-  service_name               = var.service_name
-  runtime_service_account_id = var.runtime_service_account_id
+  project_id                    = local.project_id
+  region                        = local.region
+  service_name                  = var.service_name
+  runtime_service_account_email = local.runtime_service_account_email
 
   repository_url   = local.registry_url
   image_name       = var.image_name
@@ -81,7 +108,8 @@ module "service" {
   # remote validation, but exposing it is a separate reviewed step taken after
   # the private service has been independently verified, never part of the apply
   # that creates it.
-  allow_unauthenticated = var.allow_unauthenticated
+  allow_unauthenticated      = var.allow_unauthenticated
+  authorised_invoker_members = local.authorised_invoker_members
 
   # The web reads no secret. ADR-0005: the web workload identity may not read the
   # registry, infrastructure state, or any secret.

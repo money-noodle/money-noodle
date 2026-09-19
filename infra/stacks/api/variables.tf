@@ -3,6 +3,11 @@ variable "platform_state_bucket" {
   type        = string
 }
 
+variable "bootstrap_state_bucket" {
+  description = "State bucket holding the bootstrap stack's published contract, read to learn the runtime and deployer identities. Supplied at apply; never committed."
+  type        = string
+}
+
 variable "service_name" {
   description = "Cloud Run service name."
   type        = string
@@ -12,12 +17,6 @@ variable "service_name" {
     condition     = var.service_name == "platform-api"
     error_message = "The API stack must identify its application as platform-api."
   }
-}
-
-variable "runtime_service_account_id" {
-  description = "Account id for the API's own runtime identity, mechanically distinct from the web's."
-  type        = string
-  default     = "platform-api-runtime"
 }
 
 variable "image_name" {
@@ -67,12 +66,21 @@ variable "allow_unauthenticated" {
 
 variable "authorised_invoker_members" {
   description = <<-EOT
-    IAM members granted `run.invoker`. The web runtime identity belongs here, so
-    the least-privilege path from web to API exists and is testable even while the
-    service is also publicly invocable.
+    Additional IAM members granted service-level `run.invoker`, beyond the web
+    runtime identity and the post-apply verifier that this stack always grants
+    from the bootstrap contract. Empty by default: a further invoker is a
+    reviewed decision, not a convenience.
   EOT
   type        = list(string)
   default     = []
+
+  validation {
+    condition = alltrue([
+      for member in var.authorised_invoker_members :
+      startswith(member, "serviceAccount:") || startswith(member, "group:")
+    ])
+    error_message = "An additional invoker must be a service account or a group. Public access is the separate `allow_unauthenticated` step (ADR-0005)."
+  }
 }
 
 variable "accessible_secret_ids" {

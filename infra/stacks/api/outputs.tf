@@ -6,8 +6,13 @@ output "contract_service_uri" {
 }
 
 output "contract_runtime_service_account_email" {
-  description = "The API's own runtime identity."
+  description = "The API's own runtime identity, created by the bootstrap stack and consumed here."
   value       = module.service.runtime_service_account_email
+}
+
+output "authorised_invoker_members" {
+  description = "Members holding service-level `roles/run.invoker` on the API. Not part of the cross-stack contract; published so who may call the API is answerable from state."
+  value       = module.service.authorised_invoker_members
 }
 
 output "deployed_digest" {

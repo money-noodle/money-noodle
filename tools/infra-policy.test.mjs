@@ -342,34 +342,120 @@ test('images deploy by digest and never by a mutable tag', () => {
 });
 
 test('runtime identities are distinct per service and hold no registry access', () => {
-  const stacks = ['web', 'api'].map((name) => ({
-    name,
-    source: readStack(join(infraRoot, 'stacks', name)),
-  }));
+  // The identities moved to the maintainer-applied bootstrap stack (#178), so
+  // the account ids are declared there. They are still one per service and still
+  // mechanically distinct; a shared identity would make blast radius a
+  // convention rather than a property.
+  const bootstrapVariables = read(join(infraRoot, 'stacks', 'bootstrap', 'variables.tf'));
+  const declared = bootstrapVariables.match(
+    /variable "runtime_service_accounts"[\s\S]*?default = \{([\s\S]*?)\n {2}\}/,
+  )?.[1];
+  assert.ok(declared, 'bootstrap must declare one runtime account id per deployable service');
 
-  const accountIds = stacks.map(({ source }) => {
-    const match = source.match(/runtime_service_account_id"[\s\S]*?default\s*=\s*"([^"]+)"/);
-    return match?.[1];
-  });
-
-  assert.ok(
-    accountIds.every(Boolean),
-    'both service stacks must declare their own runtime service account id',
+  const accounts = Object.fromEntries(
+    [...declared.matchAll(/"([a-z][-a-z0-9]*)"\s*=\s*"([a-z][-a-z0-9]*)"/g)].map(
+      ([, service, accountId]) => [service, accountId],
+    ),
+  );
+  assert.deepEqual(
+    Object.keys(accounts).sort(),
+    ['platform-api', 'web'],
+    'bootstrap must declare a runtime identity for each deployable service, keyed by its Cloud Run service name',
   );
   assert.equal(
-    new Set(accountIds).size,
-    accountIds.length,
-    `the web and API runtime identities must be mechanically distinct; both default to ${accountIds[0]}`,
+    new Set(Object.values(accounts)).size,
+    Object.values(accounts).length,
+    'the web and API runtime identities must be mechanically distinct',
   );
 
+  // The service stacks select theirs by their own pinned service name, so the
+  // API cannot be wired to run as the web's identity.
+  for (const [service, stack] of [
+    ['platform-api', 'api'],
+    ['web', 'web'],
+  ]) {
+    const source = readStack(join(infraRoot, 'stacks', stack));
+    assert.ok(
+      source.includes('contract_runtime_service_account_emails'),
+      `the ${stack} stack must read its runtime identity from the bootstrap contract`,
+    );
+    assert.ok(
+      source.includes('[var.service_name]'),
+      `the ${stack} stack must select its runtime identity by its own pinned service name`,
+    );
+    assert.match(
+      read(join(infraRoot, 'stacks', stack, 'variables.tf')),
+      new RegExp(`condition\\s*=\\s*var\\.service_name == "${service}"`),
+      `the ${stack} stack's service name must stay pinned, because it is now the identity key`,
+    );
+  }
+
   const cloudRun = read(join(infraRoot, 'modules', 'cloud-run-service', 'main.tf'));
+  for (const source of [cloudRun, read(join(infraRoot, 'stacks', 'bootstrap', 'main.tf'))]) {
+    assert.ok(
+      !/artifactregistry\.(reader|writer)/.test(source),
+      'a runtime identity must not be granted Artifact Registry access; Cloud Run pulls as the service agent (ADR-0005)',
+    );
+    assert.ok(
+      !/storage\.(object)?[Aa]dmin/.test(source),
+      'a runtime identity must not be granted access to infrastructure state',
+    );
+  }
+});
+
+test('a service apply declares no identity or project-level IAM resource', () => {
+  // #178: the first authorized `api` apply failed on `iam.serviceAccounts.create`
+  // because the module asked the deployer to create its runtime identity. The
+  // deployer holds no identity or project-IAM authority by design, so a plan for
+  // either service must now contain Cloud Run resources and service-level
+  // bindings only.
+  const forbidden = [
+    [/resource\s+"google_service_account"/, 'a service account'],
+    [/resource\s+"google_project_iam_(member|binding|policy)"/, 'a project IAM binding'],
+    [
+      /resource\s+"google_service_account_iam_(member|binding|policy)"/,
+      'a service account IAM binding',
+    ],
+    [/resource\s+"google_organization_iam_/, 'an organization IAM binding'],
+  ];
+
+  const releasePaths = [
+    join(infraRoot, 'modules', 'cloud-run-service'),
+    join(infraRoot, 'stacks', 'api'),
+    join(infraRoot, 'stacks', 'web'),
+  ];
+
+  for (const directory of releasePaths) {
+    for (const path of walk(directory).filter((candidate) => candidate.endsWith('.tf'))) {
+      const source = read(path);
+      for (const [pattern, description] of forbidden) {
+        assert.ok(
+          !pattern.test(source),
+          `${relative(path)} declares ${description}. A service apply runs as the deployer, which holds no identity or project-IAM authority (ADR-0005, 2026-09-19 amendment); declare it in the maintainer-applied bootstrap stack instead.`,
+        );
+      }
+    }
+  }
+
+  // What stays is per-service and per-release: the service, its per-secret
+  // access, and its service-level invoker bindings.
+  const cloudRun = read(join(infraRoot, 'modules', 'cloud-run-service', 'main.tf'));
+  for (const retained of [
+    /resource\s+"google_cloud_run_v2_service"\s+"service"/,
+    /resource\s+"google_secret_manager_secret_iam_member"\s+"runtime_secret_access"/,
+    /resource\s+"google_cloud_run_v2_service_iam_member"\s+"authorised_invokers"/,
+  ]) {
+    assert.match(cloudRun, retained, 'the service module must keep its per-service resources');
+  }
+
+  // And the identity arrives as a validated input rather than being created.
+  const variables = read(join(infraRoot, 'modules', 'cloud-run-service', 'variables.tf'));
+  const block = variables.match(/variable "runtime_service_account_email" \{([\s\S]*?)\n\}/)?.[1];
+  assert.ok(block, 'the module must take the runtime identity as an input');
+  assert.match(block, /validation \{[\s\S]*can\(regex\(/, 'the input must be validated');
   assert.ok(
-    !/artifactregistry\.(reader|writer)/.test(cloudRun),
-    'a runtime identity must not be granted Artifact Registry access; Cloud Run pulls as the service agent (ADR-0005)',
-  );
-  assert.ok(
-    !/storage\.(object)?[Aa]dmin/.test(cloudRun),
-    'a runtime identity must not be granted access to infrastructure state',
+    block.includes('gserviceaccount'),
+    'the runtime identity input must be validated as a service account email, not accepted as any string',
   );
 });
 
@@ -701,13 +787,29 @@ test('telemetry authentication needs no credential in configuration', () => {
 });
 
 test('the runtime identity holds telemetry write authority and nothing more', () => {
-  const grant = cloudRunModule.match(
-    /resource "google_project_iam_member" "runtime_telemetry"[\s\S]*?\n}/,
+  // The grant moved to the maintainer-applied bootstrap stack (#178). It is the
+  // same five roles, still the only project-level authority a runtime identity
+  // holds, and it is now unreachable by the delivery pipeline.
+  const bootstrapMain = read(join(infraRoot, 'stacks', 'bootstrap', 'main.tf'));
+  const bootstrapVariables = read(join(infraRoot, 'stacks', 'bootstrap', 'variables.tf'));
+
+  const grant = bootstrapMain.match(
+    /resource "google_project_iam_member" "runtime_telemetry"[\s\S]*?\n\}/,
   )?.[0];
-  assert.ok(grant, 'the telemetry IAM grant must still exist');
+  assert.ok(grant, 'the telemetry IAM grant must still exist, in the bootstrap stack');
+  assert.match(
+    grant,
+    /google_service_account\.runtime\[each\.value\.service\]\.email/,
+    'the grant must name the runtime identity bootstrap creates, not an interpolated string',
+  );
+
+  const roles = bootstrapVariables.match(
+    /variable "runtime_telemetry_roles"[\s\S]*?default = \[([\s\S]*?)\n {2}\]/,
+  )?.[1];
+  assert.ok(roles, 'bootstrap must declare the telemetry roles it grants');
 
   // Google's Telemetry API documentation requires these two alongside the
-  // classic per-signal roles. Desired configuration only: this grants nothing.
+  // classic per-signal roles. Desired configuration only: nothing is applied.
   for (const role of [
     'roles/cloudtrace.agent',
     'roles/logging.logWriter',
@@ -715,20 +817,83 @@ test('the runtime identity holds telemetry write authority and nothing more', ()
     'roles/serviceusage.serviceUsageConsumer',
     'roles/telemetry.writer',
   ]) {
-    assert.ok(grant.includes(role), `the runtime identity must declare ${role}`);
+    assert.ok(roles.includes(role), `the runtime identity must declare ${role}`);
   }
 
   // Writing telemetry is not reading anything, and not deploying anything.
   for (const forbidden of [
     'roles/run.admin',
+    'roles/run.developer',
     'roles/storage.admin',
     'roles/owner',
     'roles/editor',
+    'roles/artifactregistry',
+    'roles/secretmanager',
   ]) {
-    assert.ok(!grant.includes(forbidden), `the runtime identity must never hold ${forbidden}`);
+    assert.ok(!roles.includes(forbidden), `the runtime identity must never hold ${forbidden}`);
   }
-  // The grant disappears entirely when telemetry is not configured.
-  assert.match(grant, /var\.telemetry_endpoint == null \? toset\(\[\]\)/);
+
+  // The variable refuses a role outside the telemetry families and refuses an
+  // administrative role inside them, so a future edit cannot widen it quietly.
+  const variableBlock = bootstrapVariables.match(
+    /variable "runtime_telemetry_roles" \{([\s\S]*?)\n\}\n\nvariable/,
+  )?.[1];
+  assert.ok(variableBlock, 'the telemetry role list must stay validated');
+  assert.match(variableBlock, /roles\/cloudtrace\./);
+  assert.match(variableBlock, /"roles\/logging\.admin"/);
+  assert.match(variableBlock, /"roles\/owner"/);
+
+  // The service module no longer grants anything at project level at all.
+  assert.ok(
+    !/resource\s+"google_project_iam_member"/.test(cloudRunModule),
+    'the service module must declare no project IAM; a service apply holds no project-IAM authority',
+  );
+});
+
+test('the deployer can bind a service invoker and administers no identity', () => {
+  // #178: a private service needs service-level `roles/run.invoker` bindings for
+  // the web and for the post-apply verifier, which `roles/run.developer` cannot
+  // set. `roles/run.admin` is confined to Cloud Run: it grants no project IAM and
+  // no identity administration.
+  const bootstrap = read(join(infraRoot, 'stacks', 'bootstrap', 'variables.tf'));
+  const declared = bootstrap.match(
+    /variable "deployer_roles"[\s\S]*?default = \[([\s\S]*?)\n {2}\]/,
+  )?.[1];
+  assert.ok(declared, 'bootstrap must enumerate the deployer roles');
+
+  assert.ok(declared.includes('"roles/run.admin"'), 'the deployer must administer Cloud Run');
+  assert.ok(
+    !declared.includes('"roles/run.developer"'),
+    'run.developer cannot set a service-level invoker binding; the first private apply fails on it',
+  );
+  assert.ok(
+    declared.includes('"roles/iam.serviceAccountUser"'),
+    'the deployer must keep the authority to act as the runtime identities it deploys',
+  );
+  assert.match(
+    declared,
+    /not `?run\.developer`?|Cloud Run administration/i,
+    'the role swap must carry a comment saying why, so a reviewer sees the reason rather than the diff',
+  );
+
+  // Acting as an identity is not administering one. None of these may appear.
+  for (const role of [
+    'roles/owner',
+    'roles/editor',
+    'roles/resourcemanager.projectIamAdmin',
+    'roles/iam.securityAdmin',
+    'roles/iam.serviceAccountAdmin',
+    'roles/iam.serviceAccountCreator',
+    'roles/iam.serviceAccountKeyAdmin',
+    'roles/secretmanager.admin',
+    'roles/secretmanager.secretAccessor',
+    'roles/secretmanager.viewer',
+  ]) {
+    assert.ok(
+      !declared.includes(`"${role}"`),
+      `the deployer must not hold ${role}; creating and granting identities is the maintainer's bootstrap, not CI's (ADR-0005)`,
+    );
+  }
 });
 
 test('log retention is explicit, and a shorter debug window cannot be claimed falsely', () => {

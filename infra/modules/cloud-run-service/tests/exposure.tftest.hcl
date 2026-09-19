@@ -6,18 +6,18 @@
 mock_provider "google" {}
 
 variables {
-  project_id                 = "example-project"
-  region                     = "us-west1"
-  service_name               = "example-service"
-  runtime_service_account_id = "example-runtime"
-  repository_url             = "us-west1-docker.pkg.dev/example-project/platform"
-  image_name                 = "example"
-  image_digest               = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-  artifact_version           = "0.0.0"
-  source_commit              = "0000000000000000000000000000000000000000"
-  container_port             = 3000
-  cpu                        = "1"
-  memory                     = "512Mi"
+  project_id                    = "example-project"
+  region                        = "us-west1"
+  service_name                  = "example-service"
+  runtime_service_account_email = "example-runtime@example-project.iam.gserviceaccount.com"
+  repository_url                = "us-west1-docker.pkg.dev/example-project/platform"
+  image_name                    = "example"
+  image_digest                  = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  artifact_version              = "0.0.0"
+  source_commit                 = "0000000000000000000000000000000000000000"
+  container_port                = 3000
+  cpu                           = "1"
+  memory                        = "512Mi"
 }
 
 run "creating_a_service_does_not_expose_it" {

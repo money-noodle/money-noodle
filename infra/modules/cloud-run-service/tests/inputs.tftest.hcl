@@ -10,18 +10,18 @@
 mock_provider "google" {}
 
 variables {
-  project_id                 = "example-project"
-  region                     = "us-west1"
-  service_name               = "example-service"
-  runtime_service_account_id = "example-runtime"
-  repository_url             = "us-west1-docker.pkg.dev/example-project/platform"
-  image_name                 = "example"
-  image_digest               = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-  artifact_version           = "0.0.0"
-  source_commit              = "0000000000000000000000000000000000000000"
-  container_port             = 3000
-  cpu                        = "1"
-  memory                     = "512Mi"
+  project_id                    = "example-project"
+  region                        = "us-west1"
+  service_name                  = "example-service"
+  runtime_service_account_email = "example-runtime@example-project.iam.gserviceaccount.com"
+  repository_url                = "us-west1-docker.pkg.dev/example-project/platform"
+  image_name                    = "example"
+  image_digest                  = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  artifact_version              = "0.0.0"
+  source_commit                 = "0000000000000000000000000000000000000000"
+  container_port                = 3000
+  cpu                           = "1"
+  memory                        = "512Mi"
 }
 
 run "a_mutable_tag_is_refused_as_an_image_reference" {
@@ -106,4 +106,40 @@ run "an_undocumented_ingress_setting_is_refused" {
   }
 
   expect_failures = [var.ingress]
+}
+
+# The identity arrives from another stack's published contract, so the module
+# refuses anything that is not a service account of this project. A bare account
+# id would previously have been accepted, because the module created the account
+# itself; it now names one that must already exist.
+run "a_bare_account_id_is_refused_as_a_runtime_identity" {
+  command = plan
+
+  variables {
+    runtime_service_account_email = "example-runtime"
+  }
+
+  expect_failures = [var.runtime_service_account_email]
+}
+
+run "a_public_principal_is_refused_as_a_runtime_identity" {
+  command = plan
+
+  variables {
+    runtime_service_account_email = "allUsers"
+  }
+
+  expect_failures = [var.runtime_service_account_email]
+}
+
+run "a_cross_project_runtime_identity_is_refused" {
+  command = plan
+
+  # Well-formed and still wrong: acting as an identity from another project is
+  # not a deployment this module may plan (ADR-0005).
+  variables {
+    runtime_service_account_email = "example-runtime@other-example.iam.gserviceaccount.com"
+  }
+
+  expect_failures = [google_cloud_run_v2_service.service]
 }

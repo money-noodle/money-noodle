@@ -17,11 +17,25 @@ override_data {
   }
 }
 
+override_data {
+  target = data.terraform_remote_state.bootstrap
+  values = {
+    outputs = {
+      contract_deployer_service_account_email = "delivery-deployer@example-project.iam.gserviceaccount.com"
+      contract_runtime_service_account_emails = {
+        "platform-api" = "platform-api-runtime@example-project.iam.gserviceaccount.com"
+        "web"          = "web-runtime@example-project.iam.gserviceaccount.com"
+      }
+    }
+  }
+}
+
 variables {
-  platform_state_bucket = "example-platform-state"
-  image_digest          = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
-  artifact_version      = "release-1.2.3+api"
-  source_commit         = "2222222222222222222222222222222222222222"
+  platform_state_bucket  = "example-platform-state"
+  bootstrap_state_bucket = "example-bootstrap-state"
+  image_digest           = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+  artifact_version       = "release-1.2.3+api"
+  source_commit          = "2222222222222222222222222222222222222222"
 }
 
 run "the_creating_apply_leaves_the_api_private" {

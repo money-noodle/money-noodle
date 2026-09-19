@@ -24,6 +24,16 @@ output "contract_workload_identity_provider" {
   value       = module.federation.provider_name
 }
 
+output "contract_runtime_service_account_emails" {
+  description = <<-EOT
+    Runtime identity email per Cloud Run service name. The `api` and `web` stacks
+    read this instead of creating an identity, so a service apply needs no
+    identity or project-IAM authority (ADR-0005, 2026-09-19 amendment). An
+    address, not a credential: holding it grants nothing.
+  EOT
+  value       = { for service, account in google_service_account.runtime : service => account.email }
+}
+
 output "contract_project_id" {
   description = "Project id, republished so downstream stacks take it from one place."
   value       = var.project_id
@@ -32,6 +42,11 @@ output "contract_project_id" {
 output "contract_region" {
   description = "Region, republished so downstream stacks cannot drift apart on it."
   value       = var.region
+}
+
+output "runtime_telemetry_roles" {
+  description = "Project roles every runtime identity is declared to hold, published for review and drift reporting. Not part of the cross-stack contract."
+  value       = sort(distinct([for grant in google_project_iam_member.runtime_telemetry : grant.role]))
 }
 
 output "attribute_condition" {

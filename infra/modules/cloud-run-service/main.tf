@@ -63,33 +63,13 @@ locals {
 # Each service holds its own identity. ADR-0005 makes the blast radius explicit:
 # the web identity cannot read the registry or infrastructure state, and the API
 # identity cannot deploy anything.
-resource "google_service_account" "runtime" {
-  project      = var.project_id
-  account_id   = var.runtime_service_account_id
-  display_name = "${var.service_name} runtime"
-  description  = "Runtime identity for the ${var.service_name} Cloud Run service. Default-deny: it holds no project role beyond those granted explicitly here."
-}
-
-# Telemetry export is the only project-level authority a runtime identity holds
-# in the first slice. Writing telemetry is not reading anything.
-resource "google_project_iam_member" "runtime_telemetry" {
-  # `telemetry.writer` and `serviceusage.serviceUsageConsumer` are what Google's
-  # current Telemetry API documentation requires for OTLP ingestion with a quota
-  # project; the three older per-signal roles remain for the classic ingestion
-  # paths. These are desired configuration in unapplied source: this module
-  # grants nothing, and an actual grant is a separately authorized operation.
-  for_each = var.telemetry_endpoint == null ? toset([]) : toset([
-    "roles/cloudtrace.agent",
-    "roles/logging.logWriter",
-    "roles/monitoring.metricWriter",
-    "roles/serviceusage.serviceUsageConsumer",
-    "roles/telemetry.writer",
-  ])
-
-  project = var.project_id
-  role    = each.value
-  member  = "serviceAccount:${google_service_account.runtime.email}"
-}
+#
+# The identity itself, and its project-level telemetry grants, are created by the
+# maintainer-applied bootstrap stack and consumed here. This module declares no
+# `google_service_account` and no `google_project_iam_member`, so a service apply
+# needs neither identity administration nor project IAM (ADR-0005, 2026-09-19
+# amendment). What stays here is what is genuinely per-service and per-release:
+# per-secret access and service-level invoker bindings.
 
 # Secret access is granted per secret, never at project level, and only to the
 # service explicitly declared as its consumer.
@@ -99,7 +79,7 @@ resource "google_secret_manager_secret_iam_member" "runtime_secret_access" {
   project   = var.project_id
   secret_id = each.value
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.runtime.email}"
+  member    = "serviceAccount:${var.runtime_service_account_email}"
 }
 
 resource "google_cloud_run_v2_service" "service" {
@@ -115,7 +95,7 @@ resource "google_cloud_run_v2_service" "service" {
 
   template {
     revision        = local.revision_name
-    service_account = google_service_account.runtime.email
+    service_account = var.runtime_service_account_email
     timeout         = "${var.request_timeout_seconds}s"
 
     scaling {
@@ -209,6 +189,14 @@ resource "google_cloud_run_v2_service" "service" {
     precondition {
       condition     = startswith(var.image_digest, "sha256:")
       error_message = "Cloud Run services deploy by digest. A mutable tag breaks attribution and makes rollback ambiguous (ADR-0005)."
+    }
+
+    # The identity arrives from another stack's published contract, so the shape
+    # check on the variable is not enough: an identity from a different project
+    # is well-formed and still wrong.
+    precondition {
+      condition     = endswith(var.runtime_service_account_email, "@${var.project_id}.iam.gserviceaccount.com")
+      error_message = "The runtime identity must belong to this service's own project. A cross-project identity is not one this deployment may act as (ADR-0005)."
     }
   }
 }
