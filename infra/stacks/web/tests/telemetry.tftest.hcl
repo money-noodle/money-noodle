@@ -15,8 +15,18 @@ override_data {
   }
 }
 
+override_data {
+  target = data.terraform_remote_state.api
+  values = {
+    outputs = {
+      contract_service_uri = "https://api.example.test"
+    }
+  }
+}
+
 variables {
   platform_state_bucket = "example-platform-state"
+  api_state_bucket      = "example-api-state"
   image_digest          = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
   artifact_version      = "release-1.2.3+web"
   source_commit         = "3333333333333333333333333333333333333333"
