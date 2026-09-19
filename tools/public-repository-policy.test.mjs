@@ -776,7 +776,7 @@ test('temporary integration exception is maintainer-only, exact-head, evidenced,
   assert.match(versionControl, /specific reason an independent eligible reviewer was unavailable/i);
   assert.match(versionControl, /required check's name, successful conclusion, and run reference/i);
   assert.match(versionControl, /expires immediately when a second maintainer-designated/i);
-  assert.match(versionControl, /before provider delivery is enabled/i);
+  assert.match(versionControl, /does not expire at provider enablement/i);
   assert.match(versionControl, /enables branch-protection administrator enforcement/i);
   assert.match(versionControl, /removes the active `OrganizationAdmin` bypass actor/i);
   assert.match(versionControl, /does not perform those setting changes/i);
@@ -790,7 +790,9 @@ test('temporary integration exception is maintainer-only, exact-head, evidenced,
     /cannot invoke the exception, request that it be invoked, infer it/i,
   );
   assert.match(delivery, /cannot invoke or request the temporary sole-maintainer exception/i);
-  assert.match(delivery, /policy forbids use of the environment administrator bypass/i);
+  assert.match(delivery, /maintainer personally uses the environment administrator bypass/i);
+  assert.match(delivery, /No agent, workload identity or automation may use, request or assume that bypass/i);
+  assert.match(versionControl, /never available to an agent, workload identity or automation/i);
   assert.match(versionControl, /never authorizes a failed-check bypass, direct or force push/i);
   assert.doesNotMatch(versionControl, /merge only after review and required checks/i);
   assert.doesNotMatch(versionControl, /A reviewed merge to protected `main`/i);
@@ -799,10 +801,11 @@ test('temporary integration exception is maintainer-only, exact-head, evidenced,
   assert.doesNotMatch(coordinationDecision, /^## (?:Validation|Revisit when)$/m);
 });
 
-test('current production truth requires distinct approval and remains mechanically blocked', () => {
+test('current production truth keeps self-review prevention, maintainer-only bypass, and remains mechanically blocked', () => {
   assert.match(currentStatus, /prevent_self_review=true/);
-  assert.match(currentStatus, /distinct eligible actor/);
-  assert.match(currentStatus, /configured owner reviewer alone/);
+  assert.match(currentStatus, /can_admins_bypass=true/);
+  assert.match(currentStatus, /maintainer personally uses the environment administrator bypass/);
+  assert.match(currentStatus, /configuration-derived, not observed/);
   assert.match(currentStatus, /mechanically blocked/);
   assert.match(currentStatus, /repository provider\/apply variable or secret/);
   assert.match(currentStatus, /aquasecurity\/setup-trivy/);
