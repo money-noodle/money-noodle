@@ -16,7 +16,7 @@
       "executor": "nx:run-commands",
       "cache": false,
       "options": {
-        "command": "docker buildx build --load --provenance=true --attest=type=sbom,generator=docker.io/docker/buildkit-syft-scanner@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9 --file services/platform-api/Dockerfile --tag money-noodle/platform-api:local ."
+        "command": "docker buildx build --load --provenance=true --attest=type=sbom,generator=docker.io/docker/buildkit-syft-scanner@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9 --build-arg SOURCE_REPOSITORY=${SOURCE_REPOSITORY:-unknown} --build-arg SOURCE_COMMIT=${SOURCE_COMMIT:-unknown} --build-arg SOURCE_REF=${SOURCE_REF:-unknown} --build-arg BUILD_WORKFLOW=${BUILD_WORKFLOW:-unknown} --build-arg BUILD_RUN=${BUILD_RUN:-unknown} --build-arg ARTIFACT_VERSION=${ARTIFACT_VERSION:-unknown} --file services/platform-api/Dockerfile --tag money-noodle/platform-api:local ."
       }
     },
     "contract": {

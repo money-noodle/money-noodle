@@ -43,6 +43,32 @@ COPY --from=build --chown=api:nodejs /runtime/node_modules ./node_modules
 COPY --from=build --chown=api:nodejs /workspace/services/platform-api/dist ./dist
 COPY --from=build --chown=api:nodejs /workspace/services/platform-api/openapi ./services/platform-api/openapi
 
+# Provenance the artifact carries itself. The attestation is the authority, but
+# an image that cannot say which repository, commit, workflow and run produced
+# it forces every later question about "what is this digest" back onto an
+# external lookup. These are declared last so they cost no layer cache, and they
+# default to `unknown` so a local build needs no arguments (ADR-0005, "Artifact
+# trust").
+ARG SOURCE_REPOSITORY=unknown
+ARG SOURCE_COMMIT=unknown
+ARG SOURCE_REF=unknown
+ARG BUILD_WORKFLOW=unknown
+ARG BUILD_RUN=unknown
+ARG ARTIFACT_VERSION=unknown
+LABEL org.opencontainers.image.title="platform-api" \
+  org.opencontainers.image.source="https://github.com/${SOURCE_REPOSITORY}" \
+  org.opencontainers.image.revision="${SOURCE_COMMIT}" \
+  org.opencontainers.image.version="${ARTIFACT_VERSION}" \
+  money.noodle.source.ref="${SOURCE_REF}" \
+  money.noodle.build.workflow="${BUILD_WORKFLOW}" \
+  money.noodle.build.run="${BUILD_RUN}"
+
+# The image declares how to prove itself healthy, so the release pipeline and a
+# reviewer run the same check. `node` is the only interpreter guaranteed to
+# survive the runtime stage's tool removal above.
+HEALTHCHECK --interval=5s --timeout=3s --start-period=20s --retries=12 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3001)+'/health/ready').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
 USER api
 EXPOSE 3001
 CMD ["node", "dist/main.js"]
