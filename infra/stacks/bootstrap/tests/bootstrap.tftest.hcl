@@ -59,6 +59,11 @@ run "defaults_are_valid_and_budget_authority_is_narrow" {
   }
 
   assert {
+    condition     = contains(var.deployer_roles, "roles/artifactregistry.admin")
+    error_message = "The deployer must be able to create the platform image repository and set its IAM; writer alone fails the first platform apply."
+  }
+
+  assert {
     condition     = google_billing_account_iam_member.deployer_budget_manager.role == "roles/billing.costsManager"
     error_message = "The deployer needs only billing cost/budget management on the billing account."
   }
