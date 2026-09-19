@@ -38,9 +38,12 @@ variable "deployer_roles" {
   EOT
   type        = list(string)
   default = [
-    "roles/run.developer",           # deploy revisions and reassign traffic; not run.admin
-    "roles/artifactregistry.writer", # push images
-    "roles/iam.serviceAccountUser",  # act as the runtime identities it deploys
+    "roles/run.developer", # deploy revisions and reassign traffic; not run.admin
+    # Registry administration, not writer: the platform stack creates the image
+    # repository and sets its repository-level IAM, which writer cannot do. The
+    # role is confined to Artifact Registry and also covers pushing images.
+    "roles/artifactregistry.admin",
+    "roles/iam.serviceAccountUser", # act as the runtime identities it deploys
     # No Secret Manager administrative role: it could grant the deployer
     # secretAccessor and collapse the custody boundary. Revisit with the first
     # real secret and a separate policy-administration design.
