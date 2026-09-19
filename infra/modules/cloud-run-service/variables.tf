@@ -133,7 +133,7 @@ variable "max_instances" {
 
   validation {
     condition     = var.max_instances >= 1 && var.max_instances <= 20
-    error_message = "max_instances must be between 1 and 20 while the USD 30 ceiling stands."
+    error_message = "max_instances must be between 1 and 20 while the USD 25 alert budget stands."
   }
 }
 

@@ -33,9 +33,9 @@ variable "display_name" {
 }
 
 variable "monthly_ceiling" {
-  description = "Monthly ceiling. The maintainer accepted USD 30 for the first slice."
+  description = "Monthly alert budget, not a hard spending cap. The maintainer accepted USD 25."
   type        = number
-  default     = 30
+  default     = 25
 
   validation {
     condition     = var.monthly_ceiling > 0 && var.monthly_ceiling <= 100
@@ -50,17 +50,18 @@ variable "currency_code" {
 }
 
 variable "threshold_percents" {
-  description = "Actual-spend alert thresholds as percentages. The maintainer accepted 50, 80, and 100."
+  description = "Actual-spend alert thresholds as percentages. The maintainer accepted 20, 50, 80, and 100."
   type        = list(number)
-  default     = [50, 80, 100]
+  default     = [20, 50, 80, 100]
 
   validation {
     condition = (
+      contains(var.threshold_percents, 20) &&
       contains(var.threshold_percents, 50) &&
       contains(var.threshold_percents, 80) &&
       contains(var.threshold_percents, 100)
     )
-    error_message = "The accepted 50, 80, and 100 percent thresholds must all be present; removing one is a maintainer decision."
+    error_message = "The accepted 20, 50, 80, and 100 percent thresholds must all be present; removing one is a maintainer decision."
   }
 }
 
