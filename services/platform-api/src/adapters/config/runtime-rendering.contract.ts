@@ -19,7 +19,11 @@ const { api }: { api: Rendering[] } = JSON.parse(readFileSync(path, 'utf8'));
 
 describe.each(api)('evaluated production API', (rendering) => {
   it('uses the main composition path without listening and preserves schema v1', async () => {
-    const { config, server } = createConfiguredServer(rendering.env);
+    const { config, server, telemetry } = await createConfiguredServer(rendering.env);
+    // The evaluated fixture renders a synthetic, unapproved telemetry origin, so
+    // the adapter refuses it and export stays off. That is what makes this
+    // composition provable without any possibility of reaching a provider.
+    expect(telemetry.enabled).toBe(false);
     try {
       expect(config.sourceCommit).toBe(rendering.expected.sourceCommit);
       expect(config.port).toBe(rendering.port);

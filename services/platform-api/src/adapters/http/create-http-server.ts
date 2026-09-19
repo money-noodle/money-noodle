@@ -9,6 +9,8 @@ import type {
   PlatformStatusResponse,
   ProblemResponse,
 } from '../contract/platform-api-contract.js';
+import type { Telemetry } from '../telemetry/create-telemetry.js';
+import { registerTelemetryHooks } from '../telemetry/telemetry-hooks.js';
 
 const TRACEPARENT_PATTERN = /^00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/u;
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/u;
@@ -19,6 +21,12 @@ export interface HttpServerDependencies {
   readonly getPlatformStatus: GetPlatformStatus;
   readonly onTraceContext?: (traceparent: string, requestId: string) => void;
   readonly service: ServiceDescriptor;
+  /**
+   * Adapter-owned telemetry. Absent leaves the server exactly as it was: the
+   * hooks below are the only place telemetry touches the HTTP adapter, and no
+   * route handler knows telemetry exists.
+   */
+  readonly telemetry?: Telemetry;
 }
 
 function acceptedTraceparent(value: string | string[] | undefined): string | undefined {
@@ -70,6 +78,12 @@ export function createHttpServer(dependencies: HttpServerDependencies): FastifyI
       dependencies.onTraceContext?.(traceparent, request.id);
     }
   });
+
+  // Registered after the validating hook above, so a rejected trace context is
+  // already rejected by the time a span is started from it.
+  if (dependencies.telemetry !== undefined) {
+    registerTelemetryHooks(server, dependencies.telemetry);
+  }
 
   server.get('/v1/platform/status', async (request, reply) => {
     const observation = dependencies.getPlatformStatus();

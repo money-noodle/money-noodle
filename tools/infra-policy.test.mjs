@@ -632,3 +632,194 @@ test('an HCL test proves a created service carries no allUsers binding', () => {
     );
   }
 });
+
+// ---------------------------------------------------------------------------
+// Telemetry configuration, identity and retention (#72).
+//
+// Focused static guards over the committed telemetry configuration. Nothing
+// here observes a provider: these assert what the source asks for, which is the
+// only thing source can establish. Actual ingestion, actual retention ageing
+// and actual IAM remain #8's evidence.
+// ---------------------------------------------------------------------------
+
+const cloudRunModule = read(join(infraRoot, 'modules/cloud-run-service/main.tf'));
+const cloudRunVariables = read(join(infraRoot, 'modules/cloud-run-service/variables.tf'));
+const retentionModule = read(join(infraRoot, 'modules/telemetry-retention/main.tf'));
+const retentionVariables = read(join(infraRoot, 'modules/telemetry-retention/variables.tf'));
+const retentionOutputs = read(join(infraRoot, 'modules/telemetry-retention/outputs.tf'));
+
+test('telemetry export is configured explicitly and carries attributable identity', () => {
+  for (const name of [
+    'OTEL_EXPORTER_OTLP_ENDPOINT',
+    'OTEL_EXPORTER_OTLP_PROTOCOL',
+    'OTEL_SERVICE_NAME',
+    'OTEL_RESOURCE_ATTRIBUTES',
+    'OTEL_TRACES_SAMPLER',
+    'OTEL_TRACES_SAMPLER_ARG',
+  ]) {
+    assert.ok(cloudRunModule.includes(name), `the runtime must receive ${name}`);
+  }
+
+  // OTLP over HTTP/protobuf, so the exporter stays replaceable.
+  assert.match(cloudRunModule, /OTEL_EXPORTER_OTLP_PROTOCOL = "http\/protobuf"/);
+  // Parent-based head sampling, configurable and unity at the first slice.
+  assert.match(cloudRunModule, /OTEL_TRACES_SAMPLER\s*= "parentbased_traceidratio"/);
+  assert.match(cloudRunVariables, /variable "trace_sample_ratio"[\s\S]*?default\s*=\s*1/);
+
+  // Every signal is attributable to a service, release, source commit and image
+  // digest, and those stay three distinct facts.
+  for (const attribute of [
+    'service.name=',
+    'service.version=',
+    'deployment.environment.name=',
+    'money_noodle.image_digest=',
+    'money_noodle.source_commit=',
+  ]) {
+    assert.ok(cloudRunModule.includes(attribute), `resource attributes must carry ${attribute}`);
+  }
+});
+
+test('telemetry authentication needs no credential in configuration', () => {
+  // The quota project is a project identifier the exporter sends as a header.
+  assert.match(cloudRunModule, /GOOGLE_CLOUD_QUOTA_PROJECT/);
+  // No credential may be configured into an OTEL header variable, and no
+  // service-account key may be referenced anywhere in the module.
+  assert.ok(
+    !/OTEL_EXPORTER_OTLP_HEADERS/.test(cloudRunModule),
+    'no credential may be carried in an OTEL header variable',
+  );
+  for (const forbidden of [/credentials_json/, /service_account_key/, /private_key/]) {
+    assert.ok(!forbidden.test(cloudRunModule), `the module must not reference ${forbidden}`);
+  }
+
+  // Reserved names cannot be overridden through `extra_env`, so a deployment
+  // cannot quietly retarget telemetry or substitute a quota project.
+  const reserved = cloudRunVariables.match(/variable "extra_env"[\s\S]*?\n}/)?.[0];
+  assert.ok(reserved, 'extra_env must still validate reserved names');
+  assert.ok(reserved.includes('GOOGLE_CLOUD_QUOTA_PROJECT'));
+  assert.ok(reserved.includes('startswith(name, "OTEL_")'));
+});
+
+test('the runtime identity holds telemetry write authority and nothing more', () => {
+  const grant = cloudRunModule.match(
+    /resource "google_project_iam_member" "runtime_telemetry"[\s\S]*?\n}/,
+  )?.[0];
+  assert.ok(grant, 'the telemetry IAM grant must still exist');
+
+  // Google's Telemetry API documentation requires these two alongside the
+  // classic per-signal roles. Desired configuration only: this grants nothing.
+  for (const role of [
+    'roles/cloudtrace.agent',
+    'roles/logging.logWriter',
+    'roles/monitoring.metricWriter',
+    'roles/serviceusage.serviceUsageConsumer',
+    'roles/telemetry.writer',
+  ]) {
+    assert.ok(grant.includes(role), `the runtime identity must declare ${role}`);
+  }
+
+  // Writing telemetry is not reading anything, and not deploying anything.
+  for (const forbidden of [
+    'roles/run.admin',
+    'roles/storage.admin',
+    'roles/owner',
+    'roles/editor',
+  ]) {
+    assert.ok(!grant.includes(forbidden), `the runtime identity must never hold ${forbidden}`);
+  }
+  // The grant disappears entirely when telemetry is not configured.
+  assert.match(grant, /var\.telemetry_endpoint == null \? toset\(\[\]\)/);
+});
+
+test('log retention is explicit, and a shorter debug window cannot be claimed falsely', () => {
+  // The accepted 2026-09-15 policy: application and debug logs at 14 days.
+  assert.match(retentionVariables, /variable "log_retention_days"[\s\S]*?default\s*=\s*14/);
+  assert.match(retentionVariables, /variable "debug_log_retention_days"[\s\S]*?default\s*=\s*14/);
+  assert.match(retentionModule, /retention_days = var\.log_retention_days/);
+
+  // A sink routes a copy; it does not stop `_Default` keeping its own. The
+  // module refuses to configure a shorter debug window while that copy exists.
+  const debugBucket = retentionModule.match(
+    /resource "google_logging_project_bucket_config" "debug"[\s\S]*?\n}/,
+  )?.[0];
+  assert.ok(debugBucket, 'the debug bucket must still exist');
+  assert.match(debugBucket, /precondition/);
+  assert.match(debugBucket, /var\.debug_log_retention_days >= var\.log_retention_days/);
+  assert.match(debugBucket, /var\.debug_excluded_from_default_bucket/);
+
+  // The effective window is reported as the longer of the two copies.
+  assert.match(retentionOutputs, /effective_days/);
+  assert.match(retentionOutputs, /max\(var\.debug_log_retention_days, var\.log_retention_days\)/);
+});
+
+test('provider-fixed retention is recorded as provider behaviour, not as configuration', () => {
+  const policy = retentionOutputs;
+  // Trace 30 days and OTLP metric 24 months are accepted provider behaviour.
+  assert.match(policy, /traces = \{[\s\S]*?days\s*=\s*30[\s\S]*?configured\s*=\s*false/);
+  assert.match(policy, /metrics = \{[\s\S]*?days\s*=\s*730[\s\S]*?configured\s*=\s*false/);
+  assert.match(policy, /progressive(ly)? downsampl/i);
+  assert.ok(
+    !/configurable TTL|deletion guarantee['"]?\s*:/i.test(policy) ||
+      /not an IaC-configurable deletion guarantee|not a configurable TTL/i.test(policy),
+    'provider-fixed retention must not be described as configurable',
+  );
+
+  // Audit retention is separate and untouched.
+  assert.match(policy, /audit_logs = \{[\s\S]*?days\s*=\s*400[\s\S]*?configured\s*=\s*false/);
+  assert.match(policy, /Audit is not telemetry/);
+});
+
+test('the evaluated runtime bridge proves telemetry correlation and stays mandatory', () => {
+  const bridge = read(join(repoRoot, 'infra/modules/cloud-run-service/tests/runtime-contract.mjs'));
+  const config = read(
+    join(repoRoot, 'infra/modules/cloud-run-service/tests/runtime-contract.vitest.config.ts'),
+  );
+  const workflow = read(join(repoRoot, '.github/workflows/delivery.yml'));
+
+  // The bridge consumes evaluated resources, and its allowed environment names
+  // now include the quota project.
+  assert.match(bridge, /GOOGLE_CLOUD_QUOTA_PROJECT/);
+  assert.match(bridge, /tofu[\s\S]*?'test'/);
+
+  // The telemetry correlation contract is explicitly included, alongside the
+  // two rendering contracts it must not race for the global tracer provider.
+  assert.match(config, /telemetry-correlation\.contract\.ts/);
+  assert.match(config, /fileParallelism: false/);
+
+  // The credential-free checks job still runs the bridge, and still proves it
+  // reached no provider afterwards.
+  const checks = workflow.match(/\n {2}checks:\n([\s\S]*?)(?=\n {2}[a-z][a-z0-9-]*:\n|$)/)?.[1];
+  assert.ok(checks, 'the credential-free checks job must exist');
+  assert.match(checks, /node infra\/modules\/cloud-run-service\/tests\/runtime-contract\.mjs/);
+  assert.match(checks, /Prove the checks reached no provider/);
+  assert.ok(!/id-token:|environment:/.test(checks), 'the bridge must stay credential-free');
+});
+
+test('the narrow telemetry authentication exception is enforced, not merely described', () => {
+  const eslintConfig = read(join(repoRoot, 'eslint.config.mjs'));
+  const probes = read(join(repoRoot, 'tools/verify-boundary-rules.mjs'));
+
+  // Exactly two files may import a provider authentication library.
+  for (const allowed of [
+    'apps/web/src/adapters/telemetry/workload-identity-headers.ts',
+    'services/platform-api/src/adapters/telemetry/workload-identity-headers.ts',
+  ]) {
+    assert.ok(eslintConfig.includes(allowed), `${allowed} must be named as the exception`);
+  }
+  assert.match(eslintConfig, /google-auth-library/);
+  assert.match(eslintConfig, /'googleapis', '@google-cloud\/\*\*'/);
+
+  // Inner layers stay free of telemetry and of provider authentication.
+  assert.match(
+    eslintConfig,
+    /Inner API layers must remain framework, telemetry-backend and provider-authentication independent/,
+  );
+
+  // The rules are proved by probes rather than trusted.
+  for (const probe of [
+    "import { Compute } from 'google-auth-library'",
+    "import { trace } from '@opentelemetry/api'",
+  ]) {
+    assert.ok(probes.includes(probe), `a boundary probe must exercise ${probe}`);
+  }
+});

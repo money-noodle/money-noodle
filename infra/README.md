@@ -205,12 +205,37 @@ These are honest gaps, not oversights. None can be closed without a provider.
    them would disclose sensitive state to anyone who can open a pull request. A
    separate read-only planner workload identity, bound to same-repository pull requests,
    is the bounded follow-up. Recorded in `.github/workflows/delivery.yml`.
-6. **Trace and metric retention are not configurable** through this provider, so
-   ADR-0007's 3-to-7-day trace and 30-to-90-day metric targets are *not* met by
-   configuration. Log retention is set explicitly. The gap is published in the
-   `telemetry_retention_policy` output rather than left to look satisfied.
-7. **Cost figures are estimates** from dated published list prices against
+6. **Trace and metric retention are provider behaviour, not configuration.** The
+   2026-09-15 accepted ADR-0007 amendment replaces the former 3-to-7-day trace
+   and 30-to-90-day metric targets with what the provider actually delivers:
+   Google's documented 30-day `_Trace` retention and 24 months of OTLP metrics
+   with progressive downsampling. Both are published in the
+   `telemetry_retention_policy` output as `configured = false`, so neither looks
+   like a TTL this configuration sets. Log retention *is* set explicitly, at the
+   accepted 14 days for application and debug logs alike — see the desired
+   telemetry configuration below.
+7. **Desired telemetry identity and configuration are unapplied source.**
+   `modules/cloud-run-service` renders `OTEL_EXPORTER_OTLP_ENDPOINT`,
+   `OTEL_EXPORTER_OTLP_PROTOCOL = http/protobuf`, `OTEL_SERVICE_NAME`,
+   `OTEL_RESOURCE_ATTRIBUTES` (service, version, environment, image digest and
+   source commit as distinct facts), parent-based head sampling at unity, and
+   `GOOGLE_CLOUD_QUOTA_PROJECT`. The runtime identity declares
+   `roles/cloudtrace.agent`, `roles/logging.logWriter`,
+   `roles/monitoring.metricWriter`, `roles/serviceusage.serviceUsageConsumer`
+   and `roles/telemetry.writer` — the last two are what Google's current
+   Telemetry API documentation requires alongside a quota project. **None of
+   this is granted or applied.** It is desired configuration in source; an
+   actual grant is a separately authorized operation, and no credential appears
+   in any environment variable: the exporter obtains short-lived credentials
+   from the service's own workload identity at runtime.
+8. **Debug log routing keeps no second, longer-lived copy by accident.** A sink
+   routes a copy of debug logs to their own bucket; it does not stop `_Default`
+   keeping its own. `modules/telemetry-retention` therefore refuses, by
+   precondition, to configure a debug window shorter than the operational one
+   unless a separately authorized `_Default` exclusion has been recorded. This
+   module does not create that exclusion.
+9. **Cost figures are estimates** from dated published list prices against
    assumed workload parameters. Nothing is measured.
-8. **Resource schemas are validated, not exercised.** `tofu validate` checks
+10. **Resource schemas are validated, not exercised.** `tofu validate` checks
    arguments against the provider schema; it does not prove the API accepts the
    resulting request.

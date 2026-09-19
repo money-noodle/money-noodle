@@ -24,14 +24,31 @@ variable "log_retention_days" {
 }
 
 variable "debug_log_retention_days" {
-  description = "Retention for debug-severity logs, at the short end of the accepted 7-to-14-day window. Null routes debug logs nowhere separate."
+  description = <<-EOT
+    Retention for debug-severity logs. The 2026-09-15 accepted policy puts
+    application and debug logs at 14 days, and the precondition in `main.tf`
+    refuses a shorter window while the `_Default` bucket still holds its own copy:
+    a shorter setting there would be a claim this configuration cannot honour.
+    Null routes debug logs nowhere separate.
+  EOT
   type        = number
-  default     = 7
+  default     = 14
 
   validation {
     condition     = var.debug_log_retention_days == null || (var.debug_log_retention_days >= 1 && var.debug_log_retention_days <= 14)
     error_message = "Debug log retention must be between 1 and 14 days when configured."
   }
+}
+
+variable "debug_excluded_from_default_bucket" {
+  description = <<-EOT
+    Whether debug-severity logs have been separately excluded from the `_Default`
+    bucket. This module does not create that exclusion: it is a separately
+    authorized logging change. Setting this true without having made it would be
+    asserting a shorter retention than the routing actually delivers.
+  EOT
+  type        = bool
+  default     = false
 }
 
 variable "debug_bucket_id" {

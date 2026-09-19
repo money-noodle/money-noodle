@@ -49,9 +49,13 @@ variable "log_retention_days" {
 }
 
 variable "debug_log_retention_days" {
-  description = "Debug log retention."
+  description = <<-EOT
+    Debug log retention. The 2026-09-15 accepted policy is 14 days for
+    application and debug logs alike, which is also what keeps the `_Default`
+    bucket's own copy from being a longer-lived contradiction.
+  EOT
   type        = number
-  default     = 7
+  default     = 14
 }
 
 variable "secrets" {

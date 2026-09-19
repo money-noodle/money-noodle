@@ -42,6 +42,72 @@ The following exist before the first remote deployment, not after the first surp
 - **no request or response bodies, no headers by allowlist exception only, no credentials, and no personal or financial content**, per the accepted default-to-metadata rule;
 - **bounded cardinality**: route templates rather than raw paths, and no unbounded identifier promoted to a metric label.
 
+### Accepted amendment, 2026-09-15: attainable retention
+
+The retention targets above were written before the provider's actual contract
+was read. Two of the three signal classes are not configurable at all, so the
+accepted first-slice policy is what the provider actually delivers, stated
+plainly rather than aspirationally:
+
+| Signal | Accepted first-slice policy | What that is |
+| --- | --- | --- |
+| Application and debug logs | 14 days, explicitly configured | A real setting on real log buckets. Debug logs are routed to their own bucket *and* still copied to `_Default`, so both windows are set to 14 days; a shorter debug setting would be a claim the routing does not deliver. |
+| Traces | Google's documented 30-day `_Trace` retention | Provider behaviour, not an IaC-configurable deletion guarantee. A deliberate exception to the former 3-to-7-day target. |
+| OTLP metrics | Google's documented 24 months with progressive downsampling | Original frequency for one week, one-minute intervals for the next five weeks, then ten-minute intervals. Not 24 months of full-resolution detail, and not a configurable TTL. |
+
+These exceptions apply to the financially inert, allowlisted-metadata first
+slice. No additional backend, archive, deletion job or recovery store is added
+to emulate the former trace and metric periods. Audit and accounting retention
+remain separate and unchanged. Desired configuration is not observed retention:
+[`#8`](https://github.com/money-noodle/money-noodle/issues/8) records actual
+ingestion and available provider configuration evidence, without pretending to
+have observed months of ageing.
+
+Public primary sources inspected 2026-09-15:
+[Trace quotas and retention](https://docs.cloud.google.com/trace/docs/quotas),
+[Monitoring data retention](https://docs.cloud.google.com/monitoring/quotas#data_retention),
+[Telemetry API overview and authentication](https://docs.cloud.google.com/stackdriver/docs/reference/telemetry/overview).
+Revalidate a changed provider contract at implementation pickup rather than
+silently substituting incompatible behaviour.
+
+### Accepted amendment, 2026-09-15: a narrow telemetry authentication exception
+
+"No backend vendor SDK is imported by any project" above is narrowed, not
+abandoned. An exact-version Google authentication library is permitted **only**
+in isolated server-side telemetry authentication adapters, where it supplies
+short-lived credentials from the Cloud Run service's own workload identity to
+standard OTLP exporters through the exporter's documented async headers factory.
+
+The exception does not permit a proprietary tracing or metrics SDK, and does not
+permit a provider import in any inner layer. Signal instrumentation and
+serialization remain OpenTelemetry with replaceable exporters; only workload
+authentication is provider-specific. It authorizes no stored service-account
+key, no local ADC or file-credential fallback, no browser exposure, no secret
+consumption, no identity impersonation and no general cloud-operation
+capability. The production token source is the metadata-server-only `Compute`
+client, so "no file fallback" is a property of the class rather than a review
+note.
+
+Exactly two files may hold the exception, and lint enforces that rather than
+describing it:
+
+- `apps/web/src/adapters/telemetry/workload-identity-headers.ts`
+- `services/platform-api/src/adapters/telemetry/workload-identity-headers.ts`
+
+`tools/verify-boundary-rules.mjs` proves the rule by probe: an import of the
+authentication library anywhere else, telemetry in an inner API layer, and
+telemetry in the web's presentation layer are each written to disk and required
+to fail lint.
+
+Google's current Telemetry API documentation requires a quota project plus
+`roles/serviceusage.serviceUsageConsumer` and `roles/telemetry.writer`. Those
+are reconciled into `infra/modules/cloud-run-service` as **desired
+configuration** alongside the existing per-signal roles. Nothing is granted by
+this record: an actual grant is a separately authorized operation under
+[catalog v2](../../operations/production-control-plane.md#m1-catalog-v2--selected-not-enabled),
+and independent observation and every deployment and audit authority boundary
+are preserved.
+
 ### What telemetry is not
 
 Telemetry is **not** audit and **not** accounting. `data-identity-observability.md` requires those to be durable, access-controlled, tamper-evident, and never silently sampled, and they expire on a different policy. The status request itself produces neither financial accounting nor consequential application audit, but M1 delivery operations do produce the separate sanitized journal/witness evidence specified by [catalog v2](../../operations/production-control-plane.md#field-level-custody-and-bounded-reconstruction). **No audit obligation may be satisfied by a telemetry backend**, then or later. Establishing that separation now prevents the far more expensive mistake of discovering later that an accounting record was a log line that expired.

@@ -108,7 +108,7 @@ export function extractRuntimeRendering(raw, stack) {
       assert.ok(!Object.hasOwn(env, name), 'Duplicate environment name.');
       assert.deepEqual(entry.value_source, []);
       assert.ok(
-        /^(NODE_ENV|PLATFORM_API_ORIGIN|ARTIFACT_VERSION|MONEY_NOODLE_(COMMIT|SERVICE|ENVIRONMENT)|OTEL_[A-Z_]+)$/u.test(
+        /^(NODE_ENV|PLATFORM_API_ORIGIN|ARTIFACT_VERSION|MONEY_NOODLE_(COMMIT|SERVICE|ENVIRONMENT)|GOOGLE_CLOUD_QUOTA_PROJECT|OTEL_[A-Z_]+)$/u.test(
           name,
         ),
         'Unsupported environment name.',

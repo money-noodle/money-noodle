@@ -92,7 +92,7 @@ Operational probes are separate from the public contract:
 | Failure clarity | API failure, timeout, invalid response, and version incompatibility render `unknown`, never `available` or zero-like fallback data. |
 | Security | The browser receives no deployment credential. The web has only the API origin and a least-privilege workload identity if later required. The first API route is public and returns allowlisted fields only. |
 | Portability | Domain/application code imports no Next.js, Fastify, cloud, telemetry-backend, or provider SDK. Both deployments use standard Node.js runtimes and OCI artifacts. |
-| Observability | W3C trace context and a generated request ID cross web to API. OpenTelemetry records bounded request, latency, outcome, artifact, and route metadata without bodies or personal data. |
+| Observability | W3C trace context and a generated request ID cross web to API, injected from a real active span rather than a fabricated header, so the API's server span is a genuine child on one trace. OpenTelemetry records bounded request, latency, outcome, artifact, and route metadata; span names, attributes and events are allowlisted before buffering and again before serialization, so bodies, raw URLs, headers, cookies, credentials and exception text cannot reach a payload. |
 | Performance | The web uses one bounded API request with a declared timeout and no retry fan-out. Quantitative latency/error budgets are fixed from remote baseline measurements before the slice is called production-validated. |
 | Accessibility | Availability is expressed in text and source time, not color alone. Loading and unknown states do not imply health. |
 
@@ -285,15 +285,15 @@ flowchart LR
 
     subgraph opsTrust["Operations trust boundary"]
         config["Deployment configuration and future managed secrets"]
-        telemetry["Redacted telemetry"]
+        telemetry["Redacted telemetry<br/>OTLP over HTTPS to the approved origin<br/>short-lived workload-identity credential only"]
     end
 
     browser -->|TLS, untrusted input| web
     web -->|TLS, bounded DTOs, propagated request identity| api
     config -->|project-scoped configuration| web
     config -->|project-scoped configuration| api
-    web -->|no request bodies by default| telemetry
-    api -->|no request bodies by default| telemetry
+    web -->|allowlisted metadata only| telemetry
+    api -->|allowlisted metadata only| telemetry
 ```
 
 The first route has no authentication or tenant scope because it returns only a safe public status. Future private routes add identity and default-deny tenant authorization at the API and repository boundaries; they do not grant the web direct data authority.
@@ -450,13 +450,16 @@ No row below is proposed. The administrative-observability proposal-only subsect
 | `apps/web/` | `web` | Independently built Next.js application and web OCI image |
 | `apps/web/src/app/` | `web` adapter | App Router routes, layouts, Server Components, error/loading UI |
 | `apps/web/src/presentation/` | `web` inner layer | Pure presentation mapping over client DTOs; no Next server APIs or platform work |
-| `apps/web/src/adapters/platform-api/` | `web` outbound adapter | Server-only wrapper around generated client, timeout/error mapping, trace propagation |
+| `apps/web/src/adapters/platform-api/` | `web` outbound adapter | Server-only wrapper around generated client, timeout/error mapping, real active-span propagation |
+| `apps/web/src/instrumentation.ts` | `web` runtime hook | Registers adapter-owned telemetry once per Node runtime; never evaluated on Edge or in a browser bundle |
+| `apps/web/src/adapters/telemetry/` | `web` outbound adapter | OpenTelemetry SDK composition, allowlisting and redaction, bounded export, and the one file holding the narrow workload-identity authentication exception |
 | `services/platform-api/` | `platform-api` | Independently built stateless API and API OCI image |
 | `services/platform-api/openapi/platform-api.v1.yaml` | API-owned contract | Editable canonical REST contract and version policy |
 | `services/platform-api/src/domain/` | API inner layer | Framework-free values/invariants owned by this service |
 | `services/platform-api/src/application/` | API inner layer | Use cases and ports; no HTTP, storage, cloud, or UI imports |
 | `services/platform-api/src/adapters/http/` | API inbound adapter | Fastify composition, runtime validation, RFC 9457 problem mapping |
 | `services/platform-api/src/adapters/deployment/` | API outbound adapter | Safe attributable deployment metadata; no provider secrets |
+| `services/platform-api/src/adapters/telemetry/` | API outbound adapter | OpenTelemetry SDK composition, real server spans from propagated context, allowlisting and redaction, and the one file holding the narrow workload-identity authentication exception |
 | `packages/platform-api-client/` | shared generated package | Generated TypeScript transport client consumed by interfaces |
 | `infra/` | Google Cloud/OpenTofu composition, implemented and unapplied | All provider coupling. See [`../../infra/README.md`](../../infra/README.md) |
 | `infra/modules/` | provider-neutral building blocks | No environment values; `delivery-trust` is provider-free and tested offline |
@@ -471,7 +474,9 @@ Every created project receives a README declaring purpose, contracts, targets, d
 
 - `apps/web` cannot import API service source;
 - the generated client cannot import web or API implementation;
-- API domain/application layers cannot import Fastify, Next.js, cloud SDKs, or telemetry backends;
+- API domain/application layers cannot import Fastify, Next.js, cloud SDKs, telemetry backends, or a provider authentication library;
+- exactly two files — each project's `adapters/telemetry/workload-identity-headers.ts` — may import the Google authentication library, under the [2026-09-15 accepted ADR-0007 amendment](decisions/ADR-0007-first-telemetry-backend.md#accepted-amendment-2026-09-15-a-narrow-telemetry-authentication-exception); `tools/verify-boundary-rules.mjs` proves it by probe;
+- the web's presentation layer imports no telemetry and no adapter, so nothing telemetry-owned can reach a browser bundle through it;
 - no request-serving project imports a future job/provider adapter implementation;
 - dependency cycles fail CI.
 

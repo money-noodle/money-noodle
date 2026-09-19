@@ -47,3 +47,24 @@ output "public_invoker_members" {
   description = "Members holding `roles/run.invoker` through the public binding. Empty means the service is private; derived from the declared resource, not from the input."
   value       = google_cloud_run_v2_service_iam_member.public[*].member
 }
+
+output "telemetry_env" {
+  description = <<-EOT
+    The telemetry configuration this module renders into the container. Exposed
+    so offline tests can assert desired configuration directly rather than
+    re-deriving it from an expression. It contains configuration only: the
+    exporter obtains short-lived credentials from this service's own workload
+    identity at runtime, so no credential appears here or in any environment
+    variable.
+  EOT
+  value       = local.telemetry_env
+}
+
+output "telemetry_roles" {
+  description = <<-EOT
+    Roles the runtime identity is declared to hold for telemetry export. Desired
+    configuration in unapplied source: this module grants nothing, and an actual
+    grant is a separately authorized operation.
+  EOT
+  value       = sort([for grant in google_project_iam_member.runtime_telemetry : grant.role])
+}
