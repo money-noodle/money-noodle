@@ -17,11 +17,22 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
+import { canonicalDigest, isGitObjectId, isSha256Hex } from './delivery/canonical-json.mjs';
+import {
+  CONSENT_BODY_FIELDS,
+  OPERATIONS,
+  PERMITTED_EVENTS,
+  PERMITTED_FEDERATED_WORKFLOW,
+  PERMITTED_REF,
+} from './delivery/catalog-v2.mjs';
 import {
   EXECUTION_IDENTITIES,
   RESOURCE_OPERATIONS,
   isResourceKey,
 } from './delivery/execution-identities.mjs';
+import { deriveExplicitConsent, evaluateGrant } from './delivery/grant.mjs';
+import { REFUSAL_CODES } from './delivery/refusals.mjs';
+import { assertPublishable, findForbiddenMarkers } from './delivery/sanitize.mjs';
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const workflowDirectory = join(repoRoot, '.github', 'workflows');
@@ -308,6 +319,52 @@ test('deployment verifies provenance, health, and the public contract', () => {
     /\/v1\/platform\/status/,
     'deployment must verify the public contract, not only that the process answers',
   );
+});
+
+test('post-apply and post-rollback probes authenticate to the private service', () => {
+  for (const name of ['apply', 'rollback']) {
+    const job = deliveryJobs().find((candidate) => candidate.name === name);
+    assert.ok(job, `expected a ${name} job`);
+
+    const probes = job.body
+      .split('\n')
+      .filter((line) => /\/health\/|\/v1\/platform\/status/.test(line));
+    assert.ok(probes.length > 0, `the ${name} job must probe the service it changed`);
+
+    assert.match(
+      job.body,
+      new RegExp(
+        `id: ${name}-probe-auth\\n[\\s\\S]*?google-github-actions/auth@[0-9a-f]{40}[\\s\\S]*?token_format: id_token\\n\\s+id_token_audience: \\$\\{\\{ steps\\.${name}-service\\.outputs\\.uri \\}\\}`,
+      ),
+      `the ${name} job must mint an ID token bound to the service URI as its audience. Services are created private, so an anonymous probe is refused.`,
+    );
+    assert.match(
+      job.body,
+      new RegExp(
+        `PROBE_ID_TOKEN: \\$\\{\\{ steps\\.${name}-probe-auth\\.outputs\\.id_token \\}\\}`,
+      ),
+      `the ${name} probe must receive the token through its environment`,
+    );
+
+    const curls = job.body.match(/curl -sS[\s\S]*?"\$\{SERVICE_URI\}[^"]*"/g) ?? [];
+    assert.equal(
+      curls.length,
+      probes.length,
+      `every ${name} probe must target the applied service URI`,
+    );
+    for (const curl of curls) {
+      assert.match(
+        curl,
+        /-H @-/,
+        `no ${name} probe may be anonymous, and the token must not be a process argument`,
+      );
+    }
+    assert.doesNotMatch(
+      job.body,
+      /(echo|-H\s+["'][^@])[^\n]*PROBE_ID_TOKEN/,
+      `the ${name} job must never print the probe token or pass it on a command line`,
+    );
+  }
 });
 
 test('deployment is by digest and a tag is refused before the provider is reached', () => {
@@ -1072,4 +1129,786 @@ test('no workload identity may grant itself its own authority', () => {
 
   assert.equal(EXECUTION_IDENTITIES['bootstrap-principal'].tokenClass, 'none');
   assert.match(EXECUTION_IDENTITIES['bootstrap-principal'].mustNot, /Become a workflow identity/);
+});
+
+// ---------------------------------------------------------------------------
+// The trusted release-artifact chain (#71).
+//
+// One artifact per eligible release: built once, tested and scanned as built,
+// published by that exact digest, and attested to the repository, workflow,
+// source commit and run that produced it. These assertions are static and
+// provider-free; they prove the workflow's shape, never that a publication
+// happened.
+// ---------------------------------------------------------------------------
+
+const ci = read(join(workflowDirectory, 'ci.yml'));
+
+/** One job body from `ci.yml`, using the same convention as `deliveryJobs`. */
+function ciJob(name) {
+  return ci.match(new RegExp(`\\n  ${name}:\\n([\\s\\S]*?)(?=\\n  [a-z][a-z0-9-]*:\\n|$)`))?.[1];
+}
+
+/** The required checks `delivery.yml` waits for, as the workflow declares them. */
+function declaredRequiredChecks() {
+  const block = delivery.match(/REQUIRED_CHECKS: \|\n([\s\S]*?)\n {8}run:/)?.[1];
+  assert.ok(block, 'the qualification job must declare the required checks it waits for');
+  return block
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+/** Index of a step's `- name:` line, so ordering can be asserted by position. */
+function stepIndex(body, name) {
+  const index = body.indexOf(`- name: ${name}`);
+  assert.ok(index >= 0, `expected a step named "${name}"`);
+  return index;
+}
+
+test('release qualification requires every required check on this exact head', () => {
+  const qualify = deliveryJobs().find(({ name }) => name === 'qualify');
+  assert.ok(qualify, 'delivery must define a release qualification job');
+
+  // The gate exists because GitHub cannot express a cross-workflow `needs`.
+  // Every check it waits for is one `ci.yml` actually defines under that name;
+  // a rename on either side detaches the gate silently otherwise.
+  const required = declaredRequiredChecks();
+  assert.deepEqual(
+    [...required].sort(),
+    [
+      'affected projects and repository gates',
+      'container platform-api',
+      'container web',
+      'secret scan',
+    ],
+    'the qualification gate must wait for exactly the required checks owned by ci.yml',
+  );
+  // Expand `ci.yml`'s job names the way GitHub does, matrix included, so a
+  // renamed job or a changed matrix value detaches the gate loudly here rather
+  // than silently at release time.
+  const ciCheckNames = new Set();
+  for (const [, , body] of ci.matchAll(
+    /\n  ([a-z][a-z0-9-]*):\n([\s\S]*?)(?=\n  [a-z][a-z0-9-]*:\n|$)/g,
+  )) {
+    const declared = body.match(/^    name: (.+)$/m)?.[1]?.trim();
+    if (!declared) continue;
+    const projects = [...body.matchAll(/^          - project: (\S+)$/gm)].map(([, value]) => value);
+    if (declared.includes('${{ matrix.project }}') && projects.length > 0) {
+      for (const project of projects) {
+        ciCheckNames.add(declared.replaceAll('${{ matrix.project }}', project));
+      }
+    } else {
+      ciCheckNames.add(declared);
+    }
+  }
+  for (const name of required) {
+    assert.ok(ciCheckNames.has(name), `ci.yml no longer produces a check named "${name}"`);
+  }
+
+  // Evidence is per-commit. A run attached to another head is refused rather
+  // than accepted as "close enough", which is what makes a head change
+  // invalidate prior qualification.
+  assert.match(
+    qualify.body,
+    /commits\/\$\{HEAD_SHA\}\/check-runs/,
+    'qualification must read the checks attached to this exact commit',
+  );
+  assert.match(
+    qualify.body,
+    /if \[\[ "\$head" != "\$HEAD_SHA" \]\]/,
+    'qualification must refuse a check run attached to a different head',
+  );
+  assert.match(
+    qualify.body,
+    /if \[\[ "\$conclusion" != 'success' \]\]/,
+    'anything other than success must deny: failure, cancellation, timeout and skip alike',
+  );
+  assert.match(
+    qualify.body,
+    /Required evidence never completed for this head/,
+    'missing or never-completing evidence must fail closed rather than wait forever',
+  );
+
+  // The gate reads results. It holds no provider authority and no write.
+  assert.match(qualify.body, /checks: read/);
+  assert.ok(
+    !/id-token:\s*write/.test(qualify.body),
+    'the qualification gate must not receive an OIDC token',
+  );
+  assert.ok(
+    !/contents:\s*write|environment:/.test(qualify.body),
+    'the qualification gate must not hold write or environment authority',
+  );
+});
+
+test('publication is gated on qualification of the exact head being published', () => {
+  const publish = deliveryJobs().find(({ name }) => name === 'publish');
+  assert.ok(publish, 'delivery must define a publish job');
+
+  assert.match(
+    publish.body,
+    /needs: \[checks, authorization, qualify\]/,
+    'publication must depend on the credential-free checks, the authorization state and qualification',
+  );
+  assert.match(
+    publish.body,
+    /needs\.qualify\.outputs\.qualified_head == github\.sha/,
+    'publication must require qualification of the commit it is publishing, not of some earlier one',
+  );
+  assert.match(
+    publish.body,
+    /github\.ref == 'refs\/heads\/main'/,
+    'publication stays bound to protected main',
+  );
+});
+
+test('the release artifact is built once, tested and scanned before anything is published', () => {
+  const publish = deliveryJobs().find(({ name }) => name === 'publish');
+
+  const build = stepIndex(publish.body, 'Build the release candidate with provenance and SBOM');
+  const probe = stepIndex(publish.body, 'Prove the candidate digest serves its runtime contract');
+  const scan = stepIndex(publish.body, 'Scan the candidate digest before publication');
+  const push = stepIndex(
+    publish.body,
+    'Publish the tested digest and prove it is the one in the registry',
+  );
+  const attest = stepIndex(publish.body, 'Attest build provenance');
+  const login = publish.body.indexOf('docker/login-action');
+  const auth = publish.body.indexOf('google-github-actions/auth');
+
+  assert.ok(build < probe, 'the candidate must be built before it is tested');
+  assert.ok(probe < scan, 'the tested artifact must be the one scanned');
+  assert.ok(scan < auth, 'scanning must gate publication, so it precedes the provider token');
+  assert.ok(auth < login && login < push, 'the registry is reached only after the scan passes');
+  assert.ok(push < attest, 'provenance is attested for the digest actually published');
+
+  // Built locally. Nothing reaches the registry from the build step itself.
+  const buildStep = publish.body.slice(build, probe);
+  assert.match(buildStep, /--load/, 'the release candidate must be built locally, not pushed');
+  assert.ok(
+    !/--push/.test(buildStep),
+    'building must not publish: the scan and the image test come first',
+  );
+  assert.match(buildStep, /--provenance=true/);
+  assert.match(buildStep, /--attest=type=sbom/);
+  assert.match(
+    buildStep,
+    /\^sha256:\[0-9a-f\]\{64\}\$/,
+    'the build must refuse to continue without an exact digest',
+  );
+});
+
+test('a second build cannot replace the artifact that was tested and scanned', () => {
+  const publish = deliveryJobs().find(({ name }) => name === 'publish');
+  const pushStep = publish.body.slice(
+    stepIndex(publish.body, 'Publish the tested digest and prove it is the one in the registry'),
+  );
+
+  assert.match(
+    pushStep,
+    /if \[\[ "\$published" != "\$DIGEST" \]\]/,
+    'the published digest must be compared against the digest that was tested and scanned',
+  );
+  assert.match(
+    pushStep,
+    /The published digest is not the digest that was tested and scanned/,
+    'a mismatch must fail closed with an explicit reason',
+  );
+  assert.match(
+    publish.body,
+    /subject-digest: \$\{\{ steps\.publish\.outputs\.digest \}\}/,
+    'the attestation must name the verified published digest, not an unverified build output',
+  );
+  assert.ok(
+    !/--tag[^\n]*:latest/.test(delivery),
+    'nothing may be published under a mutable latest tag',
+  );
+});
+
+test('the image test and the scan target the same digest, in both workflows', () => {
+  const publish = deliveryJobs().find(({ name }) => name === 'publish');
+  assert.match(
+    publish.body,
+    /image-ref: \$\{\{ steps\.build\.outputs\.image \}\}@\$\{\{ steps\.build\.outputs\.digest \}\}/,
+    'the release scan must address the candidate by digest, never by a floating tag',
+  );
+  assert.match(
+    publish.body,
+    /reference="\$IMAGE@\$DIGEST"/,
+    'the release image test must run the candidate by digest',
+  );
+
+  // The pull-request path proves the same property against the image it built,
+  // so a container that cannot start is caught before release time.
+  const containers = ciJob('containers');
+  assert.ok(containers, 'ci.yml must still define the container job');
+  const built = containers.indexOf('Build attributable OCI image');
+  const probed = containers.indexOf('Prove the built image serves its runtime contract');
+  const scanned = containers.indexOf('name: Scan image');
+  assert.ok(
+    built >= 0 && probed > built && scanned > probed,
+    'ci must build, then test, then scan',
+  );
+});
+
+test('the image acceptance exercises the production runtime contract and attributable version', () => {
+  for (const [label, body] of [
+    ['delivery', deliveryJobs().find(({ name }) => name === 'publish').body],
+    ['ci', ciJob('containers')],
+  ]) {
+    assert.match(body, /NODE_ENV=production/, `${label} must test the production runtime mode`);
+    assert.match(
+      body,
+      /MONEY_NOODLE_COMMIT="\$SOURCE_COMMIT"/,
+      `${label} must run the image under this run's exact source commit`,
+    );
+    assert.match(body, /\/health\/ready/, `${label} must require readiness, not merely a process`);
+    assert.match(
+      body,
+      /grep -Fq "\\"version\\":\\"\$ARTIFACT_VERSION\\""/,
+      `${label} must require the image to report its attributable version`,
+    );
+    assert.match(
+      body,
+      /org\.opencontainers\.image\.revision/,
+      `${label} must require the artifact to name the commit it was built from`,
+    );
+    assert.match(
+      body,
+      /State\.Health\.Status/,
+      `${label} must use the health contract the image itself declares`,
+    );
+    // The probe must never reach a real service.
+    assert.match(
+      body,
+      /PLATFORM_API_ORIGIN='https:\/\/platform-api\.invalid'/,
+      `${label} must probe against a reserved, unroutable origin`,
+    );
+  }
+});
+
+test('both images declare their own health contract and carry their provenance labels', () => {
+  for (const [project, dockerfile, port] of [
+    ['web', 'apps/web/Dockerfile', '3000'],
+    ['platform-api', 'services/platform-api/Dockerfile', '3001'],
+  ]) {
+    const source = read(join(repoRoot, dockerfile));
+    assert.match(source, /^HEALTHCHECK /m, `${project} must declare how it proves itself healthy`);
+    assert.ok(
+      source.includes(`process.env.PORT||${port}`),
+      `${project}'s health check must probe its own declared port`,
+    );
+    assert.match(
+      source,
+      /\/health\/ready/,
+      `${project}'s health check must use the readiness route`,
+    );
+
+    for (const label of [
+      'org.opencontainers.image.source',
+      'org.opencontainers.image.revision',
+      'org.opencontainers.image.version',
+      'money.noodle.source.ref',
+      'money.noodle.build.workflow',
+      'money.noodle.build.run',
+    ]) {
+      assert.ok(source.includes(label), `${project} must bind ${label} into the artifact`);
+    }
+    for (const argument of [
+      'SOURCE_REPOSITORY',
+      'SOURCE_COMMIT',
+      'SOURCE_REF',
+      'BUILD_WORKFLOW',
+      'BUILD_RUN',
+      'ARTIFACT_VERSION',
+    ]) {
+      assert.match(
+        source,
+        new RegExp(`^ARG ${argument}=unknown$`, 'm'),
+        `${project} must accept ${argument} and default it, so a local build needs no arguments`,
+      );
+    }
+  }
+
+  // The build definitions forward those bindings, and both workflows supply them.
+  for (const project of ['apps/web', 'services/platform-api']) {
+    const target = JSON.parse(read(join(repoRoot, project, 'project.json'))).targets.container
+      .options.command;
+    for (const argument of ['SOURCE_REPOSITORY', 'SOURCE_COMMIT', 'BUILD_WORKFLOW', 'BUILD_RUN']) {
+      assert.ok(
+        target.includes(`--build-arg ${argument}=`),
+        `${project}'s container target must forward ${argument}`,
+      );
+    }
+  }
+  for (const [label, body] of [
+    ['delivery', deliveryJobs().find(({ name }) => name === 'publish').body],
+    ['ci', ciJob('containers')],
+  ]) {
+    assert.match(
+      body,
+      /SOURCE_COMMIT: \$\{\{ github\.sha \}\}/,
+      `${label} must bind the artifact to the commit being built`,
+    );
+    assert.match(
+      body,
+      /BUILD_WORKFLOW: \$\{\{ github\.workflow_ref \}\}/,
+      `${label} must bind the artifact to the trusted workflow that built it`,
+    );
+    assert.match(
+      body,
+      /BUILD_RUN: \$\{\{ github\.run_id \}\}\/\$\{\{ github\.run_attempt \}\}/,
+      `${label} must bind the artifact to the exact build run`,
+    );
+  }
+});
+
+test('dependency, secret and image scan gates all precede release publication', () => {
+  const required = declaredRequiredChecks();
+  // The dependency audit and the secret scan are required checks, so they are
+  // proven complete and successful before `publish` can start at all.
+  assert.ok(ci.includes('pnpm audit --audit-level high'), 'ci must still audit dependencies');
+  assert.ok(
+    required.includes('affected projects and repository gates'),
+    'the dependency audit runs inside a required check the release waits for',
+  );
+  assert.ok(
+    required.includes('secret scan'),
+    'the secret scan is a required check the release waits for',
+  );
+  assert.ok(
+    required.includes('container platform-api') && required.includes('container web'),
+    'both container builds are required checks the release waits for',
+  );
+
+  const publish = deliveryJobs().find(({ name }) => name === 'publish');
+  assert.ok(
+    stepIndex(publish.body, 'Scan the candidate digest before publication') <
+      publish.body.indexOf('google-github-actions/auth'),
+    'the image scan must gate publication rather than follow it',
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Artifact identity bound to the #70 grant contract (#71).
+//
+// The publication path does not re-implement authorization. It drives the one
+// grant check, so a substituted digest or missing evidence is refused by the
+// same code, under the same clause, as every other operation. These fixtures
+// are synthetic and provider-free: no registry, no token, no network.
+// ---------------------------------------------------------------------------
+
+const SYNTHETIC_SOURCE_COMMIT = 'c'.repeat(40);
+const SYNTHETIC_ARTIFACT_DIGEST = 'a'.repeat(64);
+const SYNTHETIC_SUBSTITUTE_DIGEST = '9'.repeat(64);
+
+/**
+ * A complete, synthetic `artifact.publish` consent body.
+ *
+ * Every identifier is obviously fake. `artifactDigest` is bare lowercase hex
+ * because that is what the catalog's encoding requires; the registry reference
+ * form (`sha256:<hex>`) is a transport detail, not the consent field.
+ */
+function artifactConsentBody(overrides = {}) {
+  return {
+    approvalRef: { commentId: 2, issueNumber: 1 },
+    artifactVector: [
+      {
+        artifactDigest: SYNTHETIC_ARTIFACT_DIGEST,
+        tuple: {
+          buildInvocation: 'synthetic-run-1/1',
+          buildTarget: 'container',
+          builderIdentity: 'synthetic-delivery-workflow',
+          configurationDigest: 'b'.repeat(64),
+          configurationVersion: 'config-1',
+          deployableProject: 'platform-api',
+          outputPlatform: 'linux/amd64',
+          sourceSHA: SYNTHETIC_SOURCE_COMMIT,
+        },
+      },
+    ],
+    catalog: 'money-noodle.production-operations',
+    controlDependencyDigest: 'd'.repeat(64),
+    controlSourceSHA: 'e'.repeat(40),
+    effectBounds: { 'publish-artifact': 1 },
+    environment: 'synthetic-production',
+    executorClass: 'registry-writer',
+    expiresAt: '2026-09-13T01:00:00Z',
+    inputDigest: 'f'.repeat(64),
+    issuedAt: '2026-09-13T00:00:00Z',
+    notBefore: '2026-09-13T00:00:00Z',
+    operation: 'artifact.publish',
+    permissionSlot: 'artifact-publication',
+    planDigest: null,
+    policyDigest: '1'.repeat(64),
+    principal: 'synthetic-principal',
+    readBounds: {
+      maxBytes: 4096,
+      maxPages: 1,
+      timeoutSeconds: 10,
+      validUntil: '2026-09-13T01:00:00Z',
+    },
+    reasonRef: 'synthetic-release-1',
+    recovery: null,
+    recoveryContractDigest: '2'.repeat(64),
+    repositoryIdentity: 'synthetic-repository',
+    requestId: 'synthetic-request-1',
+    requester: 'synthetic-agent',
+    sourceSHA: SYNTHETIC_SOURCE_COMMIT,
+    targetVector: [
+      {
+        actionCounts: { 'publish-artifact': 1 },
+        configurationVersion: 'config-1',
+        expectedSafeVersions: { artifact: 'none' },
+        intendedSafeVersions: { artifact: 'release-candidate' },
+        logicalIncarnation: 'synthetic-api-1',
+      },
+    ],
+    transportPhases: [
+      {
+        actionId: 'publish-artifact',
+        maxSubmissions: 1,
+        phaseId: 'publish',
+        targetIds: ['synthetic-api-1'],
+      },
+    ],
+    verificationContractDigest: '3'.repeat(64),
+    verifierClass: 'registry-provenance-reader',
+    version: 2,
+    ...overrides,
+  };
+}
+
+const publishExecution = (overrides = {}) => ({
+  event: 'push',
+  ref: PERMITTED_REF,
+  workflowPath: PERMITTED_FEDERATED_WORKFLOW,
+  actor: 'synthetic-agent',
+  executorOwner: {
+    jobId: 'publish',
+    runAttempt: 1,
+    runId: 'run-1',
+    workflowPath: PERMITTED_FEDERATED_WORKFLOW,
+    workflowSHA: 'b'.repeat(40),
+  },
+  ...overrides,
+});
+
+const publishLedger = (overrides = {}) => ({
+  activeRequestId: null,
+  consumedSlots: {},
+  corroboration: { requestId: 'synthetic-request-1', witnessConfirmed: true },
+  verifiedPredecessors: [],
+  ...overrides,
+});
+
+const PUBLISH_NOW = '2026-09-13T00:30:00Z';
+
+function decidePublication({ body = {}, execution, ledger, expected, now = PUBLISH_NOW } = {}) {
+  const derived = deriveExplicitConsent(artifactConsentBody(body));
+  return {
+    derived,
+    decision: evaluateGrant({
+      consent: derived.consent,
+      execution: execution ?? publishExecution(),
+      ledger: ledger ?? publishLedger(),
+      expected: expected ?? { repositoryIdentity: 'synthetic-repository' },
+      now,
+    }),
+  };
+}
+
+function assertPublicationRefused(decision, code) {
+  assert.equal(decision.allowed, false, `expected a refusal, got ${JSON.stringify(decision)}`);
+  assert.equal(decision.mayExchangeMutationToken, false);
+  assert.equal(decision.refusal.code, code);
+  assert.ok(REFUSAL_CODES.includes(code), `${code} must be a declared refusal code`);
+  assert.ok(decision.refusal.clauseReference.includes('#'), 'a refusal must name its clause');
+  return decision.refusal;
+}
+
+test('the release artifact identities are the catalog row, not restated literals', () => {
+  const row = OPERATIONS['artifact.publish'];
+  assert.ok(row, 'catalog v2 must still carry the artifact publication row');
+  assert.deepEqual(row.permissionSlots, ['artifact-publication']);
+  assert.equal(row.verifierClass, 'registry-provenance-reader');
+  assert.equal(row.executorClass, 'registry-writer');
+
+  // The workflow's trusted source, workflow and event identities are the ones
+  // the catalog defines. Asserting equality here is what stops the workflow and
+  // the contract drifting into two different definitions of "trusted".
+  assert.ok(
+    delivery.includes(`github.ref == '${PERMITTED_REF}'`),
+    'publication must be bound to the catalog-permitted ref',
+  );
+  assert.equal(PERMITTED_FEDERATED_WORKFLOW, '.github/workflows/delivery.yml');
+  assert.ok(
+    PERMITTED_EVENTS.includes('push'),
+    'publication runs on push, which must remain inside the closed permitted event set',
+  );
+
+  // Consent for a release carries the artifact binding the publication needs.
+  for (const field of ['artifactVector', 'sourceSHA', 'controlSourceSHA']) {
+    assert.ok(CONSENT_BODY_FIELDS.includes(field), `consent must still carry ${field}`);
+  }
+});
+
+test('a fully bound artifact publication is allowed and exchanges nothing by itself', () => {
+  const { derived, decision } = decidePublication();
+  assert.equal(decision.allowed, true, JSON.stringify(decision.refusal ?? {}));
+  assert.equal(decision.operation, 'artifact.publish');
+  assert.equal(decision.permissionSlot, 'artifact-publication');
+  assert.equal(decision.verifierClass, 'registry-provenance-reader');
+  assert.equal(decision.providerEnabled, false);
+  assert.equal(decision.grantKey, derived.grantKey);
+});
+
+test('a substituted artifact digest is refused in the publication path', () => {
+  // The recorded envelope binds one digest. Rebuilding the consent around a
+  // different digest is internally consistent but is no longer the envelope the
+  // journal recorded, which is exactly the substitution this must catch.
+  const recorded = deriveExplicitConsent(artifactConsentBody());
+  const substituted = artifactConsentBody({
+    artifactVector: [
+      {
+        artifactDigest: SYNTHETIC_SUBSTITUTE_DIGEST,
+        tuple: artifactConsentBody().artifactVector[0].tuple,
+      },
+    ],
+  });
+
+  const { decision } = decidePublication({
+    body: substituted,
+    expected: {
+      repositoryIdentity: 'synthetic-repository',
+      consentDigest: recorded.consentDigest,
+    },
+  });
+  assertPublicationRefused(decision, 'consent-digest-mismatch');
+
+  // A mutable tag is not a digest, and an empty vector is not a binding.
+  for (const artifactVector of [
+    [{ artifactDigest: 'latest', tuple: artifactConsentBody().artifactVector[0].tuple }],
+    [],
+  ]) {
+    const { decision: refused } = decidePublication({ body: { artifactVector } });
+    const refusal = assertPublicationRefused(refused, 'artifact-binding-missing');
+    assert.match(
+      refusal.reason,
+      /a mutable tag is not a digest|each artifact entry is exactly/,
+      'the refusal must say why the binding is not a binding',
+    );
+  }
+});
+
+test('missing or stale authorization evidence is refused in the publication path', () => {
+  // Missing: an intent nobody corroborated is pending, never authority.
+  assertPublicationRefused(
+    decidePublication({ ledger: publishLedger({ corroboration: null }) }).decision,
+    'journal-not-corroborated',
+  );
+  assertPublicationRefused(
+    decidePublication({
+      ledger: publishLedger({
+        corroboration: { requestId: 'synthetic-request-1', witnessConfirmed: false },
+      }),
+    }).decision,
+    'witness-missing',
+  );
+
+  // Stale: the original window has closed, and a retry does not reopen it.
+  assertPublicationRefused(
+    decidePublication({ now: '2026-09-13T01:00:00Z' }).decision,
+    'validity-window-expired',
+  );
+  assertPublicationRefused(
+    decidePublication({
+      now: '2026-09-14T00:00:00Z',
+      execution: publishExecution({
+        executorOwner: {
+          jobId: 'publish',
+          runAttempt: 2,
+          runId: 'run-2',
+          workflowPath: PERMITTED_FEDERATED_WORKFLOW,
+          workflowSHA: 'b'.repeat(40),
+        },
+      }),
+    }).decision,
+    'validity-window-expired',
+  );
+
+  // Spent: the slot is consumed at admission and a second release cannot reuse
+  // it, so a rerun cannot republish under the same consent.
+  const { derived } = decidePublication();
+  assertPublicationRefused(
+    decidePublication({
+      ledger: publishLedger({
+        consumedSlots: {
+          'artifact-publication': {
+            admissionEventId: 'intent-1',
+            grantKey: derived.grantKey,
+          },
+        },
+      }),
+    }).decision,
+    'slot-already-spent',
+  );
+});
+
+test('a wrong source, workflow or event cannot publish an artifact', () => {
+  for (const [ref, code] of [
+    ['refs/heads/claim-v1/issue-71', 'ref-not-permitted'],
+    ['refs/tags/v1', 'ref-not-permitted'],
+    ['refs/pull/1/merge', 'ref-not-permitted'],
+  ]) {
+    assertPublicationRefused(
+      decidePublication({ execution: publishExecution({ ref }) }).decision,
+      code,
+    );
+  }
+
+  for (const workflowPath of ['.github/workflows/ci.yml', '.github/workflows/delivery-copy.yml']) {
+    assertPublicationRefused(
+      decidePublication({
+        execution: publishExecution({
+          workflowPath,
+          executorOwner: {
+            jobId: 'publish',
+            runAttempt: 1,
+            runId: 'run-1',
+            workflowPath,
+            workflowSHA: 'b'.repeat(40),
+          },
+        }),
+      }).decision,
+      'workflow-not-permitted',
+    );
+  }
+
+  for (const event of ['pull_request', 'pull_request_target', 'release']) {
+    assertPublicationRefused(
+      decidePublication({ execution: publishExecution({ event }) }).decision,
+      'event-not-permitted',
+    );
+  }
+
+  // A run that is not the named requester is not the signer either.
+  assertPublicationRefused(
+    decidePublication({ execution: publishExecution({ actor: 'unrelated-agent' }) }).decision,
+    'actor-not-requester',
+  );
+});
+
+test('the synthetic artifact and attestation examples are themselves publishable', () => {
+  const body = artifactConsentBody();
+  const [artifact] = body.artifactVector;
+
+  // The worked example a reviewer can read: one tuple, one digest, bound to the
+  // repository, trusted workflow, source commit and build run.
+  const attestationExample = {
+    artifactDigest: artifact.artifactDigest,
+    buildRun: 'synthetic-run-1/1',
+    buildWorkflow: `${PERMITTED_FEDERATED_WORKFLOW}@${PERMITTED_REF}`,
+    imageReference: `synthetic-registry/synthetic-project/platform-api@sha256:${artifact.artifactDigest}`,
+    predicateType: 'https://slsa.dev/provenance/v1',
+    repositoryIdentity: body.repositoryIdentity,
+    sourceCommit: artifact.tuple.sourceSHA,
+    sourceRef: PERMITTED_REF,
+  };
+
+  assert.deepEqual(findForbiddenMarkers(attestationExample), []);
+  assert.deepEqual(findForbiddenMarkers(body), []);
+  assert.equal(assertPublishable(attestationExample, 'attestation example'), attestationExample);
+  assert.ok(isSha256Hex(artifact.artifactDigest), 'an artifact digest is bare lowercase hex');
+  assert.ok(isGitObjectId(artifact.tuple.sourceSHA), 'a source commit is a full object id');
+  assert.ok(isSha256Hex(canonicalDigest(attestationExample)), 'the example has a stable identity');
+
+  // Obviously synthetic: no real project, registry host, account or service URL.
+  const text = JSON.stringify({ body, attestationExample });
+  for (const shape of [/\.run\.app/, /gserviceaccount\.com/, /pkg\.dev/, /\bprojects\/\d/]) {
+    assert.ok(!shape.test(text), `the examples must not contain ${shape}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Synthetic events and path changes (#71).
+// ---------------------------------------------------------------------------
+
+/** Translates a workflow `paths:` glob into a matcher. */
+function pathFilterMatcher(pattern) {
+  const source = pattern
+    .split('**')
+    .map((part) => part.replace(/[.+^${}()|[\]\\]/g, '\\$&').replaceAll('*', '[^/]*'))
+    .join('.*');
+  return new RegExp(`^${source}$`);
+}
+
+/** The `paths:` filters a workflow declares for one event. */
+function declaredPathFilters(workflow, event) {
+  const trigger = workflow.match(
+    new RegExp(`\\n  ${event}:\\n([\\s\\S]*?)(?=\\n  [a-z_]+:\\n|\\n[a-z]+:|$)`),
+  )?.[1];
+  if (!trigger) return null;
+  const paths = trigger.match(/paths:\n([\s\S]*?)(?=\n {2}\S|$)/)?.[1];
+  if (!paths) return null;
+  return [...paths.matchAll(/^ {6}- '([^']+)'$/gm)].map(([, value]) => value);
+}
+
+const deliveryTriggers = (changed) => {
+  const filters = declaredPathFilters(delivery, 'push');
+  assert.ok(filters, 'delivery must keep its push path filter');
+  const matchers = filters.map(pathFilterMatcher);
+  return changed.some((path) => matchers.some((matcher) => matcher.test(path)));
+};
+
+test('synthetic path changes route to the workflows that own them', () => {
+  const cases = [
+    ['app-only', ['apps/web/src/app/page.tsx'], true],
+    ['api-only', ['services/platform-api/src/adapters/http/create-http-server.ts'], true],
+    ['contract', ['services/platform-api/openapi/platform-api.v1.yaml'], true],
+    ['shared input', ['packages/platform-api-client/src/index.ts'], true],
+    ['infrastructure', ['infra/stacks/api/main.tf'], true],
+    ['delivery adapters', ['tools/delivery/grant.mjs'], true],
+    ['workflow itself', ['.github/workflows/delivery.yml'], true],
+    ['lockfile', ['pnpm-lock.yaml'], true],
+    ['unrelated docs', ['docs/current-status.md'], false],
+    ['unrelated coordination', ['tools/coordination-status.mjs'], false],
+    ['mixed docs and app', ['docs/current-status.md', 'apps/web/src/app/page.tsx'], true],
+  ];
+
+  for (const [label, changed, expectedToRun] of cases) {
+    assert.equal(
+      deliveryTriggers(changed),
+      expectedToRun,
+      `${label} must ${expectedToRun ? '' : 'not '}reach the delivery workflow`,
+    );
+  }
+
+  // Both trigger lists must agree, or a change would be checked on the pull
+  // request and unchecked on the push that publishes it.
+  assert.deepEqual(
+    declaredPathFilters(delivery, 'pull_request'),
+    declaredPathFilters(delivery, 'push'),
+    'delivery must filter pull_request and push identically',
+  );
+});
+
+test('required-check attachment survives: the gates run for every change', () => {
+  // `ci.yml` deliberately carries no path filter. Every required check attaches
+  // to every commit, so a documentation-only change cannot silently skip a
+  // required check and leave a branch unmergeable or a release unqualified.
+  for (const event of ['push', 'pull_request']) {
+    assert.equal(
+      declaredPathFilters(ci, event),
+      null,
+      `ci.yml must not filter ${event} by path: required checks must attach to every commit`,
+    );
+  }
+  assert.match(ci, /\n  push:\n    branches: \['\*\*'\]/, 'ci must run on every branch push');
+
+  // An unrelated-docs change therefore still produces every required check,
+  // which is what lets `qualify` demand all four without deadlocking.
+  for (const name of declaredRequiredChecks()) {
+    assert.ok(name.length > 0);
+  }
 });

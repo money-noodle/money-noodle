@@ -426,13 +426,13 @@ test('the accepted budget ceiling and alert thresholds are represented', () => {
 
   assert.match(
     budget,
-    /monthly_ceiling"[\s\S]*?default\s*=\s*30\b/,
-    'the accepted USD 30 monthly ceiling must be the default',
+    /monthly_ceiling"[\s\S]*?default\s*=\s*25\b/,
+    'the accepted USD 25 monthly alert budget must be the default',
   );
   assert.match(
     budget,
-    /threshold_percents"[\s\S]*?default\s*=\s*\[50,\s*80,\s*100\]/,
-    'the accepted 50/80/100 percent alert thresholds must be the default',
+    /threshold_percents"[\s\S]*?default\s*=\s*\[20,\s*50,\s*80,\s*100\]/,
+    'the accepted 20/50/80/100 percent alert thresholds must be the default',
   );
   assert.match(
     budget,
@@ -453,6 +453,22 @@ test('services scale to zero, bounding idle cost', () => {
     /var\.min_instances\s*==\s*0/,
     'a standing minimum instance count must be rejected rather than silently permitted',
   );
+});
+
+test('services default to two maximum instances, bounding saturation cost', () => {
+  const cloudRun = read(join(infraRoot, 'modules', 'cloud-run-service', 'variables.tf'));
+  assert.match(
+    cloudRun,
+    /max_instances"[\s\S]*?default\s*=\s*2\b/,
+    'maximum instances must default to two per service (accepted recommendation Q4a of #75)',
+  );
+  for (const stack of ['api', 'web']) {
+    assert.doesNotMatch(
+      read(join(infraRoot, 'stacks', stack, 'main.tf')),
+      /\bmax_instances\s*=/,
+      `the ${stack} stack must not override the bounded default`,
+    );
+  }
 });
 
 test('no DNS resource is declared, so Vercel remains authoritative for noodle.money', () => {

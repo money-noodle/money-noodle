@@ -26,15 +26,15 @@ variable "registry_repository_id" {
 }
 
 variable "monthly_ceiling" {
-  description = "Accepted monthly ceiling in USD."
+  description = "Accepted monthly alert budget in USD; an alerting amount, not a hard spending cap."
   type        = number
-  default     = 30
+  default     = 25
 }
 
 variable "budget_threshold_percents" {
   description = "Accepted alert thresholds."
   type        = list(number)
-  default     = [50, 80, 100]
+  default     = [20, 50, 80, 100]
 }
 
 variable "budget_alert_email_addresses" {

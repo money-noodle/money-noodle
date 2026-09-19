@@ -20,8 +20,8 @@ run "the_accepted_ceiling_and_thresholds_are_configured" {
     condition = one([
       for amount in google_billing_budget.monthly_ceiling.amount :
       one([for specified in amount.specified_amount : specified.units])
-    ]) == "30"
-    error_message = "The accepted USD 30 monthly ceiling must be what is configured."
+    ]) == "25"
+    error_message = "The accepted USD 25 monthly alert budget must be what is configured."
   }
 
   assert {
@@ -36,18 +36,18 @@ run "the_accepted_ceiling_and_thresholds_are_configured" {
     condition = length([
       for rule in google_billing_budget.monthly_ceiling.threshold_rules :
       rule if rule.spend_basis == "CURRENT_SPEND"
-    ]) == 3
-    error_message = "The accepted 50, 80, and 100 percent actual-spend alerts must all exist."
+    ]) == 4
+    error_message = "The accepted 20, 50, 80, and 100 percent actual-spend alerts must all exist."
   }
 
   assert {
     condition = alltrue([
-      for percent in [0.5, 0.8, 1.0] : anytrue([
+      for percent in [0.2, 0.5, 0.8, 1.0] : anytrue([
         for rule in google_billing_budget.monthly_ceiling.threshold_rules :
         rule.threshold_percent == percent && rule.spend_basis == "CURRENT_SPEND"
       ])
     ])
-    error_message = "Each of the accepted 50, 80, and 100 percent thresholds must be present at the right level."
+    error_message = "Each of the accepted 20, 50, 80, and 100 percent thresholds must be present at the right level."
   }
 }
 

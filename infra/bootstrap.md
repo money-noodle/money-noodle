@@ -51,7 +51,7 @@ from public surfaces and from workflow output.
 | --- | --- | --- |
 | `project_id` | The Google Cloud project the maintainer creates | Every resource |
 | `project_number` | Same project, numeric form | Budget filter, Cloud Run service agent identity |
-| `billing_account_id` | The billing account linked to that project | Narrow budget-management grant plus the USD 30 budget |
+| `billing_account_id` | The billing account linked to that project | Narrow budget-management grant plus the USD 25 alert budget |
 | `state_bucket_prefix` | A name the maintainer chooses; bucket names are globally unique | The four state buckets |
 | `repository_id` | `gh api repos/money-noodle/money-noodle --jq .id` | Trust conjunction |
 | `repository_owner_id` | `gh api repos/money-noodle/money-noodle --jq .owner.id` | Trust conjunction |
