@@ -1178,24 +1178,48 @@ test('duplicate matching witness comments add no authority', () => {
 
 const SYNTHETIC_MARKER = 'MN-SYNTHETIC-LEAK-CANARY-8f2c41d6';
 
+// These values are synthetic and are assembled from fragments at runtime so that
+// no credential-shaped string appears in this file's source text for a secret
+// scanner to match. The assembled values are what the fixtures below assert on.
+const SERVICE_ACCOUNT_EMAIL = ['deployer@example-project', '.iam.', 'gservice', 'account.com'].join(
+  '',
+);
+const SYNTHETIC = {
+  githubTokenPrefix: ['gh', 'p', '_'].join(''),
+  googleOauthToken: ['ya', '29', '.', 'A'.repeat(20)].join(''),
+  privateKeyBlock: ['-----', 'BEGIN RSA ', 'PRIVATE', ' KEY', '-----'].join(''),
+  serviceAccountEmail: SERVICE_ACCOUNT_EMAIL,
+  serviceAccountMember: ['service', 'Account:', SERVICE_ACCOUNT_EMAIL].join(''),
+  cloudRunUrl: ['https://', 'platform-api-abc123-uc', '.a.', 'run', '.app'].join(''),
+  nativeProjectPath: [
+    'projects/',
+    '123456789012',
+    '/locations/us-central1/services/platform-api',
+  ].join(''),
+  rawPlanPayload: ['{"', 'resource_changes', '": [] }'].join(''),
+};
+
 test('the output-leak fixture produces a safe error and no marker anywhere', () => {
   const hostile = clone(EXAMPLE.consent);
-  hostile.reasonRef = `ghp_${'A'.repeat(36)}`;
+  hostile.reasonRef = `${SYNTHETIC.githubTokenPrefix}${'A'.repeat(36)}`;
 
   const decision = decide({ consent: hostile });
   const serialised = JSON.stringify(decision);
   assert.equal(decision.allowed, false);
   assert.equal(decision.refusal.code, 'evidence-unsanitised');
-  assert.ok(!serialised.includes('ghp_'), 'a refusal must not quote what it refused');
+  assert.ok(
+    !serialised.includes(SYNTHETIC.githubTokenPrefix),
+    'a refusal must not quote what it refused',
+  );
   assert.ok(serialised.includes('github-token'), 'the refusal names the kind that was found');
 
   for (const [kind, value] of [
-    ['google-oauth-token', 'ya29.AbCdEfGhIjKlMnOpQrSt'],
-    ['private-key-block', '-----BEGIN RSA PRIVATE KEY-----'],
-    ['service-account-member', 'serviceAccount:deployer@example-project.iam.gserviceaccount.com'],
-    ['cloud-run-url', 'https://platform-api-abc123-uc.a.run.app'],
-    ['native-project-path', 'projects/123456789012/locations/us-central1/services/platform-api'],
-    ['raw-plan-payload', '{"resource_changes": [] }'],
+    ['google-oauth-token', SYNTHETIC.googleOauthToken],
+    ['private-key-block', SYNTHETIC.privateKeyBlock],
+    ['service-account-member', SYNTHETIC.serviceAccountMember],
+    ['cloud-run-url', SYNTHETIC.cloudRunUrl],
+    ['native-project-path', SYNTHETIC.nativeProjectPath],
+    ['raw-plan-payload', SYNTHETIC.rawPlanPayload],
   ]) {
     const markers = findForbiddenMarkers({ observations: [{ note: value }] });
     assert.ok(
@@ -1216,7 +1240,7 @@ test('an unsanitised journal event is refused rather than recorded', () => {
     executorOwner: executorOwner(),
     occurredAt: NOW,
     eventId: 'observation-leak',
-    observations: [{ detail: 'https://platform-api-abc123-uc.a.run.app' }],
+    observations: [{ detail: SYNTHETIC.cloudRunUrl }],
   });
   assert.equal(leaked.allowed, false);
   assert.equal(leaked.refusal.code, 'evidence-unsanitised');
@@ -1228,8 +1252,8 @@ test('a digest of a low-entropy identifier is refused, because hashing is not sa
     '123456789012',
     'platform-api',
     'synthetic-api-1',
-    'deployer@example-project.iam.gserviceaccount.com',
-    'https://platform-api-abc123-uc.a.run.app',
+    SYNTHETIC.serviceAccountEmail,
+    SYNTHETIC.cloudRunUrl,
     '2026-09-13T00:00:00Z',
     'production',
   ]) {
@@ -1287,19 +1311,17 @@ test('the suite itself prints no token or provider payload', () => {
   const source = readFileSync(fileURLToPath(import.meta.url), 'utf8');
   const withoutCanary = source.split(SYNTHETIC_MARKER).join('');
   const markers = findForbiddenMarkers({ source: withoutCanary });
-  const allowed = new Set([
-    // Fixture literals that exist precisely to be recognised and refused.
-    'github-token',
-    'google-oauth-token',
-    'private-key-block',
-    'service-account-member',
-    'cloud-run-url',
-    'native-project-path',
-    'raw-plan-payload',
-  ]);
-  for (const marker of markers) {
-    assert.ok(allowed.has(marker.kind), `unexpected ${marker.kind} in the suite source`);
-  }
+  // Every credential-shaped fixture value is assembled at runtime from
+  // fragments, so none of those shapes exists in this file's source text and
+  // the expected set is empty. Pasting a literal one back in fails here, and
+  // fails the repository's secret scan for the same reason.
+  assert.deepEqual(
+    markers,
+    [],
+    `the suite source must contain no credential-shaped literal; found ${markers
+      .map((marker) => marker.kind)
+      .join(', ')}`,
+  );
 });
 
 // --------------------------------------------------------------------------
