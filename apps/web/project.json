@@ -1,5 +1,17 @@
 {
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "metadata": {
+    "deployment": {
+      "dependsOn": ["api"],
+      "image": "web",
+      "order": 2,
+      "port": 3000,
+      "service": "web",
+      "stack": "web",
+      "unit": "web",
+      "verify": ["/health/live", "/health/ready"]
+    }
+  },
   "name": "web",
   "projectType": "application",
   "sourceRoot": "apps/web/src",
