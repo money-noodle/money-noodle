@@ -108,10 +108,12 @@ Every check here is static. `init` runs with `-backend=false`, and every
 
 ## Testing
 
-61 OpenTofu test runs execute offline across the trust policy, service contract,
-rollback behaviour, bootstrap defaults, state durability, budget, and federation
-modules. 37 infrastructure static guards run in the repository gate. Nearly all are **negative** tests: a
-test proving the pipeline can deploy proves nothing about who else can.
+113 OpenTofu test runs execute offline across the trust policy, service contract,
+runtime identity, rollback behaviour, bootstrap defaults, state durability,
+budget, and federation modules. 32 infrastructure static guards run in
+`tools/infra-policy.test.mjs` inside the repository gate, alongside the delivery
+policy suite. Nearly all are **negative** tests: a test proving the pipeline can
+deploy proves nothing about who else can.
 
 The trust policy is the piece worth understanding. `modules/delivery-trust`
 declares the clause set **once** and emits it twice — as the CEL string the
