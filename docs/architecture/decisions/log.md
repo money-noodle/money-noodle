@@ -8,6 +8,7 @@ Newest first. Keep entries to one or two sentences. If an entry needs a paragrap
 
 ## 2026
 
+- **2026-09-15** — The principal accepted attainable telemetry retention and a narrow provider-authentication exception under Working [ADR-0007](ADR-0007-first-telemetry-backend.md): application and debug logs at 14 configured days, Google's documented 30-day trace and 24-month downsampled OTLP-metric behaviour recorded as provider behaviour rather than configurable TTLs, and an exact-version Google authentication library permitted only in the two isolated telemetry authentication adapters. Audit retention is unchanged and nothing is granted or deployed by the acceptance.
 - **2026-09-13** — The principal accepted the M1 catalog v2 and restricted workload-publication target, with separate artifact/forward/one-rollback consent slots and bounded existing-repository Git journal/witness custody; see [ADR-0010](ADR-0010-agent-operated-production-control-plane.md) and [ADR-0005](ADR-0005-delivery-trust-and-secret-custody.md). This is design acceptance, not host/provider enablement.
 - **2026-09-13** — Replace the fixed first-slice budget ceiling with dated #85 estimates, measured attribution and configurable alerts under [delivery cost policy](../../operations/delivery.md#cost-estimates-and-operational-bounds); alerts are not caps or spending authority, and unapplied legacy defaults await separate implementation.
 
