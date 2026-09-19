@@ -1377,7 +1377,10 @@ test('M1 custody and cost clauses disclose bounded reconstruction without weaken
   assert.match(delivery, /no current normative USD 30 ceiling/);
   assert.match(delivery, /2026-09-09 revision-3 cost research/);
   assert.match(delivery, /not a guaranteed spending cap/);
-  assert.match(delivery, /existing unapplied `infra\/modules\/budget-guardrail` USD 30/);
+  assert.match(
+    delivery,
+    /existing unapplied `infra\/modules\/budget-guardrail` USD 25 alert-budget/,
+  );
   assert.match(currentStatus, /design contracts, not installed publisher\/journal\/witness/);
   for (const id of ['0004', '0005', '0006', '0007', '0010', '0011']) {
     const [, source] = decisionRecords.find(([path]) => path.includes(`ADR-${id}-`));

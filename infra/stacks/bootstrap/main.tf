@@ -120,8 +120,8 @@ resource "google_project_iam_member" "deployer" {
 }
 
 # Project IAM cannot authorize a billing-account budget. This separate binding
-# is the narrow billing scope the platform stack needs for the accepted USD 30
-# guardrail; it grants no billing-account administration or payment authority.
+# is the narrow billing scope the platform stack needs for the accepted USD 25
+# alert budget; it grants no billing-account administration or payment authority.
 resource "google_billing_account_iam_member" "deployer_budget_manager" {
   billing_account_id = var.billing_account_id
   role               = "roles/billing.costsManager"

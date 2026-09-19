@@ -426,13 +426,13 @@ test('the accepted budget ceiling and alert thresholds are represented', () => {
 
   assert.match(
     budget,
-    /monthly_ceiling"[\s\S]*?default\s*=\s*30\b/,
-    'the accepted USD 30 monthly ceiling must be the default',
+    /monthly_ceiling"[\s\S]*?default\s*=\s*25\b/,
+    'the accepted USD 25 monthly alert budget must be the default',
   );
   assert.match(
     budget,
-    /threshold_percents"[\s\S]*?default\s*=\s*\[50,\s*80,\s*100\]/,
-    'the accepted 50/80/100 percent alert thresholds must be the default',
+    /threshold_percents"[\s\S]*?default\s*=\s*\[20,\s*50,\s*80,\s*100\]/,
+    'the accepted 20/50/80/100 percent alert thresholds must be the default',
   );
   assert.match(
     budget,
