@@ -17,6 +17,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
+import {
+  EXECUTION_IDENTITIES,
+  RESOURCE_OPERATIONS,
+  isResourceKey,
+} from './delivery/execution-identities.mjs';
+
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const workflowDirectory = join(repoRoot, '.github', 'workflows');
 const deliveryPath = join(workflowDirectory, 'delivery.yml');
@@ -900,4 +906,170 @@ test('rendered plan and drift text is redacted before it reaches a job summary',
       `job "${jobName}" must use the shared redaction rules, not an inline address-only pass`,
     );
   }
+});
+
+// ---------------------------------------------------------------------------
+// Execution-identity ownership over `infra/**`.
+//
+// "Every declared delivery operation has a named execution identity" is only a
+// property if nothing is left over on either side. These assertions fail when a
+// resource is added without an owner, when an owner is declared for a resource
+// that no longer exists, and when a resource is claimed by more than one
+// identity. See `tools/delivery/execution-identities.mjs`.
+// ---------------------------------------------------------------------------
+
+/** Every `<modules|stacks>/<directory>:<type>.<name>` declared under `infra/`. */
+function declaredResourceOperations() {
+  const infraRoot = join(repoRoot, 'infra');
+  const found = [];
+
+  for (const parent of ['modules', 'stacks']) {
+    const parentPath = join(infraRoot, parent);
+    if (!existsSync(parentPath)) continue;
+    for (const entry of readdirSync(parentPath, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const directory = join(parentPath, entry.name);
+      for (const file of readdirSync(directory)) {
+        if (!file.endsWith('.tf')) continue;
+        const source = read(join(directory, file));
+        for (const [, type, name] of source.matchAll(
+          /^resource\s+"([a-z0-9_]+)"\s+"([a-z0-9_]+)"/gm,
+        )) {
+          found.push({
+            key: `${parent}/${entry.name}:${type}.${name}`,
+            file: relative(join(directory, file)),
+          });
+        }
+      }
+    }
+  }
+  return found;
+}
+
+test('every resource operation in infra/** maps to exactly one named identity', () => {
+  const declared = declaredResourceOperations();
+  assert.ok(declared.length > 0, 'expected declared resources under infra/');
+
+  const duplicates = declared
+    .map(({ key }) => key)
+    .filter((key, index, all) => all.indexOf(key) !== index);
+  assert.deepEqual(duplicates, [], 'a resource address must be declared once');
+
+  const declaredKeys = declared.map(({ key }) => key).sort();
+  const mappedKeys = Object.keys(RESOURCE_OPERATIONS).sort();
+
+  const unowned = declaredKeys.filter((key) => !mappedKeys.includes(key));
+  assert.deepEqual(
+    unowned,
+    [],
+    `every declared resource needs a named execution identity in tools/delivery/execution-identities.mjs. Unowned: ${unowned.join(', ')}`,
+  );
+
+  const orphaned = mappedKeys.filter((key) => !declaredKeys.includes(key));
+  assert.deepEqual(
+    orphaned,
+    [],
+    `an identity claims a resource that no longer exists. Orphaned: ${orphaned.join(', ')}`,
+  );
+
+  for (const key of declaredKeys) {
+    const row = RESOURCE_OPERATIONS[key];
+    assert.ok(isResourceKey(key), `${key} is not a well-formed resource address`);
+
+    // Exactly one identity. An array, a list or a "team" is not an identity.
+    assert.equal(typeof row.identity, 'string', `${key} must name exactly one identity`);
+    const identity = EXECUTION_IDENTITIES[row.identity];
+    assert.ok(identity, `${key} names undeclared identity ${row.identity}`);
+    assert.ok(
+      identity.catalogOperations.includes(row.catalogOperation),
+      `${key} claims ${row.catalogOperation}, which ${row.identity} is not permitted to execute`,
+    );
+
+    // A permission justification, not a restatement of the resource name.
+    assert.ok(
+      row.justification.length >= 40,
+      `${key} needs a justification for why ${row.identity} may perform this operation`,
+    );
+    assert.match(row.justification, /\.$/, `${key}'s justification must be a sentence`);
+    assert.ok(
+      !row.justification.toLowerCase().includes('todo'),
+      `${key}'s justification is a placeholder`,
+    );
+  }
+});
+
+test('the credential-free checks job runs the delivery control policy guard', () => {
+  // The adapters are only a control if they actually run. This asserts the
+  // guard is in the `checks` job — which holds no `id-token` permission and no
+  // environment — and that the workflow re-runs it when the adapters change.
+  const checks = deliveryJobs().find(({ name }) => name === 'checks');
+  assert.ok(checks, 'expected a checks job');
+  assert.ok(
+    checks.body.includes('run: node --test tools/delivery-control-policy.test.mjs'),
+    'the checks job must run the delivery control policy suite',
+  );
+  assert.ok(
+    !/id-token:|environment:/.test(checks.body),
+    'the delivery control guard must stay in the credential-free job',
+  );
+
+  for (const event of ['pull_request', 'push']) {
+    const trigger = delivery.match(
+      new RegExp(`\\n {2}${event}:\\n([\\s\\S]*?)(?=\\n {2}[a-z_]+:|$)`),
+    )?.[1];
+    assert.ok(trigger, `${event} trigger must exist`);
+    for (const path of ['tools/delivery/**', 'tools/delivery-control-policy.test.mjs']) {
+      assert.ok(
+        trigger.includes(`      - '${path}'`),
+        `${event} must re-run the guard when ${path} changes`,
+      );
+    }
+  }
+});
+
+test('creating a service and exposing it are owned by different identities', () => {
+  // The private-before-public seam only holds if the apply that creates a
+  // service cannot also perform the exposure. Different owners, different
+  // approval classes, different catalog rows.
+  const service =
+    RESOURCE_OPERATIONS['modules/cloud-run-service:google_cloud_run_v2_service.service'];
+  const exposure =
+    RESOURCE_OPERATIONS['modules/cloud-run-service:google_cloud_run_v2_service_iam_member.public'];
+
+  assert.notEqual(service.identity, exposure.identity);
+  assert.equal(EXECUTION_IDENTITIES[service.identity].approvalClass, 'H1');
+  assert.equal(EXECUTION_IDENTITIES[exposure.identity].approvalClass, 'H2');
+  assert.equal(exposure.catalogOperation, 'workload.access.change');
+  assert.match(
+    EXECUTION_IDENTITIES[exposure.identity].mustNot,
+    /independently verified in private/,
+    'the access executor must record that it cannot expose an unverified private candidate',
+  );
+});
+
+test('no workload identity may grant itself its own authority', () => {
+  // Every binding that establishes the deployer's own authority is owned by the
+  // human bootstrap principal, because an identity that can extend its own
+  // permissions makes least privilege unenforceable.
+  const selfGranting = [
+    'stacks/bootstrap:google_project_iam_member.deployer',
+    'stacks/bootstrap:google_billing_account_iam_member.deployer_budget_manager',
+    'modules/workload-identity-federation:google_service_account_iam_member.deployer_impersonation',
+    'modules/workload-identity-federation:google_iam_workload_identity_pool_provider.github',
+    'modules/state-bucket:google_storage_bucket_iam_member.deployer',
+  ];
+
+  for (const key of selfGranting) {
+    const row = RESOURCE_OPERATIONS[key];
+    assert.ok(row, `${key} must be mapped`);
+    assert.equal(
+      row.identity,
+      'bootstrap-principal',
+      `${key} grants the deployer authority and must be owned by the human bootstrap principal`,
+    );
+    assert.equal(row.catalogOperation, 'bootstrap.initialize');
+  }
+
+  assert.equal(EXECUTION_IDENTITIES['bootstrap-principal'].tokenClass, 'none');
+  assert.match(EXECUTION_IDENTITIES['bootstrap-principal'].mustNot, /Become a workflow identity/);
 });
