@@ -267,6 +267,48 @@ As committed, gate 3 is unset, so no path reaches a provider at all. This view i
 detection uses its separately declared scheduled read path and never corrects; destroy is available to no
 workflow.
 
+### Merge-triggered release vector
+
+The deployment a qualifying merge produces. It is implemented in `delivery.yml` as the
+credential-free `release-plan` job and the gated `deploy` job, and is unreachable from a pull
+request, a fork, a tag, any non-main ref and any `workflow_dispatch`. Gates 1 to 4 above still
+apply; gate 5's typed phrase belongs to the manual `apply` path and has no equivalent here, because
+the qualifying merge is the initiation and the `production` environment gate remains the production
+decision ([#74](https://github.com/money-noodle/money-noodle/issues/74)).
+
+```mermaid
+flowchart TB
+    merge["Qualifying merge to protected main"]
+    gates["ci.yml required checks<br/>including the packaged-artifact journey"]
+    qualify["release qualification<br/>every required check on this exact head"]
+    publish["publish<br/>build once, test, scan, push, attest"]
+    vector["release vector<br/>affected projects from declared project.json manifests"]
+    idle["No declared unit affected<br/>nothing is deployed"]
+    envGate{"production environment gate<br/>maintainer decision"}
+    provenance["Resolve every digest and verify provenance<br/>repository + signer workflow + source commit"]
+    deployApi["Apply stacks/api at the published digest"]
+    verifyApi["Audience-bound ID token probe<br/>health and /v1/platform/status"]
+    deployWeb["Apply stacks/web at the published digest"]
+    verifyWeb["Audience-bound ID token probe<br/>health"]
+    blocked["Candidate blocked<br/>unaffected services untouched<br/>no rollback permission minted"]
+    record["Ordered vector and per-step verification recorded"]
+
+    merge --> gates --> qualify --> publish --> vector
+    vector -->|no affected unit| idle
+    vector -->|one or two declared units| envGate
+    envGate --> provenance
+    provenance -->|provenance does not bind this commit| blocked
+    provenance --> deployApi --> verifyApi --> deployWeb --> verifyWeb --> record
+    verifyApi -->|failed| blocked
+    verifyWeb -->|failed| blocked
+```
+
+Each service's group of steps runs only when the planned vector contains that unit, so an API-only
+change reaches `deployApi` and `verifyApi` and stops there, and a web-only change reaches only the
+web pair. Nothing is rebuilt for promotion: the digest behind this commit's published tag is
+resolved, provenance-verified, and applied. A failure anywhere leaves the candidate blocked rather
+than recovered, because a rollback needs a verified predecessor and this path never invents one.
+
 ### Trust boundaries
 
 ```mermaid
@@ -467,7 +509,9 @@ No row below is proposed. The administrative-observability proposal-only subsect
 | `infra/stacks/platform/` | shared platform stack | Artifact Registry, budget, telemetry retention, secret boundary |
 | `infra/stacks/api/`, `infra/stacks/web/` | per-service stacks | Own Cloud Run service, workload identity, and separate state per ADR-0006 |
 | `tools/delivery/` | provider-disabled control adapters | Catalog v2 grant check, append-only journal, nonrecursive witness, output allowlisting, and the named execution identity owning each `infra/` resource. No transport, no credential, no ref or issue created |
-| `.github/workflows/delivery.yml` | delivery pipeline | Infrastructure checks, digest publication, gated apply, drift, rollback |
+| `tools/release/` | release orchestration and journey | Ordered forward vector from declared `project.json` deployment manifests, the CI-only upstream fixture, and the packaged-artifact journey. Reads the catalog row for its bound and slot; mints nothing and reaches no provider |
+| `tools/release.test.mjs` | release gate attachment | Makes the existing repository test command discover and run `tools/release/**`, failing on a suite that discovered nothing or a journey that was enabled and skipped |
+| `.github/workflows/delivery.yml` | delivery pipeline | Infrastructure checks, digest publication, the merge-triggered release vector and deployment, the gated manual apply, drift, rollback |
 | `docs/architecture/` | governed documentation | Current diagrams, decision records, and source/deployment map |
 
 Every created project receives a README declaring purpose, contracts, targets, dependencies, runtime, deployment unit, configuration, health checks, and owned data. Nx tags and lint rules enforce at least:
@@ -521,7 +565,7 @@ The foundation implements root and Nx targets for format checks, lint, type chec
 
 Remote validation must follow the owning [first-release acceptance and exposure order](../operations/delivery.md#first-release-acceptance-and-exposure-order): verified immutable artifacts, private API verification, separate H2 API exposure, private web verification against that API, then separate H2 web exposure and public journey/trace evidence. Compatible later affected releases follow API-before-web ordering where coordination is required, and consume only their exact granted forward/conditional rollback vectors. No predecessor or ambiguous effect creates recovery authority.
 
-Infrastructure commands are `node tools/infra-check.mjs {fmt,validate,test,all}`, also exposed as the Nx targets `infra:infra-fmt`, `infra:infra-validate`, and `infra:infra-test`. They are deliberately outside the `lint`/`typecheck`/`test`/`contract`/`build` set so `pnpm check` stays runnable without OpenTofu installed; the static guards that need no provider tooling run inside `pnpm check` through `tools/infra-policy.test.mjs` and `tools/infra-delivery-policy.test.mjs`. `.github/workflows/delivery.yml` owns publication, the gated apply, drift detection, and rollback, and is separate from `ci.yml`.
+Infrastructure commands are `node tools/infra-check.mjs {fmt,validate,test,all}`, also exposed as the Nx targets `infra:infra-fmt`, `infra:infra-validate`, and `infra:infra-test`. They are deliberately outside the `lint`/`typecheck`/`test`/`contract`/`build` set so `pnpm check` stays runnable without OpenTofu installed; the static guards that need no provider tooling run inside `pnpm check` through `tools/infra-policy.test.mjs` and `tools/infra-delivery-policy.test.mjs`. `.github/workflows/delivery.yml` owns publication, the merge-triggered release vector and deployment, the gated manual apply, drift detection, and rollback, and is separate from `ci.yml`. The affected release vector is computed from the `metadata.deployment` block each deployable project declares in its own `project.json`, so a project becomes deployable by declaring itself rather than by being added to a table in the pipeline.
 
 Quantitative latency thresholds remain unset until remote evidence exists. Cloud Run revision traffic assignment is the accepted rollback mechanism, but local checks alone cannot satisfy remote acceptance: the infrastructure is currently implemented and **unapplied**, and [`../../infra/README.md`](../../infra/README.md) lists what remains before an apply can be trusted.
 

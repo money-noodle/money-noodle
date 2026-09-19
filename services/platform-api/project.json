@@ -1,5 +1,17 @@
 {
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "metadata": {
+    "deployment": {
+      "dependsOn": [],
+      "image": "platform-api",
+      "order": 1,
+      "port": 3001,
+      "service": "platform-api",
+      "stack": "api",
+      "unit": "api",
+      "verify": ["/health/live", "/health/ready", "/v1/platform/status"]
+    }
+  },
   "name": "platform-api",
   "projectType": "application",
   "sourceRoot": "services/platform-api/src",

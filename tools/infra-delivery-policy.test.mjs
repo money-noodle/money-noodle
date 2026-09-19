@@ -33,6 +33,7 @@ import {
 import { deriveExplicitConsent, evaluateGrant } from './delivery/grant.mjs';
 import { REFUSAL_CODES } from './delivery/refusals.mjs';
 import { assertPublishable, findForbiddenMarkers } from './delivery/sanitize.mjs';
+import { loadDeploymentManifests } from './release/deployment-manifests.mjs';
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const workflowDirectory = join(repoRoot, '.github', 'workflows');
@@ -47,6 +48,11 @@ const workflowPaths = readdirSync(workflowDirectory)
 
 const delivery = existsSync(deliveryPath) ? read(deliveryPath) : null;
 const pinnedToolVersion = read(join(repoRoot, 'infra', '.terraform-version')).trim();
+
+// The deployable surface, read from the manifests each project declares. The
+// workflow's per-unit step groups are checked against this rather than against
+// a list restated here.
+const declaredDeployments = loadDeploymentManifests(repoRoot);
 
 // Splits the top-level `jobs:` mapping into individual job bodies.
 function deliveryJobs() {
@@ -1869,6 +1875,9 @@ test('synthetic path changes route to the workflows that own them', () => {
     ['shared input', ['packages/platform-api-client/src/index.ts'], true],
     ['infrastructure', ['infra/stacks/api/main.tf'], true],
     ['delivery adapters', ['tools/delivery/grant.mjs'], true],
+    ['release orchestration', ['tools/release/plan-release.mjs'], true],
+    ['release journey', ['tools/release/journey/journey.test.mjs'], true],
+    ['release discovery', ['tools/release.test.mjs'], true],
     ['workflow itself', ['.github/workflows/delivery.yml'], true],
     ['lockfile', ['pnpm-lock.yaml'], true],
     ['unrelated docs', ['docs/current-status.md'], false],
@@ -1910,5 +1919,428 @@ test('required-check attachment survives: the gates run for every change', () =>
   // which is what lets `qualify` demand all four without deadlocking.
   for (const name of declaredRequiredChecks()) {
     assert.ok(name.length > 0);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Automatic deployment on a qualifying merge (#73).
+//
+// The deployment path is the one place where "a merge to protected main causes
+// a production effect" becomes literally true, so its guard is evaluated here
+// rather than read. Everything below is static: no provider, no credential, no
+// network. It proves the shape of the workflow, never that a deployment
+// happened.
+// ---------------------------------------------------------------------------
+
+/** The `if: >-` guard a job declares, as one line. */
+function jobGuard(name) {
+  const job = deliveryJobs().find((candidate) => candidate.name === name);
+  assert.ok(job, `expected a ${name} job`);
+  const condition = job.body.match(/if: >-\n([\s\S]*?)\n {4}runs-on:/)?.[1];
+  assert.ok(condition, `the ${name} job must carry a block guard condition`);
+  return condition.replace(/\s+/gu, ' ').trim();
+}
+
+/**
+ * Evaluates a guard against a synthetic run context.
+ *
+ * The grammar is deliberately tiny — a conjunction of equality comparisons —
+ * and an unsupported clause fails the test rather than being skipped, so a
+ * future guard cannot become unevaluated by getting cleverer.
+ */
+function guardAllows(condition, context) {
+  const resolve = (token) => {
+    if (token.startsWith("'") && token.endsWith("'")) return token.slice(1, -1);
+    assert.ok(token in context, `the synthetic context does not model ${token}`);
+    return context[token];
+  };
+
+  return condition
+    .split('&&')
+    .map((clause) => clause.trim())
+    .filter(Boolean)
+    .every((clause) => {
+      const parts = clause.match(/^(\S+)\s*(==|!=)\s*('[^']*'|\S+)$/u);
+      assert.ok(parts, `unsupported guard clause: ${clause}`);
+      const [, left, operator, right] = parts;
+      const equal = resolve(left) === resolve(right);
+      return operator === '==' ? equal : !equal;
+    });
+}
+
+/** A run context in which the automatic deployment is meant to be reachable. */
+const qualifyingMerge = () => ({
+  'github.event_name': 'push',
+  'github.ref': 'refs/heads/main',
+  'github.repository': 'money-noodle/money-noodle',
+  'github.sha': 'a'.repeat(40),
+  'needs.authorization.outputs.apply_authorized': 'true',
+  'needs.authorization.outputs.environment_reviewers_verified': 'true',
+  'needs.authorization.outputs.federation_configured': 'true',
+  'needs.authorization.outputs.provider_configured': 'true',
+  'needs.qualify.outputs.qualified_head': 'a'.repeat(40),
+  'needs.release-plan.outputs.count': '1',
+});
+
+test('the automatic deployment runs for a qualifying merge and for nothing else', () => {
+  const guard = jobGuard('deploy');
+  assert.ok(guardAllows(guard, qualifyingMerge()), 'a qualifying merge must reach the deployment');
+
+  // Acceptance: unreachable from a pull request, a fork, a tag or a non-main
+  // ref. Each case is evaluated, not asserted by reading the text.
+  const denied = [
+    ['a pull request', { 'github.event_name': 'pull_request', 'github.ref': 'refs/pull/7/merge' }],
+    [
+      'a pull request from a fork',
+      {
+        'github.event_name': 'pull_request',
+        'github.ref': 'refs/pull/7/merge',
+        'github.repository': 'someone-else/money-noodle',
+      },
+    ],
+    ['a tag', { 'github.event_name': 'push', 'github.ref': 'refs/tags/v1.0.0' }],
+    ['a non-main branch', { 'github.event_name': 'push', 'github.ref': 'refs/heads/feature' }],
+    ['a manual dispatch', { 'github.event_name': 'workflow_dispatch' }],
+    ['the scheduled drift event', { 'github.event_name': 'schedule' }],
+    ['an unqualified head', { 'needs.qualify.outputs.qualified_head': 'b'.repeat(40) }],
+    ['an empty release vector', { 'needs.release-plan.outputs.count': '0' }],
+    ['unconfigured federation', { 'needs.authorization.outputs.federation_configured': 'false' }],
+    ['incomplete provider inputs', { 'needs.authorization.outputs.provider_configured': 'false' }],
+    ['unauthorised apply', { 'needs.authorization.outputs.apply_authorized': 'false' }],
+    [
+      'unverified environment reviewers',
+      { 'needs.authorization.outputs.environment_reviewers_verified': 'false' },
+    ],
+  ];
+
+  for (const [label, overrides] of denied) {
+    assert.equal(
+      guardAllows(guard, { ...qualifyingMerge(), ...overrides }),
+      false,
+      `${label} must not reach the automatic deployment`,
+    );
+  }
+
+  // A fork cannot produce a push event on this repository's protected ref at
+  // all, so the two clauses above are the structural part of that denial. The
+  // guard must additionally never mention the pull-request event or a dispatch
+  // input, which is what would reintroduce the reachability by other means.
+  assert.ok(!guard.includes('pull_request'), 'the deployment guard must not mention pull_request');
+  assert.ok(
+    !guard.includes('github.event.inputs'),
+    'the automatic deployment must not depend on a dispatch input; there is no interim manual deployment',
+  );
+
+  const deploy = deliveryJobs().find(({ name }) => name === 'deploy');
+  assert.match(
+    deploy.body,
+    /needs: \[checks, authorization, qualify, publish, release-plan\]/,
+    'the deployment must depend on the checks, the authorization state, qualification, publication and the vector',
+  );
+  assert.match(
+    deploy.body,
+    /environment: production/,
+    'the production environment gate remains the deployment decision',
+  );
+  // No permission the gated manual apply does not already hold.
+  const permissions = (body) =>
+    (body.match(/\n {4}permissions:\n((?: {6}\S+: \S+\n)+)/)?.[1] ?? '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .sort();
+  assert.deepEqual(
+    permissions(deploy.body),
+    permissions(deliveryJobs().find(({ name }) => name === 'apply').body),
+    'the automatic deployment must hold exactly the permissions the manual apply holds',
+  );
+});
+
+test('the automatic deployment promotes a published digest and rebuilds nothing', () => {
+  const deploy = deliveryJobs().find(({ name }) => name === 'deploy');
+
+  for (const forbidden of [/docker buildx build/, /--push\b/, /:container\b/, /nx run /]) {
+    assert.ok(
+      !forbidden.test(deploy.body),
+      `the deployment must not build an artifact (${forbidden})`,
+    );
+  }
+
+  const verify = deploy.body.slice(
+    stepIndex(deploy.body, 'Resolve and verify the artifacts this commit published'),
+  );
+  assert.match(verify, /gh attestation verify "oci:\/\/\$\{image\}@\$\{digest\}"/);
+  assert.match(
+    verify,
+    /--source-digest "\$SOURCE_COMMIT"/,
+    'provenance must bind the digest to the commit being deployed',
+  );
+  assert.match(
+    verify,
+    /--signer-workflow "\$\{\{ github\.repository \}\}\/\.github\/workflows\/delivery\.yml"/,
+    'provenance must name the exact signer workflow',
+  );
+  assert.match(verify, /--repo "\$\{\{ github\.repository \}\}"/);
+  assert.match(verify, /--source-ref refs\/heads\/main/);
+  assert.match(verify, /--deny-self-hosted-runners/);
+  assert.match(
+    verify,
+    /\[\[ "\$digest" =~ \^sha256:\[0-9a-f\]\{64\}\$ \]\]/,
+    'a tag is not deployable; only a full digest is',
+  );
+
+  // The whole vector is verified before any of it is deployed.
+  assert.ok(
+    stepIndex(deploy.body, 'Resolve and verify the artifacts this commit published') <
+      stepIndex(deploy.body, 'Deploy api'),
+    'nothing may be deployed before every artifact in the vector has been verified',
+  );
+});
+
+test('the automatic deployment never mints a rollback permission', () => {
+  const rollbackSlots = OPERATIONS['service.rollback'].permissionSlots;
+  assert.ok(rollbackSlots.length > 0);
+
+  for (const name of ['release-plan', 'deploy']) {
+    const job = deliveryJobs().find((candidate) => candidate.name === name);
+    for (const slot of rollbackSlots) {
+      assert.ok(!job.body.includes(slot), `the ${name} job names the ${slot} slot`);
+    }
+    assert.ok(
+      !/rollback_revision|rollback\.tfplan/.test(job.body),
+      `the ${name} job must not reach the recovery path; no verified predecessor exists`,
+    );
+  }
+
+  // The forward slot is the catalog's, not a literal invented in the workflow.
+  assert.deepEqual(
+    [...OPERATIONS['service.deploy'].permissionSlots],
+    ['release-forward'],
+    'the forward release slot is the catalog row',
+  );
+});
+
+test('every declared deployment unit has exactly one deploy step group', () => {
+  const deploy = deliveryJobs().find(({ name }) => name === 'deploy');
+  const units = [...declaredDeployments.manifests.values()].sort(
+    (left, right) => left.order - right.order,
+  );
+  assert.ok(units.length > 0, 'expected declared deployment units');
+  assert.ok(
+    units.length <= OPERATIONS['service.deploy'].maxTargets,
+    'the declared units must fit the catalog target bound',
+  );
+
+  for (const manifest of units) {
+    assert.match(
+      deploy.body,
+      new RegExp(`- name: Deploy ${manifest.unit}\\n`),
+      `the deployment has no step for the declared unit "${manifest.unit}"`,
+    );
+    assert.ok(
+      deploy.body.includes(`working-directory: infra/stacks/${manifest.stack}`),
+      `"${manifest.unit}" declares the stack "${manifest.stack}" but the deployment applies another`,
+    );
+    assert.ok(
+      deploy.body.includes(
+        `contains(fromJSON(needs.release-plan.outputs.units), '${manifest.unit}')`,
+      ),
+      `"${manifest.unit}" must deploy only when the planned vector contains it`,
+    );
+  }
+
+  // Nothing deploys that nothing declares.
+  const deployed = [...deploy.body.matchAll(/- name: Deploy ([a-z][a-z0-9-]*)\n/g)].map(
+    ([, unit]) => unit,
+  );
+  assert.deepEqual(
+    deployed.sort(),
+    units.map(({ unit }) => unit).sort(),
+    'the deployment must deploy exactly the declared units',
+  );
+});
+
+test('the deployment follows the declared order and verifies between steps', () => {
+  const deploy = deliveryJobs().find(({ name }) => name === 'deploy');
+  const ordered = [...declaredDeployments.manifests.values()].sort(
+    (left, right) => left.order - right.order,
+  );
+
+  let previousVerification = -1;
+  for (const manifest of ordered) {
+    const applied = stepIndex(deploy.body, `Deploy ${manifest.unit}`);
+    // Declared as `- id: … / name: …`, so this is not a `- name:` step opener.
+    const observed = deploy.body.indexOf(`name: Read the deployed ${manifest.unit} service URI`);
+    const verified = deploy.body.indexOf(`- name: Verify ${manifest.unit} health`);
+    assert.ok(observed > applied, `${manifest.unit} must be applied before its URI is read`);
+    assert.ok(verified > observed, `${manifest.unit} must be read before it is verified`);
+    assert.ok(
+      applied > previousVerification,
+      `${manifest.unit} must not deploy before the unit it follows has been verified`,
+    );
+    previousVerification = verified;
+  }
+
+  // "A coordinated compatible contract change deploys API first, verifies it,
+  // then web": the API's own contract is part of its verification, not only its
+  // readiness.
+  assert.match(
+    deploy.body.slice(deploy.body.indexOf('- name: Verify api health')),
+    /\/v1\/platform\/status/,
+    'the API verification must exercise the published contract',
+  );
+});
+
+test('every automatic deployment probe authenticates to its private service', () => {
+  const deploy = deliveryJobs().find(({ name }) => name === 'deploy');
+
+  for (const manifest of declaredDeployments.manifests.values()) {
+    assert.match(
+      deploy.body,
+      new RegExp(
+        `id: deploy-${manifest.unit}-probe-auth\\n[\\s\\S]*?google-github-actions/auth@[0-9a-f]{40}[\\s\\S]*?token_format: id_token\\n\\s+id_token_audience: \\$\\{\\{ steps\\.deploy-${manifest.unit}-service\\.outputs\\.uri \\}\\}`,
+      ),
+      `the ${manifest.unit} probe must use an ID token bound to that service's URI`,
+    );
+  }
+
+  const probes = deploy.body
+    .split('\n')
+    .filter((line) => /\/health\/|\/v1\/platform\/status/.test(line));
+  const curls = deploy.body.match(/curl -sS[\s\S]*?"\$\{SERVICE_URI\}[^"]*"/g) ?? [];
+  assert.equal(curls.length, probes.length, 'every deployment probe must target the service URI');
+  for (const curl of curls) {
+    assert.match(
+      curl,
+      /-H @-/,
+      'no deployment probe may be anonymous or pass the token as an argument',
+    );
+  }
+  assert.doesNotMatch(
+    deploy.body,
+    /(echo|-H\s+["'][^@])[^\n]*PROBE_ID_TOKEN/,
+    'the deployment must never print the probe token or pass it on a command line',
+  );
+});
+
+test('the release vector is computed without any provider authority', () => {
+  const plan = deliveryJobs().find(({ name }) => name === 'release-plan');
+  assert.ok(plan, 'delivery must define a release vector job');
+
+  assert.ok(!/id-token:\s*write/.test(plan.body), 'the vector job must not receive an OIDC token');
+  assert.ok(!/environment:/.test(plan.body), 'the vector job must hold no environment authority');
+  assert.ok(!/secrets\./.test(plan.body), 'the vector job must read no secret');
+  assert.ok(!/vars\.GCP_/.test(plan.body), 'the vector job must read no provider input');
+  assert.match(plan.body, /permissions:\n {6}contents: read/);
+
+  // Declared manifests, not a table in the workflow.
+  assert.match(
+    plan.body,
+    /pnpm nx show projects --affected --base="\$NX_BASE" --head=HEAD --json/,
+    'the affected set must come from the workspace project graph',
+  );
+  assert.match(plan.body, /node tools\/release\/plan-release\.mjs --affected affected\.json/);
+  for (const manifest of declaredDeployments.manifests.values()) {
+    assert.ok(
+      !new RegExp(`\\b${manifest.unit}\\b`).test(plan.body),
+      `the vector job names "${manifest.unit}"; the vector must come from the manifests, not the workflow`,
+    );
+  }
+});
+
+test('an undecidable affected range blocks the release rather than guessing', () => {
+  const plan = deliveryJobs().find(({ name }) => name === 'release-plan');
+  const range = plan.body.slice(
+    stepIndex(plan.body, 'Establish the reviewed predecessor of this push'),
+  );
+
+  assert.match(
+    range,
+    /\[\[ ! "\$PREVIOUS_HEAD" =~ \^\[0-9a-f\]\{40\}\$ \]\]/,
+    'a push with no previous commit must not be planned from',
+  );
+  assert.match(
+    range,
+    /git merge-base --is-ancestor "\$PREVIOUS_HEAD" HEAD/,
+    'a rewritten history must not silently widen or narrow the affected range',
+  );
+  assert.ok(
+    !/hash-object -t tree/.test(plan.body),
+    'the release vector must not fall back to "everything changed"; that would redeploy an untouched service',
+  );
+});
+
+test('the packaged journey gates the release inside an existing required check', () => {
+  // The required check names are the protection rules the maintainer owns.
+  // Adding a fifth job here would leave the journey ungated until those rules
+  // changed, so it must run inside one of these four.
+  const required = new Set(declaredRequiredChecks());
+  assert.ok(required.has('container web'), 'the journey runs in the container web check');
+
+  const containers = ciJob('containers');
+  assert.ok(containers, 'ci.yml must still define the container job');
+  assert.match(
+    containers,
+    /- name: Run the packaged-artifact release journey\n {8}if: matrix\.journey\n/,
+    'the packaged journey must run inside the container job',
+  );
+  assert.match(
+    containers,
+    /MONEY_NOODLE_RELEASE_JOURNEY: '1'/,
+    'the journey must be enabled explicitly, so a skipped journey is detectable',
+  );
+  assert.match(
+    containers,
+    /run: node --test tools\/release\.test\.mjs/,
+    'the journey must be reached through the declared discovery entry point',
+  );
+  assert.match(containers, /- name: Install the pinned journey browser\n/);
+
+  // Both packaged artifacts, and neither rebuilt for the release.
+  assert.match(containers, /MONEY_NOODLE_JOURNEY_API_IMAGE: money-noodle\/platform-api:local/);
+  assert.match(containers, /MONEY_NOODLE_JOURNEY_WEB_IMAGE: \$\{\{ matrix\.image \}\}/);
+
+  // Still credential-free, so a fork's pull request runs it unchanged.
+  assert.match(
+    ci,
+    /# A pull request from a fork runs here[\s\S]*?permissions:\n {6}contents: read/,
+    'the container job must stay read-only',
+  );
+  assert.ok(
+    !/id-token:\s*write/.test(ci),
+    'no ci.yml job may hold provider authority, journey or not',
+  );
+});
+
+test('the repository gate discovers the nested release suite', () => {
+  const manifest = JSON.parse(read(join(repoRoot, 'package.json')));
+  assert.match(
+    manifest.scripts['verify:foundation'],
+    /node --test tools\/\*\.test\.mjs/,
+    'the foundation gate must discover tools/*.test.mjs, which is what attaches the release suite',
+  );
+  assert.ok(
+    existsSync(join(repoRoot, 'tools', 'release.test.mjs')),
+    'the release discovery entry point must exist',
+  );
+
+  // Exactly one Playwright dependency, exact-version, test-only, at the root.
+  const version = manifest.devDependencies.playwright;
+  assert.match(
+    version,
+    /^\d+\.\d+\.\d+$/u,
+    'the journey browser must be pinned to an exact version',
+  );
+  assert.equal(manifest.dependencies, undefined, 'the root manifest ships no runtime dependency');
+  for (const project of ['apps/web', 'services/platform-api', 'packages/platform-api-client']) {
+    const projectManifest = JSON.parse(read(join(repoRoot, project, 'package.json')));
+    for (const field of ['dependencies', 'devDependencies']) {
+      for (const name of Object.keys(projectManifest[field] ?? {})) {
+        assert.ok(
+          !name.startsWith('playwright') && !name.startsWith('@playwright/'),
+          `${project} declares ${name}; the journey browser is a root test-only dependency`,
+        );
+      }
+    }
   }
 });

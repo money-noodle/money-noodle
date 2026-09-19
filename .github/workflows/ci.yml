@@ -135,6 +135,12 @@ jobs:
             port: '3000'
             contract_path: /
             contract_expect: '<!DOCTYPE html'
+            # The packaged-artifact journey needs both images, so it runs once,
+            # in this leg. It stays inside an existing required check because
+            # `delivery.yml` qualifies a release on exactly these four check
+            # names; a fifth would have to be added to the protection rules
+            # before it could gate anything.
+            journey: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -242,6 +248,41 @@ jobs:
           exit-code: '1'
           ignore-unfixed: true
           severity: HIGH,CRITICAL
+
+      # The other half of the journey's pair. Built here rather than carried
+      # between jobs, because an artifact that crosses a job boundary is no
+      # longer obviously the artifact this job built and scanned.
+      - name: Build the API artifact the journey runs against
+        if: matrix.journey
+        env:
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          SOURCE_REF: ${{ github.ref }}
+          BUILD_WORKFLOW: ${{ github.workflow_ref }}
+          BUILD_RUN: ${{ github.run_id }}/${{ github.run_attempt }}
+          ARTIFACT_VERSION: git-${{ github.sha }}
+        run: pnpm nx run platform-api:container
+
+      # Exact-version and lockfile-pinned: the browser revision is the one this
+      # Playwright release declares, not whatever a runner image happens to
+      # carry. Nothing here needs a credential, so a fork's pull request runs it
+      # exactly as `main` does.
+      - name: Install the pinned journey browser
+        if: matrix.journey
+        run: pnpm exec playwright install --with-deps chromium
+
+      # Drives the images this job built: accessible state, the same
+      # API-provided timestamp the page received, and status unknown for every
+      # upstream failure family. Failure fails this required check.
+      - name: Run the packaged-artifact release journey
+        if: matrix.journey
+        env:
+          MONEY_NOODLE_RELEASE_JOURNEY: '1'
+          MONEY_NOODLE_JOURNEY_API_IMAGE: money-noodle/platform-api:local
+          MONEY_NOODLE_JOURNEY_WEB_IMAGE: ${{ matrix.image }}
+          MONEY_NOODLE_JOURNEY_COMMIT: ${{ github.sha }}
+          MONEY_NOODLE_JOURNEY_ARTIFACT_VERSION: git-${{ github.sha }}
+        run: node --test tools/release.test.mjs
 
   secrets:
     name: secret scan
