@@ -17,7 +17,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:https';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /** How the fixture answers the packaged web artifact's next request. */
@@ -102,6 +102,15 @@ export function createJourneyCertificate(directory, hostname = FIXTURE_HOSTNAME)
     '-out',
     certificate,
   ]);
+
+  // The packaged artifacts run as their own unprivileged user, and a temporary
+  // directory is private to its creator, so the mounted CA would be unreadable
+  // inside the container. Only the certificates are opened up — a certificate
+  // is public by definition. Both private keys stay owner-only, and neither
+  // ever leaves this directory, which is removed with the run.
+  chmodSync(directory, 0o755);
+  for (const path of [caCertificate, certificate]) chmodSync(path, 0o644);
+  for (const path of [caKey, key]) chmodSync(path, 0o600);
 
   return { caCertificate, certificate, hostname, key };
 }

@@ -28,17 +28,33 @@ function readAffected(source) {
     throw new ReleasePlanError('invalid-affected-input', '--affected <file|-> is required.');
   }
   const raw = readFileSync(source === '-' ? 0 : source, 'utf8').trim();
-  let parsed;
-  try {
-    parsed = JSON.parse(raw === '' ? '[]' : raw);
-  } catch {
-    throw new ReleasePlanError('invalid-affected-input', 'The affected set is not valid JSON.');
+  if (raw === '') return [];
+
+  // `nx show projects --affected --json` prints a bare array, but a task runner
+  // is entitled to print a banner or a daemon notice alongside it. Parse the
+  // whole text first and fall back to the last standalone JSON array line;
+  // anything else refuses rather than being interpreted generously.
+  const candidates = [
+    raw,
+    ...raw
+      .split('\n')
+      .map((line) => line.trim())
+      .reverse(),
+  ];
+  for (const candidate of candidates) {
+    if (!candidate.startsWith('[') && !candidate.startsWith('{')) continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+    if (Array.isArray(parsed)) return parsed;
+    // Accept the `{ projects: [...] }` envelope too, rather than depending on
+    // one shape of a tool's output.
+    if (Array.isArray(parsed.projects)) return parsed.projects;
   }
-  // `nx show projects --affected --json` prints a bare array; accept the
-  // `{ projects: [...] }` envelope too rather than depending on one shape.
-  if (Array.isArray(parsed)) return parsed;
-  if (Array.isArray(parsed?.projects)) return parsed.projects;
-  throw new ReleasePlanError('invalid-affected-input', 'The affected set is not an array.');
+  throw new ReleasePlanError('invalid-affected-input', 'The affected set is not a JSON array.');
 }
 
 export function main(argv = process.argv.slice(2), env = process.env) {
