@@ -455,6 +455,22 @@ test('services scale to zero, bounding idle cost', () => {
   );
 });
 
+test('services default to two maximum instances, bounding saturation cost', () => {
+  const cloudRun = read(join(infraRoot, 'modules', 'cloud-run-service', 'variables.tf'));
+  assert.match(
+    cloudRun,
+    /max_instances"[\s\S]*?default\s*=\s*2\b/,
+    'maximum instances must default to two per service (accepted recommendation Q4a of #75)',
+  );
+  for (const stack of ['api', 'web']) {
+    assert.doesNotMatch(
+      read(join(infraRoot, 'stacks', stack, 'main.tf')),
+      /\bmax_instances\s*=/,
+      `the ${stack} stack must not override the bounded default`,
+    );
+  }
+});
+
 test('no DNS resource is declared, so Vercel remains authoritative for noodle.money', () => {
   // Issue #14 excludes any change to existing Vercel DNS, and ADR-0004 defers the
   // domain cutover to a separately reviewed plan. Interim validation targets
