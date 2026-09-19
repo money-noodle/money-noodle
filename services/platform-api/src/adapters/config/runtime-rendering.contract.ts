@@ -64,9 +64,13 @@ describe.each(api)('evaluated production API', (rendering) => {
     'MONEY_NOODLE_COMMIT',
     'MONEY_NOODLE_SERVICE',
     'MONEY_NOODLE_ENVIRONMENT',
-  ])('refuses absent or empty evaluated %s before startup', (name) => {
+  ])('refuses absent or empty evaluated %s before startup', async (name) => {
+    // The composition is async since telemetry joined it, so a refusal is a
+    // rejection, never a synchronous throw.
     for (const value of [undefined, '']) {
-      expect(() => createConfiguredServer({ ...rendering.env, [name]: value })).toThrow(name);
+      await expect(createConfiguredServer({ ...rendering.env, [name]: value })).rejects.toThrow(
+        name,
+      );
     }
   });
 });
