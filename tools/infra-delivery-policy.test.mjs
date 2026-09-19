@@ -321,6 +321,52 @@ test('deployment verifies provenance, health, and the public contract', () => {
   );
 });
 
+test('post-apply and post-rollback probes authenticate to the private service', () => {
+  for (const name of ['apply', 'rollback']) {
+    const job = deliveryJobs().find((candidate) => candidate.name === name);
+    assert.ok(job, `expected a ${name} job`);
+
+    const probes = job.body
+      .split('\n')
+      .filter((line) => /\/health\/|\/v1\/platform\/status/.test(line));
+    assert.ok(probes.length > 0, `the ${name} job must probe the service it changed`);
+
+    assert.match(
+      job.body,
+      new RegExp(
+        `id: ${name}-probe-auth\\n[\\s\\S]*?google-github-actions/auth@[0-9a-f]{40}[\\s\\S]*?token_format: id_token\\n\\s+id_token_audience: \\$\\{\\{ steps\\.${name}-service\\.outputs\\.uri \\}\\}`,
+      ),
+      `the ${name} job must mint an ID token bound to the service URI as its audience. Services are created private, so an anonymous probe is refused.`,
+    );
+    assert.match(
+      job.body,
+      new RegExp(
+        `PROBE_ID_TOKEN: \\$\\{\\{ steps\\.${name}-probe-auth\\.outputs\\.id_token \\}\\}`,
+      ),
+      `the ${name} probe must receive the token through its environment`,
+    );
+
+    const curls = job.body.match(/curl -sS[\s\S]*?"\$\{SERVICE_URI\}[^"]*"/g) ?? [];
+    assert.equal(
+      curls.length,
+      probes.length,
+      `every ${name} probe must target the applied service URI`,
+    );
+    for (const curl of curls) {
+      assert.match(
+        curl,
+        /-H @-/,
+        `no ${name} probe may be anonymous, and the token must not be a process argument`,
+      );
+    }
+    assert.doesNotMatch(
+      job.body,
+      /(echo|-H\s+["'][^@])[^\n]*PROBE_ID_TOKEN/,
+      `the ${name} job must never print the probe token or pass it on a command line`,
+    );
+  }
+});
+
 test('deployment is by digest and a tag is refused before the provider is reached', () => {
   assert.match(
     delivery,

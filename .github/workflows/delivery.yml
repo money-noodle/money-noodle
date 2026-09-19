@@ -1183,19 +1183,46 @@ jobs:
           tofu apply -input=false -lock-timeout=5m -auto-approve stack.tfplan
           rm -f stack.tfplan
 
-      - name: Verify health and the public contract
+      - id: apply-service
+        name: Read the applied service URI
         if: github.event.inputs.stack != 'platform'
         working-directory: infra/stacks/${{ github.event.inputs.stack }}
         run: |
           set -euo pipefail
-          uri="$(tofu output -raw contract_service_uri)"
+          echo "uri=$(tofu output -raw contract_service_uri)" >> "$GITHUB_OUTPUT"
+
+      # The service is created private, so an anonymous probe is refused. Mint a
+      # short-lived ID token for the same federated deployer, bound to this
+      # service as its audience. The action masks the token.
+      - id: apply-probe-auth
+        if: github.event.inputs.stack != 'platform'
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+          audience: money-noodle-delivery
+          create_credentials_file: false
+          token_format: id_token
+          id_token_audience: ${{ steps.apply-service.outputs.uri }}
+
+      - name: Verify health and the public contract
+        if: github.event.inputs.stack != 'platform'
+        env:
+          SERVICE_URI: ${{ steps.apply-service.outputs.uri }}
+          PROBE_ID_TOKEN: ${{ steps.apply-probe-auth.outputs.id_token }}
+        run: |
+          set -euo pipefail
+          # The header is read from stdin so the token is never a process argument.
           for path in /health/live /health/ready; do
-            code="$(curl -sS -o /dev/null -w '%{http_code}' --retry 6 --retry-delay 5 \
-              --retry-all-errors --max-time 20 "${uri}${path}")"
+            code="$(printf 'Authorization: Bearer %s\n' "$PROBE_ID_TOKEN" |
+              curl -sS -o /dev/null -w '%{http_code}' --retry 6 --retry-delay 5 \
+                --retry-all-errors --max-time 20 -H @- "${SERVICE_URI}${path}")"
             [[ "$code" == '200' ]] || { echo "${path} returned ${code}" >&2; exit 1; }
           done
           if [[ '${{ github.event.inputs.stack }}' == 'api' ]]; then
-            curl -sSf --max-time 20 "${uri}/v1/platform/status" | jq -e '.state and .asOf' > /dev/null
+            printf 'Authorization: Bearer %s\n' "$PROBE_ID_TOKEN" |
+              curl -sSf --max-time 20 -H @- "${SERVICE_URI}/v1/platform/status" |
+              jq -e '.state and .asOf' > /dev/null
           fi
 
       - name: Report the deployed artifact
@@ -1380,11 +1407,31 @@ jobs:
           tofu apply -input=false -lock-timeout=5m -auto-approve rollback.tfplan
           rm -f rollback.tfplan
 
-      - name: Verify the rolled-back service is healthy
+      - id: rollback-service
+        name: Read the rolled-back service URI
         working-directory: infra/stacks/${{ github.event.inputs.stack }}
         run: |
           set -euo pipefail
-          uri="$(tofu output -raw contract_service_uri)"
-          code="$(curl -sS -o /dev/null -w '%{http_code}' --retry 6 --retry-delay 5 \
-            --retry-all-errors --max-time 20 "${uri}/health/ready")"
+          echo "uri=$(tofu output -raw contract_service_uri)" >> "$GITHUB_OUTPUT"
+
+      # Same audience-bound ID token as the apply probe: the service is private.
+      - id: rollback-probe-auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+          audience: money-noodle-delivery
+          create_credentials_file: false
+          token_format: id_token
+          id_token_audience: ${{ steps.rollback-service.outputs.uri }}
+
+      - name: Verify the rolled-back service is healthy
+        env:
+          SERVICE_URI: ${{ steps.rollback-service.outputs.uri }}
+          PROBE_ID_TOKEN: ${{ steps.rollback-probe-auth.outputs.id_token }}
+        run: |
+          set -euo pipefail
+          code="$(printf 'Authorization: Bearer %s\n' "$PROBE_ID_TOKEN" |
+            curl -sS -o /dev/null -w '%{http_code}' --retry 6 --retry-delay 5 \
+              --retry-all-errors --max-time 20 -H @- "${SERVICE_URI}/health/ready")"
           [[ "$code" == '200' ]] || { echo "readiness returned ${code}" >&2; exit 1; }
