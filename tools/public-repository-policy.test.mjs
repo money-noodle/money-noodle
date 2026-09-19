@@ -791,7 +791,10 @@ test('temporary integration exception is maintainer-only, exact-head, evidenced,
   );
   assert.match(delivery, /cannot invoke or request the temporary sole-maintainer exception/i);
   assert.match(delivery, /maintainer personally uses the environment administrator bypass/i);
-  assert.match(delivery, /No agent, workload identity or automation may use, request or assume that bypass/i);
+  assert.match(
+    delivery,
+    /No agent, workload identity or automation may use, request or assume that bypass/i,
+  );
   assert.match(versionControl, /never available to an agent, workload identity or automation/i);
   assert.match(versionControl, /never authorizes a failed-check bypass, direct or force push/i);
   assert.doesNotMatch(versionControl, /merge only after review and required checks/i);
