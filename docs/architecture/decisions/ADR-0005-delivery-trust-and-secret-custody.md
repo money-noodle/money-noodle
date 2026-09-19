@@ -3,6 +3,7 @@
 > **Status:** Working
 > **Date accepted:** 2026-08-29
 > **Repository controls revised:** 2026-08-30
+> **Amended:** 2026-09-19 — identity creation and project-level grants are maintainer-applied
 > **Owners:** Platform foundation; accepted by maintainer
 > **Related architecture:** [`../overview.md`](../overview.md)
 > **Evidence:** [`../../operations/deployment-composition.md`](../../operations/deployment-composition.md)
@@ -42,13 +43,53 @@ Humans retain explicit scoped approval of production effects, provider/domain ac
 
 | Workload identity | May | May not |
 | --- | --- | --- |
-| **Deployer** (CI, federated) | Push images to the registry, read and write remote infrastructure state, create and update the declared infrastructure, deploy service revisions, reassign revision traffic | Read tenant data, read secret values that runtime workloads consume, serve requests, act interactively |
+| **Deployer** (CI, federated) | Push images to the registry, read and write remote infrastructure state, create and update the declared infrastructure, deploy service revisions, reassign revision traffic, bind service-level `run.invoker` | Create, delete or re-grant an identity, set project IAM, read tenant data, read secret values that runtime workloads consume, serve requests, act interactively |
 | **Web workload identity** | Call the API origin, export telemetry | Read the registry, read infrastructure state, read any secret, reach a database, run jobs, hold provider authority |
 | **API workload identity** | Read only the secrets it is explicitly granted, export telemetry, serve requests | Write the registry, write infrastructure state, deploy anything, read another service's secrets or future schema |
 
 This table describes the existing unapplied foundation identity split, not permission to reuse one mutation token for every M1 effect. The accepted [catalog v2](../../operations/production-control-plane.md#m1-catalog-v2--selected-not-enabled) further separates operation-specific executors, independent verification, journal writer, witness writer and the no-OIDC source publisher. No additional service or durable credential is selected. Developer access is separate and least-privilege. No workload identity in this design holds funded authority, because none exists in the current platform.
 
 Every resource declared under `infra/` names exactly one owning execution identity, with a recorded justification for the permission, in [`tools/delivery/execution-identities.mjs`](../../../tools/delivery/execution-identities.mjs). A static test derives the resource addresses from the committed configuration and fails on an unowned resource, an orphaned claim, or an identity claiming an operation its catalog row does not permit. Creating a service and exposing it therefore have different owners under different approval classes, and every binding that establishes the deployer's own authority belongs to the human bootstrap principal rather than to any workload identity. The [provider-disabled adapters](../../../tools/delivery/README.md) alongside it implement the grant, journal and witness contracts and enforce this conjunction — exact `refs/heads/main`, exact `.github/workflows/delivery.yml`, the closed event set, and no mutation for the scheduled read-only path — before any token exchange. They create no identity, ref, issue or provider path; federation remains unconfigured and `infra/` remains unapplied.
+
+### Accepted amendment 2026-09-19: identities and project-level grants are maintainer-applied
+
+The first authorized service deploy planned seven resources for `api` and failed
+on the first, with `IAM_PERMISSION_DENIED` on `iam.serviceAccounts.create`.
+Nothing was created. The cause was a contradiction in this record's own
+implementation rather than a misconfiguration: `modules/cloud-run-service` asked
+the deployer to create each runtime service account and to grant it five
+project-level telemetry roles, while the bootstrap validation above refuses the
+deployer both `roles/resourcemanager.projectIamAdmin` and every
+identity-administration role. Under this decision the deployer could never have
+performed that apply, and the only ways to make it work were to grant CI the
+broad rights this record rejects, or to move the work.
+
+The maintainer chose to move the work. **Creating an identity and granting it a
+project role are bootstrap operations, performed by the human principal.** The
+`bootstrap` stack now creates one runtime service account per deployable service
+and grants each exactly the telemetry write roles it needs, and publishes their
+emails as a non-sensitive contract output. The `api` and `web` stacks read that
+contract and declare no `google_service_account` and no `google_project_iam_member`
+at all. **The delivery pipeline manages Cloud Run resources and service-level IAM
+bindings, and nothing else.**
+
+The deployer's Cloud Run role becomes `roles/run.admin` in place of
+`roles/run.developer`, because a service is created private and its named
+invokers are service-level `roles/run.invoker` bindings that `run.developer`
+cannot set. The role is confined to Cloud Run. It grants no project IAM and no
+identity administration, and the forbidden-role set above is unchanged: no owner,
+no editor, no project-IAM administration, no service-account administration, no
+Secret Manager role. The deployer keeps `roles/iam.serviceAccountUser`, so it may
+*act as* the runtime identities it deploys without being able to create, delete
+or re-grant them.
+
+This narrows the deployer rather than widening it, and it makes the separation
+mechanical: an identity the pipeline cannot create is an identity the pipeline
+cannot quietly re-permission. It changes no gate — the environment approval, the
+typed apply confirmation and the provenance requirement are untouched — and it
+applies nothing. The bootstrap re-apply and the service applies remain maintainer
+operations under the existing #75 approvals; `../../../infra/bootstrap.md`
+records the exact delta to expect.
 
 ### Sole-principal target and current safeguards
 
@@ -97,6 +138,7 @@ Rejected. It contradicts default-deny and makes the CI workload identity the mos
 - No long-lived cloud credential exists to leak, rotate, or forget.
 - Compromise of the GitHub account does not by itself yield standing provider access, because tokens are short-lived and trust is ref-constrained.
 - Separate workload identities make blast radius explicit and mechanically testable.
+- CI cannot create or re-permission an identity at all, so the separation above is a property of what the deployer can reach rather than of what its configuration currently says.
 - Digest-plus-attestation deployment makes "what is running" answerable from the commit.
 - Secret custody exists before the first secret, so no capability has to improvise it.
 
@@ -104,6 +146,7 @@ Rejected. It contradicts default-deny and makes the CI workload identity the mos
 
 - Federation setup is more work than pasting a key, and misconfigured trust conditions fail in confusing ways.
 - The trust condition must be revisited whenever branch protection, environments, or the deployment ref change.
+- Adding a deployable service now needs a bootstrap re-apply before its first service apply, because its runtime identity must exist first. That is a deliberate handoff to the human principal, and it is one more step than a self-service pipeline would take.
 - Provider choice is constrained by federation support, which is exactly why this decision drove ADR-0004.
 - Attestation verification adds a CI step and a failure mode that can block an otherwise good deployment.
 
