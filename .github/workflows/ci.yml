@@ -115,14 +115,26 @@ jobs:
     needs: foundation
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    # A pull request from a fork runs here. It builds and scans an image and
+    # gets nothing else: no provider token, no environment, no write.
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         include:
           - project: platform-api
             image: money-noodle/platform-api:local
+            service: platform-api
+            port: '3001'
+            contract_path: /v1/platform/status
+            contract_expect: '"schemaVersion":"1"'
           - project: web
             image: money-noodle/web:local
+            service: web
+            port: '3000'
+            contract_path: /
+            contract_expect: '<!DOCTYPE html'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -151,7 +163,77 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build attributable OCI image with provenance and SBOM
+        env:
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          SOURCE_REF: ${{ github.ref }}
+          BUILD_WORKFLOW: ${{ github.workflow_ref }}
+          BUILD_RUN: ${{ github.run_id }}/${{ github.run_attempt }}
+          ARTIFACT_VERSION: git-${{ github.sha }}
         run: pnpm nx run ${{ matrix.project }}:container
+
+      # The image this job scans is the image this job just proved serves its
+      # runtime contract. The same acceptance runs against the release candidate
+      # in `delivery.yml` before publication, so a container that cannot start
+      # is caught on the pull request rather than at release time.
+      - name: Prove the built image serves its runtime contract
+        env:
+          IMAGE: ${{ matrix.image }}
+          ARTIFACT_VERSION: git-${{ github.sha }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          SERVICE_NAME: ${{ matrix.service }}
+          SERVICE_PORT: ${{ matrix.port }}
+          CONTRACT_PATH: ${{ matrix.contract_path }}
+          CONTRACT_EXPECT: ${{ matrix.contract_expect }}
+        run: |
+          set -euo pipefail
+
+          # A reserved-for-testing origin: the probe must never depend on, or
+          # reach, a real service (RFC 2606).
+          container="$(
+            docker run --detach --rm \
+              --env NODE_ENV=production \
+              --env MONEY_NOODLE_SERVICE="$SERVICE_NAME" \
+              --env MONEY_NOODLE_ENVIRONMENT=production \
+              --env MONEY_NOODLE_COMMIT="$SOURCE_COMMIT" \
+              --env ARTIFACT_VERSION="$ARTIFACT_VERSION" \
+              --env PLATFORM_API_ORIGIN='https://platform-api.invalid' \
+              --publish "127.0.0.1:0:${SERVICE_PORT}" \
+              "$IMAGE"
+          )"
+          trap 'docker stop "$container" >/dev/null 2>&1 || true' EXIT
+
+          health='starting'
+          for _ in $(seq 1 60); do
+            health="$(docker inspect --format '{{.State.Health.Status}}' "$container")"
+            [[ "$health" == 'healthy' ]] && break
+            if [[ "$health" == 'unhealthy' ]]; then
+              echo 'The built image reported itself unhealthy.' >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          if [[ "$health" != 'healthy' ]]; then
+            echo 'The built image never became healthy under the production runtime contract.' >&2
+            exit 1
+          fi
+
+          port="$(docker port "$container" "${SERVICE_PORT}/tcp" | head -n 1 | sed 's/.*://')"
+          ready="$(curl --fail --silent --show-error "http://127.0.0.1:${port}/health/ready")"
+          grep -Fq '"status":"ready"' <<< "$ready"
+          grep -Fq "\"version\":\"$ARTIFACT_VERSION\"" <<< "$ready"
+
+          contract="$(curl --fail --silent --show-error "http://127.0.0.1:${port}${CONTRACT_PATH}")"
+          grep -Fq "$CONTRACT_EXPECT" <<< "$contract"
+
+          revision="$(
+            docker image inspect \
+              --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE"
+          )"
+          if [[ "$revision" != "$SOURCE_COMMIT" ]]; then
+            echo 'The built image does not carry this run'"'"'s source commit.' >&2
+            exit 1
+          fi
 
       - name: Scan image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
