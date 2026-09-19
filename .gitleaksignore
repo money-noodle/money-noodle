@@ -1,0 +1,2 @@
+# Synthetic credential-shaped test fixture on the #70 claim branch; assembled at runtime from the next commit on. Not a secret.
+9de402ac7f4ab6e1f366ef9d04a4a03a8b31a5ff:tools/delivery-control-policy.test.mjs:generic-api-key:1126
