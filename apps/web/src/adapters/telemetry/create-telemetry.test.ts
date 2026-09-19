@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { AddressInfo } from 'node:net';
+import type { AddressInfo } from 'node:net';
 
 import { SpanKind, trace } from '@opentelemetry/api';
 import { InMemoryLogRecordExporter, type ReadableLogRecord } from '@opentelemetry/sdk-logs';
