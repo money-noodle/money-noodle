@@ -145,7 +145,7 @@ Rejected. It contradicts default-deny and makes the CI workload identity the mos
 ### Negative
 
 - Federation setup is more work than pasting a key, and misconfigured trust conditions fail in confusing ways.
-- The trust condition must be revisited whenever branch protection, environments, or the deployment ref change.
+- The trust condition must be revisited whenever branch protection or the deployment ref changes. It does not depend on which jobs declare a GitHub environment, because no `attribute.environment` is mapped — removing the `production` gate from the routine deploy (#189, 2026-09-20) therefore needed no change to it. The other side of that is that an environment can never be the credential boundary here; the job guard, per-commit qualification, provenance verification and exposure guard are.
 - Adding a deployable service now needs a bootstrap re-apply before its first service apply, because its runtime identity must exist first. That is a deliberate handoff to the human principal, and it is one more step than a self-service pipeline would take.
 - Provider choice is constrained by federation support, which is exactly why this decision drove ADR-0004.
 - Attestation verification adds a CI step and a failure mode that can block an otherwise good deployment.
