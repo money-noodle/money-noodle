@@ -2037,10 +2037,13 @@ test('the automatic deployment runs for a qualifying merge and for nothing else'
     /needs: \[checks, authorization, qualify, publish, release-plan\]/,
     'the deployment must depend on the checks, the authorization state, qualification, publication and the vector',
   );
-  assert.match(
-    deploy.body,
-    /environment: production/,
-    'the production environment gate remains the deployment decision',
+  // A routine deploy declares no environment: the pull-request review of the
+  // merge is its approval (#189). Anchored to job-level indentation, so neither
+  // a step-level `env:` nor the `environment_reviewers_verified` clause in the
+  // guard above can satisfy or defeat it.
+  assert.ok(
+    !/\n {4}environment:/u.test(deploy.body),
+    'a routine deploy must declare no environment; the gate stays on every dispatched operation (#189)',
   );
   // No permission the gated manual apply does not already hold.
   const permissions = (body) =>
@@ -2746,4 +2749,209 @@ test('exposing a service stays a different operation from creating it', () => {
   assert.equal(exposure.catalogOperation, 'workload.access.change');
   assert.notEqual(exposure.identity, service.identity);
   assert.notEqual(exposure.catalogOperation, service.catalogOperation);
+});
+
+// ---------------------------------------------------------------------------
+// Where the production gate applies, now that a routine deploy does not reach
+// it (#189).
+//
+// A *routine deploy* is the deploy of `web` and/or `api` that an ordinary code
+// merge to `main` triggers through the push Delivery run: a new image digest on
+// the same infrastructure, under the same access rules. A *non-routine
+// operation* is one a person dispatches — `apply`, `rollback`, or a
+// public-access change. Milestone #77 asks for no second routine deployment
+// approval; every non-routine operation keeps the gate.
+//
+// These rules are derived from the workflow rather than written as a list of
+// job names, so a dispatched mutating job added later cannot arrive ungated.
+// ---------------------------------------------------------------------------
+
+/** A job's guard as one line, in either the block or the inline form. */
+function guardTextOf(body) {
+  const block = body.match(/\n {4}if: >-\n([\s\S]*?)\n {4}\S/u)?.[1];
+  const inline = body.match(/\n {4}if: ([^\n]*)/u)?.[1];
+  return (block ?? inline ?? '').replace(/\s+/gu, ' ').trim();
+}
+
+/** Splits a guard on `&&` at parenthesis depth zero. */
+function topLevelConjuncts(guard) {
+  const clauses = [];
+  let depth = 0;
+  let current = '';
+  for (let index = 0; index < guard.length; index += 1) {
+    const character = guard[index];
+    if (character === '(') depth += 1;
+    if (character === ')') depth -= 1;
+    if (depth === 0 && guard.startsWith('&&', index)) {
+      clauses.push(current.trim());
+      current = '';
+      index += 1;
+      continue;
+    }
+    current += character;
+  }
+  clauses.push(current.trim());
+  return clauses.filter(Boolean);
+}
+
+const runsInfrastructureApply = (body) => /\n {10}tofu apply\b/u.test(body);
+const declaresAnyEnvironment = (body) => /\n {4}environment:/u.test(body);
+const declaresProductionEnvironment = (body) => /\n {4}environment: production\n/u.test(body);
+
+test('every dispatched mutating job keeps the production gate', () => {
+  // Derived, not enumerated: whatever a person dispatches that can apply
+  // infrastructure must wait at the gate, including a job nobody has written
+  // yet.
+  const dispatched = deliveryJobs().filter(
+    ({ body }) =>
+      guardTextOf(body).includes("github.event_name == 'workflow_dispatch'") &&
+      runsInfrastructureApply(body),
+  );
+  assert.ok(
+    dispatched.length >= 2,
+    'expected the dispatched apply and rollback paths to be found by derivation',
+  );
+
+  for (const job of dispatched) {
+    assert.ok(
+      declaresProductionEnvironment(job.body),
+      `job "${job.name}" is dispatched and applies infrastructure, so it must declare the production environment (#189 removed the gate from routine deploys only)`,
+    );
+  }
+
+  // The apply job carries both typed phrases, so both reach the same gate.
+  const applyGuard = jobGuard('apply');
+  for (const phrase of ['APPLY-TO-PRODUCTION', 'CHANGE-PUBLIC-ACCESS']) {
+    assert.ok(
+      applyGuard.includes(`github.event.inputs.confirmation == '${phrase}'`),
+      `the dispatched apply must still recognise the ${phrase} phrase`,
+    );
+  }
+  assert.ok(dispatched.some(({ name }) => name === 'apply'));
+  assert.ok(dispatched.some(({ name }) => name === 'rollback'));
+});
+
+test('exactly one job applies infrastructure without an environment', () => {
+  const ungated = deliveryJobs()
+    .filter(({ body }) => runsInfrastructureApply(body) && !declaresAnyEnvironment(body))
+    .map(({ name }) => name)
+    .sort();
+  assert.deepEqual(
+    ungated,
+    ['deploy'],
+    'only the routine deploy may apply infrastructure with no environment; anything else needs the gate or is not an apply path',
+  );
+
+  // And it is still the merge-triggered path, not something that acquired the
+  // name later: no dispatch anywhere in its guard.
+  const guard = jobGuard('deploy');
+  assert.ok(guard.includes("github.event_name == 'push'"));
+  assert.ok(!guard.includes('workflow_dispatch'));
+});
+
+test('no job reachable from a pull request can obtain provider authority', () => {
+  // The routine deploy is ungated, so the question of who else can mint the
+  // same identity matters more than before. Every privileged job must carry
+  // `github.ref == 'refs/heads/main'` as a *top-level* conjunct: on a pull
+  // request `github.ref` is `refs/pull/N/merge`, so one such clause denies the
+  // whole guard however the rest of it is shaped. Checked structurally because
+  // `plan`'s guard contains a parenthesised `||` that the tiny evaluator above
+  // deliberately does not parse.
+  const privileged = deliveryJobs().filter(({ body }) => /id-token:\s*write/u.test(body));
+  assert.ok(privileged.length >= 5, 'expected several jobs to exchange a provider token');
+
+  for (const job of privileged) {
+    const guard = guardTextOf(job.body);
+    assert.ok(guard.length > 0, `job "${job.name}" requests an OIDC token with no guard at all`);
+    assert.ok(
+      topLevelConjuncts(guard).includes("github.ref == 'refs/heads/main'"),
+      `job "${job.name}" must pin protected main as a top-level condition; a pull request head would otherwise be able to reach it`,
+    );
+    assert.ok(
+      !guard.includes('pull_request'),
+      `job "${job.name}" mentions pull_request in a guard that can obtain provider authority`,
+    );
+    for (const [, eventName] of guard.matchAll(/github\.event_name == '([a-z_]+)'/gu)) {
+      assert.ok(
+        ['push', 'workflow_dispatch', 'schedule'].includes(eventName),
+        `job "${job.name}" admits the "${eventName}" event, which the federation trust does not authorise`,
+      );
+    }
+  }
+
+  assert.ok(
+    !/\n {2}pull_request_target:/u.test(delivery),
+    'the delivery workflow must never run contributor-controlled source under pull_request_target',
+  );
+});
+
+test('the ungated identity is still pinned by the committed federation trust', () => {
+  // Removing the environment removed nothing from the trust, because the trust
+  // never read the environment claim. This asserts the conjunction the
+  // committed source emits, as text, so it needs no OpenTofu.
+  const trust = read(join(repoRoot, 'infra', 'modules', 'delivery-trust', 'main.tf'));
+
+  for (const [label, pattern] of [
+    ['a branch ref type', /ref_type\s+=\s+"assertion\.ref_type == \\"branch\\""/u],
+    [
+      'the allowed ref list',
+      /ref\s+=\s+"assertion\.ref in \$\{jsonencode\(local\.allowed_refs_sorted\)\}"/u,
+    ],
+    [
+      'the closed event list',
+      /event_name\s+=\s+"assertion\.event_name in \$\{jsonencode\(local\.allowed_events_sorted\)\}"/u,
+    ],
+    [
+      'the exact signer workflow',
+      /job_workflow_ref\s+=\s+"assertion\.job_workflow_ref in \$\{jsonencode\(local\.authorised_job_workflow_refs\)\}"/u,
+    ],
+  ]) {
+    assert.match(trust, pattern, `the trust conjunction must still pin ${label}`);
+  }
+
+  // `<repository>/<workflow path>@<ref>` — the workflow file and the branch
+  // together, which is what makes the signer workflow exact.
+  assert.match(
+    trust,
+    /for ref in var\.allowed_refs : "\$\{local\.repository\}\/\$\{path\}@\$\{ref\}"/u,
+    'the authorised job_workflow_ref must be built from the allowed workflow path and the allowed ref',
+  );
+
+  // No environment claim is mapped, so no binding could be written against one.
+  const mapping = trust.match(/attribute_mapping = \{([\s\S]*?)\n {2}\}/u)?.[1];
+  assert.ok(mapping, 'the trust must declare its claim mapping');
+  assert.ok(
+    !mapping.includes('environment'),
+    'the trust maps no environment claim; removing the gate therefore changes no credential boundary',
+  );
+
+  // And the bootstrap inputs that feed it are still exactly main, exactly the
+  // delivery workflow, and the closed event set with pull requests refused.
+  const bootstrap = read(join(repoRoot, 'infra', 'stacks', 'bootstrap', 'variables.tf'));
+  assert.match(
+    bootstrap,
+    /one\(var\.allowed_refs\) == "refs\/heads\/main"/u,
+    'bootstrap must still authorise exactly protected main',
+  );
+  assert.match(
+    bootstrap,
+    /one\(var\.allowed_workflow_paths\) == "\.github\/workflows\/delivery\.yml"/u,
+    'bootstrap must still authorise exactly the delivery workflow',
+  );
+  const events = bootstrap.match(/variable "allowed_event_names" \{([\s\S]*?)\n\}/u)?.[1];
+  assert.ok(events, 'bootstrap must declare the authorised event names');
+  for (const refused of ['pull_request', 'pull_request_target']) {
+    assert.ok(
+      !events.includes(`"${refused}"`),
+      `bootstrap must never authorise the ${refused} event`,
+    );
+  }
+  const trustEvents = read(
+    join(repoRoot, 'infra', 'modules', 'delivery-trust', 'variables.tf'),
+  ).match(/variable "allowed_event_names" \{([\s\S]*?)\n\}/u)?.[1];
+  assert.match(
+    trustEvents,
+    /!contains\(var\.allowed_event_names, "pull_request"\) && !contains\(var\.allowed_event_names, "pull_request_target"\)/u,
+    'the trust module must refuse a pull-request event allowlist by validation, not by convention',
+  );
 });

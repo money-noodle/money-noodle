@@ -737,15 +737,40 @@ jobs:
           push-to-registry: true
 
   # ---------------------------------------------------------------------------
-  # Deploy. The qualifying merge is the deployment; the environment gate is
-  # still the production decision.
+  # Deploy. The reviewed merge is the consent for a routine deploy.
   # ---------------------------------------------------------------------------
   #
   # This is the missing piece of the CD path. `apply` deploys a stack a person
   # typed a phrase for; this deploys the vector the merge itself produced, with
-  # no `workflow_dispatch` anywhere in its guard. What it does not do is decide:
-  # `environment: production` still holds the run at the maintainer's gate, and
-  # nothing here can approve, request or assume that approval (#74).
+  # no `workflow_dispatch` anywhere in its guard.
+  #
+  # A *routine deploy* is exactly what this job performs: the deploy of `web`
+  # and/or `api` that an ordinary code merge to `main` triggers through the push
+  # Delivery run — a new image digest on the same infrastructure, under the same
+  # access rules. A *non-routine operation* is one a person dispatches: `apply`,
+  # `rollback`, or a public-access change. Those keep the `production`
+  # environment gate. This job declares no environment, because milestone #77
+  # asks for no second routine deployment approval and the pull-request review
+  # of the merge is that approval (maintainer decision 2026-09-20, #189). The
+  # prohibition on any agent, workload identity or automation using, requesting
+  # or assuming the environment administrator bypass is unchanged (#74); the
+  # bypass now belongs to the dispatched operations that still reach the gate.
+  #
+  # The environment was never the credential boundary. The federation trust
+  # conjunction maps no environment claim: it pins the repository identity,
+  # `ref_type == "branch"`, exactly `refs/heads/main`, the closed
+  # push/schedule/workflow_dispatch event set and the exact `job_workflow_ref`,
+  # and `publish`, `plan` and `drift` already authenticate as the same deployer
+  # with no environment. What protects a routine deploy is the guard below,
+  # per-commit release qualification, provenance verification of every digest
+  # before anything is applied, the saved-plan exposure guard in `automatic`
+  # mode, the audience-bound probe after each unit, and serialised concurrency.
+  # `INFRA_APPLY_AUTHORIZED` is the stop switch: set it to anything but `true`
+  # and every routine deploy halts, with no code change and no redeploy.
+  #
+  # What still does not exist is automatic rollback. A bad routine deploy is
+  # recovered by a dispatched, gated `rollback` or by a revert merge until #155
+  # lands, which the maintainer accepted is not a prerequisite for this.
   #
   # Three properties this job is built around.
   #
@@ -773,7 +798,6 @@ jobs:
       needs.authorization.outputs.environment_reviewers_verified == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    environment: production
     permissions:
       contents: read
       id-token: write
