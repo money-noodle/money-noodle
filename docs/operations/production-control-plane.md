@@ -250,7 +250,7 @@ No browser, issue, prompt, repository file, commit metadata, Actions log/summary
 | Code | Meaning |
 | --- | --- |
 | `R0` | Standing read permission at an exact scope; no one-time production-effect approval. Sensitive export and privileged read remain separately authorized and evidenced. |
-| `H1` | Single-use human grant for one exact production effect, including a sensitive export. A protected-branch review/merge may supply this only for the exact automatic forward deploy it identifies; any configured environment gate still applies. |
+| `H1` | Single-use human grant for one exact production effect, including a sensitive export. A protected-branch review/merge may supply this only for the exact routine deploy it identifies — the forward deploy of `web` and/or `api` that merge triggers — and for nothing else. That routine deploy reaches no environment gate (#189); every non-routine operation still passes its configured gate. |
 | `H2` | Single-use high-consequence human grant after recovery readiness and a fresh plan are proven. Used for restore, destructive migration, secret revocation, access, cost ceiling, and DNS/certificate change. |
 | `SC` | Human-approved versioned schedule/reconciliation charter. Each conforming invocation needs no live approval; changing scope, code, cadence, identity, limits, or effects needs a new `H1` grant. |
 | `HB` | Human-only bootstrap or break-glass authority. Never an agent credential or standing routine grant. |

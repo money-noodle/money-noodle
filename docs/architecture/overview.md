@@ -270,11 +270,17 @@ workflow.
 ### Merge-triggered release vector
 
 The deployment a qualifying merge produces. It is implemented in `delivery.yml` as the
-credential-free `release-plan` job and the gated `deploy` job, and is unreachable from a pull
+credential-free `release-plan` job and the `deploy` job, and is unreachable from a pull
 request, a fork, a tag, any non-main ref and any `workflow_dispatch`. Gates 1 to 4 above still
-apply; gate 5's typed phrase belongs to the manual `apply` path and has no equivalent here, because
-the qualifying merge is the initiation and the `production` environment gate remains the production
-decision ([#74](https://github.com/money-noodle/money-noodle/issues/74)).
+apply. Gate 5's typed phrase belongs to the manual `apply` path and has no equivalent here, and the
+`deploy` job declares no environment: this is a **routine deploy** — a new image digest for `web`
+and/or `api` on the same infrastructure, under the same access rules — and the pull-request review
+of the qualifying merge is its production consent
+([#189](https://github.com/money-noodle/money-noodle/issues/189), maintainer decision 2026-09-20,
+narrowing the environment decision recorded under
+[#74](https://github.com/money-noodle/money-noodle/issues/74)). A **non-routine operation** — a
+dispatched `apply`, `rollback`, or public-access change — keeps the `production` environment
+gate.
 
 ```mermaid
 flowchart TB
@@ -284,7 +290,6 @@ flowchart TB
     publish["publish<br/>build once, test, scan, push, attest"]
     vector["release vector<br/>affected projects from declared project.json manifests"]
     idle["No declared unit affected<br/>nothing is deployed"]
-    envGate{"production environment gate<br/>maintainer decision"}
     provenance["Resolve every digest and verify provenance<br/>repository + signer workflow + source commit"]
     deployApi["Apply stacks/api at the published digest"]
     verifyApi["Audience-bound ID token probe<br/>health and /v1/platform/status"]
@@ -295,8 +300,7 @@ flowchart TB
 
     merge --> gates --> qualify --> publish --> vector
     vector -->|no affected unit| idle
-    vector -->|one or two declared units| envGate
-    envGate --> provenance
+    vector -->|one or two declared units| provenance
     provenance -->|provenance does not bind this commit| blocked
     provenance --> deployApi --> verifyApi --> deployWeb --> verifyWeb --> record
     verifyApi -->|failed| blocked
