@@ -30,6 +30,14 @@ crash.*.log
 *.tfvars
 *.tfvars.json
 !*.tfvars.example
+# The one reviewed exception. `exposure.tfvars` carries a single boolean and no
+# identifier: it is the committed, pull-request-reviewed record that one service
+# may be invoked publicly, which is what gives the accepted "expose under a
+# separate approval" step an apply path at all (#180). Its content and location
+# are pinned by `tools/infra-policy.test.mjs`, and applying it needs the distinct
+# typed confirmation plus the saved-plan exposure guard.
+!infra/stacks/api/exposure.tfvars
+!infra/stacks/web/exposure.tfvars
 *.tfbackend
 !*.tfbackend.example
 

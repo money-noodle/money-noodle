@@ -176,11 +176,64 @@ stacks asserts the creating plan produces no public binding, and
 `tools/infra-policy.test.mjs` asserts the defaults, the single writer, and that
 no workflow input can collapse create and expose into one apply.
 
-This covers the *configuration* half of the accepted order. The independent
-verification between the two steps, and the separate approval that authorises
-the exposure operation, are operational gates and are not expressible here.
+### How an exposure is actually applied
+
+Step 2 above has an apply path, and it is deliberately narrow (#180).
+
+1. **Merge the service, created private.** Nothing about this changes.
+2. **Verify it independently**, with a separate read-only identity and an
+   audience-bound ID token, per `docs/operations/delivery.md`.
+3. **Open a pull request adding `exposure.tfvars`** to exactly one stack
+   directory — `infra/stacks/api/` or `infra/stacks/web/`. Comments aside, the
+   file contains exactly `allow_unauthenticated = true`. Every other `*.tfvars`
+   stays git-ignored, `tools/infra-policy.test.mjs` refuses any other content or
+   location, and `*.auto.tfvars` is refused outright because `tofu test` would
+   load it and quietly flip the creating-plan assertions.
+4. **Apply it under its own typed confirmation.** Dispatch the delivery workflow
+   with `action: apply`, the stack, and the confirmation `CHANGE-PUBLIC-ACCESS`.
+   The ordinary `APPLY-TO-PRODUCTION` phrase cannot expose: it mints a revision
+   named for its run, so its plan always changes the service too, and the guard
+   refuses an exposure that is not applied alone. The access-change path instead
+   reloads the digest, artifact version, source commit and revision suffix the
+   service is already configured with — as rollback and drift already do — and
+   re-attests that artifact, so the plan contains the public binding and nothing
+   else. It needs no `image_digest` input.
+5. **Verify what is now public.** The job probes the service and reports the
+   count in `contract_public_invoker_members`, so whether a service is publicly
+   invocable is answerable from state rather than from a provider console.
+
+API before web, because the web uses the API normally once the API is public.
+
+`tools/infra-exposure-guard.mjs` runs between `tofu plan -out=…` and
+`tofu apply` in **every** path that applies a service stack: both step groups of
+the automatic `deploy` job, the dispatched `apply`, and `rollback`. It reads the
+`tofu show -json` rendering of that exact saved plan, keys on the single
+`public` writer inside the service module, and refuses a plan that changes it
+together with the service's creation, together with any other resource, in a
+path with no typed confirmation, or under the wrong phrase. It also refuses the
+exposure confirmation when the plan changes no binding, so a confirmation always
+matches the plan it authorises. The rendering is written under `$RUNNER_TEMP`,
+removed on every exit path, and never uploaded or written to a job summary; the
+guard prints resource addresses and actions only.
+
+**If `exposure.tfvars` merges before the guarded apply has run**, the next
+automatic deploy of that stack stops at the guard — red, with nothing applied
+and no revision created. The automatic path refuses a pending exposure rather
+than performing one. Removing the file is the same guarded operation in reverse:
+it plans a delete of the same binding and needs the same confirmation.
+
+What remains outside this repository is the independent verification between
+steps 2 and 3, and the environment approval that authorises the operation
+itself. Those are operational gates. The reviewed record of *whether* a service
+may be public, and the refusal of every path that must not change it, are here.
 
 ## Delivery input and rollback contract
+
+Every job that plans a service stack — `plan`, `drift`, `apply`, `rollback` and
+both step groups of the automatic `deploy` — passes `-var-file=exposure.tfvars`
+only when that file exists in the stack directory. A reviewed exposure is
+therefore neither planned away by the next release nor reported as drift, and a
+stack that has never been exposed is unaffected.
 
 Provider operations remain skipped until the authorization job validates every
 account-specific stack input documented in `bootstrap.md`. Service plans and

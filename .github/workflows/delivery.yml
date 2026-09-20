@@ -73,7 +73,7 @@ on:
           - api
           - web
       confirmation:
-        description: 'Type APPLY-TO-PRODUCTION to authorise an apply. Ignored for plan.'
+        description: 'Type APPLY-TO-PRODUCTION to authorise an apply, or CHANGE-PUBLIC-ACCESS to authorise a reviewed public-access change. Ignored for plan.'
         required: false
         type: string
       image_digest:
@@ -137,6 +137,12 @@ jobs:
 
       - name: Static infrastructure and delivery policy guards
         run: node --test tools/infra-policy.test.mjs tools/infra-delivery-policy.test.mjs
+
+      - name: Exposure guard rules
+        # The guard decides whether a saved plan may change who can invoke a
+        # service, in four paths that install no dependencies. Its own rules run
+        # here, credential-free, against synthetic plan renderings (#180).
+        run: node --test tools/infra-exposure-guard.test.mjs
 
       - name: Provider-disabled delivery control policy guards
         # Grant, journal and witness adapter behaviour. No provider, no
@@ -937,8 +943,26 @@ jobs:
           tofu init -input=false \
             -backend-config="bucket=${STATE_BUCKET_PREFIX}-api" \
             -backend-config="prefix=stacks/api"
+          # A reviewed exposure lives in `exposure.tfvars`, committed by its own
+          # pull request and admitted by a narrow `.gitignore` exception (#180).
+          # Passing it only when it exists leaves a stack that has never been
+          # exposed untouched, and stops a reviewed exposure from being planned
+          # away by the next release or reported as drift.
+          exposure_args=()
+          if [[ -f exposure.tfvars ]]; then
+            exposure_args+=(-var-file=exposure.tfvars)
+          fi
           # Plan and apply the same plan file, so what was planned is what runs.
-          tofu plan -input=false -lock-timeout=5m -out=stack.tfplan
+          tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -out=stack.tfplan
+          # Between plan and apply, because the saved plan is what actually runs.
+          # `tofu show -json` carries state values, so the rendering goes under
+          # $RUNNER_TEMP, is removed on every exit path, and is never uploaded or
+          # written to a job summary. The guard prints addresses and actions only.
+          plan_json="$RUNNER_TEMP/exposure-plan.json"
+          trap 'rm -f "$plan_json" stack.tfplan' EXIT
+          tofu show -json stack.tfplan > "$plan_json"
+          node "$GITHUB_WORKSPACE/tools/infra-exposure-guard.mjs" \
+            --plan "$plan_json" --mode automatic
           tofu apply -input=false -lock-timeout=5m -auto-approve stack.tfplan
           rm -f stack.tfplan
 
@@ -997,7 +1021,25 @@ jobs:
           tofu init -input=false \
             -backend-config="bucket=${STATE_BUCKET_PREFIX}-web" \
             -backend-config="prefix=stacks/web"
-          tofu plan -input=false -lock-timeout=5m -out=stack.tfplan
+          # A reviewed exposure lives in `exposure.tfvars`, committed by its own
+          # pull request and admitted by a narrow `.gitignore` exception (#180).
+          # Passing it only when it exists leaves a stack that has never been
+          # exposed untouched, and stops a reviewed exposure from being planned
+          # away by the next release or reported as drift.
+          exposure_args=()
+          if [[ -f exposure.tfvars ]]; then
+            exposure_args+=(-var-file=exposure.tfvars)
+          fi
+          tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -out=stack.tfplan
+          # Between plan and apply, because the saved plan is what actually runs.
+          # `tofu show -json` carries state values, so the rendering goes under
+          # $RUNNER_TEMP, is removed on every exit path, and is never uploaded or
+          # written to a job summary. The guard prints addresses and actions only.
+          plan_json="$RUNNER_TEMP/exposure-plan.json"
+          trap 'rm -f "$plan_json" stack.tfplan' EXIT
+          tofu show -json stack.tfplan > "$plan_json"
+          node "$GITHUB_WORKSPACE/tools/infra-exposure-guard.mjs" \
+            --plan "$plan_json" --mode automatic
           tofu apply -input=false -lock-timeout=5m -auto-approve stack.tfplan
           rm -f stack.tfplan
 
@@ -1231,9 +1273,18 @@ jobs:
           tofu init -input=false \
             -backend-config="bucket=${STATE_BUCKET_PREFIX}-${{ matrix.stack }}" \
             -backend-config="prefix=stacks/${{ matrix.stack }}"
+          # A reviewed exposure lives in `exposure.tfvars`, committed by its own
+          # pull request and admitted by a narrow `.gitignore` exception (#180).
+          # Passing it only when it exists leaves a stack that has never been
+          # exposed untouched, and stops a reviewed exposure from being planned
+          # away by the next release or reported as drift.
+          exposure_args=()
+          if [[ -f exposure.tfvars ]]; then
+            exposure_args+=(-var-file=exposure.tfvars)
+          fi
           # `-lock-timeout` waits for a concurrent operation rather than failing
           # immediately or, worse, proceeding without the lock.
-          tofu plan -input=false -lock-timeout=5m -out=stack.tfplan
+          tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -out=stack.tfplan
           # Rendered without values that state may hold; the binary plan is never
           # uploaded as an artifact.
           tofu show -no-color stack.tfplan > plan.txt
@@ -1390,10 +1441,19 @@ jobs:
             revision_suffix="$(tofu output -raw configured_revision_suffix 2>/dev/null || true)"
             [[ -z "$revision_suffix" ]] || export TF_VAR_revision_suffix="$revision_suffix"
           fi
+          # A reviewed exposure lives in `exposure.tfvars`, committed by its own
+          # pull request and admitted by a narrow `.gitignore` exception (#180).
+          # Passing it only when it exists leaves a stack that has never been
+          # exposed untouched, and stops a reviewed exposure from being planned
+          # away by the next release or reported as drift.
+          exposure_args=()
+          if [[ -f exposure.tfvars ]]; then
+            exposure_args+=(-var-file=exposure.tfvars)
+          fi
           # `-refresh-only` compares reviewed desired state with observed reality
           # and proposes no changes. `-detailed-exitcode` returns 2 on difference.
           set +e
-          tofu plan -input=false -lock-timeout=5m -refresh-only -detailed-exitcode -no-color > drift.txt
+          tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -refresh-only -detailed-exitcode -no-color > drift.txt
           status=$?
           set -e
           # Account identifiers and notification destinations are account data,
@@ -1429,7 +1489,8 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       github.ref == 'refs/heads/main' &&
       github.event.inputs.action == 'apply' &&
-      github.event.inputs.confirmation == 'APPLY-TO-PRODUCTION' &&
+      (github.event.inputs.confirmation == 'APPLY-TO-PRODUCTION' ||
+      github.event.inputs.confirmation == 'CHANGE-PUBLIC-ACCESS') &&
       needs.authorization.outputs.federation_configured == 'true' &&
       needs.authorization.outputs.provider_configured == 'true' &&
       needs.authorization.outputs.apply_authorized == 'true' &&
@@ -1548,7 +1609,9 @@ jobs:
           password: ${{ steps.apply-auth.outputs.access_token }}
 
       - name: Require a digest and source commit when deploying a service
-        if: github.event.inputs.stack != 'platform'
+        if: >-
+          github.event.inputs.stack != 'platform' &&
+          github.event.inputs.confirmation != 'CHANGE-PUBLIC-ACCESS'
         env:
           DIGEST: ${{ github.event.inputs.image_digest }}
           SOURCE_COMMIT: ${{ github.event.inputs.source_commit }}
@@ -1561,7 +1624,9 @@ jobs:
           [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "source_commit must be a full commit SHA." >&2; exit 1; }
 
       - name: Verify the artifact carries provenance from this repository
-        if: github.event.inputs.stack != 'platform'
+        if: >-
+          github.event.inputs.stack != 'platform' &&
+          github.event.inputs.confirmation != 'CHANGE-PUBLIC-ACCESS'
         env:
           GH_TOKEN: ${{ github.token }}
           IMAGE: ${{ vars.GCP_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REGISTRY_REPOSITORY }}/${{ github.event.inputs.stack == 'web' && 'web' || 'platform-api' }}
@@ -1579,8 +1644,10 @@ jobs:
             --predicate-type https://slsa.dev/provenance/v1
 
       - name: Apply
+        if: github.event.inputs.confirmation != 'CHANGE-PUBLIC-ACCESS'
         working-directory: infra/stacks/${{ github.event.inputs.stack }}
         env:
+          CONFIRMATION: ${{ github.event.inputs.confirmation }}
           STATE_BUCKET_PREFIX: ${{ vars.GCP_STATE_BUCKET_PREFIX }}
           TF_VAR_image_digest: ${{ github.event.inputs.image_digest }}
           TF_VAR_artifact_version: ${{ github.event.inputs.source_commit }}
@@ -1591,8 +1658,104 @@ jobs:
           tofu init -input=false \
             -backend-config="bucket=${STATE_BUCKET_PREFIX}-${{ github.event.inputs.stack }}" \
             -backend-config="prefix=stacks/${{ github.event.inputs.stack }}"
+          # A reviewed exposure lives in `exposure.tfvars`, committed by its own
+          # pull request and admitted by a narrow `.gitignore` exception (#180).
+          # Passing it only when it exists leaves a stack that has never been
+          # exposed untouched, and stops a reviewed exposure from being planned
+          # away by the next release or reported as drift.
+          exposure_args=()
+          if [[ -f exposure.tfvars ]]; then
+            exposure_args+=(-var-file=exposure.tfvars)
+          fi
           # Plan and apply the same plan file, so what was reviewed is what runs.
-          tofu plan -input=false -lock-timeout=5m -out=stack.tfplan
+          tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -out=stack.tfplan
+          # Between plan and apply, because the saved plan is what actually runs.
+          # `tofu show -json` carries state values, so the rendering goes under
+          # $RUNNER_TEMP, is removed on every exit path, and is never uploaded or
+          # written to a job summary. The guard prints addresses and actions only.
+          plan_json="$RUNNER_TEMP/exposure-plan.json"
+          trap 'rm -f "$plan_json" stack.tfplan' EXIT
+          tofu show -json stack.tfplan > "$plan_json"
+          node "$GITHUB_WORKSPACE/tools/infra-exposure-guard.mjs" \
+            --plan "$plan_json" --mode dispatch \
+            --confirmation "$CONFIRMATION"
+          tofu apply -input=false -lock-timeout=5m -auto-approve stack.tfplan
+          rm -f stack.tfplan
+
+      # An access change is not a deployment, and it is the one apply the
+      # ordinary phrase must not reach. It reloads the template inputs the
+      # service is already configured with — as `rollback` and `drift` already do
+      # — so its plan contains the public binding and nothing else. The ordinary
+      # apply names a revision after its run id, which would make an
+      # exposure-only plan unreachable and hide the access change inside a
+      # release. It needs no `image_digest` input for the same reason.
+      - name: Load the configured artifact for a reviewed access change
+        if: github.event.inputs.confirmation == 'CHANGE-PUBLIC-ACCESS'
+        working-directory: infra/stacks/${{ github.event.inputs.stack }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ vars.GCP_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REGISTRY_REPOSITORY }}/${{ github.event.inputs.stack == 'web' && 'web' || 'platform-api' }}
+          STACK: ${{ github.event.inputs.stack }}
+          STATE_BUCKET_PREFIX: ${{ vars.GCP_STATE_BUCKET_PREFIX }}
+        run: |
+          set -euo pipefail
+          if [[ "$STACK" == 'platform' ]]; then
+            echo 'The platform stack declares no public invoker binding, so it has no access change to apply.' >&2
+            exit 1
+          fi
+          tofu init -input=false \
+            -backend-config="bucket=${STATE_BUCKET_PREFIX}-${STACK}" \
+            -backend-config="prefix=stacks/${STACK}"
+          digest="$(tofu output -raw deployed_digest)"
+          version="$(tofu output -raw artifact_version)"
+          source_commit="$(tofu output -raw source_commit)"
+          revision_suffix="$(tofu output -raw configured_revision_suffix 2>/dev/null || true)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]]
+          [[ -n "$version" ]]
+          # The running artifact is re-attested before its access changes, so an
+          # exposure cannot publish something whose provenance no longer holds.
+          gh attestation verify "oci://${IMAGE}@${digest}" \
+            --repo "${{ github.repository }}" \
+            --signer-workflow "${{ github.repository }}/.github/workflows/delivery.yml" \
+            --source-digest "$source_commit" \
+            --source-ref refs/heads/main \
+            --deny-self-hosted-runners \
+            --predicate-type https://slsa.dev/provenance/v1
+          {
+            echo "TF_VAR_image_digest=$digest"
+            echo "TF_VAR_artifact_version=$version"
+            echo "TF_VAR_source_commit=$source_commit"
+            [[ -z "$revision_suffix" ]] || echo "TF_VAR_revision_suffix=$revision_suffix"
+          } >> "$GITHUB_ENV"
+
+      - name: Apply the reviewed access change
+        if: github.event.inputs.confirmation == 'CHANGE-PUBLIC-ACCESS'
+        working-directory: infra/stacks/${{ github.event.inputs.stack }}
+        env:
+          CONFIRMATION: ${{ github.event.inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          # A reviewed exposure lives in `exposure.tfvars`, committed by its own
+          # pull request and admitted by a narrow `.gitignore` exception (#180).
+          # Passing it only when it exists leaves a stack that has never been
+          # exposed untouched, and stops a reviewed exposure from being planned
+          # away by the next release or reported as drift.
+          exposure_args=()
+          if [[ -f exposure.tfvars ]]; then
+            exposure_args+=(-var-file=exposure.tfvars)
+          fi
+          tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -out=stack.tfplan
+          # Between plan and apply, because the saved plan is what actually runs.
+          # `tofu show -json` carries state values, so the rendering goes under
+          # $RUNNER_TEMP, is removed on every exit path, and is never uploaded or
+          # written to a job summary. The guard prints addresses and actions only.
+          plan_json="$RUNNER_TEMP/exposure-plan.json"
+          trap 'rm -f "$plan_json" stack.tfplan' EXIT
+          tofu show -json stack.tfplan > "$plan_json"
+          node "$GITHUB_WORKSPACE/tools/infra-exposure-guard.mjs" \
+            --plan "$plan_json" --mode dispatch \
+            --confirmation "$CONFIRMATION"
           tofu apply -input=false -lock-timeout=5m -auto-approve stack.tfplan
           rm -f stack.tfplan
 
@@ -1640,11 +1803,22 @@ jobs:
 
       - name: Report the deployed artifact
         working-directory: infra/stacks/${{ github.event.inputs.stack }}
+        env:
+          CONFIRMATION: ${{ github.event.inputs.confirmation }}
         run: |
+          set -euo pipefail
           {
             echo "### Applied \`${{ github.event.inputs.stack }}\`"
             echo
-            echo "- source commit: \`${{ github.event.inputs.source_commit }}\`"
+            if [[ "$CONFIRMATION" == 'CHANGE-PUBLIC-ACCESS' ]]; then
+              # A count, not the member list: whether a service is publicly
+              # invocable is answerable from state without publishing an identity
+              # into a summary that is never masked.
+              echo "- operation: reviewed public-access change, no revision created"
+              echo "- public invokers after the change: $(tofu output -json contract_public_invoker_members | jq 'length')"
+            else
+              echo "- source commit: \`${{ github.event.inputs.source_commit }}\`"
+            fi
             echo "- workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -1819,8 +1993,26 @@ jobs:
             echo 'rollback_revision is not a valid Cloud Run revision name.' >&2
             exit 1
           }
-          tofu plan -input=false -lock-timeout=5m -out=rollback.tfplan \
+          # A reviewed exposure lives in `exposure.tfvars`, committed by its own
+          # pull request and admitted by a narrow `.gitignore` exception (#180).
+          # Passing it only when it exists leaves a stack that has never been
+          # exposed untouched, and stops a reviewed exposure from being planned
+          # away by the next release or reported as drift.
+          exposure_args=()
+          if [[ -f exposure.tfvars ]]; then
+            exposure_args+=(-var-file=exposure.tfvars)
+          fi
+          tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -out=rollback.tfplan \
             -var="rollback_revision=${ROLLBACK_REVISION}"
+          # Between plan and apply, because the saved plan is what actually runs.
+          # `tofu show -json` carries state values, so the rendering goes under
+          # $RUNNER_TEMP, is removed on every exit path, and is never uploaded or
+          # written to a job summary. The guard prints addresses and actions only.
+          plan_json="$RUNNER_TEMP/exposure-plan.json"
+          trap 'rm -f "$plan_json" rollback.tfplan' EXIT
+          tofu show -json rollback.tfplan > "$plan_json"
+          node "$GITHUB_WORKSPACE/tools/infra-exposure-guard.mjs" \
+            --plan "$plan_json" --mode rollback
           tofu apply -input=false -lock-timeout=5m -auto-approve rollback.tfplan
           rm -f rollback.tfplan
 
