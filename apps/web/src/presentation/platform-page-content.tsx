@@ -16,7 +16,7 @@ export async function PlatformPageContent({ loadStatus }: PlatformPageContentPro
       <h1>Money Noodle</h1>
       <p className="lede">A clear view of the platform, one trustworthy noodle at a time.</p>
       <PlatformStatusCard status={status} />
-      <p>Every release here ships from a reviewed merge to main.</p>
+      <p>Every release here ships from a reviewed merge to main, with no second approval.</p>
     </main>
   );
 }
