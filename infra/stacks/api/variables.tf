@@ -59,6 +59,12 @@ variable "allow_unauthenticated" {
     independently, and only then exposes it as a separate reviewed step. The
     accepted public `api.noodle.money` target is the end state, not the state
     the creating apply may produce.
+
+    Nothing in the pipeline supplies this value. It is set only by a committed
+    `exposure.tfvars` in this directory, reviewed as its own pull request, which
+    every job planning this stack passes by `-var-file` when it exists. Applying
+    a plan that changes the resulting binding needs the distinct typed
+    confirmation and passes the saved-plan exposure guard first (#180).
   EOT
   type        = bool
   default     = false

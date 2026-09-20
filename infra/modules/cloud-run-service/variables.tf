@@ -200,6 +200,11 @@ variable "allow_unauthenticated" {
     exposure order is create private, verify independently, then expose as a
     separate reviewed step, so this stays false through the apply that creates a
     service and is turned on only afterwards.
+
+    A stack turns it on through a committed, separately reviewed
+    `exposure.tfvars`, and the resulting change to the single `public` binding
+    below is refused by the saved-plan exposure guard unless it is applied alone,
+    under its own typed confirmation (#180).
   EOT
   type        = bool
   default     = false
