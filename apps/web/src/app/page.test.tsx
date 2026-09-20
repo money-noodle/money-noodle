@@ -30,7 +30,9 @@ describe('PlatformPage', () => {
       '<time dateTime="2026-08-29T20:00:00.000Z">2026-08-29T20:00:00.000Z</time>',
     );
     expect(markup).toContain('<dt>API version</dt><dd>git-abc1234</dd>');
-    expect(markup).toContain('<p>Every release here ships from a reviewed merge to main.</p>');
+    expect(markup).toContain(
+      '<p>Every release here ships from a reviewed merge to main, with no second approval.</p>',
+    );
   });
 
   it('renders unknown without a stale source time when production configuration is invalid', async () => {
