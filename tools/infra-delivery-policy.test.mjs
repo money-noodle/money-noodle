@@ -2447,3 +2447,303 @@ test('the web runtime identity remains the API authorised invoker', () => {
     'the API must not read the web stack; that cycle is what the bootstrap contract avoids',
   );
 });
+
+// ---------------------------------------------------------------------------
+// The guarded exposure path (#180).
+//
+// `docs/operations/delivery.md` accepts exposure as a separate step under its
+// own approval. The configuration half of that was already enforced; these
+// guards cover the apply half, which is where it can actually go wrong: a
+// reviewed `exposure.tfvars` planned away by the next automatic deploy, or an
+// access change carried along inside a release nobody reviewed as one.
+// ---------------------------------------------------------------------------
+
+const EXPOSURE_GUARD = 'tools/infra-exposure-guard.mjs';
+const EXPOSURE_CONFIRMATION = 'CHANGE-PUBLIC-ACCESS';
+
+/** One step's body, from its `- name:` opener to the next step at that indent. */
+function stepBody(jobBody, name) {
+  const body = jobBody.match(
+    new RegExp(`\\n {6}- name: ${name}\\n([\\s\\S]*?)(?=\\n {6}- |$)`),
+  )?.[1];
+  assert.ok(body, `expected a step named "${name}"`);
+  return body;
+}
+
+/** Every path that applies a stack, with the mode it must declare. */
+const APPLY_SITES = [
+  { job: 'deploy', mode: 'automatic', plan: 'stack.tfplan', step: 'Deploy api' },
+  { job: 'deploy', mode: 'automatic', plan: 'stack.tfplan', step: 'Deploy web' },
+  { job: 'apply', mode: 'dispatch', plan: 'stack.tfplan', step: 'Apply' },
+  {
+    job: 'apply',
+    mode: 'dispatch',
+    plan: 'stack.tfplan',
+    step: 'Apply the reviewed access change',
+  },
+  {
+    job: 'rollback',
+    mode: 'rollback',
+    plan: 'rollback.tfplan',
+    step: 'Reassign traffic to the prior revision without changing the template',
+  },
+];
+
+test('every apply runs the exposure guard between its plan and its apply', () => {
+  // A guard that runs beside the apply rather than between plan and apply would
+  // be checking a different plan from the one that runs.
+  const applySteps = [...delivery.matchAll(/\n {10}tofu apply\b/g)].length;
+  assert.equal(
+    applySteps,
+    APPLY_SITES.length,
+    'an apply site was added or removed without updating the guarded-site table',
+  );
+
+  for (const site of APPLY_SITES) {
+    const job = deliveryJobs().find(({ name }) => name === site.job);
+    assert.ok(job, `expected a ${site.job} job`);
+    const body = stepBody(job.body, site.step);
+
+    const planned = body.indexOf(`-out=${site.plan}`);
+    const guarded = body.indexOf(EXPOSURE_GUARD);
+    const applied = body.indexOf(`tofu apply`);
+    assert.ok(planned >= 0, `"${site.step}" must save a plan`);
+    assert.ok(
+      guarded > planned,
+      `"${site.step}" must run the exposure guard after the plan it will apply`,
+    );
+    assert.ok(
+      applied > guarded,
+      `"${site.step}" must run the exposure guard before applying, not alongside it`,
+    );
+
+    assert.ok(
+      body.includes(`--mode ${site.mode}`),
+      `"${site.step}" must declare the ${site.mode} mode, so the guard knows whether this path may change public access`,
+    );
+    assert.ok(
+      body.includes(`tofu apply -input=false -lock-timeout=5m -auto-approve ${site.plan}`),
+      `"${site.step}" must apply exactly the plan file the guard read`,
+    );
+  }
+});
+
+test('the automatic and rollback paths can never change who may invoke', () => {
+  // Neither carries a typed confirmation at all, so neither may reach the public
+  // binding. The mode they declare is what makes that a refusal rather than a
+  // convention.
+  for (const site of APPLY_SITES.filter(({ mode }) => mode !== 'dispatch')) {
+    const job = deliveryJobs().find(({ name }) => name === site.job);
+    const body = stepBody(job.body, site.step);
+    assert.ok(
+      !body.includes('--confirmation'),
+      `"${site.step}" must pass no confirmation; a path that could supply one could expose`,
+    );
+    assert.ok(
+      body.includes(`--mode ${site.mode}`) && site.mode !== 'dispatch',
+      `"${site.step}" must declare a mode the guard refuses an exposure in`,
+    );
+  }
+
+  // The two dispatch sites pass the typed phrase through for the guard to judge.
+  for (const site of APPLY_SITES.filter(({ mode }) => mode === 'dispatch')) {
+    const job = deliveryJobs().find(({ name }) => name === site.job);
+    const body = stepBody(job.body, site.step);
+    assert.match(
+      body,
+      /--confirmation "\$CONFIRMATION"/,
+      `"${site.step}" must hand the typed phrase to the guard rather than deciding itself`,
+    );
+    assert.match(
+      body,
+      /CONFIRMATION: \$\{\{ github\.event\.inputs\.confirmation \}\}/,
+      `"${site.step}" must read the confirmation from the dispatch input`,
+    );
+  }
+});
+
+test('the ordinary phrase cannot expose and the exposure phrase cannot deploy', () => {
+  const apply = deliveryJobs().find(({ name }) => name === 'apply');
+
+  // Both phrases reach the job, and the job still carries every authorization
+  // requirement and the protected environment.
+  const condition = apply.body.match(/if: >-\n([\s\S]*?)\n {4}runs-on:/)?.[1];
+  assert.ok(condition.includes("github.event.inputs.confirmation == 'APPLY-TO-PRODUCTION'"));
+  assert.ok(condition.includes(`github.event.inputs.confirmation == '${EXPOSURE_CONFIRMATION}'`));
+  assert.match(apply.body, /environment: production/);
+
+  // The ordinary apply mints a revision named for the run, so it can never
+  // produce an exposure-only plan; it is simply not reachable by the exposure
+  // phrase.
+  const ordinary = stepBody(apply.body, 'Apply');
+  assert.match(ordinary, /TF_VAR_revision_suffix: \$\{\{ github\.run_id \}\}/);
+  assert.ok(
+    ordinary.includes(`if: github.event.inputs.confirmation != '${EXPOSURE_CONFIRMATION}'`),
+    'the ordinary apply must not run for the exposure phrase',
+  );
+
+  // The access change reloads what is already configured, exactly as rollback
+  // and drift do, and therefore needs no digest input.
+  const loader = stepBody(apply.body, 'Load the configured artifact for a reviewed access change');
+  for (const output of [
+    'deployed_digest',
+    'artifact_version',
+    'source_commit',
+    'configured_revision_suffix',
+  ]) {
+    assert.ok(
+      loader.includes(`tofu output -raw ${output}`),
+      `an access change must preserve ${output} from the currently configured template`,
+    );
+  }
+  assert.match(
+    loader,
+    /gh attestation verify/,
+    'an access change must re-attest the running artifact before publishing it',
+  );
+  assert.ok(
+    !loader.includes('github.event.inputs.image_digest'),
+    'an access change must need no digest input; it changes access, not what is running',
+  );
+
+  const change = stepBody(apply.body, 'Apply the reviewed access change');
+  assert.ok(
+    change.includes(`if: github.event.inputs.confirmation == '${EXPOSURE_CONFIRMATION}'`),
+    'the access change must run only for its own typed phrase',
+  );
+  assert.ok(
+    !change.includes('TF_VAR_revision_suffix'),
+    'an access change must not name a new revision; its plan is the binding and nothing else',
+  );
+
+  // The steps that demand a deployable artifact belong to the ordinary apply.
+  for (const name of [
+    'Require a digest and source commit when deploying a service',
+    'Verify the artifact carries provenance from this repository',
+  ]) {
+    assert.ok(
+      stepBody(apply.body, name).includes(
+        `github.event.inputs.confirmation != '${EXPOSURE_CONFIRMATION}'`,
+      ),
+      `"${name}" must not run for an access change, which supplies no digest`,
+    );
+  }
+
+  // And the workflow still supplies no public-access value of its own.
+  assert.ok(
+    !delivery.includes('allow_unauthenticated'),
+    'exposure stays a reviewed file, never a workflow input',
+  );
+});
+
+test('every stack plan passes the reviewed exposure file when it exists', () => {
+  // A plan without it would report a reviewed exposure as a pending removal, and
+  // the next automatic deploy would plan it away. A plan with it unconditionally
+  // would fail on every stack that has never been exposed.
+  const plans = [...delivery.matchAll(/\n {10}tofu plan\b[^\n]*/g)].map(([line]) => line);
+  assert.ok(plans.length >= 7, 'expected a plan in every service-stack path, drift included');
+  for (const line of plans) {
+    assert.ok(
+      line.includes('"${exposure_args[@]}"'),
+      `\`${line.trim()}\` must pass the reviewed exposure file when one exists`,
+    );
+  }
+
+  // Built with an `if`, never `[[ -f … ]] && …`, which returns 1 and would end
+  // the step under `set -e` on every stack that is not exposed.
+  const constructions = [...delivery.matchAll(/exposure_args=\(\)\n([\s\S]*?)\n {10}fi\n/g)];
+  assert.equal(
+    constructions.length,
+    plans.length,
+    'every plan must build its own exposure arguments rather than inheriting them',
+  );
+  for (const [block] of constructions) {
+    assert.match(
+      block,
+      /if \[\[ -f exposure\.tfvars \]\]; then\n {12}exposure_args\+=\(-var-file=exposure\.tfvars\)\n {10}fi/,
+      'the exposure file must be detected with an `if`, so an unexposed stack does not end the step under `set -e`',
+    );
+  }
+
+  // Drift reports; it still never applies.
+  const drift = deliveryJobs().find(({ name }) => name === 'drift');
+  assert.ok(!/tofu apply/.test(drift.body), 'drift must still never apply');
+});
+
+test('the rendered plan the guard reads never leaves the runner', () => {
+  // `tofu show -json` carries state values, which are sensitive by default even
+  // where no secret exists.
+  const renderings = [...delivery.matchAll(/\n {10}tofu show -json[^\n]*/g)].map(([line]) => line);
+  assert.equal(renderings.length, APPLY_SITES.length, 'every guarded plan is rendered once');
+  for (const line of renderings) {
+    assert.ok(
+      line.includes('> "$plan_json"'),
+      `\`${line.trim()}\` must write the rendering to the runner temporary directory only`,
+    );
+  }
+  assert.equal(
+    [...delivery.matchAll(/plan_json="\$RUNNER_TEMP\/exposure-plan\.json"/g)].length,
+    APPLY_SITES.length,
+  );
+  assert.equal(
+    [...delivery.matchAll(/trap 'rm -f "\$plan_json" [a-z]+\.tfplan' EXIT/g)].length,
+    APPLY_SITES.length,
+    'the rendering must be removed on every exit path, including a refusal',
+  );
+
+  for (const forbidden of [
+    /cat "\$plan_json"/,
+    /\$plan_json[^\n]*GITHUB_STEP_SUMMARY/,
+    /upload-artifact[\s\S]{0,200}plan_json/,
+  ]) {
+    assert.ok(
+      !forbidden.test(delivery),
+      `the rendered plan must never be published (${forbidden})`,
+    );
+  }
+});
+
+test('the credential-free checks job runs the exposure guard rules', () => {
+  // The guard is only a control if its rules actually run, and they must run
+  // where no provider token exists.
+  const checks = deliveryJobs().find(({ name }) => name === 'checks');
+  const step = stepBody(checks.body, 'Exposure guard rules');
+  assert.match(
+    step,
+    /run: node --test tools\/infra-exposure-guard\.test\.mjs/,
+    'the checks job must run the exposure guard unit tests',
+  );
+  // A step that can be skipped or can fail without failing the job is not a
+  // check, however faithfully it names the file it would have run.
+  assert.ok(
+    !/(^|\n) {8}(if|continue-on-error):/.test(step),
+    'the exposure guard rules must run unconditionally and must fail the job',
+  );
+  assert.ok(!/id-token:|environment:/.test(checks.body));
+
+  // And the workflow re-runs when either file changes.
+  for (const event of ['pull_request', 'push']) {
+    const trigger = delivery.match(
+      new RegExp(`\\n {2}${event}:\\n([\\s\\S]*?)(?=\\n {2}[a-z_]+:|$)`),
+    )?.[1];
+    assert.ok(
+      trigger.includes("      - 'tools/infra-*.mjs'"),
+      `${event} must cover the guard and its tests`,
+    );
+  }
+});
+
+test('exposing a service stays a different operation from creating it', () => {
+  // #180 adds no infrastructure resource, so the ownership rows are unchanged.
+  // Asserted anyway: the guard's whole premise is that these are two operations
+  // with two approvals.
+  const service =
+    RESOURCE_OPERATIONS['modules/cloud-run-service:google_cloud_run_v2_service.service'];
+  const exposure =
+    RESOURCE_OPERATIONS['modules/cloud-run-service:google_cloud_run_v2_service_iam_member.public'];
+  assert.ok(service && exposure, 'both rows must exist');
+  assert.equal(exposure.identity, 'iam-executor');
+  assert.equal(exposure.catalogOperation, 'workload.access.change');
+  assert.notEqual(exposure.identity, service.identity);
+  assert.notEqual(exposure.catalogOperation, service.catalogOperation);
+});

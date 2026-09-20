@@ -988,3 +988,81 @@ test('the narrow telemetry authentication exception is enforced, not merely desc
     assert.ok(probes.includes(probe), `a boundary probe must exercise ${probe}`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// The reviewed exposure file (#180).
+//
+// `allow_unauthenticated` has a committed source of truth now: a per-stack
+// `exposure.tfvars`, admitted by a narrow `.gitignore` exception and passed by
+// `-var-file` only when it exists. That file is the whole approval record, so
+// its location and its content are pinned here — a tfvars that could carry
+// anything else would be a second, unreviewed way to configure a service.
+// ---------------------------------------------------------------------------
+
+const EXPOSURE_FILE = 'exposure.tfvars';
+const EXPOSURE_STACKS = ['api', 'web'];
+
+test('no automatically loaded tfvars exists anywhere under infra', () => {
+  // `tofu` loads `*.auto.tfvars` without being asked, including during
+  // `tofu test`. One would flip the creating-plan assertions in every
+  // `tests/exposure.tftest.hcl` while leaving them looking green, which is
+  // exactly why the mechanism is a `-var-file` the workflow names explicitly.
+  for (const path of infraFiles) {
+    assert.ok(
+      !basename(path).endsWith('.auto.tfvars'),
+      `${relative(path)} would be loaded automatically, including by \`tofu test\`. Exposure is passed by an explicit \`-var-file\`, so the creating-plan tests stay true.`,
+    );
+  }
+});
+
+test('an exposure file may exist only where exposure is reviewable', () => {
+  const found = infraFiles.filter((path) => basename(path) === EXPOSURE_FILE);
+  const permitted = EXPOSURE_STACKS.map((stack) => join(infraRoot, 'stacks', stack, EXPOSURE_FILE));
+
+  for (const path of found) {
+    assert.ok(
+      permitted.includes(path),
+      `${relative(path)} is an exposure file outside the api and web stacks. Only those two declare a public invoker binding, so only those two can be exposed.`,
+    );
+  }
+});
+
+test('an exposure file, when one exists, may say only that the service is public', () => {
+  // The file is an approval record, not a configuration surface. Anything else
+  // in it would be a second way to change a service that no one reviewed as a
+  // change to that service.
+  for (const stack of EXPOSURE_STACKS) {
+    const path = join(infraRoot, 'stacks', stack, EXPOSURE_FILE);
+    if (!existsSync(path)) continue;
+
+    const statements = read(path)
+      .split('\n')
+      .map((line) => line.replace(/#.*$/, '').trim())
+      .filter(Boolean);
+    assert.deepEqual(
+      statements,
+      ['allow_unauthenticated = true'],
+      `${relative(path)} must contain exactly \`allow_unauthenticated = true\`, comments aside. An exposure file that can set anything else is not an exposure record.`,
+    );
+  }
+});
+
+test('the gitignore exception admits exactly the two exposure files', () => {
+  const gitignore = read(join(repoRoot, '.gitignore'));
+  assert.ok(
+    gitignore.split('\n').includes('*.tfvars'),
+    'every other tfvars must stay ignored; they carry account identifiers supplied at bootstrap',
+  );
+
+  const exceptions = gitignore
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(
+      (line) => line.startsWith('!') && line.includes('.tfvars') && !line.includes('example'),
+    );
+  assert.deepEqual(
+    exceptions.sort(),
+    EXPOSURE_STACKS.map((stack) => `!infra/stacks/${stack}/${EXPOSURE_FILE}`).sort(),
+    'the tfvars exception must name exactly the two stack exposure files, so no other tfvars can be committed by a wildcard',
+  );
+});
