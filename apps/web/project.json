@@ -65,13 +65,14 @@
     },
     "typecheck": {
       "executor": "nx:run-commands",
-      "dependsOn": ["^build", "typegen"],
+      "dependsOn": ["^build", "build", "typegen"],
       "options": {
         "command": "tsc --project apps/web/tsconfig.json --noEmit"
       }
     },
     "typegen": {
       "executor": "nx:run-commands",
+      "dependsOn": ["build"],
       "outputs": ["{projectRoot}/.next/types"],
       "options": {
         "command": "pnpm --dir apps/web exec next typegen"
