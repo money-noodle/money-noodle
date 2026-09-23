@@ -768,9 +768,13 @@ jobs:
   # `INFRA_APPLY_AUTHORIZED` is the stop switch: set it to anything but `true`
   # and every routine deploy halts, with no code change and no redeploy.
   #
-  # What still does not exist is automatic rollback. A bad routine deploy is
-  # recovered by a dispatched, gated `rollback` or by a revert merge until #155
-  # lands, which the maintainer accepted is not a prerequisite for this.
+  # A routine deploy that fails its health check rolls itself back (#198). The
+  # decision is `tools/release/rollback-decision.mjs` (#155), not a rule improvised
+  # here: given the revision recorded before the apply and the health results, it
+  # answers `rollback` to exactly that revision or `halt`. Traffic moves back, the
+  # probe runs once more, and the job is red either way so a person looks. There
+  # is never a second attempt, and a unit that cannot be recovered stops the job
+  # before the next unit is touched.
   #
   # Three properties this job is built around.
   #
@@ -781,9 +785,10 @@ jobs:
   #     rather than after them. A failed API verification stops the job before
   #     web is touched, which is what "leaves the candidate blocked, leaves
   #     unaffected services untouched" means in practice.
-  #   * It is forward only. `service.rollback` needs a verified predecessor,
-  #     which cannot exist before a first deployment, so no path here names a
-  #     rollback revision or spends a recovery slot. Recovery is #155.
+  #   * Forward deployment spends no recovery slot. The rollback below moves
+  #     traffic to a revision this run recorded from the stack's own state before
+  #     it changed anything; it names no `service.rollback` permission and mints
+  #     nothing. A stack with no recorded revision — a first deploy — halts.
   deploy:
     name: deploy release vector
     needs: [checks, authorization, qualify, publish, release-plan]
@@ -953,6 +958,7 @@ jobs:
       # step ends the job, so web is only reached once the API it depends on has
       # been deployed and independently probed.
       - name: Deploy api
+        id: deploy-api
         if: contains(fromJSON(needs.release-plan.outputs.units), 'api')
         working-directory: infra/stacks/api
         env:
@@ -967,6 +973,13 @@ jobs:
           tofu init -input=false \
             -backend-config="bucket=${STATE_BUCKET_PREFIX}-api" \
             -backend-config="prefix=stacks/api"
+          # The revision serving before this run changes anything. A rollback
+          # names this exact value and never derives one (#198). The output is
+          # absent on a stack's first deploy, and an unreadable value is recorded
+          # as none rather than guessed: a later failure then halts.
+          previous="$(tofu output -raw latest_ready_revision 2>/dev/null || true)"
+          [[ "$previous" =~ ^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$ ]] || previous=''
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
           # A reviewed exposure lives in `exposure.tfvars`, committed by its own
           # pull request and admitted by a narrow `.gitignore` exception (#180).
           # Passing it only when it exists leaves a stack that has never been
@@ -1013,6 +1026,7 @@ jobs:
           id_token_audience: ${{ steps.deploy-api-service.outputs.uri }}
 
       - name: Verify api health and the published contract
+        id: verify-api
         if: contains(fromJSON(needs.release-plan.outputs.units), 'api')
         env:
           SERVICE_URI: ${{ steps.deploy-api-service.outputs.uri }}
@@ -1030,7 +1044,119 @@ jobs:
             curl -sSf --max-time 20 -H @- "${SERVICE_URI}/v1/platform/status" |
             jq -e '.state and .asOf and .schemaVersion == "1"' > /dev/null
 
+      # Rollback, decided rather than improvised (#198).
+      #
+      # This runs only when api's own health check failed. An apply that failed
+      # is deliberately not this step's business: it left traffic where it was, so
+      # there is nothing to move back. The decision belongs to the pure helper
+      # from #155 — given the revision recorded before the apply and the health
+      # results, it answers `rollback` to exactly that revision or `halt`, and it
+      # is asked again with the re-check appended. Two answers, one apply, one
+      # re-check, and no second attempt however either turns out.
+      #
+      # The plan is traffic only: every template value here is the one this run
+      # just applied, so the single difference `rollback_revision` introduces is
+      # which revision serves. The job ends red either way, because a release that
+      # needed rolling back is not a release that succeeded.
+      - name: Roll api back to the recorded revision
+        id: rollback-api
+        if: failure() && steps.verify-api.conclusion == 'failure'
+        working-directory: infra/stacks/api
+        env:
+          PREVIOUS_REVISION: ${{ steps.deploy-api.outputs.previous }}
+          PROBE_ID_TOKEN: ${{ steps.deploy-api-probe-auth.outputs.id_token }}
+          SERVICE_URI: ${{ steps.deploy-api-service.outputs.uri }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          UNIT: api
+          TF_VAR_artifact_version: git-${{ github.sha }}
+          TF_VAR_source_commit: ${{ github.sha }}
+          TF_VAR_revision_suffix: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          TF_VAR_image_digest="$(jq -er --arg unit "$UNIT" '.[$unit]' \
+            "$RUNNER_TEMP/release-artifacts.json")"
+          export TF_VAR_image_digest
+
+          # The helper adds no rules of its own and reaches nothing: it is a pure
+          # function of the recorded revision and the results handed to it.
+          decide() {
+            HEALTH_CHECKS="$1" node --input-type=module -e '
+              const helper = process.env.GITHUB_WORKSPACE + "/tools/release/rollback-decision.mjs";
+              const { decideRollback } = await import(helper);
+              process.stdout.write(
+                JSON.stringify(
+                  decideRollback({
+                    previousRevision: process.env.PREVIOUS_REVISION || null,
+                    healthChecks: JSON.parse(process.env.HEALTH_CHECKS),
+                  }),
+                ),
+              );
+            '
+          }
+
+          record() {
+            echo "$1" >&2
+            echo "- $1" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          first="$(decide '[{"healthy":false}]')"
+          if [[ "$(jq -r '.action' <<< "$first")" != 'rollback' ]]; then
+            record "halt: ${UNIT} cannot be rolled back automatically ($(jq -r '.reason' <<< "$first")); traffic is unchanged and nothing else was touched"
+            exit 1
+          fi
+          revision="$(jq -r '.revision' <<< "$first")"
+          [[ "$revision" =~ ^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$ ]] || {
+            record "halt: the recorded ${UNIT} revision is not a valid Cloud Run revision name; traffic is unchanged"
+            exit 1
+          }
+
+          # A reviewed exposure lives in `exposure.tfvars`, committed by its own
+          # pull request and admitted by a narrow `.gitignore` exception (#180).
+          # Passing it only when it exists keeps a reviewed exposure from being
+          # planned away by the move back.
+          exposure_args=()
+          if [[ -f exposure.tfvars ]]; then
+            exposure_args+=(-var-file=exposure.tfvars)
+          fi
+          tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -out=rollback.tfplan \
+            -var="rollback_revision=${revision}"
+          # Between plan and apply, because the saved plan is what actually runs.
+          # `tofu show -json` carries state values, so the rendering goes under
+          # $RUNNER_TEMP, is removed on every exit path, and is never uploaded or
+          # written to a job summary. The guard prints addresses and actions only.
+          plan_json="$RUNNER_TEMP/exposure-plan.json"
+          trap 'rm -f "$plan_json" rollback.tfplan' EXIT
+          tofu show -json rollback.tfplan > "$plan_json"
+          node "$GITHUB_WORKSPACE/tools/infra-exposure-guard.mjs" \
+            --plan "$plan_json" --mode rollback
+          tofu apply -input=false -lock-timeout=5m -auto-approve rollback.tfplan
+          rm -f rollback.tfplan
+
+          # One re-check, on the same paths and the same audience-bound token the
+          # first probe used. A failed probe records a result here rather than
+          # ending the step, because the helper decides what an unhealthy
+          # re-check means.
+          recheck=true
+          for path in /health/live /health/ready; do
+            code="$(printf 'Authorization: Bearer %s\n' "$PROBE_ID_TOKEN" |
+              curl -sS -o /dev/null -w '%{http_code}' --retry 6 --retry-delay 5 \
+                --retry-all-errors --max-time 20 -H @- "${SERVICE_URI}${path}" || true)"
+            [[ "$code" == '200' ]] || recheck=false
+          done
+          printf 'Authorization: Bearer %s\n' "$PROBE_ID_TOKEN" |
+            curl -sSf --max-time 20 -H @- "${SERVICE_URI}/v1/platform/status" |
+            jq -e '.state and .asOf and .schemaVersion == "1"' > /dev/null || recheck=false
+
+          final="$(decide "[{\"healthy\":false},{\"healthy\":${recheck}}]")"
+          if [[ "$(jq -r '.action' <<< "$final")" == 'none' ]]; then
+            record "rolled ${UNIT} back to ${revision}; the deploy of ${SOURCE_COMMIT} is red and nothing further was deployed"
+          else
+            record "halt: ${UNIT} was rolled back to ${revision} and is still unhealthy ($(jq -r '.reason' <<< "$final")); there is no second attempt"
+          fi
+          exit 1
+
       - name: Deploy web
+        id: deploy-web
         if: contains(fromJSON(needs.release-plan.outputs.units), 'web')
         working-directory: infra/stacks/web
         env:
@@ -1045,6 +1171,13 @@ jobs:
           tofu init -input=false \
             -backend-config="bucket=${STATE_BUCKET_PREFIX}-web" \
             -backend-config="prefix=stacks/web"
+          # The revision serving before this run changes anything. A rollback
+          # names this exact value and never derives one (#198). The output is
+          # absent on a stack's first deploy, and an unreadable value is recorded
+          # as none rather than guessed: a later failure then halts.
+          previous="$(tofu output -raw latest_ready_revision 2>/dev/null || true)"
+          [[ "$previous" =~ ^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$ ]] || previous=''
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
           # A reviewed exposure lives in `exposure.tfvars`, committed by its own
           # pull request and admitted by a narrow `.gitignore` exception (#180).
           # Passing it only when it exists leaves a stack that has never been
@@ -1087,6 +1220,7 @@ jobs:
           id_token_audience: ${{ steps.deploy-web-service.outputs.uri }}
 
       - name: Verify web health
+        id: verify-web
         if: contains(fromJSON(needs.release-plan.outputs.units), 'web')
         env:
           SERVICE_URI: ${{ steps.deploy-web-service.outputs.uri }}
@@ -1099,6 +1233,114 @@ jobs:
                 --retry-all-errors --max-time 20 -H @- "${SERVICE_URI}${path}")"
             [[ "$code" == '200' ]] || { echo "${path} returned ${code}" >&2; exit 1; }
           done
+
+      # Rollback, decided rather than improvised (#198).
+      #
+      # This runs only when web's own health check failed. An apply that failed
+      # is deliberately not this step's business: it left traffic where it was, so
+      # there is nothing to move back. The decision belongs to the pure helper
+      # from #155 — given the revision recorded before the apply and the health
+      # results, it answers `rollback` to exactly that revision or `halt`, and it
+      # is asked again with the re-check appended. Two answers, one apply, one
+      # re-check, and no second attempt however either turns out.
+      #
+      # The plan is traffic only: every template value here is the one this run
+      # just applied, so the single difference `rollback_revision` introduces is
+      # which revision serves. The job ends red either way, because a release that
+      # needed rolling back is not a release that succeeded.
+      - name: Roll web back to the recorded revision
+        id: rollback-web
+        if: failure() && steps.verify-web.conclusion == 'failure'
+        working-directory: infra/stacks/web
+        env:
+          PREVIOUS_REVISION: ${{ steps.deploy-web.outputs.previous }}
+          PROBE_ID_TOKEN: ${{ steps.deploy-web-probe-auth.outputs.id_token }}
+          SERVICE_URI: ${{ steps.deploy-web-service.outputs.uri }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          UNIT: web
+          TF_VAR_artifact_version: git-${{ github.sha }}
+          TF_VAR_source_commit: ${{ github.sha }}
+          TF_VAR_revision_suffix: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          TF_VAR_image_digest="$(jq -er --arg unit "$UNIT" '.[$unit]' \
+            "$RUNNER_TEMP/release-artifacts.json")"
+          export TF_VAR_image_digest
+
+          # The helper adds no rules of its own and reaches nothing: it is a pure
+          # function of the recorded revision and the results handed to it.
+          decide() {
+            HEALTH_CHECKS="$1" node --input-type=module -e '
+              const helper = process.env.GITHUB_WORKSPACE + "/tools/release/rollback-decision.mjs";
+              const { decideRollback } = await import(helper);
+              process.stdout.write(
+                JSON.stringify(
+                  decideRollback({
+                    previousRevision: process.env.PREVIOUS_REVISION || null,
+                    healthChecks: JSON.parse(process.env.HEALTH_CHECKS),
+                  }),
+                ),
+              );
+            '
+          }
+
+          record() {
+            echo "$1" >&2
+            echo "- $1" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          first="$(decide '[{"healthy":false}]')"
+          if [[ "$(jq -r '.action' <<< "$first")" != 'rollback' ]]; then
+            record "halt: ${UNIT} cannot be rolled back automatically ($(jq -r '.reason' <<< "$first")); traffic is unchanged and nothing else was touched"
+            exit 1
+          fi
+          revision="$(jq -r '.revision' <<< "$first")"
+          [[ "$revision" =~ ^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$ ]] || {
+            record "halt: the recorded ${UNIT} revision is not a valid Cloud Run revision name; traffic is unchanged"
+            exit 1
+          }
+
+          # A reviewed exposure lives in `exposure.tfvars`, committed by its own
+          # pull request and admitted by a narrow `.gitignore` exception (#180).
+          # Passing it only when it exists keeps a reviewed exposure from being
+          # planned away by the move back.
+          exposure_args=()
+          if [[ -f exposure.tfvars ]]; then
+            exposure_args+=(-var-file=exposure.tfvars)
+          fi
+          tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -out=rollback.tfplan \
+            -var="rollback_revision=${revision}"
+          # Between plan and apply, because the saved plan is what actually runs.
+          # `tofu show -json` carries state values, so the rendering goes under
+          # $RUNNER_TEMP, is removed on every exit path, and is never uploaded or
+          # written to a job summary. The guard prints addresses and actions only.
+          plan_json="$RUNNER_TEMP/exposure-plan.json"
+          trap 'rm -f "$plan_json" rollback.tfplan' EXIT
+          tofu show -json rollback.tfplan > "$plan_json"
+          node "$GITHUB_WORKSPACE/tools/infra-exposure-guard.mjs" \
+            --plan "$plan_json" --mode rollback
+          tofu apply -input=false -lock-timeout=5m -auto-approve rollback.tfplan
+          rm -f rollback.tfplan
+
+          # One re-check, on the same paths and the same audience-bound token the
+          # first probe used. A failed probe records a result here rather than
+          # ending the step, because the helper decides what an unhealthy
+          # re-check means.
+          recheck=true
+          for path in /health/live /health/ready; do
+            code="$(printf 'Authorization: Bearer %s\n' "$PROBE_ID_TOKEN" |
+              curl -sS -o /dev/null -w '%{http_code}' --retry 6 --retry-delay 5 \
+                --retry-all-errors --max-time 20 -H @- "${SERVICE_URI}${path}" || true)"
+            [[ "$code" == '200' ]] || recheck=false
+          done
+
+          final="$(decide "[{\"healthy\":false},{\"healthy\":${recheck}}]")"
+          if [[ "$(jq -r '.action' <<< "$final")" == 'none' ]]; then
+            record "rolled ${UNIT} back to ${revision}; the deploy of ${SOURCE_COMMIT} is red and nothing further was deployed"
+          else
+            record "halt: ${UNIT} was rolled back to ${revision} and is still unhealthy ($(jq -r '.reason' <<< "$final")); there is no second attempt"
+          fi
+          exit 1
 
       # The record is the ordered vector, what was left alone and what was
       # verified. It names no service URI, digest or account identifier, because
@@ -1117,7 +1359,7 @@ jobs:
             echo "- ordered vector: $(jq -r '[.vector[].unit] | join(" then ")' <<< "$RELEASE_PLAN")"
             echo "- left unchanged: $(jq -r 'if (.unaffected | length) == 0 then "none" else (.unaffected | join(", ")) end' <<< "$RELEASE_PLAN")"
             echo '- verified per step: readiness and liveness, plus the published contract for the API'
-            echo '- predecessor evidence: none, so no rollback permission exists or was minted'
+            echo '- automatic rollback: not needed; every deployed unit passed its health check'
             echo "- workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
