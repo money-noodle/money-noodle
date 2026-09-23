@@ -129,6 +129,19 @@ Before provider enablement, separately authorized qualification must prove unaut
 
 The exact pinned infrastructure toolchain must match CI. Prove real concurrent applies to one stack block rather than interleave, versioned state restores, out-of-band drift is reported rather than auto-corrected, and applying web neither locks nor modifies API state. Test reconstruction in a separately authorized disposable scope, publishing no raw plan/state. Both services require independent health and attributable versions; rollback with a verified predecessor must leave unaffected services healthy. Later domain cutover separately verifies TLS issuance/renewal. These requirements remain future evidence, not assertions that source tests have proved provider behavior.
 
+### The simple rollback rules
+
+Rollback follows four rules, and nothing more:
+
+1. Before a deploy, note the revision that is serving now — the **previous revision**.
+2. The health check passes after the deploy: do nothing.
+3. The health check fails and a previous revision was noted: roll back to exactly that revision, then run the health check once more.
+4. No previous revision was noted, or the health check fails again after rolling back: stop and report. No second attempt, and no guessing at a revision nobody noted.
+
+[`tools/release/rollback-decision.mjs`](../../tools/release/rollback-decision.mjs) states those rules as one pure function. Given the noted revision and the health results, it answers `none`, `rollback` with the revision to return to, or `halt` with a reason. **It decides; it never acts.** It reaches no provider, reads no credential, and is not wired into `.github/workflows/delivery.yml` — connecting it to the deploy is separate work, and until then recovery stays the dispatched, gated `rollback` or a revert merge.
+
+Two properties are deliberate. At most one rollback happens per deploy: the helper only ever answers `rollback` while the deploy's own health check is the single result, so recording the re-check puts that answer out of reach. And every doubt resolves to `halt` — unreadable health results, a revision noted as blank, a third health check that could only follow a second rollback. "Nothing to do" is the one answer a confused rollback helper must never give.
+
 ## Cost estimates and operational bounds
 
 There is no current normative USD 30 ceiling. Use [#85's accepted 2026-09-09 revision-3 cost research](https://github.com/money-noodle/money-noodle/issues/85) as dated synthetic known components **plus unknowns**, not a platform total, invoice, guaranteed free allowance, spending authorization or replacement fixed ceiling. Revalidate rates, units, region, billing period, shared pools, other workload usage and private eligibility at #75's exact revision. Keep currencies and migration phases separate; M1 does not inherit later retained-provider consumers or costs.
