@@ -2100,20 +2100,102 @@ test('the automatic deployment promotes a published digest and rebuilds nothing'
   );
 });
 
-test('the automatic deployment never mints a rollback permission', () => {
+test('the automatic deployment rolls back only where it is allowed to (#198)', () => {
+  // This replaces "never mints a rollback permission". The deploy job now does
+  // reach the recovery path, so the rule is no longer "never" — it is "only in
+  // the step that a failed health check guards, and only to the revision this
+  // run recorded from the stack's own state". Written against the workflow
+  // rather than against a list of step names, so a rollback added somewhere
+  // else in the job fails this even if it looks reasonable.
   const rollbackSlots = OPERATIONS['service.rollback'].permissionSlots;
   assert.ok(rollbackSlots.length > 0);
 
-  for (const name of ['release-plan', 'deploy']) {
-    const job = deliveryJobs().find((candidate) => candidate.name === name);
-    for (const slot of rollbackSlots) {
-      assert.ok(!job.body.includes(slot), `the ${name} job names the ${slot} slot`);
-    }
-    assert.ok(
-      !/rollback_revision|rollback\.tfplan/.test(job.body),
-      `the ${name} job must not reach the recovery path; no verified predecessor exists`,
-    );
+  const deploy = deliveryJobs().find(({ name }) => name === 'deploy');
+  const units = [...declaredDeployments.manifests.values()];
+  assert.ok(units.length > 0, 'expected declared deployment units');
+
+  // The vector job is still credential-free and still names no recovery at all.
+  const plan = deliveryJobs().find(({ name }) => name === 'release-plan');
+  for (const slot of rollbackSlots) {
+    assert.ok(!plan.body.includes(slot), `the release-plan job names the ${slot} slot`);
   }
+  assert.ok(
+    !/rollback_revision|rollback\.tfplan/u.test(plan.body),
+    'the release-plan job must not reach the recovery path; it computes a vector and nothing else',
+  );
+
+  // A rollback spends no recovery permission. It moves traffic to a revision the
+  // stack already had; it mints nothing and names no slot.
+  for (const slot of rollbackSlots) {
+    assert.ok(!deploy.body.includes(slot), `the deploy job names the ${slot} slot`);
+  }
+
+  let remainder = deploy.body;
+  for (const { unit } of units) {
+    const step = `Roll ${unit} back to the recorded revision`;
+    const body = stepBody(deploy.body, step);
+
+    // Guarded by this unit's own health failure. `failure()` alone would also
+    // fire when the apply failed, which leaves traffic where it was and gives
+    // nothing to move back.
+    assert.match(
+      body,
+      new RegExp(`if: failure\\(\\) && steps\\.verify-${unit}\\.conclusion == 'failure'`, 'u'),
+      `"${step}" must run only when ${unit}'s own health check failed`,
+    );
+
+    // The target is the recorded step output, reached through the helper — never
+    // a literal, a dispatch input or anything derived in the workflow.
+    assert.match(
+      body,
+      new RegExp(
+        `PREVIOUS_REVISION: \\$\\{\\{ steps\\.deploy-${unit}\\.outputs\\.previous \\}\\}`,
+        'u',
+      ),
+      `"${step}" must take its target from the revision recorded before the apply`,
+    );
+    assert.match(
+      body,
+      /-var="rollback_revision=\$\{revision\}"/u,
+      `"${step}" must roll back to the decided revision, not to a literal`,
+    );
+    assert.ok(
+      !/github\.event\.inputs/u.test(body),
+      `"${step}" must not read a dispatch input; a push run has none`,
+    );
+    assert.match(
+      body,
+      /rollback-decision\.mjs/u,
+      `"${step}" must ask the decision helper rather than improvising the rule`,
+    );
+
+    // Exactly one rollback and one apply per deploy. No retry, no second plan.
+    assert.equal(
+      [...body.matchAll(/tofu apply/gu)].length,
+      1,
+      `"${step}" must apply once; there is no second attempt`,
+    );
+    assert.equal(
+      [...body.matchAll(/-out=rollback\.tfplan/gu)].length,
+      1,
+      `"${step}" must save exactly one rollback plan`,
+    );
+
+    remainder = remainder.replace(body, '');
+  }
+
+  // Nowhere else in the job. With every rollback step removed, nothing the job
+  // *runs* mentions the recovery path. Comment lines are dropped first: the rule
+  // is about what executes, and prose that names the variable while explaining
+  // the design is not a second rollback.
+  const executable = remainder
+    .split('\n')
+    .filter((line) => !/^\s*#/u.test(line))
+    .join('\n');
+  assert.ok(
+    !/rollback_revision|rollback\.tfplan/u.test(executable),
+    'the deploy job may reach the recovery path only inside its failure-guarded rollback steps',
+  );
 
   // The forward slot is the catalog's, not a literal invented in the workflow.
   assert.deepEqual(
@@ -2121,6 +2203,32 @@ test('the automatic deployment never mints a rollback permission', () => {
     ['release-forward'],
     'the forward release slot is the catalog row',
   );
+});
+
+test('each deployed unit records its serving revision before it changes anything (#198)', () => {
+  const deploy = deliveryJobs().find(({ name }) => name === 'deploy');
+
+  for (const { unit } of declaredDeployments.manifests.values()) {
+    const body = stepBody(deploy.body, `Deploy ${unit}`);
+    const recorded = body.indexOf('previous=$previous');
+    const planned = body.indexOf('tofu plan');
+    assert.ok(recorded >= 0, `"Deploy ${unit}" must record the revision serving before it`);
+    assert.ok(
+      body.includes('tofu output -raw latest_ready_revision'),
+      `"Deploy ${unit}" must read the recorded revision from the stack's own state`,
+    );
+    assert.ok(
+      recorded < planned,
+      `"Deploy ${unit}" must record the serving revision before it plans a change`,
+    );
+    // An unreadable value is recorded as none, so a later failure halts rather
+    // than rolling traffic to something nobody verified.
+    assert.match(
+      body,
+      /\|\| previous=''/u,
+      `"Deploy ${unit}" must record an unusable revision as none rather than guess`,
+    );
+  }
 });
 
 test('every declared deployment unit has exactly one deploy step group', () => {
@@ -2489,6 +2597,20 @@ const APPLY_SITES = [
     mode: 'rollback',
     plan: 'rollback.tfplan',
     step: 'Reassign traffic to the prior revision without changing the template',
+  },
+  // The automatic rollback of a failed routine deploy (#198). Same mode as the
+  // dispatched one, because it is the same kind of change: traffic only.
+  {
+    job: 'deploy',
+    mode: 'rollback',
+    plan: 'rollback.tfplan',
+    step: 'Roll api back to the recorded revision',
+  },
+  {
+    job: 'deploy',
+    mode: 'rollback',
+    plan: 'rollback.tfplan',
+    step: 'Roll web back to the recorded revision',
   },
 ];
 

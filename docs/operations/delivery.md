@@ -67,8 +67,8 @@ Compute affected projects from declared build/runtime/contract dependencies. API
 - `deploy` runs only for a `push` to `refs/heads/main` whose head is the qualified head, whose publication succeeded, whose vector is non-empty, and with all four authorization states recorded true. It plans no identity and no project IAM: a first `api` or `web` plan contains Cloud Run resources and service-level bindings only, and a plan containing a `google_service_account` or a `google_project_iam_member` means the bootstrap re-apply has not happened. It holds exactly the permissions the manual apply holds and masks account identifiers with the same rules, but declares no environment: a routine deploy's approval is the pull-request review of the merge that triggered it (#189), while the dispatched `apply` and `rollback` keep the `production` gate. It resolves and provenance-verifies **every** digest in the vector before applying any of it: the tag this commit published is only a lookup, and the digest behind it is accepted only when `gh attestation verify` binds it to this repository, this exact signer workflow, `refs/heads/main` and this source commit. Nothing is rebuilt for promotion.
 - Each unit is applied, its service URI read, and then probed with a short-lived ID token bound to that service as its audience — the services are private, so an anonymous probe is refused. The API's probe exercises the published contract, not only readiness. Step order is the declared order, and a failed step ends the job, so a failed API verification leaves web untouched.
 - The path cannot change who may invoke a service. Every plan it saves passes the saved-plan exposure guard before it is applied, declaring the `automatic` mode, which carries no typed confirmation at all. If a reviewed `exposure.tfvars` merges before its guarded apply has run, the next automatic deploy of that stack **stops at the guard**: red, nothing applied, no revision created. The automatic path refuses a pending exposure rather than performing one.
-- The path is forward only. It names no rollback revision and spends no recovery slot; `service.rollback` requires a verified predecessor, which cannot exist before a first deployment. Recovery is [#155](https://github.com/money-noodle/money-noodle/issues/155).
-- The job records the ordered vector, the permission slot spent, which services were left unchanged, what was verified at each step, and that no predecessor evidence and therefore no rollback permission exists. It publishes no service URI, digest or account identifier, because a job summary is public and never masked.
+- A unit that fails its health check rolls itself back ([#198](https://github.com/money-noodle/money-noodle/issues/198)). Before it plans any change, each `Deploy <unit>` step records that stack's `latest_ready_revision` as a step output. If that unit's probe then fails, one guarded step asks [`tools/release/rollback-decision.mjs`](../../tools/release/rollback-decision.mjs) what to do, moves traffic back to exactly the recorded revision, probes once more on the same paths with the same audience-bound token, and ends the job red either way. It spends no recovery permission: traffic returns to a revision the stack already had, so nothing is minted and no `service.rollback` slot is named. Forward deployment itself remains forward only.
+- The job records the ordered vector, the permission slot spent, which services were left unchanged, what was verified at each step, and whether an automatic rollback was needed. It publishes no service URI, digest or account identifier, because a job summary is public and never masked.
 
 #### Packaged-artifact journey gate
 
@@ -138,9 +138,28 @@ Rollback follows four rules, and nothing more:
 3. The health check fails and a previous revision was noted: roll back to exactly that revision, then run the health check once more.
 4. No previous revision was noted, or the health check fails again after rolling back: stop and report. No second attempt, and no guessing at a revision nobody noted.
 
-[`tools/release/rollback-decision.mjs`](../../tools/release/rollback-decision.mjs) states those rules as one pure function. Given the noted revision and the health results, it answers `none`, `rollback` with the revision to return to, or `halt` with a reason. **It decides; it never acts.** It reaches no provider, reads no credential, and is not wired into `.github/workflows/delivery.yml` — connecting it to the deploy is separate work, and until then recovery stays the dispatched, gated `rollback` or a revert merge.
+[`tools/release/rollback-decision.mjs`](../../tools/release/rollback-decision.mjs) states those rules as one pure function. Given the noted revision and the health results, it answers `none`, `rollback` with the revision to return to, or `halt` with a reason. **It decides; it never acts** — it reaches no provider and reads no credential. The push `deploy` job in `.github/workflows/delivery.yml` is what acts on its answer ([#198](https://github.com/money-noodle/money-noodle/issues/198)); a dispatched, gated `rollback` remains available for everything the automatic path will not do.
 
 Two properties are deliberate. At most one rollback happens per deploy: the helper only ever answers `rollback` while the deploy's own health check is the single result, so recording the re-check puts that answer out of reach. And every doubt resolves to `halt` — unreadable health results, a revision noted as blank, a third health check that could only follow a second rollback. "Nothing to do" is the one answer a confused rollback helper must never give.
+
+### After an automatic rollback
+
+A rollback always leaves a **red** Delivery run, even when it worked. A release that had to be rolled back is not a release that succeeded, and the run is the thing that makes a person look.
+
+What an operator sees, in the job summary:
+
+- `rolled <unit> back to <revision>; the deploy of <commit> is red and nothing further was deployed` — traffic is back on the recorded revision and that revision answered its probe. Nothing after the failed unit was deployed, so a rolled-back `api` means `web` was never touched.
+- `halt: <unit> cannot be rolled back automatically (no-previous-revision); traffic is unchanged and nothing else was touched` — usually a stack's first-ever deploy, which has no earlier revision to return to. The new revision is still serving and still unhealthy.
+- `halt: <unit> was rolled back to <revision> and is still unhealthy (rollback-did-not-recover); there is no second attempt` — the previous revision did not recover either, so the problem is probably not the new revision.
+
+What to do next:
+
+- **After a successful rollback**, treat it as a normal red build: fix forward. The next merge to `main` deploys a new revision and takes traffic back to `LATEST` on its own.
+- **After a `halt`**, nothing further changed, so the service is wherever the failed deploy left it. Recover with the dispatched, gated `rollback` operation (which takes an explicit revision and passes the `production` environment gate), or by reverting the merge.
+
+**Known behaviour, not a defect.** After an automatic rollback the service stays pinned to the previous revision until the next forward deploy — exactly like today's manual rollback, because it is the same traffic assignment. Until then `rollback_revision` holds traffic on the named revision, so a revision deployed by any other means will not receive traffic.
+
+One caveat about what gets recorded: the value is the stack's `latest_ready_revision`, the most recent revision that passed its startup probe. That equals the serving revision in every ordinary case, but **not** immediately after a prior rollback pinned an older revision — there the latest ready revision is the one traffic was moved away from. Rolling back twice in a row without a forward deploy in between could therefore return traffic to the revision that already failed. Recording the actual traffic target instead would need an infrastructure change, which #198 deliberately did not make.
 
 ## Cost estimates and operational bounds
 
