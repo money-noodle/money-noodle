@@ -7,6 +7,7 @@ import { createConfiguredServer } from './create-configured-server.js';
 
 interface Rendering {
   env: Record<string, string>;
+  secretEnv: Record<string, { secret: string; version: string }>;
   image: string;
   port: number;
   livePath: string;
@@ -58,6 +59,16 @@ describe.each(api)('evaluated production API', (rendering) => {
       await server.close();
     }
   });
+  it('holds the projection connection string only as a reference, never as a value', () => {
+    // The evaluated rendering is the evidence: the one credential this service
+    // consumes arrives by reference, and the plain environment the composition
+    // above was handed carries no connection string at all. A regression here
+    // would mean a value had been rendered into configuration.
+    expect(Object.keys(rendering.secretEnv)).toEqual(['PLATFORM_API_PROJECTION_DATABASE_URL']);
+    expect(rendering.secretEnv.PLATFORM_API_PROJECTION_DATABASE_URL?.version).toBe('latest');
+    expect(Object.keys(rendering.env)).not.toContain('PLATFORM_API_PROJECTION_DATABASE_URL');
+  });
+
   it.each([
     'NODE_ENV',
     'ARTIFACT_VERSION',

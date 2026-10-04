@@ -36,4 +36,34 @@ variables {
 
 run "production_api" {
   command = plan
+
+  # The projection connection reaches the runtime by reference, under the one
+  # name the runtime contract allowlists, and only because the same secret is
+  # granted to this service's runtime identity (#209, ADR-0012). The bridge
+  # proves the rendered reference; these assert the declared intent it is
+  # checked against, so a binding renamed here fails in HCL rather than only in
+  # the bridge's JSON.
+  assert {
+    condition = (
+      length(var.secret_environment) == 1 &&
+      contains(keys(var.secret_environment), "PLATFORM_API_PROJECTION_DATABASE_URL")
+    )
+    error_message = "The api runtime may hold exactly one secret-backed variable, the projection connection string; found: ${join(", ", keys(var.secret_environment))}"
+  }
+
+  assert {
+    condition = alltrue([
+      for name, secret_id in var.secret_environment :
+      contains(var.accessible_secret_ids, secret_id)
+    ])
+    error_message = "A secret bound by reference must also be granted to this service's runtime identity, or the instance cannot start."
+  }
+
+  # No value is supplied anywhere in this configuration. The container is
+  # declared empty by the platform stack and the maintainer adds the version out
+  # of band, so there is nothing here a plan or state file could carry.
+  assert {
+    condition     = length(var.secret_environment) == length(distinct(values(var.secret_environment)))
+    error_message = "Two variables must not reference the same secret under different names."
+  }
 }

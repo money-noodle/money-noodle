@@ -59,7 +59,16 @@ variable "debug_log_retention_days" {
 }
 
 variable "secrets" {
-  description = "Secret containers to declare. Empty for the first slice."
+  description = <<-EOT
+    Secret containers to declare, keyed by secret id, with the custody record
+    each one must carry before it can exist (ADR-0005).
+
+    The default declares the projection reader's connection string and nothing
+    else. The container is created empty: a **value is never supplied here**,
+    because reaching this variable means passing through an OpenTofu plan and
+    into remote state. The maintainer adds the version out of band, and the
+    container is already waiting for it (ADR-0012, #209).
+  EOT
   type = map(object({
     owner                  = string
     consuming_principal    = string
@@ -67,7 +76,28 @@ variable "secrets" {
     revocation_procedure   = string
     recovery_path          = string
   }))
-  default = {}
+
+  default = {
+    # SELECT-only role on the existing public paper projection. The API reads four
+    # tables through it and can do nothing else; readiness refuses to pass if the
+    # role ever holds more than SELECT, so an over-granted replacement value fails
+    # the next revision rather than quietly widening what the API can do.
+    "platform-api-projection-database-url" = {
+      owner                  = "maintainer"
+      consuming_principal    = "platform-api runtime service account"
+      rotation_interval_days = 90
+      revocation_procedure   = "Drop or alter the SELECT-only database role at the provider, then add a new secret version. The next revision fails its readiness probe until a working value exists, so a revoked credential cannot serve traffic."
+      recovery_path          = "Recreate the SELECT-only role at the database provider and add a new secret version. Nothing in this repository holds or can reconstruct the value; the projection itself is written by a separate system and is not restored from here."
+    }
+  }
+
+  validation {
+    condition = alltrue([
+      for id, secret in var.secrets :
+      can(regex("^[a-z][a-z0-9-]{0,61}$", id))
+    ])
+    error_message = "Secret ids are lower-case, hyphenated names, so the id that appears in a Cloud Run secret reference is predictable."
+  }
 }
 
 variable "labels" {

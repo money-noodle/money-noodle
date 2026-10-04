@@ -10,7 +10,9 @@
 
 ## Purpose
 
-This architecture establishes the smallest current boundary that can prove Money Noodle's web/API, contract, trust, deployment, and observability requirements without introducing identity, tenant data, a database, provider credentials, background work, simulation, or funded authority.
+This architecture establishes the smallest current boundary that can prove Money Noodle's web/API, contract, trust, deployment, and observability requirements without introducing identity, tenant data, background work, simulation, or funded authority.
+
+The original boundary admitted no database and no provider credential at all. Working [`ADR-0012`](decisions/ADR-0012-read-only-projection-port.md) amends that on 2026-10-04, and only this far: the **platform API** may read the four public paper projection tables an existing separate system writes, through a typed read-only port, as a database role holding nothing but `SELECT` — a property the service verifies at readiness rather than trusts. Its connection string is the first real use of the managed secret store under ADR-0005. Nothing else changes: the API owns no schema and performs no write, the **web gains no database access of any kind**, and a second store, a provider SDK, a scheduler or funded authority still needs its own accepted boundary.
 
 It is intentionally not a complete platform decomposition. New domains, stores, jobs, and providers require their own accepted boundaries and diagrams before implementation.
 
@@ -21,7 +23,7 @@ It is intentionally not a complete platform decomposition. New domains, stores, 
 - The repository implements pnpm workspaces and Nx projects for the Next.js web, Fastify API, and generated OpenAPI client, with exact runtime/tool versions and a frozen lockfile.
 - Current source ownership, repository and Actions controls, hosted validation evidence, and deployment gaps are owned in [`../current-status.md`](../current-status.md); they are not architecture decisions.
 - TypeScript is the default, REST/OpenAPI is required, the API must remain interface-neutral, and deployable projects must build and deploy independently.
-- The web is a presentation client. It cannot become a worker, provider adapter, scheduler, data authority, or direct database client.
+- The web is a presentation client. It cannot become a worker, provider adapter, scheduler, data authority, or direct database client. ADR-0012 admits a read-only projection port in the API only; the boundary checks refuse a database driver, and any projection module, anywhere in `apps/web`.
 - Production has no real-money authority. Simulation and funded concepts remain structurally separate when they are introduced.
 - The first standing remote environment is production; CI may create ephemeral resources, and there is no required persistent staging environment.
 - The implemented foundation pins Node.js 22.22.0, pnpm 11.24.0, Nx 23.1.2, TypeScript 6.0.3, Next.js 16.3.3, React 19.2.8, and Fastify 5.12.1.
@@ -46,7 +48,7 @@ Create two deployable projects and one generated client package:
 | Project | Path | Owns | Must not own |
 | --- | --- | --- | --- |
 | Web | `apps/web` | Next.js routes, rendering, accessibility, browser state, presentation mapping, web telemetry, server-only API-client composition | Canonical API behavior, database access, platform jobs, provider SDKs/secrets, funded or simulation authority |
-| Platform API | `services/platform-api` | HTTP authentication/authorization adapters when introduced, runtime validation, application use-case composition, public/private DTOs, API telemetry, its future explicitly owned schema | UI rendering, long-running work, provider automation, another service's tables, frontend-specific workflow state |
+| Platform API | `services/platform-api` | HTTP authentication/authorization adapters when introduced, runtime validation, application use-case composition, public/private DTOs, API telemetry, a **read-only projection port** over the existing public paper projection (ADR-0012), its future explicitly owned schema | UI rendering, long-running work, provider automation, writes or migrations against the projection it reads, another service's tables, frontend-specific workflow state |
 | Generated TypeScript client | `packages/platform-api-client` | Generated transport models and request functions for TypeScript clients | Domain models, hand-maintained request code, business rules, secrets |
 
 The API begins as one lightweight modular deployment rather than premature domain services. A module may move to its own service only after data ownership, scaling, failure isolation, or authority provides a material reason. The API must never become a resident multipurpose worker: commands that need external effects will persist intent and enqueue an isolated job or service in a later accepted slice.
@@ -63,7 +65,7 @@ The accepted first user-visible capability is a public **platform availability c
 4. `apps/web` uses the generated client in a Server Component and renders state plus the API-provided `asOf` time.
 5. API timeout, transport failure, incompatible schema, or invalid response renders **status unknown**. The web never invents an available state or silently serves stale status.
 
-The endpoint is intentionally read-only, identity-free, tenant-free, database-free, and financially inert. It proves the cross-deployment contract, generated-client ownership, runtime validation, safe failure presentation, traces, independent artifacts, and remote smoke path before riskier capabilities exist.
+The endpoint is intentionally read-only, identity-free, tenant-free, database-free, and financially inert — the projection port ADR-0012 admits is a separate capability that this endpoint does not consult. It proves the cross-deployment contract, generated-client ownership, runtime validation, safe failure presentation, traces, independent artifacts, and remote smoke path before riskier capabilities exist.
 
 ### Public contract boundary
 

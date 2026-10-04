@@ -90,9 +90,32 @@ variable "authorised_invoker_members" {
 }
 
 variable "accessible_secret_ids" {
-  description = "Secret Manager secret ids the API may read. Empty for the first slice."
+  description = <<-EOT
+    Secret Manager secret ids the API may read. Defaults to the read-only paper
+    projection's connection string, declared as an empty container by the platform
+    stack (ADR-0012, #209). Granting access to a container with no version is
+    deliberate and harmless: the grant is what lets the maintainer supply the value
+    without a second apply.
+  EOT
   type        = list(string)
-  default     = []
+  default     = ["platform-api-projection-database-url"]
+}
+
+variable "secret_environment" {
+  description = <<-EOT
+    Environment variables injected from Secret Manager by reference, keyed by
+    variable name.
+
+    `PLATFORM_API_PROJECTION_DATABASE_URL` is the connection string for the
+    SELECT-only role on the existing public paper projection. The API reads four
+    tables through it and refuses readiness if the role holds more than SELECT or
+    the database is unreachable (ADR-0012). No value appears here, in a plan, or in
+    state; the maintainer adds the secret version out of band.
+  EOT
+  type        = map(string)
+  default = {
+    PLATFORM_API_PROJECTION_DATABASE_URL = "platform-api-projection-database-url"
+  }
 }
 
 variable "trace_sample_ratio" {

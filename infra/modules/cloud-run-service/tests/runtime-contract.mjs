@@ -101,11 +101,67 @@ export function extractRuntimeRendering(raw, stack) {
       known(resource.sensitive_values?.template),
       'Runtime configuration contains sensitive values.',
     );
+    // An environment entry is one of exactly two kinds (#209, ADR-0012).
+    //
+    //   * A plain value entry: no `value_source`, a name on the allowlist regex,
+    //     and a non-empty evaluated value. Unchanged rules.
+    //   * A secret-reference entry: a name on the explicit per-stack allowlist
+    //     below, no inline value at all, and one `secret_key_ref` naming the
+    //     secret this stack's evaluated plan declares, at `latest`.
+    //
+    // The second kind is why this bridge still proves what it claims to. It reads
+    // a *reference*, so the rendering can be checked without a value existing
+    // anywhere — which is the same reason the value is held in a managed secret
+    // rather than in configuration.
+    const secretNameAllowlist = stack === 'api' ? ['PLATFORM_API_PROJECTION_DATABASE_URL'] : [];
+    // Taken from the evaluated plan, never restated here. A literal copied into
+    // this file would keep passing after the stack stopped declaring the binding,
+    // which is precisely the drift this bridge exists to catch.
+    const declaredSecretEnv = plan.variables.secret_environment?.value ?? {};
+    const grantedSecretIds = plan.variables.accessible_secret_ids?.value ?? [];
+
     const env = {};
+    const secretEnv = {};
     assert.ok(Array.isArray(container.env) && container.env.length > 0);
     for (const entry of container.env) {
       const name = text(entry.name);
-      assert.ok(!Object.hasOwn(env, name), 'Duplicate environment name.');
+      assert.ok(
+        !Object.hasOwn(env, name) && !Object.hasOwn(secretEnv, name),
+        'Duplicate environment name.',
+      );
+
+      if (Array.isArray(entry.value_source) && entry.value_source.length > 0) {
+        assert.ok(secretNameAllowlist.includes(name), 'Unsupported secret environment name.');
+        // Null rather than empty string: the pinned provider renders an absent
+        // inline value as null, and accepting anything else would accept an entry
+        // carrying both a literal and a reference.
+        assert.ok(
+          entry.value === null || entry.value === undefined,
+          'A secret reference carries no inline value.',
+        );
+        const source = one(entry.value_source);
+        assert.deepEqual(Object.keys(source), ['secret_key_ref']);
+        const reference = one(source.secret_key_ref);
+        assert.deepEqual(Object.keys(reference).sort(), ['secret', 'version']);
+        const secret = text(reference.secret);
+        assert.equal(
+          secret,
+          text(declaredSecretEnv[name]),
+          'A secret reference must name the secret this plan declares for it.',
+        );
+        // A reference the runtime identity cannot read would surface as an
+        // instance that will not start, so it is refused here instead.
+        assert.ok(
+          grantedSecretIds.includes(secret),
+          'A referenced secret must also be granted to this runtime identity.',
+        );
+        // `latest` is the accepted custody rule: revocation is "add a new
+        // version", so a pinned version would keep serving a replaced credential.
+        assert.equal(reference.version, 'latest');
+        secretEnv[name] = { secret, version: reference.version };
+        continue;
+      }
+
       assert.deepEqual(entry.value_source, []);
       assert.ok(
         /^(NODE_ENV|PLATFORM_API_ORIGIN|ARTIFACT_VERSION|MONEY_NOODLE_(COMMIT|SERVICE|ENVIRONMENT)|GOOGLE_CLOUD_QUOTA_PROJECT|OTEL_[A-Z_]+)$/u.test(
@@ -114,6 +170,15 @@ export function extractRuntimeRendering(raw, stack) {
         'Unsupported environment name.',
       );
       env[name] = text(entry.value);
+    }
+
+    // The rendering must match the declared intent exactly. A dropped binding is a
+    // change to the production runtime, and an extra one is a new credential path.
+    assert.deepEqual(Object.keys(secretEnv).sort(), Object.keys(declaredSecretEnv).sort());
+    // Stated separately as well as through the empty allowlist above, because
+    // "the web is never a database client" is the rule most worth failing loudly.
+    if (stack === 'web') {
+      assert.deepEqual(secretEnv, {}, 'The web stack may hold no secret reference.');
     }
     const required = [
       'NODE_ENV',
@@ -155,6 +220,7 @@ export function extractRuntimeRendering(raw, stack) {
     return {
       run,
       env,
+      secretEnv,
       image,
       port,
       expected,
@@ -163,6 +229,18 @@ export function extractRuntimeRendering(raw, stack) {
     };
   });
 }
+
+const planOf = (records) => records.find((record) => record.type === 'test_plan').test_plan;
+
+const containerEnv = (records) =>
+  planOf(records).planned_values.root_module.child_modules[0].resources.find(
+    (entry) => entry.type === 'google_cloud_run_v2_service',
+  ).values.template[0].containers[0].env;
+
+const secretReferenceEntry = (records) =>
+  containerEnv(records).find((entry) => entry.value_source?.length > 0);
+
+const secretKeyRef = (records) => secretReferenceEntry(records).value_source[0].secret_key_ref[0];
 
 // Mutate the actual capture to prove the extractor fails closed, without a
 // parallel handwritten rendering fixture that could drift from production.
@@ -202,6 +280,70 @@ function verifyExtractionFailures(raw, stack) {
       const plan = records.find((record) => record.type === 'test_plan').test_plan;
       delete plan.planned_values.outputs.source_commit;
     },
+    // A secret reference under a name no stack allowlists. Refused on both, which
+    // is what stops the allowlist being a comment.
+    (records) => {
+      containerEnv(records).push({
+        name: 'DATABASE_URL',
+        value: null,
+        value_source: [{ secret_key_ref: [{ secret: 'some-secret', version: 'latest' }] }],
+      });
+    },
+    ...(stack === 'api'
+      ? [
+          // Each field of the accepted reference, broken one at a time.
+          (records) => {
+            secretKeyRef(records).version = '1';
+          },
+          (records) => {
+            secretKeyRef(records).secret = 'a-secret-the-plan-does-not-declare';
+          },
+          (records) => {
+            secretReferenceEntry(records).value = 'an inline value';
+          },
+          (records) => {
+            secretReferenceEntry(records).name = 'DATABASE_URL';
+          },
+          (records) => {
+            secretKeyRef(records).project = 'example-project';
+          },
+          (records) => {
+            secretReferenceEntry(records).value_source[0].secret_key_ref.push({
+              secret: 'a-second-secret',
+              version: 'latest',
+            });
+          },
+          // The reference survives but the plan stops declaring it: a literal in
+          // this file would have passed here.
+          (records) => {
+            delete planOf(records).variables.secret_environment;
+          },
+          // A reference the runtime identity was never granted.
+          (records) => {
+            planOf(records).variables.accessible_secret_ids.value = [];
+          },
+          // The declared binding silently dropped from the rendering.
+          (records) => {
+            const env = containerEnv(records);
+            env.splice(env.indexOf(secretReferenceEntry(records)), 1);
+          },
+        ]
+      : [
+          // The web stack carries none, and must keep carrying none.
+          (records) => {
+            containerEnv(records).push({
+              name: 'PLATFORM_API_PROJECTION_DATABASE_URL',
+              value: null,
+              value_source: [
+                {
+                  secret_key_ref: [
+                    { secret: 'platform-api-projection-database-url', version: 'latest' },
+                  ],
+                },
+              ],
+            });
+          },
+        ]),
   ];
   for (const mutate of mutations) {
     const records = raw

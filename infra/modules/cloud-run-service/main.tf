@@ -134,6 +134,28 @@ resource "google_cloud_run_v2_service" "service" {
         }
       }
 
+      # Secret-backed environment, by reference only. The value is resolved by
+      # Cloud Run from Secret Manager at instance start, so it never passes
+      # through an OpenTofu variable, plan, or state file — which is the whole
+      # reason this is a separate block rather than another entry in `local.env`
+      # (ADR-0005, ADR-0012).
+      #
+      # `latest` is deliberate: revocation is "add a new version", and a revision
+      # pinned to a version number would keep serving a credential the maintainer
+      # had already replaced.
+      dynamic "env" {
+        for_each = var.secret_environment
+        content {
+          name = env.key
+          value_source {
+            secret_key_ref {
+              secret  = env.value
+              version = "latest"
+            }
+          }
+        }
+      }
+
       # Cloud Run has no separate readiness probe; the startup probe is what
       # gates a revision from receiving traffic, so `/health/ready` belongs here.
       # A revision that never reports ready never serves, which is the behaviour

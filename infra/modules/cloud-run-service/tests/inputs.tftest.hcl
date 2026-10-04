@@ -143,3 +143,49 @@ run "a_cross_project_runtime_identity_is_refused" {
 
   expect_failures = [google_cloud_run_v2_service.service]
 }
+
+# A secret bound to an environment variable without the matching accessor grant
+# is the one failure mode of ADR-0012's custody path that would surface as an
+# instance that will not start rather than a plan that will not apply. It is
+# refused at plan time instead (#209).
+run "a_secret_environment_variable_without_an_accessor_grant_is_refused" {
+  command = plan
+
+  variables {
+    secret_environment = {
+      PLATFORM_API_PROJECTION_DATABASE_URL = "platform-api-projection-database-url"
+    }
+    accessible_secret_ids = []
+  }
+
+  expect_failures = [var.secret_environment]
+}
+
+run "a_lower_case_secret_environment_variable_name_is_refused" {
+  command = plan
+
+  variables {
+    secret_environment    = { platform_api_projection_database_url = "example-secret" }
+    accessible_secret_ids = ["example-secret"]
+  }
+
+  expect_failures = [var.secret_environment]
+}
+
+run "a_granted_secret_may_be_bound_by_reference" {
+  command = plan
+
+  variables {
+    secret_environment = {
+      PLATFORM_API_PROJECTION_DATABASE_URL = "platform-api-projection-database-url"
+    }
+    accessible_secret_ids = ["platform-api-projection-database-url"]
+  }
+
+  # The reference is planned, and no value appears anywhere in it: the module
+  # creates no secret version and takes no value as input.
+  assert {
+    condition     = length(google_secret_manager_secret_iam_member.runtime_secret_access) == 1
+    error_message = "A bound secret must also be granted to this service's runtime identity."
+  }
+}

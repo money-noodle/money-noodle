@@ -105,8 +105,16 @@ module "service" {
   allow_unauthenticated      = var.allow_unauthenticated
   authorised_invoker_members = local.authorised_invoker_members
 
-  # Empty. The first slice needs no operational secret.
+  # The projection reader's connection string, granted per secret and only to this
+  # service's own runtime identity (ADR-0005). The container is created empty by
+  # the platform stack; the maintainer adds the version out of band, and until then
+  # the API runs with no projection configured and says so through readiness
+  # (ADR-0012, #209).
   accessible_secret_ids = var.accessible_secret_ids
+
+  # Bound by reference, so the value is resolved by Cloud Run at instance start
+  # and never enters a variable, a plan, or state.
+  secret_environment = var.secret_environment
 
   telemetry_endpoint = local.telemetry_endpoint
   trace_sample_ratio = var.trace_sample_ratio

@@ -31,7 +31,11 @@ output "contract_telemetry_endpoint" {
 }
 
 output "contract_secret_ids" {
-  description = "Secret container ids available to be granted to a service. Empty for the first slice."
+  description = <<-EOT
+    Secret container ids a service stack may be granted. Declared containers only;
+    this output carries no value and cannot, because the module never creates a
+    version. Currently the projection reader's connection string (ADR-0012).
+  EOT
   value       = module.secret_store.secret_ids
 }
 
