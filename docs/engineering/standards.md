@@ -65,7 +65,7 @@ The first web/API foundation pins one reproducible toolchain. Reverify security 
 | Test/coverage | Vitest 4.1.11 with V8 coverage |
 | OpenAPI | Redocly CLI 2.49.0, Hey API OpenAPI TypeScript 0.99.0, OpenAPI Changes 0.2.11 |
 
-The lockfile overrides the generator's exact vulnerable `js-yaml@4.2.0` transitive dependency to compatible patched `4.3.2`; `pnpm audit --audit-level high` must remain clean. Approved install scripts are allowlisted in `pnpm-workspace.yaml`. Adding a build script requires review rather than interactive approval residue.
+The lockfile overrides the generator's exact vulnerable `js-yaml@4.2.0` transitive dependency to compatible patched `4.3.2`, and `pnpm-workspace.yaml` carries further same-major overrides for vulnerable transitives whose parents have not yet released (`axios`, `brace-expansion`, `fast-uri`); `pnpm audit --audit-level high` must remain clean. An advisory with no published fix may be listed under `audit.ignore` only with its GHSA id, the reason it cannot be fixed, the path through which it is reached, and the date; remove the entry as soon as a fix ships. Overrides are removed when the parent dependency catches up. Approved install scripts are allowlisted in `pnpm-workspace.yaml`. Adding a build script requires review rather than interactive approval residue.
 
 The generated client package disables `exactOptionalPropertyTypes` only because generator 0.99 emits explicit `undefined` in optional Fetch fields. Domain, API, and web source retain the strict repository default. Revisit and remove this exception when the generator supports it.
 

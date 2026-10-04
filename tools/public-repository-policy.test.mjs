@@ -583,7 +583,7 @@ test('public entry points route to security, contribution, architecture, and lic
     assert.ok(readme.includes(`](${target})`), `README.md must route readers to ${target}`);
   }
   assert.match(readme, /no real-money authority/i);
-  assert.match(currentStatus, /nothing here has been remotely deployed/i);
+  assert.match(currentStatus, /M1 foundation is applied and live/i);
 });
 
 test('security reporting is enabled, private, and requires revocation before history cleanup', () => {
@@ -627,7 +627,7 @@ test('current repository truth has one owner and every governed entry point rout
     /Strict `main` protection requires/,
     /branch-protection administrator enforcement is currently disabled/i,
     /active default-branch `stable` ruleset/i,
-    /mechanically blocked/,
+    /deployer service account has zero user-managed keys/,
     /aquasecurity\/setup-trivy/,
   ];
 
@@ -804,13 +804,13 @@ test('temporary integration exception is maintainer-only, exact-head, evidenced,
   assert.doesNotMatch(coordinationDecision, /^## (?:Validation|Revisit when)$/m);
 });
 
-test('current production truth keeps self-review prevention, maintainer-only bypass, and remains mechanically blocked', () => {
+test('current production truth keeps self-review prevention, maintainer-only bypass, and gates only dispatched operations', () => {
   assert.match(currentStatus, /prevent_self_review=true/);
   assert.match(currentStatus, /can_admins_bypass=true/);
   assert.match(currentStatus, /maintainer personally uses the environment administrator bypass/);
   assert.match(currentStatus, /configuration-derived, not observed/);
-  assert.match(currentStatus, /mechanically blocked/);
-  assert.match(currentStatus, /repository provider\/apply variable or secret/);
+  assert.match(currentStatus, /routine deploy does not reach this environment at all/);
+  assert.match(currentStatus, /dispatched `apply`, `rollback`, and public-access operations only/);
   assert.match(currentStatus, /aquasecurity\/setup-trivy/);
 });
 
@@ -938,17 +938,11 @@ test('workflow and decision lifecycle each have one authority and proposed recor
   }
 });
 
-test('current provider configuration remains absent and mechanically blocked', () => {
-  assert.match(
-    currentStatus,
-    /Repository and production-environment Actions variables and secrets are empty/,
-  );
-  assert.match(currentStatus, /no Google Cloud project resource/i);
-  assert.match(currentStatus, /provider delivery/);
-  assert.match(
-    currentStatus,
-    /every provider path remains mechanically blocked before authentication/i,
-  );
+test('current provider configuration is federation-only with no durable credentials', () => {
+  assert.match(currentStatus, /The repository holds zero Actions secrets/);
+  assert.match(currentStatus, /maintainer-owned Google Cloud project exists in `us-west1`/i);
+  assert.match(currentStatus, /Merge-to-main delivery runs and passes/);
+  assert.match(currentStatus, /delivery authenticates only through workload-identity federation/i);
   assert.match(currentStatus, /aquasecurity\/setup-trivy/);
 });
 
