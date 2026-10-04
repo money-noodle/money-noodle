@@ -68,3 +68,12 @@ output "authorised_invoker_members" {
   EOT
   value       = sort([for entry in google_cloud_run_v2_service_iam_member.authorised_invokers : entry.member])
 }
+
+output "rendered_secret_environment" {
+  description = <<-EOT
+    Secret-backed environment variables this revision renders, as name to secret
+    container id. References only: this module never receives, reads, or outputs a
+    secret value, and an empty map means the revision binds no secret at all.
+  EOT
+  value       = var.secret_environment
+}

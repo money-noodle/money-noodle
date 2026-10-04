@@ -34,6 +34,20 @@ locals {
   region     = data.terraform_remote_state.bootstrap.outputs.contract_region
   deployer   = data.terraform_remote_state.bootstrap.outputs.contract_deployer_service_account_email
 
+  # Runtime identity per Cloud Run service name, as the maintainer-applied
+  # bootstrap stack published it. Read here for one purpose: naming the consumer
+  # of a secret by the service it belongs to, so no account address is written
+  # down in this repository (#217).
+  runtime_identities = data.terraform_remote_state.bootstrap.outputs.contract_runtime_service_account_emails
+
+  # Who may read each declared secret, resolved from service name to identity. A
+  # service name that bootstrap does not publish fails here rather than granting
+  # access to something unintended.
+  secret_accessor_members = {
+    for secret_id, services in var.secret_consumer_services :
+    secret_id => [for service in services : "serviceAccount:${local.runtime_identities[service]}"]
+  }
+
   # Cloud Run pulls images as the serverless service agent, not as a workload's
   # own runtime identity. ADR-0005 states plainly that the web workload identity
   # may not read the registry, so the pull grant goes here and nowhere near the
@@ -84,7 +98,12 @@ module "secret_store" {
   # Empty. The first slice needs no operational secret; the store exists so the
   # first capability that does need one is not also designing custody.
   secrets = var.secrets
-  labels  = var.labels
+  # The access boundary belongs with the container. Granting `secretAccessor`
+  # needs Secret Manager authority the routine deploy's identity does not hold,
+  # so the grant is declared in this maintainer-applied stack rather than in the
+  # service stack that reads the secret (#217, ADR-0005, ADR-0012).
+  accessor_members = local.secret_accessor_members
+  labels           = var.labels
 
   depends_on = [google_project_service.platform]
 }

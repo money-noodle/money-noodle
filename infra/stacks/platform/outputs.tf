@@ -58,3 +58,13 @@ output "secret_custody_register" {
   description = "Owner, consumer, rotation, revocation, and recovery per declared secret. Contains no secret value."
   value       = module.secret_store.custody_register
 }
+
+output "secret_accessor_register" {
+  description = <<-EOT
+    Members holding `secretAccessor` per declared secret, as this stack applied
+    them. Published for review and drift reporting; not part of the cross-stack
+    contract, because a service stack needs the grant to exist rather than to read
+    who holds it. Contains no secret value.
+  EOT
+  value       = module.secret_store.accessor_register
+}

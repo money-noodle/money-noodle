@@ -403,12 +403,15 @@ test('runtime identities are distinct per service and hold no registry access', 
   }
 });
 
-test('a service apply declares no identity or project-level IAM resource', () => {
+test('a service apply declares no identity, project-level, or secret IAM resource', () => {
   // #178: the first authorized `api` apply failed on `iam.serviceAccounts.create`
-  // because the module asked the deployer to create its runtime identity. The
-  // deployer holds no identity or project-IAM authority by design, so a plan for
-  // either service must now contain Cloud Run resources and service-level
-  // bindings only.
+  // because the module asked the deployer to create its runtime identity. #217: the
+  // first routine deploy after #216 failed again, on a Secret Manager IAM member —
+  // the deployer holds no Secret Manager role at all, and the secret container is
+  // created by a maintainer-applied stack, so a grant declared in the release path
+  // could only fail the deploy that needed it. The deployer holds no identity,
+  // project-IAM or secret authority by design, so a plan for either service must
+  // contain Cloud Run resources and service-level bindings only.
   const forbidden = [
     [/resource\s+"google_service_account"/, 'a service account'],
     [/resource\s+"google_project_iam_(member|binding|policy)"/, 'a project IAM binding'],
@@ -417,6 +420,10 @@ test('a service apply declares no identity or project-level IAM resource', () =>
       'a service account IAM binding',
     ],
     [/resource\s+"google_organization_iam_/, 'an organization IAM binding'],
+    [
+      /resource\s+"google_secret_manager_secret(_iam_(member|binding|policy))?"/,
+      'a Secret Manager resource',
+    ],
   ];
 
   const releasePaths = [
@@ -431,22 +438,41 @@ test('a service apply declares no identity or project-level IAM resource', () =>
       for (const [pattern, description] of forbidden) {
         assert.ok(
           !pattern.test(source),
-          `${relative(path)} declares ${description}. A service apply runs as the deployer, which holds no identity or project-IAM authority (ADR-0005, 2026-09-19 amendment); declare it in the maintainer-applied bootstrap stack instead.`,
+          `${relative(path)} declares ${description}. A service apply runs as the deployer, which holds no identity, project-IAM or Secret Manager authority (ADR-0005, 2026-09-19 amendment; #217); declare it in a maintainer-applied stack instead.`,
         );
       }
     }
   }
 
-  // What stays is per-service and per-release: the service, its per-secret
-  // access, and its service-level invoker bindings.
+  // What stays is per-service and per-release: the service itself and its
+  // service-level invoker bindings.
   const cloudRun = read(join(infraRoot, 'modules', 'cloud-run-service', 'main.tf'));
   for (const retained of [
     /resource\s+"google_cloud_run_v2_service"\s+"service"/,
-    /resource\s+"google_secret_manager_secret_iam_member"\s+"runtime_secret_access"/,
     /resource\s+"google_cloud_run_v2_service_iam_member"\s+"authorised_invokers"/,
   ]) {
     assert.match(cloudRun, retained, 'the service module must keep its per-service resources');
   }
+
+  // Secret access still exists; it is declared where it can actually be applied,
+  // beside the container, and granted by name from the maintainer-applied platform
+  // stack. A reference the service stacks declare is validated against that intent
+  // rather than granted by them (#217).
+  assert.match(
+    read(join(infraRoot, 'modules', 'secret-store', 'main.tf')),
+    /resource\s+"google_secret_manager_secret_iam_member"\s+"accessor"/,
+    'the secret store must declare the access boundary for the containers it creates',
+  );
+  assert.match(
+    read(join(infraRoot, 'stacks', 'platform', 'main.tf')),
+    /accessor_members\s*=/,
+    'the platform stack must pass the declared consumers through to the secret store',
+  );
+  assert.match(
+    read(join(infraRoot, 'modules', 'cloud-run-service', 'variables.tf')),
+    /variable "accessible_secret_ids"/,
+    'the service module must keep declared secret intent as a validated input',
+  );
 
   // And the identity arrives as a validated input rather than being created.
   const variables = read(join(infraRoot, 'modules', 'cloud-run-service', 'variables.tf'));

@@ -69,18 +69,15 @@ locals {
 # `google_service_account` and no `google_project_iam_member`, so a service apply
 # needs neither identity administration nor project IAM (ADR-0005, 2026-09-19
 # amendment). What stays here is what is genuinely per-service and per-release:
-# per-secret access and service-level invoker bindings.
-
-# Secret access is granted per secret, never at project level, and only to the
-# service explicitly declared as its consumer.
-resource "google_secret_manager_secret_iam_member" "runtime_secret_access" {
-  for_each = toset(var.accessible_secret_ids)
-
-  project   = var.project_id
-  secret_id = each.value
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${var.runtime_service_account_email}"
-}
+# the service itself and its service-level invoker bindings.
+#
+# Secret access is not among them. `secretAccessor` on a secret is set with Secret
+# Manager authority, and the deployer identity that runs a routine deploy holds no
+# Secret Manager role at all, by design. A grant declared here could therefore only
+# fail the deploy that needs it, so the grant is declared beside the container in
+# the maintainer-applied platform stack and this module takes
+# `accessible_secret_ids` as declared intent to validate against (#217, ADR-0005,
+# ADR-0012).
 
 resource "google_cloud_run_v2_service" "service" {
   project  = var.project_id

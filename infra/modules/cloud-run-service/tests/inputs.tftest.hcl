@@ -144,10 +144,11 @@ run "a_cross_project_runtime_identity_is_refused" {
   expect_failures = [google_cloud_run_v2_service.service]
 }
 
-# A secret bound to an environment variable without the matching accessor grant
-# is the one failure mode of ADR-0012's custody path that would surface as an
-# instance that will not start rather than a plan that will not apply. It is
-# refused at plan time instead (#209).
+# A secret bound to an environment variable that this service never declared it
+# may read is the one failure mode of ADR-0012's custody path that would surface
+# as an instance that will not start rather than a plan that will not apply. It is
+# refused at plan time instead (#209), against the declared intent the platform
+# stack grants access from (#217).
 run "a_secret_environment_variable_without_an_accessor_grant_is_refused" {
   command = plan
 
@@ -185,7 +186,21 @@ run "a_granted_secret_may_be_bound_by_reference" {
   # The reference is planned, and no value appears anywhere in it: the module
   # creates no secret version and takes no value as input.
   assert {
-    condition     = length(google_secret_manager_secret_iam_member.runtime_secret_access) == 1
-    error_message = "A bound secret must also be granted to this service's runtime identity."
+    condition = length([
+      for entry in google_cloud_run_v2_service.service.template[0].containers[0].env :
+      entry if entry.name == "PLATFORM_API_PROJECTION_DATABASE_URL"
+    ]) == 1
+    error_message = "A granted secret must be rendered as exactly one environment entry."
+  }
+
+  # And nothing in this module grants that access. The binding is declared beside
+  # the container in the maintainer-applied platform stack, because setting IAM on
+  # a secret needs authority the routine deploy's identity does not hold (#217).
+  # `tools/infra-policy.test.mjs` is what fails if a Secret Manager IAM resource
+  # ever reappears in a release path; this run proves the reference itself still
+  # plans without one.
+  assert {
+    condition     = contains(var.accessible_secret_ids, "platform-api-projection-database-url")
+    error_message = "A bound secret must be declared as intended-readable, which is what the platform stack grants against."
   }
 }
