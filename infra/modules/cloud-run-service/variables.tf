@@ -222,6 +222,38 @@ variable "accessible_secret_ids" {
   default     = []
 }
 
+variable "secret_environment" {
+  description = <<-EOT
+    Environment variables whose values come from Secret Manager, keyed by variable
+    name with the secret container id as the value. Injected by reference: no value
+    appears in a variable, a plan, or state (ADR-0005).
+
+    Every secret named here must also appear in `accessible_secret_ids`, which is
+    what grants this service's runtime identity `secretAccessor` on it. The
+    validation below refuses the halfway state — a reference the service cannot
+    read — because that failure surfaces as an instance that will not start rather
+    than as a plan that will not apply.
+  EOT
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition = alltrue([
+      for name, secret_id in var.secret_environment :
+      contains(var.accessible_secret_ids, secret_id)
+    ])
+    error_message = "Every secret bound to an environment variable must also be listed in accessible_secret_ids, or the service is granted no access to the value it is told to read."
+  }
+
+  validation {
+    condition = alltrue([
+      for name, secret_id in var.secret_environment :
+      can(regex("^[A-Z][A-Z0-9_]{0,127}$", name))
+    ])
+    error_message = "Secret environment variable names are upper-case with underscores."
+  }
+}
+
 variable "telemetry_endpoint" {
   description = "OTLP endpoint. Null disables telemetry configuration entirely, rather than half-configuring it."
   type        = string
