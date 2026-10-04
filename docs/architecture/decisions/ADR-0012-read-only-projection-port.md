@@ -80,6 +80,19 @@ The connection string is held in Secret Manager under ADR-0005's existing custod
 - The reference pins `latest`, because revocation is "add a new version" and a revision pinned to a version number would keep serving a credential the maintainer had already replaced.
 - An absent or empty value is a legitimate state, not a misconfiguration: it is exactly the window between this decision landing and the maintainer entering a value.
 
+### The binding is proved against the evaluated plan, by reference only
+
+`infra/modules/cloud-run-service/tests/runtime-contract.mjs` evaluates both production stacks and feeds the rendered container into the readers the service really boots with, so the runtime described above is checked rather than asserted. A secret bound by reference is the first thing that check had no vocabulary for: it previously required every environment entry to carry a literal value.
+
+An environment entry is therefore one of exactly two kinds, and nothing else is accepted:
+
+- A **plain value entry** — no `value_source`, a name matching the existing allowlist, and a non-empty evaluated value. Unchanged.
+- A **secret-reference entry** — a name on an explicit per-stack allowlist, exactly `PLATFORM_API_PROJECTION_DATABASE_URL` for the api stack and nothing at all for the web; no inline value; and one `secret_key_ref` naming a secret at `latest`.
+
+The expected secret id is read from the stack's own evaluated plan rather than restated in the check, so a stack that quietly stopped declaring the binding fails instead of passing against a copied literal. The referenced secret must also appear among the ids granted to that service's runtime identity, because a reference the runtime cannot read is a revision that will not start. The web stack must render **zero** secret-reference entries: this decision's driver ban, asserted against evaluated infrastructure rather than only against imports.
+
+Reading a reference and never a value is what allows this check to run in a public pipeline at all — there is nothing in the rendering to leak, which is the same property that puts the value in a managed secret in the first place.
+
 ### Driver choice
 
 **`postgres` (postgres.js), exact-pinned, with an empty dependency closure.** Chosen over `pg` on supply-chain surface alone: `pg` brings six further packages, and the delivery contract binds the complete executable dependency closure. No ORM, no query builder, no migration tool — this port reads four tables.
@@ -128,6 +141,6 @@ The driver is permitted in `services/platform-api/src/adapters/projection/**` an
 
 Working: decided enough to build on, not production-proven. There is **no evidence of applied infrastructure or of a real database read** — no provider resource was created, no secret version exists, and the integration test that would exercise a real projection is skipped unless a connection string is supplied, so it has never run in CI.
 
-What is exercised by repository checks: the privilege rule, the readiness verdict, the safe-failure conversion, the configuration reader, the boundary probes and the infrastructure policy tests. What is not: the adapter against a live PostgreSQL server, the Secret Manager reference resolving at instance start, and the behaviour of readiness against a genuinely unreachable database.
+What is exercised by repository checks: the privilege rule, the readiness verdict, the safe-failure conversion, the configuration reader, the boundary probes, the infrastructure policy tests, and the evaluated-runtime contract above against both production stacks. What is not: the adapter against a live PostgreSQL server, the Secret Manager reference resolving at instance start, and the behaviour of readiness against a genuinely unreachable database.
 
 Promotion to Settled requires a deployed revision reading the projection through a role independently confirmed to be SELECT-only, with readiness observed failing closed when that role is widened.
