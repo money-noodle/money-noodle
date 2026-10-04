@@ -258,11 +258,11 @@ reported by this first slice.
 ### Enabling the projection secret
 
 The read-only paper projection the platform API reads (ADR-0012) needs three
-things that a routine deploy cannot produce, in this order. None of them is
-optional and none of them can be reordered: Cloud Run refuses a revision whose
-referenced secret does not exist, and the deployer identity holds **no Secret
-Manager role at all**, so the container, its access grant, and its value are all
-outside what a merge can do (#217).
+things a routine deploy cannot produce — the secret container, its access grant,
+and its value — and they arrive in the order below. The order is not a preference:
+Cloud Run refuses a revision whose referenced secret does not exist, and the
+deployer identity that a merge deploys as holds **no Secret Manager role at all**,
+so none of the three is inside what a merge can do (#217).
 
 1. **Merge the change.** It declares the container and its single accessor grant in
    the platform stack, declares the API's intent to read it in the api stack, and
