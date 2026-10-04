@@ -38,6 +38,41 @@ const probes = [
     path: 'apps/web/src/presentation/.boundary-probe.ts',
     source: "import { trace } from '@opentelemetry/api';\nvoid trace;\n",
   },
+  // ADR-0012 admits a read-only projection port in the API only, behind one
+  // PostgreSQL adapter. These probes prove the narrowness in every direction that
+  // matters: the driver is refused outside `adapters/projection`, inner layers
+  // cannot reach the adapter directory at all, and the web cannot become a
+  // database client either directly or by importing a projection module.
+  {
+    path: 'services/platform-api/src/adapters/http/.database-boundary-probe.ts',
+    source: "import postgres from 'postgres';\nvoid postgres;\n",
+  },
+  {
+    path: 'services/platform-api/src/application/.database-boundary-probe.ts',
+    source: "import postgres from 'postgres';\nvoid postgres;\n",
+  },
+  {
+    path: 'services/platform-api/src/domain/.database-boundary-probe.ts',
+    source: "import postgres from 'postgres';\nvoid postgres;\n",
+  },
+  {
+    path: 'services/platform-api/src/application/.projection-adapter-boundary-probe.ts',
+    source:
+      "import { createPostgresPaperProjection } from '../adapters/projection/postgres-paper-projection.js';\nvoid createPostgresPaperProjection;\n",
+  },
+  {
+    path: 'apps/web/src/.database-boundary-probe.ts',
+    source: "import postgres from 'postgres';\nvoid postgres;\n",
+  },
+  {
+    path: 'apps/web/src/presentation/.database-boundary-probe.ts',
+    source: "import postgres from 'postgres';\nvoid postgres;\n",
+  },
+  {
+    path: 'apps/web/src/.projection-module-boundary-probe.ts',
+    source:
+      "import type { PaperBudgetRow } from '../../../services/platform-api/src/domain/paper-projection.js';\nexport type Probe = PaperBudgetRow;\n",
+  },
 ];
 
 try {

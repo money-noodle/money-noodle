@@ -66,6 +66,11 @@ export default tseslint.config(
               message:
                 'The accepted authentication exception is narrow: only the telemetry authentication adapter may import it.',
             },
+            {
+              name: 'postgres',
+              message:
+                'The database driver belongs in the projection adapter. Inner layers depend on the projection port (ADR-0012).',
+            },
           ],
           patterns: [
             {
@@ -81,6 +86,27 @@ export default tseslint.config(
               message:
                 'Inner API layers must remain framework, telemetry-backend and provider-authentication independent.',
             },
+            {
+              // ADR-0012 admits a read-only projection port. The port is an
+              // interface the inner layers own; the driver and the adapter that
+              // uses it are outside, and stay outside.
+              group: [
+                'postgres',
+                'postgres/**',
+                'pg',
+                'pg/**',
+                'pg-*',
+                'mysql',
+                'mysql2',
+                'sqlite3',
+                'better-sqlite3',
+                'mongodb',
+                'ioredis',
+                '**/adapters/projection/**',
+              ],
+              message:
+                'Inner API layers depend on the projection port, never on a database driver or its adapter.',
+            },
           ],
         },
       ],
@@ -93,8 +119,10 @@ export default tseslint.config(
   {
     files: ['services/platform-api/src/**/*.ts'],
     ignores: [
-      // The adapter the exception is for.
+      // Each of these has its own trailing block, so the exemption it needs is
+      // granted there rather than by removing every restriction here.
       'services/platform-api/src/adapters/telemetry/workload-identity-headers.ts',
+      'services/platform-api/src/adapters/projection/**/*.ts',
       // Inner API layers keep their own, stricter rule above; listing them here
       // stops this block from replacing it, because the last matching config
       // wins for a given rule.
@@ -111,12 +139,108 @@ export default tseslint.config(
               message:
                 'Only the telemetry authentication adapter may import a provider authentication library (ADR-0007, 2026-09-15 amendment).',
             },
+            {
+              name: 'postgres',
+              message:
+                'Only services/platform-api/src/adapters/projection may import a database driver (ADR-0012).',
+            },
+            {
+              name: 'pg',
+              message:
+                'Only services/platform-api/src/adapters/projection may import a database driver (ADR-0012).',
+            },
           ],
           patterns: [
             {
               group: ['google-auth-library/**', 'googleapis', '@google-cloud/**'],
               message:
                 'The accepted exception covers workload authentication for OTLP export only, not a provider SDK.',
+            },
+            {
+              group: [
+                'postgres/**',
+                'pg/**',
+                'pg-*',
+                'mysql',
+                'mysql2',
+                'sqlite3',
+                'better-sqlite3',
+                'mongodb',
+                'ioredis',
+              ],
+              message:
+                'The accepted exception is one PostgreSQL adapter for one read-only projection, not a database client anywhere in the service (ADR-0012).',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  // ADR-0012 admits one read-only projection port with one PostgreSQL adapter.
+  // This block is the exception the driver restriction above exists for, and it
+  // is declared after that block because a flat config replaces a rule rather
+  // than merging it: the last matching configuration is the one in force. The
+  // provider-authentication restriction is restated here so permitting the driver
+  // does not quietly permit a provider SDK as well.
+  {
+    files: ['services/platform-api/src/adapters/projection/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'google-auth-library',
+              message:
+                'Only the telemetry authentication adapter may import a provider authentication library (ADR-0007, 2026-09-15 amendment).',
+            },
+          ],
+          patterns: [
+            {
+              group: ['google-auth-library/**', 'googleapis', '@google-cloud/**'],
+              message:
+                'The projection adapter reads a database. It is not a provider SDK boundary.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  // The telemetry authentication adapter keeps its narrow provider-authentication
+  // exception, and gains no database exception with it.
+  {
+    files: ['services/platform-api/src/adapters/telemetry/workload-identity-headers.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'postgres',
+              message:
+                'Only services/platform-api/src/adapters/projection may import a database driver (ADR-0012).',
+            },
+            {
+              name: 'pg',
+              message:
+                'Only services/platform-api/src/adapters/projection may import a database driver (ADR-0012).',
+            },
+          ],
+          patterns: [
+            {
+              group: [
+                'postgres/**',
+                'pg/**',
+                'pg-*',
+                'mysql',
+                'mysql2',
+                'sqlite3',
+                'better-sqlite3',
+                'mongodb',
+                'ioredis',
+              ],
+              message:
+                'The accepted exception is one PostgreSQL adapter for one read-only projection, not a database client anywhere in the service (ADR-0012).',
             },
           ],
         },
@@ -160,6 +284,31 @@ export default tseslint.config(
               message:
                 'The accepted exception covers workload authentication for OTLP export only, not a provider SDK.',
             },
+            {
+              // ADR-0012 admits a projection port in the API only. The web is a
+              // presentation client and never becomes a direct database client,
+              // which is an accepted rule in `overview.md` and older than this
+              // projection. It is restated as a driver ban so the rule does not
+              // depend on noticing that a module name happens to be a database.
+              group: [
+                'postgres',
+                'postgres/**',
+                'pg',
+                'pg/**',
+                'pg-*',
+                'mysql',
+                'mysql2',
+                'sqlite3',
+                'better-sqlite3',
+                'mongodb',
+                'ioredis',
+                '**/adapters/projection/**',
+                '**/domain/paper-projection*',
+                '**/domain/projection-privileges*',
+              ],
+              message:
+                'The web may never be a database client, directly or through an API projection module (overview.md, ADR-0012).',
+            },
           ],
         },
       ],
@@ -176,9 +325,30 @@ export default tseslint.config(
         {
           patterns: [
             {
-              group: ['@opentelemetry/**', '**/adapters/**', 'google-auth-library'],
+              group: [
+                '@opentelemetry/**',
+                '**/adapters/**',
+                'google-auth-library',
+                // This block is the last matching configuration for these files,
+                // so it replaces the web-wide rule rather than adding to it. The
+                // driver ban is restated here or presentation would be the one
+                // place in the web that could import one (ADR-0012).
+                'postgres',
+                'postgres/**',
+                'pg',
+                'pg/**',
+                'pg-*',
+                'mysql',
+                'mysql2',
+                'sqlite3',
+                'better-sqlite3',
+                'mongodb',
+                'ioredis',
+                '**/domain/paper-projection*',
+                '**/domain/projection-privileges*',
+              ],
               message:
-                'Presentation stays independent of telemetry, adapters and provider authentication.',
+                'Presentation stays independent of telemetry, adapters, provider authentication and any database client.',
             },
           ],
         },
