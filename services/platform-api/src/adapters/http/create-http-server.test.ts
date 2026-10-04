@@ -65,6 +65,73 @@ describe('createHttpServer', () => {
     expect(JSON.stringify(body)).not.toMatch(/host|region|project|secret|dependency/i);
   });
 
+  // Readiness now depends on the read-only projection (#209, ADR-0012). Liveness
+  // deliberately does not: a database outage must not make the platform restart a
+  // process that is answering perfectly well.
+  it('serves ready when the readiness check passes', async () => {
+    const response = await createServer({
+      checkReadiness: async () => ({ ready: true }),
+    }).inject({ method: 'GET', url: '/health/ready' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      service: 'platform-api',
+      status: 'ready',
+      version: 'git-abc1234',
+    });
+  });
+
+  it.each([
+    ['reports not ready', async () => ({ ready: false })],
+    [
+      'throws',
+      async () => {
+        throw new Error('connect ECONNREFUSED db.example.invalid:5432 as role reader');
+      },
+    ],
+  ])('fails readiness closed when the check %s', async (_label, checkReadiness) => {
+    const response = await createServer({
+      checkReadiness: checkReadiness as () => Promise<{ ready: boolean }>,
+    }).inject({ method: 'GET', url: '/health/ready' });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.headers['content-type']).toContain('application/problem+json');
+    const body = response.json() as Record<string, unknown>;
+    expect(body.errorCode).toBe('MN-NOT-READY');
+    expect(body.title).toBe('Service Unavailable');
+
+    // Nothing about the dependency, the host, the port or the role may travel.
+    const serialised = JSON.stringify(body);
+    for (const forbidden of ['ECONNREFUSED', 'db.example.invalid', '5432', 'reader']) {
+      expect(serialised).not.toContain(forbidden);
+    }
+    expect(serialised).not.toMatch(/host|region|project|secret|postgres|role/i);
+  });
+
+  it('leaves liveness unaffected while readiness is failing', async () => {
+    const server = createServer({ checkReadiness: async () => ({ ready: false }) });
+
+    const live = await server.inject({ method: 'GET', url: '/health/live' });
+    expect(live.statusCode).toBe(200);
+    expect(live.json()).toEqual({
+      service: 'platform-api',
+      status: 'live',
+      version: 'git-abc1234',
+    });
+  });
+
+  it('consults the readiness check only for readiness', async () => {
+    const checkReadiness = vi.fn(async () => ({ ready: true }));
+    const server = createServer({ checkReadiness });
+
+    await server.inject({ method: 'GET', url: '/health/live' });
+    await server.inject({ method: 'GET', url: '/v1/platform/status' });
+    expect(checkReadiness).not.toHaveBeenCalled();
+
+    await server.inject({ method: 'GET', url: '/health/ready' });
+    expect(checkReadiness).toHaveBeenCalledTimes(1);
+  });
+
   it('turns an invalid application result into safe RFC 9457 details', async () => {
     const invalidQuery = (() => ({
       asOf: observedAt,

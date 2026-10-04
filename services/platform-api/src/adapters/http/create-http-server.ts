@@ -16,6 +16,16 @@ const TRACEPARENT_PATTERN = /^00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/u;
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/u;
 
 export interface HttpServerDependencies {
+  /**
+   * Readiness of the dependencies this revision must have to serve its
+   * contract. Absent keeps the pre-#209 behaviour — a process that answers is
+   * ready — which is still correct for a composition with no dependencies.
+   *
+   * Present, it decides `/health/ready` and nothing else. Liveness never
+   * consults it: a database outage is not a reason for the platform to restart a
+   * process that is working.
+   */
+  readonly checkReadiness?: () => Promise<{ readonly ready: boolean }>;
   readonly contract: PlatformApiContract;
   readonly generateRequestId?: () => string;
   readonly getPlatformStatus: GetPlatformStatus;
@@ -110,6 +120,32 @@ export function createHttpServer(dependencies: HttpServerDependencies): FastifyI
   });
 
   server.get('/health/ready', async (request, reply) => {
+    // Fails closed. A readiness check that threw is not a readiness check that
+    // passed, and the reason stays where it was produced: the problem response
+    // carries a stable code and no detail, because the things that could be said
+    // here are connection strings, hosts and role names (#209, SECURITY.md).
+    let ready = true;
+    if (dependencies.checkReadiness !== undefined) {
+      try {
+        ready = (await dependencies.checkReadiness()).ready;
+      } catch {
+        ready = false;
+      }
+    }
+
+    if (!ready) {
+      // The code deliberately does not name the dependency. Which component is
+      // unready is operational detail, and a public probe response is the wrong
+      // place to disclose that this service has a database behind it at all.
+      const response = problem(request, 503, 'Service Unavailable', 'MN-NOT-READY');
+      dependencies.contract.assertProblem(response);
+      return reply
+        .code(503)
+        .headers(requestIdHeader(request))
+        .type('application/problem+json')
+        .send(response);
+    }
+
     const response = {
       service: dependencies.service.name,
       status: 'ready' as const,
