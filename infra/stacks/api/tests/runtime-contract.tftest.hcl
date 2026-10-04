@@ -32,6 +32,14 @@ variables {
   image_digest           = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
   artifact_version       = "release-1.2.3+api"
   source_commit          = "2222222222222222222222222222222222222222"
+
+  # Enabled here on purpose, where the stack default is off (#217). This file is
+  # the rendering the runtime-contract bridge evaluates, and the contract worth
+  # proving is the one that will serve production once the maintainer has applied
+  # the container and its accessor grant: a reference, never a value. The
+  # default-off rendering is proved separately, in `secret-binding.tftest.hcl`,
+  # which the bridge does not read.
+  projection_secret_binding_enabled = true
 }
 
 run "production_api" {

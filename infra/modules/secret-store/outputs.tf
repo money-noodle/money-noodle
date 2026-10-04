@@ -20,3 +20,15 @@ output "custody_register" {
     }
   }
 }
+
+output "accessor_register" {
+  description = <<-EOT
+    Members holding `secretAccessor` per declared secret, published so the access
+    boundary is reviewable and drift-visible without reading any value. A service
+    account email is an address, not a credential: holding it grants nothing.
+  EOT
+  value = {
+    for secret_id, members in var.accessor_members :
+    secret_id => sort(members)
+  }
+}

@@ -255,6 +255,69 @@ publish run. Delivery verifies the digest's signed provenance against that exact
 source commit and signer workflow; the commit is also the artifact version
 reported by this first slice.
 
+### Enabling the projection secret
+
+The read-only paper projection the platform API reads (ADR-0012) needs three
+things that a routine deploy cannot produce, in this order. None of them is
+optional and none of them can be reordered: Cloud Run refuses a revision whose
+referenced secret does not exist, and the deployer identity holds **no Secret
+Manager role at all**, so the container, its access grant, and its value are all
+outside what a merge can do (#217).
+
+1. **Merge the change.** It declares the container and its single accessor grant in
+   the platform stack, declares the API's intent to read it in the api stack, and
+   leaves `projection_secret_binding_enabled = false` so the api deploy that
+   follows the merge references no secret and succeeds.
+2. **Apply the platform stack**, which creates the empty container and grants
+   `roles/secretmanager.secretAccessor` on exactly that secret to exactly the API's
+   own runtime identity:
+
+   ```sh
+   gh workflow run delivery.yml --ref main \
+     -f action=apply \
+     -f stack=platform \
+     -f confirmation=APPLY-TO-PRODUCTION
+   ```
+
+   No `image_digest` or `source_commit` is passed: those are required for a service
+   stack, not for `platform`. The run waits for the `production` environment
+   approval. Read the plan before approving: it must contain one
+   `google_secret_manager_secret` and one `google_secret_manager_secret_iam_member`
+   and no secret **version**.
+
+   **Authority precondition.** That apply authenticates as the federated deployer,
+   whose enumerated roles include nothing from Secret Manager — it can neither
+   create the container nor set IAM on it. Until that is resolved the apply fails on
+   `secretmanager.secrets.create`. Two ways to resolve it, and the choice is the
+   maintainer's:
+
+   - apply these two resources themselves, from their own account against the same
+     remote state, as the explicitly scoped human-only exception this document
+     already uses for the bootstrap stack, leaving the pipeline owning everything
+     else; or
+   - give the deployer a **narrow custom role** carrying only
+     `secretmanager.secrets.{create,get,update,setIamPolicy}` and no
+     `secretmanager.versions.access`, so it manages containers and still cannot read
+     a value. That is an ADR-0005 amendment and a bootstrap change, not a step in
+     this procedure.
+
+3. **Add the secret version out of band**, in the provider's protected secret
+   interface. This is the audited payload-ingress exception recorded in
+   [`../docs/operations/delivery.md`](../docs/operations/delivery.md): the value must
+   not pass through this repository, an OpenTofu variable, a plan, state, a workflow
+   input, or a job log. Nothing here holds or can reconstruct it. The SELECT-only
+   database role it names is created at the database provider, not here.
+4. **Flip the binding on** — a reviewed one-line change setting
+   `projection_secret_binding_enabled` to `true` in `infra/stacks/api/variables.tf`.
+   The merge's own routine api deploy then renders the reference, and the revision's
+   readiness probe is the proof that the credential resolves and that the role is
+   SELECT-only: a revision whose projection is unreachable, or whose role holds more
+   than SELECT, never serves traffic.
+
+Rotation and revocation need none of this again: the grant and the reference pin
+`latest`, so adding a version takes effect on the next instance start without a
+deployment.
+
 ## Step 7 — prove state is recoverable
 
 ADR-0006 requires a **tested** restore, exercised at least once before the first
@@ -271,8 +334,9 @@ Record the date, what was restored, and how it was verified.
 ## What this procedure deliberately does not do
 
 - It does not create DNS records, a load balancer, or a custom domain mapping.
-- It does not create a secret **value**. The secret store is declared empty; the
-  first slice needs no operational secret.
+- It does not create a secret **value**. Secret containers are declared empty, and
+  the one value this platform now needs is entered out of band by the maintainer in
+  the order above.
 - It does not grant the deployer owner, editor, or any secret-reading role, and
   it grants no identity-administration role: the deployer may *act as* the
   runtime identities (`roles/iam.serviceAccountUser`) but may not create, delete

@@ -188,6 +188,11 @@ export const RESOURCE_OPERATIONS = Object.freeze({
     'infrastructure.apply',
     'The declared secret container is infrastructure; ADR-0005 requires custody to exist before the first secret, and no value-bearing version is managed here.',
   ),
+  'modules/secret-store:google_secret_manager_secret_iam_member.accessor': own(
+    'stack-executor',
+    'infrastructure.apply',
+    'Per-secret read access for the one workload declared as its consumer, applied with the container it applies to rather than by the release that references it: a release identity cannot set secret IAM, and a grant declared in the release path could only fail the deploy that needed it (#217).',
+  ),
   'modules/telemetry-retention:google_logging_project_bucket_config.default': own(
     'telemetry-configurator',
     'telemetry.configuration.change',
@@ -215,11 +220,6 @@ export const RESOURCE_OPERATIONS = Object.freeze({
   ),
 
   // --- Per-service stacks: release and the separate exposure seam. ---
-  'modules/cloud-run-service:google_secret_manager_secret_iam_member.runtime_secret_access': own(
-    'stack-executor',
-    'infrastructure.apply',
-    'Per-secret access is granted only for the secrets a service is explicitly declared to consume, never project-wide.',
-  ),
   'modules/cloud-run-service:google_cloud_run_v2_service.service': own(
     'service-executor',
     'service.deploy',

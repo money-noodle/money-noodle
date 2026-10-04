@@ -20,6 +20,21 @@ terraform {
 # images, build logs, telemetry, or handoffs. Versions are added out of band by
 # the maintainer and the container is then already waiting for them.
 
+locals {
+  # One grant per (secret, member) pair, flattened so each is its own address and
+  # a removed consumer is a removed resource rather than an edited list.
+  accessor_grants = {
+    for grant in flatten([
+      for secret_id, members in var.accessor_members : [
+        for member in members : {
+          secret_id = secret_id
+          member    = member
+        }
+      ]
+    ]) : "${grant.secret_id}/${grant.member}" => grant
+  }
+}
+
 resource "google_secret_manager_secret" "secret" {
   for_each = var.secrets
 
@@ -59,4 +74,21 @@ resource "google_secret_manager_secret" "secret" {
   lifecycle {
     prevent_destroy = true
   }
+}
+
+# The access boundary for those containers, declared beside them.
+#
+# Per secret and per member, never a project-level role, and never the deployer:
+# the identity that runs a deploy manages containers, not contents (ADR-0005).
+# Creating this binding needs Secret Manager authority, which belongs to the
+# stack a maintainer applies rather than to the routine release path (#217).
+resource "google_secret_manager_secret_iam_member" "accessor" {
+  for_each = local.accessor_grants
+
+  project = var.project_id
+  # Through the resource, so the grant cannot be created before the container it
+  # applies to, and cannot survive a secret this store stopped declaring.
+  secret_id = google_secret_manager_secret.secret[each.value.secret_id].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = each.value.member
 }

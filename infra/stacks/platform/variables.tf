@@ -100,6 +100,50 @@ variable "secrets" {
   }
 }
 
+variable "secret_consumer_services" {
+  description = <<-EOT
+    Which services may read each declared secret, keyed by secret id with the
+    Cloud Run **service names** that consume it. Service names, never account
+    addresses: the identity is resolved through the bootstrap stack's published
+    contract, so no account identifier is committed here and a renamed identity
+    cannot leave a stale grant behind.
+
+    The default grants the projection connection string to the platform API and
+    to nothing else. The web is deliberately absent: it is never a database
+    client, and that rule is enforced in the api/web runtime contract as well as
+    here (ADR-0012).
+
+    This is the only place `secretAccessor` is granted. The service stacks declare
+    which secrets they intend to read, and the module validates that a bound
+    reference is a declared one, but they create no Secret Manager IAM: the
+    deployer identity that runs a routine deploy holds no Secret Manager role, so
+    a grant declared there could only fail the deploy (#217).
+  EOT
+  type        = map(list(string))
+
+  default = {
+    "platform-api-projection-database-url" = ["platform-api"]
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for secret_id, services in var.secret_consumer_services : [
+        for service in services :
+        can(regex("^[a-z][a-z0-9-]{0,62}$", service))
+      ]
+    ]))
+    error_message = "A consumer is named by its Cloud Run service name, which is lower-case and hyphenated. An account email here would be a committed identifier and would also bypass the bootstrap contract."
+  }
+
+  validation {
+    condition = alltrue([
+      for secret_id, services in var.secret_consumer_services :
+      length(services) > 0 && length(services) == length(distinct(services))
+    ])
+    error_message = "Each secret lists at least one consumer, once. An empty list is a secret nobody can read, which is better expressed by removing the entry."
+  }
+}
+
 variable "labels" {
   description = "Additional resource labels."
   type        = map(string)

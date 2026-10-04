@@ -44,3 +44,12 @@ output "contract_public_invoker_members" {
   description = "Members holding `roles/run.invoker` publicly. Empty until the separately reviewed exposure step is applied."
   value       = module.service.public_invoker_members
 }
+
+output "secret_environment_bound" {
+  description = <<-EOT
+    Secret-backed variables this revision binds, as name to secret container id.
+    Empty until the projection binding is enabled (#217). Names and container ids
+    only; no value exists in this stack, its plan, or its state.
+  EOT
+  value       = module.service.rendered_secret_environment
+}

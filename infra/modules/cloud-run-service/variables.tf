@@ -217,7 +217,17 @@ variable "authorised_invoker_members" {
 }
 
 variable "accessible_secret_ids" {
-  description = "Secret Manager secret ids this service may read. Empty for the first slice, which needs no operational secret."
+  description = <<-EOT
+    Secret Manager secret ids this service is intended to read. Empty by default.
+
+    Declared intent, not a grant. The grant is a `secretAccessor` binding on the
+    secret, declared beside the container in the maintainer-applied platform stack,
+    because setting IAM on a secret needs authority the routine deploy's identity
+    does not have (#217). What this input does here is make the intent checkable:
+    `secret_environment` is validated against it, so a reference the platform stack
+    was never asked to grant fails at plan time rather than as an instance that
+    will not start.
+  EOT
   type        = list(string)
   default     = []
 }
@@ -228,11 +238,11 @@ variable "secret_environment" {
     name with the secret container id as the value. Injected by reference: no value
     appears in a variable, a plan, or state (ADR-0005).
 
-    Every secret named here must also appear in `accessible_secret_ids`, which is
-    what grants this service's runtime identity `secretAccessor` on it. The
-    validation below refuses the halfway state — a reference the service cannot
-    read — because that failure surfaces as an instance that will not start rather
-    than as a plan that will not apply.
+    Every secret named here must also appear in `accessible_secret_ids`, the
+    declared intent the platform stack grants against. The validation below refuses
+    the halfway state — a reference this service never asked to be able to read —
+    because that failure otherwise surfaces as an instance that will not start
+    rather than as a plan that will not apply.
   EOT
   type        = map(string)
   default     = {}
@@ -242,7 +252,7 @@ variable "secret_environment" {
       for name, secret_id in var.secret_environment :
       contains(var.accessible_secret_ids, secret_id)
     ])
-    error_message = "Every secret bound to an environment variable must also be listed in accessible_secret_ids, or the service is granted no access to the value it is told to read."
+    error_message = "Every secret bound to an environment variable must also be listed in accessible_secret_ids, the declared intent the platform stack grants access against. A reference nobody was asked to grant is a revision that will not start."
   }
 
   validation {

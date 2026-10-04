@@ -68,6 +68,20 @@ locals {
     "serviceAccount:${local.runtime_identities["web"]}",
     "serviceAccount:${local.deployer}",
   ], var.authorised_invoker_members))
+
+  # The secret bindings this revision actually renders.
+  #
+  # Cloud Run refuses a revision whose referenced secret does not exist, and the
+  # container plus its accessor grant are created by a maintainer-applied platform
+  # stack — not by this deploy, which holds no Secret Manager authority at all. So
+  # the binding is withheld until that has happened, and a routine deploy before it
+  # renders no reference and succeeds, with the API running with no projection
+  # configured and saying so through readiness (#217, ADR-0012).
+  #
+  # Flipping `projection_secret_binding_enabled` to true is a one-line reviewed
+  # change, which is the point: enabling a credential path is a decision with a
+  # pull request behind it rather than a side effect of a release.
+  secret_environment = var.projection_secret_binding_enabled ? var.secret_environment : {}
 }
 
 module "service" {
@@ -105,16 +119,17 @@ module "service" {
   allow_unauthenticated      = var.allow_unauthenticated
   authorised_invoker_members = local.authorised_invoker_members
 
-  # The projection reader's connection string, granted per secret and only to this
-  # service's own runtime identity (ADR-0005). The container is created empty by
-  # the platform stack; the maintainer adds the version out of band, and until then
-  # the API runs with no projection configured and says so through readiness
-  # (ADR-0012, #209).
+  # The secrets this service is intended to read. Declared intent only: the
+  # `secretAccessor` grant itself is declared beside the container in the
+  # maintainer-applied platform stack, because this apply has no Secret Manager
+  # authority (#217, ADR-0005). The module validates a binding against this list,
+  # so a reference nobody was asked to grant fails at plan time.
   accessible_secret_ids = var.accessible_secret_ids
 
   # Bound by reference, so the value is resolved by Cloud Run at instance start
-  # and never enters a variable, a plan, or state.
-  secret_environment = var.secret_environment
+  # and never enters a variable, a plan, or state. Empty until the binding is
+  # enabled; see the local above.
+  secret_environment = local.secret_environment
 
   telemetry_endpoint = local.telemetry_endpoint
   trace_sample_ratio = var.trace_sample_ratio
