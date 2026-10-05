@@ -411,16 +411,27 @@ jobs:
           NX_BASE: ${{ steps.range.outputs.base }}
         run: pnpm nx show projects --affected --base="$NX_BASE" --head=HEAD --json > affected.json
 
+      # The same push, as paths. A service's stack is an input of that service's
+      # deployment unit (#227), and every path under `infra/` belongs to the `infra`
+      # project — so the project graph alone reports no unit for a stack-only commit
+      # and the change would wait for an unrelated application commit to carry it.
+      # The range is the one established above, so both inputs describe one push.
+      - name: List the paths this push changed
+        env:
+          NX_BASE: ${{ steps.range.outputs.base }}
+        run: git diff --name-only "$NX_BASE" HEAD > changed.txt
+
       # Refuses rather than guesses: an affected project nothing declares, an
       # ambiguous manifest set, or more targets than the catalog row allows
-      # produces no vector at all. See `tools/release/affected-services.mjs`.
+      # produces no vector at all. See `tools/release/affected-services.mjs` and
+      # `tools/release/stack-inputs.mjs`.
       - name: Plan the ordered forward vector
         id: vector
-        run: node tools/release/plan-release.mjs --affected affected.json
+        run: node tools/release/plan-release.mjs --affected affected.json --changed changed.txt
 
       - name: Remove the intermediate affected set
         if: always()
-        run: rm -f affected.json
+        run: rm -f affected.json changed.txt
 
   # ---------------------------------------------------------------------------
   # Build once, test and scan that build, publish that exact digest, attest.

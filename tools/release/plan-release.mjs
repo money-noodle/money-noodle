@@ -4,12 +4,24 @@
 // the delivery workflow deploys.
 //
 // Usage:
-//   node tools/release/plan-release.mjs --affected <file|-> [--output <file>]
+//   node tools/release/plan-release.mjs --affected <file|-> [--changed <file|->]
+//                                      [--output <file>]
 //
-// The affected set is read, never computed here: the workspace project graph
-// owns that, and it derives it from declared manifests. This process reaches no
-// network and holds no credential; it fails closed, and a refusal prints its
-// stable code and nothing else about the inputs.
+// Two inputs, both read rather than computed here, and both describing the same
+// push:
+//
+//   * `--affected` is the workspace project graph's affected set. The graph owns
+//     that, and derives it from declared manifests.
+//   * `--changed` is the list of paths the push changed. It exists because a
+//     service's stack is an input of that service's deployment unit (#227): every
+//     path under `infra/` belongs to the `infra` project, so the project graph
+//     alone reports no deployment unit for a stack-only commit and the change
+//     would wait for an unrelated application commit to carry it.
+//     `stack-inputs.mjs` maps those paths to units using the stack each manifest
+//     already declares, and the two sets are unioned before planning.
+//
+// This process reaches no network and holds no credential; it fails closed, and a
+// refusal prints its stable code and nothing else about the inputs.
 
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -17,6 +29,7 @@ import { resolve } from 'node:path';
 import { assertPublishable } from '../delivery/sanitize.mjs';
 import { ReleasePlanError, loadDeploymentManifests } from './deployment-manifests.mjs';
 import { planReleaseVector } from './affected-services.mjs';
+import { projectsAffectedByStackPaths, readChangedPaths } from './stack-inputs.mjs';
 
 function argument(argv, name) {
   const index = argv.indexOf(`--${name}`);
@@ -57,10 +70,28 @@ function readAffected(source) {
   throw new ReleasePlanError('invalid-affected-input', 'The affected set is not a JSON array.');
 }
 
+/** The changed-path list, or an empty one when the caller supplied no file. */
+function readChanged(source) {
+  if (source === undefined) return [];
+  return readChangedPaths(readFileSync(source === '-' ? 0 : source, 'utf8'));
+}
+
 export function main(argv = process.argv.slice(2), env = process.env) {
   const affectedProjects = readAffected(argument(argv, 'affected'));
   const { manifests, projects } = loadDeploymentManifests();
-  const plan = planReleaseVector({ affectedProjects, manifests, projects });
+
+  // A stack change affects its unit as surely as a source change does, and the two
+  // are unioned rather than chosen between: a commit that changes both an
+  // application and its stack is one deploy of that unit, not two.
+  const stackAffected = projectsAffectedByStackPaths({
+    changedPaths: readChanged(argument(argv, 'changed')),
+    manifests,
+  });
+  const plan = planReleaseVector({
+    affectedProjects: [...new Set([...affectedProjects, ...stackAffected])],
+    manifests,
+    projects,
+  });
 
   // Everything in the plan is a repository-declared name, so this should never
   // deny. It runs because a job summary is public and never masked, and the one
@@ -97,6 +128,7 @@ export function main(argv = process.argv.slice(2), env = process.env) {
         `- permission slots: ${plan.permissionSlots.map((slot) => `\`${slot}\``).join(', ')}`,
         `- target bound: ${plan.maxTargets}`,
         `- left unchanged: ${plan.unaffected.length === 0 ? 'none' : plan.unaffected.map((unit) => `\`${unit}\``).join(', ')}`,
+        `- selected by a stack change: ${stackAffected.length === 0 ? 'none' : stackAffected.map((project) => `\`${project}\``).join(', ')}`,
         '',
         ordered,
         '',
