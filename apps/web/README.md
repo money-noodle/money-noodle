@@ -12,7 +12,20 @@
 - Configuration: server-only configuration-contract v1 below; `PORT` and `HOSTNAME` retain their Next.js behavior.
 - Data/schema ownership: none.
 - Health: `/health/live` reports process/artifact identity; `/health/ready` requires valid runtime configuration. Neither queries the upstream; liveness alone cannot establish readiness.
-- Public presentation: the server-side generated client performs one 1.5-second, no-retry, no-store status read. Transport, timeout, malformed, and incompatible responses render `Status unknown` without stale or healthy fallback.
+- Public presentation: every read is server-side, through the generated client, no-retry and no-store. Each is bounded — 1.5 s for the status card, 2.5 s for the three home-page reads, 4 s for a view of its own, 6 s for the full simulated record — and a read that is refused, times out, answers unusably or cannot be reached renders its own panel as unavailable without a stale or fabricated fallback. There is no client-side polling and no refresh control: reloading re-reads what the server has.
+
+## Views
+
+All four are server-rendered, dynamic, and read only through the generated client.
+
+| Route | Reads | Content |
+| --- | --- | --- |
+| `/` | status, market overview, paper budget, paper performance summary | Platform availability, per-asset market data with each source's freshness, headlines, and the bankroll and record headlines |
+| `/market/hourly` | hourly thresholds | The hour each asset is trading, the price and volatility inputs, and each contract's model probability against its own asking price |
+| `/paper/budget` | paper budget | The simulated bankroll and its recent executions |
+| `/paper/performance` | paper performance summary, paper performance | The summary, and the full record behind closed disclosures |
+
+Every view carries a research-only notice and the source times the API published. Simulated records carry times from the stopped writer's era, so the source time is shown prominently rather than at the foot of a page. No view presents a forecast, an entry signal, a fill estimate or a policy document, and nothing stands in for one.
 
 ## Configuration-contract v1
 
@@ -46,4 +59,4 @@ pnpm nx run web:container
 pnpm nx run web:dev
 ```
 
-The availability card presents only the API-provided state, source time, and artifact version. Text communicates every state independently of color. Existing `noodle.money` DNS and provider deployment remain outside this project.
+The availability card presents only the API-provided state, source time, and artifact version. Text communicates every state independently of color: a feed's `fresh`, `stale` or `unavailable` state, its age and its reason are sentences, and the border colour beside them is decoration. Charts are inline SVG with an accessible name stating direction and endpoints; there is no chart library and no client-side JavaScript for presentation. The only figures this app derives are display conversions (cents to dollars, a ratio to a percentage, a contract price to cents) and two the API's own documentation hands to a client: the bankroll reconciliation residual and the bankroll status line, both labelled as computed here. Existing `noodle.money` DNS and provider deployment remain outside this project.

@@ -112,3 +112,234 @@ p {
   margin: 0;
   overflow-wrap: anywhere;
 }
+
+/* Dashboard layout.
+ *
+ * Wide enough for a data table, still readable on a phone. The panels scroll
+ * horizontally rather than the tables being made into blocks, because a table that is
+ * display:block stops being a table to some assistive technology, and these are real
+ * tables with real headers. */
+
+main {
+  width: min(72rem, 100%);
+  text-align: start;
+}
+
+h1,
+.lede {
+  text-align: center;
+}
+
+h3 {
+  margin-block: 1.25rem 0.5rem;
+  font-size: 1.25rem;
+}
+
+h4 {
+  margin-block: 1rem 0.25rem;
+}
+
+a {
+  color: inherit;
+  text-decoration-thickness: 0.1em;
+  text-underline-offset: 0.2em;
+}
+
+.site-nav {
+  margin-block-start: 1.5rem;
+}
+
+.site-nav ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.site-nav [aria-current='page'] {
+  font-weight: 700;
+  text-decoration: underline dotted;
+}
+
+.research-notice {
+  padding: 0.75rem 1rem;
+  margin-block-start: 1rem;
+  font-size: 0.95rem;
+  background: var(--card);
+  border: 0.15rem solid var(--border);
+  border-radius: 0.75rem;
+}
+
+.panel {
+  padding: 1.25rem;
+  margin-block-start: 1.5rem;
+  overflow-x: auto;
+  background: var(--card);
+  border: 0.2rem solid var(--border);
+  border-radius: 1.25rem;
+}
+
+.panel--unavailable {
+  border-style: dashed;
+}
+
+.panel__state {
+  font-weight: 700;
+}
+
+.panel__note,
+.asset__note,
+.asset__absent,
+.footnote {
+  margin-block-start: 0.5rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.panel__warning {
+  padding: 0.5rem 0.75rem;
+  margin-block-start: 0.5rem;
+  font-size: 0.9rem;
+  border: 0.12rem solid var(--border);
+  border-radius: 0.5rem;
+}
+
+.source-time {
+  font-size: 0.95rem;
+}
+
+.source-time__label,
+.feed__label {
+  font-weight: 700;
+}
+
+.feeds {
+  display: grid;
+  gap: 0.25rem;
+  padding-block: 0.75rem;
+  margin-block: 0.75rem;
+  border-block: 1px solid var(--border);
+}
+
+.feed {
+  font-size: 0.9rem;
+}
+
+.feed--stale .feed__state::before {
+  content: '! ';
+  font-weight: 700;
+}
+
+.feed--unavailable .feed__state::before {
+  content: '× ';
+  font-weight: 700;
+}
+
+.feed__time {
+  color: var(--muted);
+}
+
+.figures {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.5rem 1.5rem;
+  margin-block: 0.75rem;
+}
+
+.figures div {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.figures dt {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.figures dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+table {
+  margin-block: 0.75rem;
+  font-size: 0.9rem;
+  border-collapse: collapse;
+}
+
+caption {
+  padding-block-end: 0.5rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-align: start;
+}
+
+th,
+td {
+  padding: 0.35rem 0.6rem;
+  text-align: start;
+  white-space: nowrap;
+  border-block-end: 1px solid var(--border);
+}
+
+td {
+  font-variant-numeric: tabular-nums;
+}
+
+tbody th {
+  font-weight: 700;
+}
+
+.asset {
+  padding-block-start: 1rem;
+  margin-block-start: 1rem;
+  border-block-start: 1px solid var(--border);
+}
+
+.asset__symbol {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.sparkline {
+  display: block;
+  width: min(20rem, 100%);
+  height: auto;
+  margin-block: 0.5rem;
+}
+
+.sparkline polyline {
+  stroke: currentcolor;
+}
+
+.headlines {
+  padding-inline-start: 1.1rem;
+  margin: 0;
+}
+
+.headlines li {
+  margin-block-end: 0.35rem;
+}
+
+.headlines time {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+details {
+  padding-block: 0.5rem;
+  border-block-start: 1px solid var(--border);
+}
+
+summary {
+  font-weight: 700;
+  cursor: pointer;
+}
+
+code {
+  font-size: 0.85em;
+  overflow-wrap: anywhere;
+}
