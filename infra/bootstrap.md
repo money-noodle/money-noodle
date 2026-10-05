@@ -329,11 +329,21 @@ containers this stack declares (#224).
 4. **Flip the binding on** — done by #219, merged once steps 2 and 3 were confirmed,
    which was the whole reason it was a separate change: merging it while the container
    had no version, or no container existed, would make Cloud Run refuse every revision
-   the api deploy creates. The first routine api deploy to render the reference has
-   not run yet, because the plan failure of step 5 skipped the deploy. When it does,
-   the revision's readiness probe is the proof that the credential resolves and that
-   the role is SELECT-only: a revision whose projection is unreachable, or whose role
-   holds more than SELECT, never serves traffic.
+   the api deploy creates.
+
+   **That merge did not deploy it,** and the earlier wording here said it would.
+   What actually happened: #219 changed only `infra/stacks/api/**`, the release vector
+   was computed from the workspace project graph alone, every path under `infra/`
+   belongs to the one `infra` project, so the vector was empty, the deploy was skipped
+   and the binding sat unapplied — waiting for some later application commit to carry
+   it. The step-5 plan failure then blocked even that. Since #227 a service's stack is
+   an input of that service's deployment unit, so from this change on a merge like
+   #219's is itself a routine deploy of `api` and the flip takes effect on its own
+   merge.
+
+   Either way the proof is the same: the first api revision that renders the reference
+   must pass its readiness probe, and a revision whose projection is unreachable, or
+   whose role holds more than SELECT, never serves traffic.
 
 5. **Let the pipeline plan what now exists** — carried by #224, and the last
    maintainer apply in this sequence. The moment step 2 created the container, every
@@ -364,6 +374,13 @@ Steps 2, 3 and 5 are the maintainer's. Steps 2 and 3 leave no trace in this
 repository, so the dated evidence that they happened is the first api revision that
 passes readiness with the binding rendered. Step 5 is visible as its own effect: a
 pipeline plan of this stack that completes.
+
+The ordering trap this sequence fell into is worth keeping in mind for the next
+secret: a reviewed change that lives entirely in a service stack used to reach
+production only when something else happened to be merged. It now deploys on its own
+(#227), so "merged" and "applied" are the same event again for a service stack — and
+still deliberately different for `platform` and `bootstrap`, which no routine deploy
+touches.
 
 Rotation and revocation need none of this again: the grant and the reference pin
 `latest`, so adding a version takes effect on the next instance start without a
