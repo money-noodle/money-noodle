@@ -467,12 +467,21 @@ jobs:
             port: '3001'
             contract_path: /v1/platform/status
             contract_expect: '"schemaVersion":"1"'
+            # Readiness is refused without the read model this service now serves
+            # from, and a container check is given no read model (#210, ADR-0012).
+            # The refusal is the expected answer here; the deployed probe, which runs
+            # against a revision that does have one, still expects 200.
+            ready_status: '503'
+            ready_expect: '"errorCode":"MN-NOT-READY"'
           - project: web
             image: web
             service: web
             port: '3000'
             contract_path: /
             contract_expect: '<!DOCTYPE html'
+            # The web depends on no read model, so its readiness is unchanged.
+            ready_status: '200'
+            ready_expect: '"status":"ready"'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -633,6 +642,8 @@ jobs:
           SERVICE_PORT: ${{ matrix.port }}
           CONTRACT_PATH: ${{ matrix.contract_path }}
           CONTRACT_EXPECT: ${{ matrix.contract_expect }}
+          READY_STATUS: ${{ matrix.ready_status }}
+          READY_EXPECT: ${{ matrix.ready_expect }}
         run: |
           set -euo pipefail
           reference="$IMAGE@$DIGEST"
@@ -670,10 +681,27 @@ jobs:
           fi
 
           port="$(docker port "$container" "${SERVICE_PORT}/tcp" | head -n 1 | sed 's/.*://')"
-          ready="$(curl --fail --silent --show-error "http://127.0.0.1:${port}/health/ready")"
-          grep -Fq '"status":"ready"' <<< "$ready"
+          live="$(curl --fail --silent --show-error "http://127.0.0.1:${port}/health/live")"
+          grep -Fq '"status":"live"' <<< "$live"
+
+          # Readiness describes this environment, not the image. Since #210 the API
+          # refuses to be ready without the read model it serves from, and the read
+          # model is a secret reference no container check is given — so the expected
+          # answer here is per project, and for the API it is the refusal. An image
+          # that answered ready without its dependency would be hiding the gate that
+          # keeps a broken revision from taking traffic.
+          ready_status="$(
+            curl --silent --show-error --output "$RUNNER_TEMP/ready.json" \
+              --write-out '%{http_code}' "http://127.0.0.1:${port}/health/ready"
+          )"
+          if [[ "$ready_status" != "$READY_STATUS" ]]; then
+            echo "Readiness answered ${ready_status}; this environment expects ${READY_STATUS}." >&2
+            exit 1
+          fi
+          grep -Fq "$READY_EXPECT" "$RUNNER_TEMP/ready.json"
           # An attributable version, not merely a process that answers.
-          grep -Fq "\"version\":\"$ARTIFACT_VERSION\"" <<< "$ready"
+          # An attributable version, not merely a process that answers.
+          grep -Fq "\"version\":\"$ARTIFACT_VERSION\"" <<< "$live"
 
           contract="$(curl --fail --silent --show-error "http://127.0.0.1:${port}${CONTRACT_PATH}")"
           grep -Fq "$CONTRACT_EXPECT" <<< "$contract"

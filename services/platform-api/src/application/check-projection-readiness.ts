@@ -11,26 +11,32 @@
 // can answer, and a database outage is not a reason to have the platform restart
 // a process that is working perfectly well.
 //
-// Three outcomes, and the reason never carries a connection detail:
+// Four outcomes, and the reason never carries a connection detail:
 //
-//   * `ready`        — reachable, and SELECT-only.
-//   * `unreachable`  — the probe failed. Why it failed stays inside the adapter.
-//   * `over-privileged` — reachable, but the role can do more than read.
+//   * `ready`           — reachable, and SELECT-only.
+//   * `unreachable`     — the probe did not complete. Why stays in the adapter.
+//   * `over-privileged` — reachable, but the connected identity can do more than read.
+//   * `unexpected-shape` — reachable, and it answered with something unreadable.
 //
-// `not-configured` exists for the window this ticket lands in: the secret
-// container is declared and empty until the maintainer enters a value, so a
-// revision may legitimately run with no projection configured at all. Which way
-// that resolves is the caller's choice, stated once at composition time rather
-// than guessed here — see `createCheckProjectionReadiness`.
+// The last one is separated from `unreachable` because the two need different
+// people: a cold or unreachable database resolves itself or is an outage, while a
+// row this API cannot parse is a change upstream and will not resolve on its own.
+// Both still fail closed, and the distinction is carried as a state rather than as
+// a message, so the adapter decides what a public probe is allowed to say (#210).
+//
+// `not-configured` is a revision running with no projection at all. That was a
+// legitimate state while nothing depended on it; since #210 a read endpoint does,
+// and the composition says so by refusing to call it ready — see
+// `createCheckProjectionReadiness`.
 
-import type { PaperProjectionPort } from '../domain/paper-projection.js';
+import { projectionFailureCode, type PaperProjectionPort } from '../domain/paper-projection.js';
 import {
   evaluateProjectionPrivileges,
   type PrivilegeViolation,
 } from '../domain/projection-privileges.js';
 
 export type ProjectionReadinessState =
-  'not-configured' | 'over-privileged' | 'ready' | 'unreachable';
+  'not-configured' | 'over-privileged' | 'ready' | 'unexpected-shape' | 'unreachable';
 
 export interface ProjectionReadiness {
   readonly ready: boolean;
@@ -53,11 +59,13 @@ export interface CheckProjectionReadinessDependencies {
   /**
    * Whether an unconfigured projection is allowed to report ready.
    *
-   * `true` is for the interval between this change landing and the maintainer
-   * entering the secret value: the API has no read endpoints yet (#210), so a
-   * revision with no projection still serves its whole declared contract. Once a
-   * read endpoint exists this becomes `false` and a missing projection is an
-   * unready revision, which is the honest answer from that point on.
+   * `true` was for the interval between #209 landing and the maintainer entering
+   * the secret value: the API had no read endpoint then, so a revision with no
+   * projection still served its whole declared contract. #210 added three, so the
+   * composition now passes `false` and a missing projection is an unready
+   * revision. The flag stays rather than being inlined because it is the one knob
+   * that decides whether a half-configured revision serves, and a test that wants
+   * to prove either behaviour should not have to reach for a different module.
    */
   readonly readyWithoutProjection: boolean;
 }
@@ -84,11 +92,18 @@ export function createCheckProjectionReadiness(
     let observation;
     try {
       observation = await projection.probePrivileges();
-    } catch {
-      // Deliberately swallowed. The adapter has already reduced whatever the
-      // driver said to a safe error; re-reading it here only risks carrying a
-      // host or a connection string into a readiness response.
-      return verdict('unreachable', false);
+    } catch (error) {
+      // The message is deliberately never read. The adapter has already reduced
+      // whatever the driver said to a safe error, and re-reading it here would risk
+      // carrying a host or a connection string into a readiness response. Only the
+      // code is consulted, and only to tell "did not answer" from "answered with
+      // something unreadable".
+      return verdict(
+        projectionFailureCode(error) === 'projection-unexpected-shape'
+          ? 'unexpected-shape'
+          : 'unreachable',
+        false,
+      );
     }
 
     const privileges = evaluateProjectionPrivileges({

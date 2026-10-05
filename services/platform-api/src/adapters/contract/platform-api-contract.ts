@@ -6,6 +6,11 @@ import Ajv2020Module, {
 import formatsModule, { type FormatsPlugin } from 'ajv-formats';
 import { parse } from 'yaml';
 
+import type {
+  PublishedBudget,
+  PublishedPerformance,
+  PublishedPerformanceSummary,
+} from '../../domain/paper-dashboard.js';
 import type { PlatformStatusState } from '../../domain/platform-status.js';
 
 const Ajv2020 = Ajv2020Module as unknown as new (options?: AjvOptions) => Ajv2020Instance;
@@ -33,6 +38,29 @@ export interface HealthResponse {
   readonly version: string;
 }
 
+/**
+ * The paper reads, as they go over the wire.
+ *
+ * Each is the published view plus the two envelope fields every response in this
+ * contract carries. The envelope is added at the edge rather than built into the
+ * view, because `schemaVersion` and `requestId` are facts about this response and
+ * not about the record it carries.
+ */
+export type PaperBudgetResponse = PublishedBudget & {
+  readonly requestId: string;
+  readonly schemaVersion: '1';
+};
+
+export type PaperPerformanceSummaryResponse = PublishedPerformanceSummary & {
+  readonly requestId: string;
+  readonly schemaVersion: '1';
+};
+
+export type PaperPerformanceResponse = PublishedPerformance & {
+  readonly requestId: string;
+  readonly schemaVersion: '1';
+};
+
 export interface ProblemResponse {
   readonly detail?: string;
   readonly errorCode: string;
@@ -45,6 +73,9 @@ export interface ProblemResponse {
 
 export interface PlatformApiContract {
   assertHealth(value: unknown): asserts value is HealthResponse;
+  assertPaperBudget(value: unknown): asserts value is PaperBudgetResponse;
+  assertPaperPerformance(value: unknown): asserts value is PaperPerformanceResponse;
+  assertPaperPerformanceSummary(value: unknown): asserts value is PaperPerformanceSummaryResponse;
   assertPlatformStatus(value: unknown): asserts value is PlatformStatusResponse;
   assertProblem(value: unknown): asserts value is ProblemResponse;
 }
@@ -146,6 +177,21 @@ export function createPlatformApiContract(source: string): PlatformApiContract {
 
   return {
     assertHealth: createAssertion<HealthResponse>('Health', validator('Health')),
+    // The read endpoints validate against the same document they are published
+    // from, for the same reason the status endpoint does: a response that drifts
+    // from the contract fails here, in this service, rather than in a client.
+    assertPaperBudget: createAssertion<PaperBudgetResponse>(
+      'PaperBudget',
+      validator('PaperBudget'),
+    ),
+    assertPaperPerformance: createAssertion<PaperPerformanceResponse>(
+      'PaperPerformance',
+      validator('PaperPerformance'),
+    ),
+    assertPaperPerformanceSummary: createAssertion<PaperPerformanceSummaryResponse>(
+      'PaperPerformanceSummary',
+      validator('PaperPerformanceSummary'),
+    ),
     assertPlatformStatus: createAssertion<PlatformStatusResponse>(
       'PlatformStatus',
       validator('PlatformStatus'),
