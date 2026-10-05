@@ -43,7 +43,7 @@ Humans retain explicit scoped approval of production effects, provider/domain ac
 
 | Workload identity | May | May not |
 | --- | --- | --- |
-| **Deployer** (CI, federated) | Push images to the registry, read and write remote infrastructure state, create and update the declared infrastructure, deploy service revisions, reassign revision traffic, bind service-level `run.invoker` | Create, delete or re-grant an identity, set project IAM, read tenant data, read secret values that runtime workloads consume, serve requests, act interactively |
+| **Deployer** (CI, federated) | Push images to the registry, read and write remote infrastructure state, create and update the declared infrastructure, deploy service revisions, reassign revision traffic, bind service-level `run.invoker`, read the metadata of a declared secret container and its IAM policy so a plan can refresh it (2026-10-05 amendment) | Create, delete or re-grant an identity, set project IAM, read tenant data, read secret values that runtime workloads consume, create, change or delete a secret or its IAM policy, serve requests, act interactively |
 | **Web workload identity** | Call the API origin, export telemetry | Read the registry, read infrastructure state, read any secret, reach a database, run jobs, hold provider authority |
 | **API workload identity** | Read only the secrets it is explicitly granted, export telemetry, serve requests | Write the registry, write infrastructure state, deploy anything, read another service's secrets or future schema |
 
@@ -79,7 +79,9 @@ invokers are service-level `roles/run.invoker` bindings that `run.developer`
 cannot set. The role is confined to Cloud Run. It grants no project IAM and no
 identity administration, and the forbidden-role set above is unchanged: no owner,
 no editor, no project-IAM administration, no service-account administration, no
-Secret Manager role. The deployer keeps `roles/iam.serviceAccountUser`, so it may
+Secret Manager role. (That last clause was narrowed by the 2026-10-05 amendment
+below: still no *project-level* Secret Manager role and no mutation, plus
+metadata read bound to each declared container.) The deployer keeps `roles/iam.serviceAccountUser`, so it may
 *act as* the runtime identities it deploys without being able to create, delete
 or re-grant them.
 
@@ -90,6 +92,53 @@ typed apply confirmation and the provenance requirement are untouched — and it
 applies nothing. The bootstrap re-apply and the service applies remain maintainer
 operations under the existing #75 approvals; `../../../infra/bootstrap.md`
 records the exact delta to expect.
+
+### Accepted amendment 2026-10-05: the deployer reads secret metadata on declared containers
+
+Once the first secret container existed, every pipeline plan of the `platform`
+stack refreshed that container and the IAM member on it as the federated
+deployer, and was refused: `403 Permission 'secretmanager.secrets.get' denied`.
+The push Delivery run after #220 failed in `plan platform` and skipped the
+deploy. Nothing was created or changed, and **no routine deploy could run at
+all** — the scheduled drift plan would have failed identically, so drift
+detection was blind for the same reason.
+
+The cause was this record's own "no Secret Manager role at all", applied to an
+identity that must *plan* a secret it may never read. A stack whose resources
+the planner cannot refresh is a stack with no plan, so zero was not a workable
+position once the resource existed.
+
+**The deployer now holds `roles/secretmanager.viewer` bound to each declared
+secret container, and nothing else in Secret Manager.** That role carries
+`secretmanager.secrets.get` and `secretmanager.secrets.getIamPolicy`, which is
+exactly what refreshing a container and an IAM member on it reads, plus list and
+version-*metadata* permissions. It carries **no `secretmanager.versions.access`**,
+so the deployer can see that a version exists and never what it contains, and it
+carries nothing that mutates: no create, no update, no delete, no `setIamPolicy`.
+The binding is at **secret level only** — never project level — and it is
+declared beside the container in the maintainer-applied `platform` stack, because
+an identity can never grant itself anything. Granting it is still a maintainer
+apply.
+
+The narrower expression was tried first and rejected on a concrete ground: a
+project custom role carrying only the two `get` permissions would be refreshed by
+the deployer on every plan of the stack that declares it, which needs
+`iam.roles.get` — not among the deployer's enumerated roles. It would have moved
+the same denial from the secret to the role. The predefined role bound to one
+secret is therefore the narrowest expression that actually works, and
+`tools/infra-policy.test.mjs` fails on any Secret Manager role granted anywhere
+under `infra/` other than `secretAccessor` for a declared consumer and
+`viewer` at secret level, on any project-level Secret Manager grant, on any
+declared `secretmanager.versions.access`, and on the deployer appearing among the
+identities that can read a value.
+
+What does not change: only the declared runtime consumer reads a value, the value
+still reaches this repository nowhere, the deployer still cannot create or
+re-grant anything in Secret Manager, and every gate — environment approval, typed
+apply confirmation, provenance — is untouched. The separation is narrower than
+before in one respect: "who can read this secret" and "who can see that it
+exists" are now two different published registers rather than one absence
+(#224).
 
 ### Sole-principal target and current safeguards
 
@@ -126,6 +175,23 @@ Rejected. It breaks attribution, makes rollback ambiguous, and lets the deployed
 ### Defer secret-store selection until a secret exists
 
 Rejected. The first capability that needs a credential would then have to design custody, rotation, revocation, and access control under delivery pressure. Declaring an empty store now costs approximately nothing.
+
+### Move the secret store into the maintainer-only bootstrap stack
+
+Rejected on 2026-10-05, as the other way to answer #224: if the pipeline never
+planned a secret container, it would need no permission on one and zero would have
+remained workable. The cost is what decided it. The existing container and its
+accessor grant would have to be moved between two remote states — a `terraform
+state rm` and `import` pair against production state, the one operation in this
+platform with no reviewed automation and no rehearsal — and from then on **every
+future secret, and every change to one, becomes a bootstrap apply**: the one
+procedure that is explicitly human-only, outside the pipeline, and therefore
+outside reviewed plan-and-apply, drift detection and the execution-identity
+mapping. It would also split the platform's declared infrastructure across two
+stacks on the basis of which identity may read it rather than what it is. A
+read-only metadata grant, bound to one secret and applied by the maintainer, buys
+the same custody boundary without taking a whole resource class out of the
+pipeline.
 
 ### Grant the deployer broad administrative rights for convenience
 

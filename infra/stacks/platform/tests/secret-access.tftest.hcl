@@ -5,10 +5,13 @@
 # value: this stack declares containers and their access boundary, never a version
 # (ADR-0005, ADR-0012).
 #
-# The grant lives in this stack because setting IAM on a secret needs Secret
-# Manager authority, and the federated deployer that runs a routine service deploy
-# holds no Secret Manager role at all. A grant declared in the release path could
-# only fail the deploy that needed it (#217).
+# The grant lives in this stack because setting IAM on a secret needs authority to
+# mutate Secret Manager, which the federated deployer that runs a routine service
+# deploy does not have. A grant declared in the release path could only fail the
+# deploy that needed it (#217). Since #224 that same deployer does hold secret-level
+# metadata read on each declared container — enough to refresh them in a plan, never
+# enough to read a value — and this stack is where that is declared too, because an
+# identity can never grant itself anything.
 mock_provider "google" {}
 
 override_data {
@@ -107,4 +110,58 @@ run "a_secret_with_no_consumer_is_refused_rather_than_silently_unreadable" {
   }
 
   expect_failures = [var.secret_consumer_services]
+}
+
+run "the_deployer_can_plan_the_container_and_read_no_value" {
+  command = plan
+
+  # Metadata read for every declared container, for the identity that plans this
+  # stack. Without it the refresh is refused and there is no plan at all (#224).
+  assert {
+    condition = (
+      length(module.secret_store.metadata_reader_register) ==
+      length(module.secret_store.secret_ids)
+    )
+    error_message = "Every declared container needs a plan-only reader, or the next pipeline plan of this stack is refused on the one that lacks it."
+  }
+
+  assert {
+    condition = alltrue([
+      for secret_id, reader in module.secret_store.metadata_reader_register :
+      length(reader.members) == 1 &&
+      contains(reader.members, "serviceAccount:delivery-deployer@example-project.iam.gserviceaccount.com")
+    ])
+    error_message = "The deployer is the only metadata reader; nothing else needs to plan this stack."
+  }
+
+  assert {
+    condition = alltrue([
+      for secret_id, reader in module.secret_store.metadata_reader_register :
+      reader.role == "roles/secretmanager.viewer"
+    ])
+    error_message = "The plan-only grant is `roles/secretmanager.viewer` at secret level, which carries no versions.access."
+  }
+
+  # The runtime identities are not plan-only identities. The API reads the value
+  # through its accessor grant; the web reads nothing at all, and giving it standing
+  # metadata read would be the first step towards treating it as a database client.
+  assert {
+    condition = alltrue(flatten([
+      for secret_id, reader in module.secret_store.metadata_reader_register : [
+        for service, email in data.terraform_remote_state.bootstrap.outputs.contract_runtime_service_account_emails :
+        !contains(reader.members, "serviceAccount:${email}")
+      ]
+    ]))
+    error_message = "No runtime identity may hold the plan-only metadata grant: a workload either consumes a secret or has no business seeing it."
+  }
+
+  # And the separation holds in the other direction, which is the one that would
+  # matter: the identity that plans must never be the identity that can read.
+  assert {
+    condition = alltrue([
+      for secret_id, members in module.secret_store.accessor_register :
+      !contains(members, "serviceAccount:delivery-deployer@example-project.iam.gserviceaccount.com")
+    ])
+    error_message = "The deployer must never appear as an accessor. It plans containers; it does not read contents (ADR-0005)."
+  }
 }

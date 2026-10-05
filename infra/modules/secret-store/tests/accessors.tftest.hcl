@@ -151,3 +151,124 @@ run "a_repeated_consumer_is_refused" {
 
   expect_failures = [var.accessor_members]
 }
+
+# Metadata read: the grant that lets an identity plan these resources without being
+# able to read what they hold (#224).
+run "a_store_asked_for_no_metadata_reader_creates_no_reader_binding" {
+  command = plan
+
+  assert {
+    condition     = length(google_secret_manager_secret_iam_member.metadata_reader) == 0
+    error_message = "A store with no declared plan-only identity must create no reader binding."
+  }
+}
+
+run "a_metadata_reader_receives_viewer_on_exactly_that_secret" {
+  command = plan
+
+  variables {
+    metadata_reader_members = {
+      "example-secret" = ["serviceAccount:example-deployer@example-project.iam.gserviceaccount.com"]
+    }
+  }
+
+  assert {
+    condition     = length(google_secret_manager_secret_iam_member.metadata_reader) == 1
+    error_message = "One reader on one secret is one binding."
+  }
+
+  # The role is the narrowest predefined one that can refresh both the container and
+  # an IAM member on it. Asserted literally: this is the line that decides what a
+  # plan-only identity can do, and it must never drift to a role that reads values.
+  assert {
+    condition = alltrue([
+      for grant in values(google_secret_manager_secret_iam_member.metadata_reader) :
+      grant.role == "roles/secretmanager.viewer" && grant.secret_id == "example-secret"
+    ])
+    error_message = "A metadata reader holds `roles/secretmanager.viewer` on the named secret and nothing else."
+  }
+
+  # Stated as a refusal as well, because these are the two roles a convenience edit
+  # would reach for, and either would turn a plan-only identity into a reader of the
+  # value or an owner of the custody boundary.
+  assert {
+    condition = alltrue([
+      for grant in values(google_secret_manager_secret_iam_member.metadata_reader) :
+      grant.role != "roles/secretmanager.secretAccessor" && grant.role != "roles/secretmanager.admin"
+    ])
+    error_message = "A metadata reader must never receive secretAccessor or admin; metadata read is the whole point of the separate list."
+  }
+}
+
+run "metadata_readers_and_accessors_are_separate_bindings" {
+  command = plan
+
+  variables {
+    accessor_members = {
+      "example-secret" = ["serviceAccount:example-runtime@example-project.iam.gserviceaccount.com"]
+    }
+    metadata_reader_members = {
+      "example-secret" = ["serviceAccount:example-deployer@example-project.iam.gserviceaccount.com"]
+    }
+  }
+
+  # Two members, two roles, two addresses. The consumer of the value and the
+  # identity that merely plans it are never the same binding.
+  assert {
+    condition = (
+      length(google_secret_manager_secret_iam_member.accessor) == 1 &&
+      length(google_secret_manager_secret_iam_member.metadata_reader) == 1
+    )
+    error_message = "An accessor and a metadata reader are distinct bindings on the same container."
+  }
+
+  assert {
+    condition = alltrue([
+      for grant in values(google_secret_manager_secret_iam_member.metadata_reader) :
+      !contains(
+        [for accessor in values(google_secret_manager_secret_iam_member.accessor) : accessor.member],
+        grant.member
+      )
+    ])
+    error_message = "An identity granted metadata read must not also appear as an accessor; that would make the separation cosmetic."
+  }
+}
+
+run "a_metadata_reader_on_an_undeclared_secret_is_refused" {
+  command = plan
+
+  variables {
+    metadata_reader_members = {
+      "a-secret-nobody-declared" = ["serviceAccount:example-deployer@example-project.iam.gserviceaccount.com"]
+    }
+  }
+
+  expect_failures = [var.metadata_reader_members]
+}
+
+run "a_human_or_public_metadata_reader_is_refused" {
+  command = plan
+
+  variables {
+    metadata_reader_members = {
+      "example-secret" = ["user:someone@example.test"]
+    }
+  }
+
+  expect_failures = [var.metadata_reader_members]
+}
+
+run "a_repeated_metadata_reader_is_refused" {
+  command = plan
+
+  variables {
+    metadata_reader_members = {
+      "example-secret" = [
+        "serviceAccount:example-deployer@example-project.iam.gserviceaccount.com",
+        "serviceAccount:example-deployer@example-project.iam.gserviceaccount.com",
+      ]
+    }
+  }
+
+  expect_failures = [var.metadata_reader_members]
+}

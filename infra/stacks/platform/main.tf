@@ -48,6 +48,21 @@ locals {
     secret_id => [for service in services : "serviceAccount:${local.runtime_identities[service]}"]
   }
 
+  # Who may see that each declared secret exists, which is not who may read it.
+  #
+  # Every pipeline plan of this stack — the push plan and the scheduled drift plan
+  # alike — refreshes each container and each IAM member on it as the deployer. With
+  # no grant that refresh is refused and no plan exists at all, which is how the
+  # first plan after the container was created failed and why no routine deploy
+  # could run (#224). The deployer is the only member here, it is named from the
+  # bootstrap contract rather than written down, and `secretmanager.viewer` bound to
+  # the one secret is what it gets: enough to refresh, never a value, never a
+  # mutation.
+  secret_metadata_reader_members = {
+    for secret_id, _secret in var.secrets :
+    secret_id => ["serviceAccount:${local.deployer}"]
+  }
+
   # Cloud Run pulls images as the serverless service agent, not as a workload's
   # own runtime identity. ADR-0005 states plainly that the web workload identity
   # may not read the registry, so the pull grant goes here and nowhere near the
@@ -103,7 +118,11 @@ module "secret_store" {
   # so the grant is declared in this maintainer-applied stack rather than in the
   # service stack that reads the secret (#217, ADR-0005, ADR-0012).
   accessor_members = local.secret_accessor_members
-  labels           = var.labels
+  # Read-only metadata for the identity that plans this stack. Declared here because
+  # the deployer can never grant itself anything: like the accessor grant, this is
+  # applied by the maintainer (#224).
+  metadata_reader_members = local.secret_metadata_reader_members
+  labels                  = var.labels
 
   depends_on = [google_project_service.platform]
 }
