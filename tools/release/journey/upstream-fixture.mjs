@@ -32,6 +32,27 @@ export const FIXTURE_MODES = Object.freeze([
 /** The hostname the certificate is minted for. Never a real, resolvable name. */
 export const FIXTURE_HOSTNAME = 'platform-api.test';
 
+/**
+ * Reads the fixture answers itself instead of forwarding.
+ *
+ * The public market reads are served by the packaged API from third-party venues and price
+ * sources (#211). Forwarding them would make every release-journey run reach those
+ * providers for real, from a CI runner, for data the journey asserts nothing about — so the
+ * fixture refuses them here. Everything the packaged API can answer without leaving the
+ * runner is still forwarded to it and still observed.
+ */
+const UNPROXIED = /^\/v1\/market\//u;
+
+/** The refusal those reads receive. Synthetic, and named so it cannot be mistaken. */
+const NOT_PROXIED = Object.freeze({
+  errorCode: 'MN-JOURNEY-UPSTREAM-NOT-PROXIED',
+  detail: 'The release-journey fixture does not proxy public market reads to third parties.',
+  requestId: 'journey-not-proxied',
+  status: 503,
+  title: 'Service Unavailable',
+  type: 'about:blank',
+});
+
 function openssl(args, input) {
   const result = spawnSync('openssl', args, { encoding: 'utf8', input });
   if (result.status !== 0) {
@@ -125,6 +146,7 @@ export function createJourneyCertificate(directory, hostname = FIXTURE_HOSTNAME)
 export async function startUpstreamFixture({ target, certificate }) {
   const sockets = new Set();
   const observations = [];
+  const unproxied = [];
   let mode = 'proxy';
   let pending = new Set();
 
@@ -162,6 +184,13 @@ export async function startUpstreamFixture({ target, certificate }) {
             state: 'available',
           }),
         );
+        return;
+      }
+
+      if (UNPROXIED.test(request.url)) {
+        unproxied.push(request.url);
+        response.writeHead(503, { 'content-type': 'application/problem+json' });
+        response.end(JSON.stringify(NOT_PROXIED));
         return;
       }
 
@@ -219,8 +248,10 @@ export async function startUpstreamFixture({ target, certificate }) {
   const { port } = server.address();
 
   return {
-    /** Every status response the fixture forwarded, oldest first. */
+    /** Every response the fixture forwarded to the packaged API, oldest first. */
     observations,
+    /** Every read the fixture refused rather than sending to a third party. */
+    unproxied,
     /** The origin the packaged web artifact is configured with. */
     origin: `https://${certificate.hostname}:${port}`,
     port,
