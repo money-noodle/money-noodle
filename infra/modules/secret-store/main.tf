@@ -49,16 +49,20 @@ resource "google_secret_manager_secret" "secret" {
     }
   }
 
+  # Labels carry label-safe values only. A provider label accepts lower-case
+  # letters, digits, hyphen and underscore, and a mocked provider never applies
+  # that rule: the first real apply was refused for the space in a custody phrase
+  # (#221). Custody facts are prose, so they are annotations, below.
   labels = merge(var.labels, {
     "managed-by" = "opentofu"
-    "owner"      = each.value.owner
-    "consumer"   = each.value.consuming_principal
   })
 
   annotations = {
     # Every secret records owner, consuming principal, rotation interval,
     # revocation procedure, and recovery path (ADR-0005). Recording them beside
     # the secret is what keeps them true; a wiki page drifts.
+    "owner"                  = each.value.owner
+    "consuming-principal"    = each.value.consuming_principal
     "rotation-interval-days" = tostring(each.value.rotation_interval_days)
     "revocation-procedure"   = each.value.revocation_procedure
     "recovery-path"          = each.value.recovery_path

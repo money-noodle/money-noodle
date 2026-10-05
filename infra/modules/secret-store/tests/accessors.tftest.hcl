@@ -28,6 +28,32 @@ run "a_container_with_no_declared_consumer_is_readable_by_nobody" {
   }
 }
 
+# A provider label accepts only lower-case letters, digits, hyphen and underscore,
+# which a mocked provider never checks: the first real apply was refused for the
+# space in a custody phrase (#221). The consuming principal above is prose with
+# spaces on purpose, so this fails if custody text ever returns to a label.
+run "custody_prose_is_an_annotation_and_every_label_is_label_safe" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for value in values(google_secret_manager_secret.secret["example-secret"].labels) :
+      can(regex("^[a-z0-9_-]{0,63}$", value))
+    ])
+    error_message = "Every label value must satisfy the provider's label character rule; free-text custody facts belong in annotations."
+  }
+
+  assert {
+    condition     = google_secret_manager_secret.secret["example-secret"].annotations["consuming-principal"] == "example runtime service account"
+    error_message = "The consuming principal is recorded beside the secret as an annotation (ADR-0005)."
+  }
+
+  assert {
+    condition     = google_secret_manager_secret.secret["example-secret"].annotations["owner"] == "maintainer"
+    error_message = "The owner is recorded beside the secret as an annotation (ADR-0005)."
+  }
+}
+
 run "a_declared_consumer_is_granted_accessor_on_exactly_that_secret" {
   command = plan
 
