@@ -66,8 +66,20 @@ LABEL org.opencontainers.image.title="platform-api" \
 # The image declares how to prove itself healthy, so the release pipeline and a
 # reviewer run the same check. `node` is the only interpreter guaranteed to
 # survive the runtime stage's tool removal above.
+# Liveness, not readiness, and the distinction is the point since #210.
+#
+# An image can assert that its process answers. It cannot assert that the
+# deployment it lands in has the read model this service now depends on: that
+# arrives as a secret reference the image is never given, so a readiness check here
+# would report the environment rather than the build, and an image built correctly
+# would look broken wherever its dependency is absent.
+#
+# Nothing in production reads this. Cloud Run gates traffic on the startup and
+# liveness probes declared on the service, which still point at `/health/ready` and
+# `/health/live` — so a revision without a working read model still never serves
+# (ADR-0012). This line exists for the container checks that boot the image alone.
 HEALTHCHECK --interval=5s --timeout=3s --start-period=20s --retries=12 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3001)+'/health/ready').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3001)+'/health/live').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 USER api
 EXPOSE 3001
