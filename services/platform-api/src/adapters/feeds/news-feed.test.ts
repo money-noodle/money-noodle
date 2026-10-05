@@ -159,7 +159,7 @@ describe('createNewsFeed', () => {
     };
 
     const headlines = await createNewsFeed(client).loadHeadlines();
-    expect(urls).toEqual(['https://www.coindesk.com/arc/outboundfeeds/rss/']);
+    expect(urls).toEqual(['https://www.coindesk.com/arc/outboundfeeds/rss']);
     expect(headlines[0]?.title).toBe('A story');
   });
 });
