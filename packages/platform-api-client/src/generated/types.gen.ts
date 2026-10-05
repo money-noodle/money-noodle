@@ -35,6 +35,723 @@ export type Problem = {
 
 export type RequestId = string;
 
+/**
+ * A time recorded by the system that produced the data, normalized to ISO-8601 UTC. Never this API's own clock.
+ */
+export type SourceTime = string;
+
+/**
+ * An amount in US cents, as the source records it. May be negative. May be fractional where the source keeps sub-cent precision; a value the source holds to more precision than this representation can carry exactly is refused rather than rounded.
+ */
+export type Cents = number;
+
+/**
+ * A fraction, not a percentage: 0.42 is 42%. A probability-point difference is expressed the same way, so 0.05 is 5 points.
+ */
+export type Ratio = number;
+
+/**
+ * A fraction as in `Ratio`, or `null` when its denominator is zero and the source therefore reports no value. `null` is a real answer and is never substituted with zero.
+ */
+export type NullableRatio = number | null;
+
+/**
+ * A finite number, or `null` where the source reports no value. `null` is never substituted with zero.
+ */
+export type NullableNumber = number | null;
+
+/**
+ * A non-negative count.
+ */
+export type Count = number;
+
+/**
+ * A display label chosen by the source system. Opaque to this API: it may contain non-ASCII punctuation and its set of values is not fixed.
+ */
+export type OpaqueLabel = string;
+
+export type PaperBudget = {
+    schemaVersion: '1';
+    requestId: RequestId;
+    /**
+     * Always true. The record was read from the durable read model, which is the only source this operation has; it is published so a client can tell this record apart from a locally assembled one without inspecting its fields.
+     */
+    durable: true;
+    /**
+     * When the source system last replaced this budget record. Disclosed so freshness can be judged by the reader; this API applies no staleness threshold and never withholds a record for being old.
+     */
+    sourceUpdatedAt: SourceTime;
+    /**
+     * The simulated bankroll's starting balance.
+     */
+    startingCents: Cents;
+    /**
+     * Uncommitted simulated cash.
+     */
+    availableCents: Cents;
+    /**
+     * `availableCents` plus `reservedCents`.
+     */
+    equityCents: Cents;
+    /**
+     * Intended stake across the open positions.
+     */
+    reservedCents: Cents;
+    /**
+     * The next stake the simulation would commit: the smaller of available cash and the configured per-position cap, and zero when there is no available cash.
+     */
+    proposedStakeCents: Cents;
+    /**
+     * Whether available cash is above zero.
+     */
+    running: boolean;
+    /**
+     * Whether available cash is at or below zero with nothing still open.
+     */
+    depleted: boolean;
+    openOrders: Count;
+    settledOrders: Count;
+    /**
+     * Realized profit and loss for the **current** bankroll funding only, on the source's whole-cent accounting, including its recorded fee corrections, and reset when the bankroll is reset.
+     *
+     * This is deliberately a different number from `realizedPnlCents` on the full record, which is exact and lifetime. The two are not expected to agree, and neither is wrong: they answer different questions. A client that wants the reconciliation residual computes `equityCents - (startingCents + realizedPnlCents)` itself.
+     */
+    realizedPnlCents: Cents;
+    bankrollResets: Count;
+    /**
+     * The most recent executions, newest `createdAt` first, at most 30. The source replaces this list whole with every budget write, so it is the whole recent history rather than a page of a longer one. An empty list beside a present budget record is a valid answer.
+     */
+    recentExecutions: Array<PaperExecution>;
+};
+
+/**
+ * One recorded simulated execution. The four conditional fields are **absent** rather than null when the source has no value for them, which is how the source distinguishes "not yet known" from "known to be nothing".
+ */
+export type PaperExecution = {
+    /**
+     * The source's own identity for this execution, stable across reads. Published so a client can key a list without inventing an index.
+     */
+    executionKey: string;
+    /**
+     * The asset symbol the position is on.
+     */
+    symbol: string;
+    venue: 'polymarket' | 'kalshi';
+    /**
+     * The direction the position was taken in.
+     */
+    side: 'UP' | 'DOWN';
+    /**
+     * Lifecycle state, as the source records it. Known values are `pending_reservation`, `uncertain`, `open`, `sold`, `won`, `lost`, `invalid`, `unfilled` and `rejected`; "settled" means `won`, `lost`, `invalid` or `sold`. The source does not constrain this column, so an unrecognised value is served as the string it is rather than refused.
+     */
+    status: string;
+    /**
+     * When the position was taken, on the source's clock.
+     */
+    createdAt: SourceTime;
+    /**
+     * When the contract settles, as the venue stated it.
+     */
+    closesAt: SourceTime;
+    /**
+     * Price paid, as a fraction of one dollar in 0..1: 0.42 is 42 cents per contract.
+     */
+    askPrice: Ratio;
+    /**
+     * Contracts held. May be fractional.
+     */
+    quantity: number;
+    /**
+     * Amount committed. May be fractional where the source keeps sub-cent precision.
+     */
+    stakeCents: Cents;
+    /**
+     * Fee charged. May be fractional.
+     */
+    feeCents: Cents;
+    /**
+     * Realized profit and loss. Absent while the position is unsettled.
+     */
+    pnlCents?: Cents;
+    /**
+     * How the contract resolved. Absent while unresolved.
+     */
+    outcome?: 'UP' | 'DOWN';
+    /**
+     * Why an attempt did not fill, as the source classified it. Known values are `post_only_race`, `rested_no_fill`, `pre_submit_quote_moved` and `ioc_no_fill`. Absent on a filled position. The source does not constrain this column, so an unrecognised value is served as the string it is.
+     */
+    noFillReason?: string;
+    /**
+     * Whether the order rested on the book or crossed it. Absent when unrecorded.
+     */
+    liquidityRole?: 'maker' | 'taker';
+};
+
+export type PaperPerformanceSummary = {
+    schemaVersion: '1';
+    requestId: RequestId;
+    /**
+     * Always true, as on the budget record.
+     */
+    durable: true;
+    /**
+     * When the source system last computed this summary, on its own clock. Older stored records carry no such stamp; for those this falls back to the row's own last-written time, normalized to ISO-8601 UTC.
+     */
+    generatedAt: SourceTime;
+    /**
+     * When the stored record was last written. Published alongside `generatedAt` because the two differ: the row is rewritten more often than the full document inside it is recomputed.
+     */
+    sourceUpdatedAt: SourceTime;
+    summary: ForecastSignalSummary;
+    paperRecord: PaperTrackSummary;
+};
+
+/**
+ * Forecast counters. Every counter except the calibration pair is over qualifying forecasts only — those the source did not mark as excluded.
+ */
+export type ForecastSignalSummary = {
+    issued: Count;
+    /**
+     * Distinct asset-cycles among the issued forecasts.
+     */
+    cycles: Count;
+    resolved: Count;
+    resolvedCycles: Count;
+    /**
+     * Correct over resolved. Null when nothing is resolved.
+     */
+    accuracy: NullableRatio;
+    /**
+     * Mean of the per-cycle accuracies, so a busy cycle does not dominate.
+     */
+    cycleBalancedAccuracy: NullableRatio;
+    /**
+     * Mean Brier score over resolved forecasts. Lower is better.
+     */
+    brierScore: NullableNumber;
+    /**
+     * Signed run length over consecutive cycles: positive for correct, negative for wrong, zero when nothing is resolved.
+     */
+    currentCycleStreak: number;
+    /**
+     * Distinct resolved settlement times. Counted over **all** forecasts, not only qualifying ones, which is why it can exceed `resolvedCycles`.
+     */
+    calibrationWindows: Count;
+    /**
+     * How many windows the source's own policy requires before it treats calibration as readable. Data, not a constant of this API.
+     */
+    calibrationMinimum: Count;
+    /**
+     * Windows over the minimum, capped at 1.
+     */
+    calibrationProgress: Ratio;
+    calibrationReady: boolean;
+    /**
+     * The most recent forecasts, at most four.
+     */
+    recent: Array<ForecastHistoryEntry>;
+};
+
+/**
+ * The bounded simulated trade record.
+ */
+export type PaperTrackSummary = {
+    /**
+     * Always `paper`. A record in any other mode is refused rather than served.
+     */
+    mode: 'paper';
+    /**
+     * Settled positions, which includes those resolved as void and those exited early.
+     */
+    settled: Count;
+    /**
+     * Distinct settlement times among settled positions.
+     */
+    windows: Count;
+    wins: Count;
+    losses: Count;
+    /**
+     * Wins over **settled**, and settled includes void and early-exited positions. `wins + losses` therefore need not equal `settled`, and this is deliberately not `wins / (wins + losses)`. Kept as the source computes it so this record and the source agree.
+     */
+    winRate: NullableRatio;
+    /**
+     * Returned minus staked, over staked. Null when nothing was staked.
+     */
+    roi: NullableRatio;
+    /**
+     * Lifetime realized profit and loss on the source's exact accounting. Not the same number as the budget record's, which is whole-cent and scoped to the current funding.
+     */
+    realizedPnlCents: Cents;
+    /**
+     * Simple mean of the per-position predicted edge, in probability points.
+     */
+    meanPredictedEdge: NullableRatio;
+    /**
+     * Return per unit staked, averaged within each settlement window first and then across windows, so correlated positions closing together count once.
+     */
+    meanRealizedReturn: NullableNumber;
+};
+
+/**
+ * One forecast, as published. Resolution fields are absent while it is pending.
+ */
+export type ForecastHistoryEntry = {
+    id: string;
+    symbol: string;
+    /**
+     * The forecast direction. Known values are `UP` and `DOWN`.
+     */
+    direction: string;
+    /**
+     * The model's probability for the stated direction.
+     */
+    directionalLikelihood: Ratio;
+    issuedAt: SourceTime;
+    modelVersion: string;
+    policyVersion: string;
+    confidence: Ratio;
+    /**
+     * Known values are `pending`, `resolved` and `invalid`.
+     */
+    status: string;
+    /**
+     * How it resolved. Absent while pending. Known values are `UP` and `DOWN`.
+     */
+    outcome?: string;
+    /**
+     * Absent while pending.
+     */
+    correct?: boolean;
+};
+
+export type PaperPerformance = {
+    schemaVersion: '1';
+    requestId: RequestId;
+    /**
+     * Always true, as on the budget record.
+     */
+    durable: true;
+    /**
+     * When the source system last replaced this full document, on its own clock. This is **not** the row's last-written time: the row is rewritten much more often than the full document is recomputed, so `sourceUpdatedAt` would overstate this document's freshness. Older stored records carry no such stamp; for those this falls back to `sourceUpdatedAt`.
+     */
+    generatedAt: SourceTime;
+    /**
+     * When the stored row was last written, for the reason given above.
+     */
+    sourceUpdatedAt: SourceTime;
+    summary: ForecastRecordSummary;
+    paperRecord: PaperTrackRecord;
+    /**
+     * One record per venue and market with any simulated position, ordered by settled count descending. Empty when the source stored none.
+     */
+    paperProviderRecords: Array<ProviderTrackRecord>;
+    /**
+     * One entry per bankroll funding, oldest first. A new funding starts at each bankroll reset.
+     */
+    paperEpochs: Array<BankrollEpoch>;
+    /**
+     * The forecast history the source publishes, newest first and bounded by the source at 500 entries.
+     */
+    forecasts: Array<ForecastHistoryEntry>;
+    /**
+     * Observation-only path diagnostics. Absent when the source stored none; absence is not an error.
+     */
+    cyclePaths?: CyclePathReport;
+};
+
+/**
+ * The full forecast summary. Counters are over qualifying forecasts unless a field says otherwise; every array is published only for the groups the source found data for, so an empty array means "nothing qualified", not "not computed".
+ */
+export type ForecastRecordSummary = {
+    issued: Count;
+    pending: Count;
+    resolved: Count;
+    cycles: Count;
+    resolvedCycles: Count;
+    cycleBalancedAccuracy: NullableRatio;
+    correct: Count;
+    invalid: Count;
+    accuracy: NullableRatio;
+    brierScore: NullableNumber;
+    /**
+     * Mean natural-log loss over resolved forecasts.
+     */
+    logLoss: NullableNumber;
+    /**
+     * Signed run length over consecutive resolved forecasts.
+     */
+    currentStreak: number;
+    /**
+     * Signed run length over consecutive cycles.
+     */
+    currentCycleStreak: number;
+    observedCalculations: Count;
+    resolvedCalculations: Count;
+    /**
+     * Rival probability sources, published only where one had resolved forecasts.
+     */
+    benchmarks: Array<BenchmarkScore>;
+    edgeBuckets: Array<EdgeBucket>;
+    segments: Array<SegmentGroup>;
+    missedBuyCounterfactual: MissedBuyCounterfactual;
+    /**
+     * Distinct settlement times among resolved forecasts.
+     */
+    resolvedWindows: Count;
+    /**
+     * Windows the source requires before it treats the evaluation as meaningful.
+     */
+    evaluationMinimumWindows: Count;
+    evaluationMeaningful: boolean;
+    /**
+     * Resolved entries carrying both a predicted edge and a realized return.
+     */
+    realizedEdgeTrades: Count;
+    meanPredictedEdge: NullableRatio;
+    meanRealizedReturn: NullableNumber;
+    /**
+     * Sliced by time from issuance to settlement.
+     */
+    byLeadTime: Array<LeadTimeSlice>;
+    calibrationBins: Array<CalibrationBin>;
+    calibrationWindows: Count;
+    calibrationMinimum: Count;
+    calibrationProgress: Ratio;
+    calibrationReady: boolean;
+    byAsset: Array<ForecastSlice>;
+    byDirection: Array<ForecastSlice>;
+    byModelVersion: Array<ForecastSlice>;
+    byConfidenceBucket: Array<ForecastSlice>;
+    /**
+     * Chronological accuracy curve, downsampled by the source to at most 500 points.
+     */
+    timeline: Array<ForecastTimelinePoint>;
+    /**
+     * The most recent forecasts, at most eight.
+     */
+    recent: Array<ForecastHistoryEntry>;
+};
+
+/**
+ * One group of resolved forecasts.
+ */
+export type ForecastSlice = {
+    label: OpaqueLabel;
+    resolved: Count;
+    correct: Count;
+    accuracy: Ratio;
+};
+
+/**
+ * A forecast slice by time from issuance to settlement. Labels are the source's bands and are opaque.
+ */
+export type LeadTimeSlice = {
+    label: OpaqueLabel;
+    resolved: Count;
+    correct: Count;
+    accuracy: Ratio;
+    brierScore: NullableNumber;
+};
+
+/**
+ * Forecast probability against observed outcome rate, in one probability band.
+ */
+export type CalibrationBin = {
+    label: OpaqueLabel;
+    resolved: Count;
+    meanForecast: Ratio;
+    observedRate: Ratio;
+};
+
+/**
+ * One rival probability source, scored on the same resolved forecasts.
+ */
+export type BenchmarkScore = {
+    label: OpaqueLabel;
+    resolved: Count;
+    accuracy: NullableRatio;
+    brierScore: NullableNumber;
+    logLoss: NullableNumber;
+};
+
+/**
+ * Positions grouped by the edge predicted at entry.
+ */
+export type EdgeBucket = {
+    label: OpaqueLabel;
+    trades: Count;
+    predictedEdge: Ratio;
+    /**
+     * Return per unit staked, averaged across the bucket.
+     */
+    realizedReturn: number;
+    /**
+     * Share of the bucket whose outcome matched the entry side.
+     */
+    winRate: Ratio;
+};
+
+/**
+ * One dimension the source sliced positions by, with its segments ordered by mean realized return descending. Dimension names are the source's and are opaque.
+ */
+export type SegmentGroup = {
+    dimension: OpaqueLabel;
+    description: string;
+    segments: Array<SegmentStat>;
+};
+
+/**
+ * One segment of a dimension.
+ */
+export type SegmentStat = {
+    label: OpaqueLabel;
+    trades: Count;
+    windows: Count;
+    meanPredictedEdge: Ratio;
+    /**
+     * Return per unit staked, clustered by settlement window. **Nullable by necessity:** the source can compute this as not-a-number, which JSON carries as null, and a record carrying it is a real record rather than a broken one.
+     */
+    meanRealizedReturn: NullableNumber;
+    /**
+     * Sample standard error across windows. Null with fewer than two windows.
+     */
+    standardError: NullableNumber;
+    winRate: Ratio;
+};
+
+/**
+ * Observation only: sides a policy floor rejected, so none of these was ever traded, simulated or otherwise.
+ */
+export type MissedBuyCounterfactual = {
+    label: OpaqueLabel;
+    description: string;
+    candidates: Count;
+    windows: Count;
+    profitableCandidates: Count;
+    meanCandidateReturn: NullableNumber;
+    standardError: NullableNumber;
+    bestPerWindowCandidates: Count;
+    bestPerWindowWins: Count;
+    bestPerWindowMeanReturn: NullableNumber;
+    bestPerWindowStandardError: NullableNumber;
+    bestPerWindowTotalReturn: NullableNumber;
+};
+
+/**
+ * One point on the accuracy curve.
+ */
+export type ForecastTimelinePoint = {
+    time: SourceTime;
+    /**
+     * Running count of resolved forecasts at this point, counting from one.
+     */
+    resolved: number;
+    cumulativeAccuracy: Ratio;
+    /**
+     * Accuracy over the trailing 25 resolved forecasts.
+     */
+    rollingAccuracy: Ratio;
+    cumulativeBrier: number;
+};
+
+/**
+ * The full simulated trade record. Every counterfactual field here is an observation about a decision that was not taken; none of them describes a position that existed.
+ */
+export type PaperTrackRecord = {
+    mode: 'paper';
+    settled: Count;
+    pending: Count;
+    windows: Count;
+    wins: Count;
+    losses: Count;
+    invalid: Count;
+    /**
+     * Positions exited before settlement.
+     */
+    sold: Count;
+    unfilled: Count;
+    rejected: Count;
+    /**
+     * Exact amount staked across settled positions.
+     */
+    stakedCents: Cents;
+    /**
+     * Exact amount returned by settled positions.
+     */
+    returnedCents: Cents;
+    /**
+     * `returnedCents` minus `stakedCents`.
+     */
+    realizedPnlCents: Cents;
+    roi: NullableRatio;
+    /**
+     * Wins over settled, with the same denominator caveat as the bounded summary.
+     */
+    winRate: NullableRatio;
+    meanPredictedEdge: NullableRatio;
+    meanRealizedReturn: NullableNumber;
+    standardError: NullableNumber;
+    switchesEvaluated: Count;
+    /**
+     * Mean cents per evaluated switch against holding instead. Observation only.
+     */
+    meanSwitchVsHoldCents: NullableNumber;
+    standaloneExitsEvaluated: Count;
+    /**
+     * The source's version for the counterfactual method below.
+     */
+    actionCounterfactualVersion: string;
+    actionCounterfactuals: Array<ActionCounterfactualArm>;
+    principalRecoveryExitsEvaluated: Count;
+    principalRecoveryVsFullExitCents: NullableNumber;
+    meanPrincipalRecoveryVsFullExitCents: NullableNumber;
+    /**
+     * Empty when nothing has settled; otherwise the source's dimensions in its own order.
+     */
+    segments: Array<SegmentGroup>;
+};
+
+/**
+ * One alternative action, scored against the action actually taken on the same positions.
+ */
+export type ActionCounterfactualArm = {
+    /**
+     * The action taken. Known values are `HOLD`, `EXIT` and `SWITCH`.
+     */
+    action: string;
+    alternative: OpaqueLabel;
+    policy: OpaqueLabel;
+    /**
+     * How the alternative's outcome was established. Known values are `authoritative` (the settled outcome) and `approximate` (an estimate from a recorded quote).
+     */
+    basis: string;
+    description: string;
+    decisions: Count;
+    windows: Count;
+    decisionsBeatingAlternative: Count;
+    hitRate: NullableRatio;
+    takenPnlCents: Cents;
+    alternativePnlCents: Cents;
+    /**
+     * `takenPnlCents` minus `alternativePnlCents`.
+     */
+    incrementalCents: Cents;
+    meanIncrementalCents: NullableNumber;
+    meanIncrementalReturn: NullableNumber;
+    incrementalReturnStandardError: NullableNumber;
+    /**
+     * Whether the source saw enough independent settlement windows to treat the mean as readable. False is not evidence of no effect.
+     */
+    credible: boolean;
+};
+
+/**
+ * The same simulated trade record, scoped to one venue and market.
+ */
+export type ProviderTrackRecord = {
+    /**
+     * The venue. Known values are `polymarket`, `kalshi`, `crypto-com`, `forecastex` and `robinhood`; stored values outside that set are served as they are.
+     */
+    providerId: string;
+    /**
+     * The market family. Known values are `crypto-15m`, `crypto-1h` and `crypto-spot`.
+     */
+    marketId: string;
+    record: PaperTrackRecord;
+};
+
+/**
+ * One bankroll funding, from its first position to its last.
+ */
+export type BankrollEpoch = {
+    /**
+     * The source's opaque identity for this funding.
+     */
+    epochId: string;
+    trades: Count;
+    settled: Count;
+    /**
+     * Exact accounting, as on the full record.
+     */
+    realizedPnlCents: Cents;
+    /**
+     * Whole-cent accounting, as on the budget record; for the current funding it includes the bankroll's recorded corrections.
+     */
+    budgetPnlCents: Cents;
+    stakedCents: Cents;
+    /**
+     * Earliest position in this funding. Absent when it has none.
+     */
+    firstAt?: SourceTime;
+    /**
+     * Latest position in this funding. Absent when it has none.
+     */
+    lastAt?: SourceTime;
+    /**
+     * True for exactly the funding now backing the simulated bankroll.
+     */
+    current: boolean;
+};
+
+/**
+ * Observation-only diagnostics about how prices moved within each cycle.
+ */
+export type CyclePathReport = {
+    policyVersion: string;
+    totalCycles: Count;
+    /**
+     * Cycles whose settlement time had passed when the source built this report.
+     */
+    completedCycles: Count;
+    totalPoints: Count;
+    latestByAsset: Array<CyclePathLatest>;
+};
+
+export type CyclePathLatest = {
+    symbol: string;
+    closesAt: SourceTime;
+    features: CycleRegimeFeatures;
+};
+
+/**
+ * Path diagnostics for one cycle. Percentage-unit fields are **percent**, not ratios: 0.12 means 0.12%. The two optional fields are absent on records the source wrote before they existed.
+ */
+export type CycleRegimeFeatures = {
+    observedAt: SourceTime;
+    observationCount: Count;
+    /**
+     * Seconds between the first and last observation.
+     */
+    coverageSeconds: number;
+    signFlipRate: NullableRatio;
+    /**
+     * Lag-one autocorrelation of returns, in -1..1.
+     */
+    lagOneAutocorrelation: NullableNumber;
+    trendEfficiency: NullableRatio;
+    /**
+     * Trend efficiency with direction, in -1..1. Absent on older records.
+     */
+    signedTrendEfficiency?: NullableNumber;
+    /**
+     * Net change in percent units. Absent on older records.
+     */
+    netChangePercent?: NullableNumber;
+    /**
+     * Observed range in percent units.
+     */
+    rangePercent: NullableNumber;
+    localVolatilityPerSecond: NullableNumber;
+    /**
+     * Fifteen-minute volatility in percent units.
+     */
+    localVolatility15mPercent: NullableNumber;
+    /**
+     * How the source classified the path. Known values are `insufficient`, `trending`, `mean-reverting` and `mixed`.
+     */
+    regime: string;
+};
+
 export type GetPlatformStatusData = {
     body?: never;
     path?: never;
@@ -63,6 +780,105 @@ export type GetPlatformStatusResponses = {
 };
 
 export type GetPlatformStatusResponse = GetPlatformStatusResponses[keyof GetPlatformStatusResponses];
+
+export type GetPaperBudgetData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/v1/paper/budget';
+};
+
+export type GetPaperBudgetErrors = {
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    404: Problem;
+    /**
+     * The read model could not answer. The `errorCode` distinguishes the three reasons: `MN-READ-MODEL-UNREACHABLE` (the read model could not be reached), `MN-READ-MODEL-NOT-PUBLISHED` (it is reachable and has published no such record yet), and `MN-READ-MODEL-INVALID` (it returned a record this API does not understand; `detail` names the field path that failed and no value from it).
+     */
+    503: Problem;
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    default: Problem;
+};
+
+export type GetPaperBudgetError = GetPaperBudgetErrors[keyof GetPaperBudgetErrors];
+
+export type GetPaperBudgetResponses = {
+    /**
+     * The published simulated budget record.
+     */
+    200: PaperBudget;
+};
+
+export type GetPaperBudgetResponse = GetPaperBudgetResponses[keyof GetPaperBudgetResponses];
+
+export type GetPaperPerformanceSummaryData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/v1/paper/performance/summary';
+};
+
+export type GetPaperPerformanceSummaryErrors = {
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    404: Problem;
+    /**
+     * The read model could not answer. The `errorCode` distinguishes the three reasons: `MN-READ-MODEL-UNREACHABLE` (the read model could not be reached), `MN-READ-MODEL-NOT-PUBLISHED` (it is reachable and has published no such record yet), and `MN-READ-MODEL-INVALID` (it returned a record this API does not understand; `detail` names the field path that failed and no value from it).
+     */
+    503: Problem;
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    default: Problem;
+};
+
+export type GetPaperPerformanceSummaryError = GetPaperPerformanceSummaryErrors[keyof GetPaperPerformanceSummaryErrors];
+
+export type GetPaperPerformanceSummaryResponses = {
+    /**
+     * The published summary record.
+     */
+    200: PaperPerformanceSummary;
+};
+
+export type GetPaperPerformanceSummaryResponse = GetPaperPerformanceSummaryResponses[keyof GetPaperPerformanceSummaryResponses];
+
+export type GetPaperPerformanceData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/v1/paper/performance';
+};
+
+export type GetPaperPerformanceErrors = {
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    404: Problem;
+    /**
+     * The read model could not answer. The `errorCode` distinguishes the three reasons: `MN-READ-MODEL-UNREACHABLE` (the read model could not be reached), `MN-READ-MODEL-NOT-PUBLISHED` (it is reachable and has published no such record yet), and `MN-READ-MODEL-INVALID` (it returned a record this API does not understand; `detail` names the field path that failed and no value from it).
+     */
+    503: Problem;
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    default: Problem;
+};
+
+export type GetPaperPerformanceError = GetPaperPerformanceErrors[keyof GetPaperPerformanceErrors];
+
+export type GetPaperPerformanceResponses = {
+    /**
+     * The published full record.
+     */
+    200: PaperPerformance;
+};
+
+export type GetPaperPerformanceResponse = GetPaperPerformanceResponses[keyof GetPaperPerformanceResponses];
 
 export type GetLivenessData = {
     body?: never;

@@ -142,6 +142,40 @@ describe('createCheckProjectionReadiness', () => {
     expect(probe).toHaveBeenCalledTimes(1);
   });
 
+  // #210: a row this API cannot read is not the same problem as a database it
+  // cannot reach. The first will not resolve on its own; the second usually does.
+  it('separates an unreadable answer from no answer at all', async () => {
+    const unreadable = Object.assign(
+      new Error('The projection returned a row this API does not understand.'),
+      { code: 'projection-unexpected-shape', name: 'ProjectionFailure' },
+    );
+    const check = createCheckProjectionReadiness({
+      expectedTables: TABLES,
+      projection: fakeProjection(() => Promise.reject(unreadable)),
+      readyWithoutProjection: false,
+    });
+
+    await expect(check()).resolves.toEqual({
+      ready: false,
+      state: 'unexpected-shape',
+      violations: [],
+    });
+  });
+
+  it('treats an unrecognised failure as no answer rather than as a readable one', async () => {
+    const check = createCheckProjectionReadiness({
+      expectedTables: TABLES,
+      // Carries a code, but is not one of this port's failures. Trusting it would let
+      // anything thrown anywhere choose how an outage is reported.
+      projection: fakeProjection(() =>
+        Promise.reject(Object.assign(new Error('nope'), { code: 'projection-unexpected-shape' })),
+      ),
+      readyWithoutProjection: false,
+    });
+
+    await expect(check()).resolves.toMatchObject({ ready: false, state: 'unreachable' });
+  });
+
   it('reports not-configured, and the caller decides what that means', async () => {
     const permissive = createCheckProjectionReadiness({
       expectedTables: TABLES,

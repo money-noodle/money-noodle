@@ -8,4 +8,10 @@ describe('platform API transport package', () => {
     expect(transport.getLiveness).toBeTypeOf('function');
     expect(transport.getReadiness).toBeTypeOf('function');
   });
+
+  it('exports the generated paper read operations', () => {
+    expect(transport.getPaperBudget).toBeTypeOf('function');
+    expect(transport.getPaperPerformanceSummary).toBeTypeOf('function');
+    expect(transport.getPaperPerformance).toBeTypeOf('function');
+  });
 });

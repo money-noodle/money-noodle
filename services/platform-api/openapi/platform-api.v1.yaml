@@ -15,6 +15,12 @@ security: []
 tags:
   - name: Platform
     description: Safe public platform observations.
+  - name: Paper
+    description: >-
+      Read-only views of the simulated ("paper") trading record, served from the
+      read-only projection an existing separate system writes. Simulation only:
+      no operation here reaches a funded balance, and none of these figures is a
+      real-money position.
   - name: Operations
     description: Minimal deployment health probes.
 paths:
@@ -35,6 +41,101 @@ paths:
                 $ref: '#/components/schemas/PlatformStatus'
         '404':
           $ref: '#/components/responses/Problem'
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/paper/budget:
+    get:
+      operationId: getPaperBudget
+      summary: Read the simulated bankroll and its most recent executions.
+      description: >-
+        The singleton simulated budget row and the executions recorded beside it,
+        newest first. Amounts are US cents, as the source records them; the client
+        decides how to display them.
+
+
+        The record is never inferred. When the read model has published no budget
+        row, or cannot be reached, or returns a record this API does not
+        understand, the response is a problem document with 503 and a distinct
+        code — never a zero balance and never an empty record.
+      tags: [Paper]
+      responses:
+        '200':
+          description: The published simulated budget record.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaperBudget'
+        '404':
+          $ref: '#/components/responses/Problem'
+        '503':
+          $ref: '#/components/responses/ReadModelProblem'
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/paper/performance/summary:
+    get:
+      operationId: getPaperPerformanceSummary
+      summary: Read the bounded forecast and simulated-trade summary.
+      description: >-
+        The small summary record a front page can poll: forecast accuracy
+        counters, calibration progress, the simulated trade record, and the four
+        most recent forecasts.
+
+
+        `generatedAt` is the source system's own clock when it last wrote this
+        summary, never this API's clock. No staleness threshold is applied: a
+        summary of any age is served as published, and the times needed to judge
+        its freshness are in the response.
+      tags: [Paper]
+      responses:
+        '200':
+          description: The published summary record.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaperPerformanceSummary'
+        '404':
+          $ref: '#/components/responses/Problem'
+        '503':
+          $ref: '#/components/responses/ReadModelProblem'
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/paper/performance:
+    get:
+      operationId: getPaperPerformance
+      summary: Read the full forecast and simulated-trade record.
+      description: >-
+        The complete analytical record: the full forecast summary with its
+        segments, benchmarks, calibration bins and timeline, the simulated trade
+        record, per-provider records, per-funding epochs, the bounded forecast
+        history, and the optional cycle-path diagnostics.
+
+
+        Intended for on-demand reads rather than polling: the document is large.
+        Every field is rebuilt from the stored record rather than passed through,
+        so a field withdrawn from this contract cannot reappear from an older
+        stored document, and an unknown field in the stored record is dropped
+        rather than served.
+      tags: [Paper]
+      responses:
+        '200':
+          description: The published full record.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaperPerformance'
+        '404':
+          $ref: '#/components/responses/Problem'
+        '503':
+          $ref: '#/components/responses/ReadModelProblem'
         default:
           $ref: '#/components/responses/Problem'
   /health/live:
@@ -82,6 +183,21 @@ components:
       schema:
         $ref: '#/components/schemas/RequestId'
   responses:
+    ReadModelProblem:
+      description: >-
+        The read model could not answer. The `errorCode` distinguishes the three
+        reasons: `MN-READ-MODEL-UNREACHABLE` (the read model could not be
+        reached), `MN-READ-MODEL-NOT-PUBLISHED` (it is reachable and has
+        published no such record yet), and `MN-READ-MODEL-INVALID` (it returned a
+        record this API does not understand; `detail` names the field path that
+        failed and no value from it).
+      headers:
+        x-request-id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
     Problem:
       description: Safe RFC 9457 problem details response.
       headers:
@@ -173,3 +289,1201 @@ components:
       minLength: 1
       maxLength: 128
       pattern: '^[A-Za-z0-9._:-]+$'
+    # --- Shared read-model vocabulary ---------------------------------------
+    #
+    # Two rules decide how a string field is typed below, and they are worth
+    # stating once rather than per field.
+    #
+    #   * A value the source database constrains (`venue`, `side`, `outcome`,
+    #     `liquidityRole`) is a closed enum: a value outside the set is refused
+    #     before it reaches a response.
+    #   * A value the source database does not constrain, or that arrives inside
+    #     a stored JSON document, is an open string whose known values are listed
+    #     in its description. An unknown stored value must not break a client, so
+    #     it is served as the string it is.
+    SourceTime:
+      description: >-
+        A time recorded by the system that produced the data, normalized to
+        ISO-8601 UTC. Never this API's own clock.
+      type: string
+      format: date-time
+    Cents:
+      description: >-
+        An amount in US cents, as the source records it. May be negative. May be
+        fractional where the source keeps sub-cent precision; a value the source
+        holds to more precision than this representation can carry exactly is
+        refused rather than rounded.
+      type: number
+    Ratio:
+      description: >-
+        A fraction, not a percentage: 0.42 is 42%. A probability-point difference
+        is expressed the same way, so 0.05 is 5 points.
+      type: number
+    NullableRatio:
+      description: >-
+        A fraction as in `Ratio`, or `null` when its denominator is zero and the
+        source therefore reports no value. `null` is a real answer and is never
+        substituted with zero.
+      type: [number, 'null']
+    NullableNumber:
+      description: >-
+        A finite number, or `null` where the source reports no value. `null` is
+        never substituted with zero.
+      type: [number, 'null']
+    Count:
+      description: A non-negative count.
+      type: integer
+      minimum: 0
+    OpaqueLabel:
+      description: >-
+        A display label chosen by the source system. Opaque to this API: it may
+        contain non-ASCII punctuation and its set of values is not fixed.
+      type: string
+      minLength: 1
+      maxLength: 200
+
+    # --- 1. Simulated budget ------------------------------------------------
+    PaperBudget:
+      type: object
+      additionalProperties: false
+      required:
+        - schemaVersion
+        - requestId
+        - durable
+        - sourceUpdatedAt
+        - startingCents
+        - availableCents
+        - equityCents
+        - reservedCents
+        - proposedStakeCents
+        - running
+        - depleted
+        - openOrders
+        - settledOrders
+        - realizedPnlCents
+        - bankrollResets
+        - recentExecutions
+      properties:
+        schemaVersion:
+          type: string
+          const: '1'
+        requestId:
+          $ref: '#/components/schemas/RequestId'
+        durable:
+          description: >-
+            Always true. The record was read from the durable read model, which is
+            the only source this operation has; it is published so a client can
+            tell this record apart from a locally assembled one without inspecting
+            its fields.
+          type: boolean
+          const: true
+        sourceUpdatedAt:
+          description: >-
+            When the source system last replaced this budget record. Disclosed so
+            freshness can be judged by the reader; this API applies no staleness
+            threshold and never withholds a record for being old.
+          $ref: '#/components/schemas/SourceTime'
+        startingCents:
+          description: The simulated bankroll's starting balance.
+          $ref: '#/components/schemas/Cents'
+        availableCents:
+          description: Uncommitted simulated cash.
+          $ref: '#/components/schemas/Cents'
+        equityCents:
+          description: '`availableCents` plus `reservedCents`.'
+          $ref: '#/components/schemas/Cents'
+        reservedCents:
+          description: Intended stake across the open positions.
+          $ref: '#/components/schemas/Cents'
+        proposedStakeCents:
+          description: >-
+            The next stake the simulation would commit: the smaller of available
+            cash and the configured per-position cap, and zero when there is no
+            available cash.
+          $ref: '#/components/schemas/Cents'
+        running:
+          description: Whether available cash is above zero.
+          type: boolean
+        depleted:
+          description: Whether available cash is at or below zero with nothing still open.
+          type: boolean
+        openOrders:
+          $ref: '#/components/schemas/Count'
+        settledOrders:
+          $ref: '#/components/schemas/Count'
+        realizedPnlCents:
+          description: >-
+            Realized profit and loss for the **current** bankroll funding only,
+            on the source's whole-cent accounting, including its recorded
+            fee corrections, and reset when the bankroll is reset.
+
+
+            This is deliberately a different number from `realizedPnlCents` on the
+            full record, which is exact and lifetime. The two are not expected to
+            agree, and neither is wrong: they answer different questions. A client
+            that wants the reconciliation residual computes
+            `equityCents - (startingCents + realizedPnlCents)` itself.
+          $ref: '#/components/schemas/Cents'
+        bankrollResets:
+          $ref: '#/components/schemas/Count'
+        recentExecutions:
+          description: >-
+            The most recent executions, newest `createdAt` first, at most 30. The
+            source replaces this list whole with every budget write, so it is the
+            whole recent history rather than a page of a longer one. An empty list
+            beside a present budget record is a valid answer.
+          type: array
+          maxItems: 30
+          items:
+            $ref: '#/components/schemas/PaperExecution'
+    PaperExecution:
+      description: >-
+        One recorded simulated execution. The four conditional fields are
+        **absent** rather than null when the source has no value for them, which
+        is how the source distinguishes "not yet known" from "known to be
+        nothing".
+      type: object
+      additionalProperties: false
+      required:
+        - executionKey
+        - symbol
+        - venue
+        - side
+        - status
+        - createdAt
+        - closesAt
+        - askPrice
+        - quantity
+        - stakeCents
+        - feeCents
+      properties:
+        executionKey:
+          description: >-
+            The source's own identity for this execution, stable across reads.
+            Published so a client can key a list without inventing an index.
+          type: string
+          minLength: 1
+          maxLength: 200
+        symbol:
+          description: The asset symbol the position is on.
+          type: string
+          minLength: 1
+          maxLength: 64
+        venue:
+          type: string
+          enum: [polymarket, kalshi]
+        side:
+          description: The direction the position was taken in.
+          type: string
+          enum: [UP, DOWN]
+        status:
+          description: >-
+            Lifecycle state, as the source records it. Known values are
+            `pending_reservation`, `uncertain`, `open`, `sold`, `won`, `lost`,
+            `invalid`, `unfilled` and `rejected`; "settled" means `won`, `lost`,
+            `invalid` or `sold`. The source does not constrain this column, so an
+            unrecognised value is served as the string it is rather than refused.
+          type: string
+          minLength: 1
+          maxLength: 64
+        createdAt:
+          description: When the position was taken, on the source's clock.
+          $ref: '#/components/schemas/SourceTime'
+        closesAt:
+          description: When the contract settles, as the venue stated it.
+          $ref: '#/components/schemas/SourceTime'
+        askPrice:
+          description: >-
+            Price paid, as a fraction of one dollar in 0..1: 0.42 is 42 cents per
+            contract.
+          $ref: '#/components/schemas/Ratio'
+        quantity:
+          description: Contracts held. May be fractional.
+          type: number
+        stakeCents:
+          description: Amount committed. May be fractional where the source keeps sub-cent precision.
+          $ref: '#/components/schemas/Cents'
+        feeCents:
+          description: Fee charged. May be fractional.
+          $ref: '#/components/schemas/Cents'
+        pnlCents:
+          description: Realized profit and loss. Absent while the position is unsettled.
+          $ref: '#/components/schemas/Cents'
+        outcome:
+          description: How the contract resolved. Absent while unresolved.
+          type: string
+          enum: [UP, DOWN]
+        noFillReason:
+          description: >-
+            Why an attempt did not fill, as the source classified it. Known values
+            are `post_only_race`, `rested_no_fill`, `pre_submit_quote_moved` and
+            `ioc_no_fill`. Absent on a filled position. The source does not
+            constrain this column, so an unrecognised value is served as the
+            string it is.
+          type: string
+          minLength: 1
+          maxLength: 64
+        liquidityRole:
+          description: Whether the order rested on the book or crossed it. Absent when unrecorded.
+          type: string
+          enum: [maker, taker]
+
+    # --- 2. Bounded summary -------------------------------------------------
+    PaperPerformanceSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - schemaVersion
+        - requestId
+        - durable
+        - generatedAt
+        - sourceUpdatedAt
+        - summary
+        - paperRecord
+      properties:
+        schemaVersion:
+          type: string
+          const: '1'
+        requestId:
+          $ref: '#/components/schemas/RequestId'
+        durable:
+          description: Always true, as on the budget record.
+          type: boolean
+          const: true
+        generatedAt:
+          description: >-
+            When the source system last computed this summary, on its own clock.
+            Older stored records carry no such stamp; for those this falls back to
+            the row's own last-written time, normalized to ISO-8601 UTC.
+          $ref: '#/components/schemas/SourceTime'
+        sourceUpdatedAt:
+          description: >-
+            When the stored record was last written. Published alongside
+            `generatedAt` because the two differ: the row is rewritten more often
+            than the full document inside it is recomputed.
+          $ref: '#/components/schemas/SourceTime'
+        summary:
+          $ref: '#/components/schemas/ForecastSignalSummary'
+        paperRecord:
+          $ref: '#/components/schemas/PaperTrackSummary'
+    ForecastSignalSummary:
+      description: >-
+        Forecast counters. Every counter except the calibration pair is over
+        qualifying forecasts only — those the source did not mark as excluded.
+      type: object
+      additionalProperties: false
+      required:
+        - issued
+        - cycles
+        - resolved
+        - resolvedCycles
+        - accuracy
+        - cycleBalancedAccuracy
+        - brierScore
+        - currentCycleStreak
+        - calibrationWindows
+        - calibrationMinimum
+        - calibrationProgress
+        - calibrationReady
+        - recent
+      properties:
+        issued:
+          $ref: '#/components/schemas/Count'
+        cycles:
+          description: Distinct asset-cycles among the issued forecasts.
+          $ref: '#/components/schemas/Count'
+        resolved:
+          $ref: '#/components/schemas/Count'
+        resolvedCycles:
+          $ref: '#/components/schemas/Count'
+        accuracy:
+          description: Correct over resolved. Null when nothing is resolved.
+          $ref: '#/components/schemas/NullableRatio'
+        cycleBalancedAccuracy:
+          description: Mean of the per-cycle accuracies, so a busy cycle does not dominate.
+          $ref: '#/components/schemas/NullableRatio'
+        brierScore:
+          description: Mean Brier score over resolved forecasts. Lower is better.
+          $ref: '#/components/schemas/NullableNumber'
+        currentCycleStreak:
+          description: >-
+            Signed run length over consecutive cycles: positive for correct,
+            negative for wrong, zero when nothing is resolved.
+          type: integer
+        calibrationWindows:
+          description: >-
+            Distinct resolved settlement times. Counted over **all** forecasts,
+            not only qualifying ones, which is why it can exceed `resolvedCycles`.
+          $ref: '#/components/schemas/Count'
+        calibrationMinimum:
+          description: >-
+            How many windows the source's own policy requires before it treats
+            calibration as readable. Data, not a constant of this API.
+          $ref: '#/components/schemas/Count'
+        calibrationProgress:
+          description: Windows over the minimum, capped at 1.
+          $ref: '#/components/schemas/Ratio'
+        calibrationReady:
+          type: boolean
+        recent:
+          description: The most recent forecasts, at most four.
+          type: array
+          maxItems: 4
+          items:
+            $ref: '#/components/schemas/ForecastHistoryEntry'
+    PaperTrackSummary:
+      description: The bounded simulated trade record.
+      type: object
+      additionalProperties: false
+      required:
+        - mode
+        - settled
+        - windows
+        - wins
+        - losses
+        - winRate
+        - roi
+        - realizedPnlCents
+        - meanPredictedEdge
+        - meanRealizedReturn
+      properties:
+        mode:
+          description: Always `paper`. A record in any other mode is refused rather than served.
+          type: string
+          const: paper
+        settled:
+          description: Settled positions, which includes those resolved as void and those exited early.
+          $ref: '#/components/schemas/Count'
+        windows:
+          description: Distinct settlement times among settled positions.
+          $ref: '#/components/schemas/Count'
+        wins:
+          $ref: '#/components/schemas/Count'
+        losses:
+          $ref: '#/components/schemas/Count'
+        winRate:
+          description: >-
+            Wins over **settled**, and settled includes void and early-exited
+            positions. `wins + losses` therefore need not equal `settled`, and
+            this is deliberately not `wins / (wins + losses)`. Kept as the source
+            computes it so this record and the source agree.
+          $ref: '#/components/schemas/NullableRatio'
+        roi:
+          description: Returned minus staked, over staked. Null when nothing was staked.
+          $ref: '#/components/schemas/NullableRatio'
+        realizedPnlCents:
+          description: >-
+            Lifetime realized profit and loss on the source's exact accounting.
+            Not the same number as the budget record's, which is whole-cent and
+            scoped to the current funding.
+          $ref: '#/components/schemas/Cents'
+        meanPredictedEdge:
+          description: Simple mean of the per-position predicted edge, in probability points.
+          $ref: '#/components/schemas/NullableRatio'
+        meanRealizedReturn:
+          description: >-
+            Return per unit staked, averaged within each settlement window first
+            and then across windows, so correlated positions closing together
+            count once.
+          $ref: '#/components/schemas/NullableNumber'
+    ForecastHistoryEntry:
+      description: One forecast, as published. Resolution fields are absent while it is pending.
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - symbol
+        - direction
+        - directionalLikelihood
+        - issuedAt
+        - modelVersion
+        - policyVersion
+        - confidence
+        - status
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 200
+        symbol:
+          type: string
+          minLength: 1
+          maxLength: 64
+        direction:
+          description: The forecast direction. Known values are `UP` and `DOWN`.
+          type: string
+          minLength: 1
+          maxLength: 32
+        directionalLikelihood:
+          description: The model's probability for the stated direction.
+          $ref: '#/components/schemas/Ratio'
+        issuedAt:
+          $ref: '#/components/schemas/SourceTime'
+        modelVersion:
+          type: string
+          minLength: 1
+          maxLength: 120
+        policyVersion:
+          type: string
+          minLength: 1
+          maxLength: 120
+        confidence:
+          $ref: '#/components/schemas/Ratio'
+        status:
+          description: Known values are `pending`, `resolved` and `invalid`.
+          type: string
+          minLength: 1
+          maxLength: 32
+        outcome:
+          description: How it resolved. Absent while pending. Known values are `UP` and `DOWN`.
+          type: string
+          minLength: 1
+          maxLength: 32
+        correct:
+          description: Absent while pending.
+          type: boolean
+
+    # --- 3. Full record -----------------------------------------------------
+    PaperPerformance:
+      type: object
+      additionalProperties: false
+      required:
+        - schemaVersion
+        - requestId
+        - durable
+        - generatedAt
+        - sourceUpdatedAt
+        - summary
+        - paperRecord
+        - paperProviderRecords
+        - paperEpochs
+        - forecasts
+      properties:
+        schemaVersion:
+          type: string
+          const: '1'
+        requestId:
+          $ref: '#/components/schemas/RequestId'
+        durable:
+          description: Always true, as on the budget record.
+          type: boolean
+          const: true
+        generatedAt:
+          description: >-
+            When the source system last replaced this full document, on its own
+            clock. This is **not** the row's last-written time: the row is
+            rewritten much more often than the full document is recomputed, so
+            `sourceUpdatedAt` would overstate this document's freshness. Older
+            stored records carry no such stamp; for those this falls back to
+            `sourceUpdatedAt`.
+          $ref: '#/components/schemas/SourceTime'
+        sourceUpdatedAt:
+          description: When the stored row was last written, for the reason given above.
+          $ref: '#/components/schemas/SourceTime'
+        summary:
+          $ref: '#/components/schemas/ForecastRecordSummary'
+        paperRecord:
+          $ref: '#/components/schemas/PaperTrackRecord'
+        paperProviderRecords:
+          description: >-
+            One record per venue and market with any simulated position, ordered
+            by settled count descending. Empty when the source stored none.
+          type: array
+          items:
+            $ref: '#/components/schemas/ProviderTrackRecord'
+        paperEpochs:
+          description: >-
+            One entry per bankroll funding, oldest first. A new funding starts at
+            each bankroll reset.
+          type: array
+          items:
+            $ref: '#/components/schemas/BankrollEpoch'
+        forecasts:
+          description: >-
+            The forecast history the source publishes, newest first and bounded by
+            the source at 500 entries.
+          type: array
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/ForecastHistoryEntry'
+        cyclePaths:
+          description: >-
+            Observation-only path diagnostics. Absent when the source stored none;
+            absence is not an error.
+          $ref: '#/components/schemas/CyclePathReport'
+    ForecastRecordSummary:
+      description: >-
+        The full forecast summary. Counters are over qualifying forecasts unless a
+        field says otherwise; every array is published only for the groups the
+        source found data for, so an empty array means "nothing qualified", not
+        "not computed".
+      type: object
+      additionalProperties: false
+      required:
+        - issued
+        - pending
+        - resolved
+        - cycles
+        - resolvedCycles
+        - cycleBalancedAccuracy
+        - correct
+        - invalid
+        - accuracy
+        - brierScore
+        - logLoss
+        - currentStreak
+        - currentCycleStreak
+        - observedCalculations
+        - resolvedCalculations
+        - benchmarks
+        - edgeBuckets
+        - segments
+        - missedBuyCounterfactual
+        - resolvedWindows
+        - evaluationMinimumWindows
+        - evaluationMeaningful
+        - realizedEdgeTrades
+        - meanPredictedEdge
+        - meanRealizedReturn
+        - byLeadTime
+        - calibrationBins
+        - calibrationWindows
+        - calibrationMinimum
+        - calibrationProgress
+        - calibrationReady
+        - byAsset
+        - byDirection
+        - byModelVersion
+        - byConfidenceBucket
+        - timeline
+        - recent
+      properties:
+        issued:
+          $ref: '#/components/schemas/Count'
+        pending:
+          $ref: '#/components/schemas/Count'
+        resolved:
+          $ref: '#/components/schemas/Count'
+        cycles:
+          $ref: '#/components/schemas/Count'
+        resolvedCycles:
+          $ref: '#/components/schemas/Count'
+        cycleBalancedAccuracy:
+          $ref: '#/components/schemas/NullableRatio'
+        correct:
+          $ref: '#/components/schemas/Count'
+        invalid:
+          $ref: '#/components/schemas/Count'
+        accuracy:
+          $ref: '#/components/schemas/NullableRatio'
+        brierScore:
+          $ref: '#/components/schemas/NullableNumber'
+        logLoss:
+          description: Mean natural-log loss over resolved forecasts.
+          $ref: '#/components/schemas/NullableNumber'
+        currentStreak:
+          description: Signed run length over consecutive resolved forecasts.
+          type: integer
+        currentCycleStreak:
+          description: Signed run length over consecutive cycles.
+          type: integer
+        observedCalculations:
+          $ref: '#/components/schemas/Count'
+        resolvedCalculations:
+          $ref: '#/components/schemas/Count'
+        benchmarks:
+          description: Rival probability sources, published only where one had resolved forecasts.
+          type: array
+          items:
+            $ref: '#/components/schemas/BenchmarkScore'
+        edgeBuckets:
+          type: array
+          items:
+            $ref: '#/components/schemas/EdgeBucket'
+        segments:
+          type: array
+          items:
+            $ref: '#/components/schemas/SegmentGroup'
+        missedBuyCounterfactual:
+          $ref: '#/components/schemas/MissedBuyCounterfactual'
+        resolvedWindows:
+          description: Distinct settlement times among resolved forecasts.
+          $ref: '#/components/schemas/Count'
+        evaluationMinimumWindows:
+          description: Windows the source requires before it treats the evaluation as meaningful.
+          $ref: '#/components/schemas/Count'
+        evaluationMeaningful:
+          type: boolean
+        realizedEdgeTrades:
+          description: Resolved entries carrying both a predicted edge and a realized return.
+          $ref: '#/components/schemas/Count'
+        meanPredictedEdge:
+          $ref: '#/components/schemas/NullableRatio'
+        meanRealizedReturn:
+          $ref: '#/components/schemas/NullableNumber'
+        byLeadTime:
+          description: Sliced by time from issuance to settlement.
+          type: array
+          items:
+            $ref: '#/components/schemas/LeadTimeSlice'
+        calibrationBins:
+          type: array
+          items:
+            $ref: '#/components/schemas/CalibrationBin'
+        calibrationWindows:
+          $ref: '#/components/schemas/Count'
+        calibrationMinimum:
+          $ref: '#/components/schemas/Count'
+        calibrationProgress:
+          $ref: '#/components/schemas/Ratio'
+        calibrationReady:
+          type: boolean
+        byAsset:
+          type: array
+          items:
+            $ref: '#/components/schemas/ForecastSlice'
+        byDirection:
+          type: array
+          items:
+            $ref: '#/components/schemas/ForecastSlice'
+        byModelVersion:
+          type: array
+          items:
+            $ref: '#/components/schemas/ForecastSlice'
+        byConfidenceBucket:
+          type: array
+          items:
+            $ref: '#/components/schemas/ForecastSlice'
+        timeline:
+          description: Chronological accuracy curve, downsampled by the source to at most 500 points.
+          type: array
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/ForecastTimelinePoint'
+        recent:
+          description: The most recent forecasts, at most eight.
+          type: array
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/ForecastHistoryEntry'
+    ForecastSlice:
+      description: One group of resolved forecasts.
+      type: object
+      additionalProperties: false
+      required: [label, resolved, correct, accuracy]
+      properties:
+        label:
+          $ref: '#/components/schemas/OpaqueLabel'
+        resolved:
+          $ref: '#/components/schemas/Count'
+        correct:
+          $ref: '#/components/schemas/Count'
+        accuracy:
+          $ref: '#/components/schemas/Ratio'
+    LeadTimeSlice:
+      description: >-
+        A forecast slice by time from issuance to settlement. Labels are the
+        source's bands and are opaque.
+      type: object
+      additionalProperties: false
+      required: [label, resolved, correct, accuracy, brierScore]
+      properties:
+        label:
+          $ref: '#/components/schemas/OpaqueLabel'
+        resolved:
+          $ref: '#/components/schemas/Count'
+        correct:
+          $ref: '#/components/schemas/Count'
+        accuracy:
+          $ref: '#/components/schemas/Ratio'
+        brierScore:
+          $ref: '#/components/schemas/NullableNumber'
+    CalibrationBin:
+      description: Forecast probability against observed outcome rate, in one probability band.
+      type: object
+      additionalProperties: false
+      required: [label, resolved, meanForecast, observedRate]
+      properties:
+        label:
+          $ref: '#/components/schemas/OpaqueLabel'
+        resolved:
+          $ref: '#/components/schemas/Count'
+        meanForecast:
+          $ref: '#/components/schemas/Ratio'
+        observedRate:
+          $ref: '#/components/schemas/Ratio'
+    BenchmarkScore:
+      description: One rival probability source, scored on the same resolved forecasts.
+      type: object
+      additionalProperties: false
+      required: [label, resolved, accuracy, brierScore, logLoss]
+      properties:
+        label:
+          $ref: '#/components/schemas/OpaqueLabel'
+        resolved:
+          $ref: '#/components/schemas/Count'
+        accuracy:
+          $ref: '#/components/schemas/NullableRatio'
+        brierScore:
+          $ref: '#/components/schemas/NullableNumber'
+        logLoss:
+          $ref: '#/components/schemas/NullableNumber'
+    EdgeBucket:
+      description: Positions grouped by the edge predicted at entry.
+      type: object
+      additionalProperties: false
+      required: [label, trades, predictedEdge, realizedReturn, winRate]
+      properties:
+        label:
+          $ref: '#/components/schemas/OpaqueLabel'
+        trades:
+          $ref: '#/components/schemas/Count'
+        predictedEdge:
+          $ref: '#/components/schemas/Ratio'
+        realizedReturn:
+          description: Return per unit staked, averaged across the bucket.
+          type: number
+        winRate:
+          description: Share of the bucket whose outcome matched the entry side.
+          $ref: '#/components/schemas/Ratio'
+    SegmentGroup:
+      description: >-
+        One dimension the source sliced positions by, with its segments ordered by
+        mean realized return descending. Dimension names are the source's and are
+        opaque.
+      type: object
+      additionalProperties: false
+      required: [dimension, description, segments]
+      properties:
+        dimension:
+          $ref: '#/components/schemas/OpaqueLabel'
+        description:
+          type: string
+          minLength: 1
+          maxLength: 500
+        segments:
+          type: array
+          items:
+            $ref: '#/components/schemas/SegmentStat'
+    SegmentStat:
+      description: One segment of a dimension.
+      type: object
+      additionalProperties: false
+      required:
+        - label
+        - trades
+        - windows
+        - meanPredictedEdge
+        - meanRealizedReturn
+        - standardError
+        - winRate
+      properties:
+        label:
+          $ref: '#/components/schemas/OpaqueLabel'
+        trades:
+          $ref: '#/components/schemas/Count'
+        windows:
+          $ref: '#/components/schemas/Count'
+        meanPredictedEdge:
+          $ref: '#/components/schemas/Ratio'
+        meanRealizedReturn:
+          description: >-
+            Return per unit staked, clustered by settlement window. **Nullable by
+            necessity:** the source can compute this as not-a-number, which JSON
+            carries as null, and a record carrying it is a real record rather than
+            a broken one.
+          $ref: '#/components/schemas/NullableNumber'
+        standardError:
+          description: Sample standard error across windows. Null with fewer than two windows.
+          $ref: '#/components/schemas/NullableNumber'
+        winRate:
+          $ref: '#/components/schemas/Ratio'
+    MissedBuyCounterfactual:
+      description: >-
+        Observation only: sides a policy floor rejected, so none of these was ever
+        traded, simulated or otherwise.
+      type: object
+      additionalProperties: false
+      required:
+        - label
+        - description
+        - candidates
+        - windows
+        - profitableCandidates
+        - meanCandidateReturn
+        - standardError
+        - bestPerWindowCandidates
+        - bestPerWindowWins
+        - bestPerWindowMeanReturn
+        - bestPerWindowStandardError
+        - bestPerWindowTotalReturn
+      properties:
+        label:
+          $ref: '#/components/schemas/OpaqueLabel'
+        description:
+          type: string
+          minLength: 1
+          maxLength: 500
+        candidates:
+          $ref: '#/components/schemas/Count'
+        windows:
+          $ref: '#/components/schemas/Count'
+        profitableCandidates:
+          $ref: '#/components/schemas/Count'
+        meanCandidateReturn:
+          $ref: '#/components/schemas/NullableNumber'
+        standardError:
+          $ref: '#/components/schemas/NullableNumber'
+        bestPerWindowCandidates:
+          $ref: '#/components/schemas/Count'
+        bestPerWindowWins:
+          $ref: '#/components/schemas/Count'
+        bestPerWindowMeanReturn:
+          $ref: '#/components/schemas/NullableNumber'
+        bestPerWindowStandardError:
+          $ref: '#/components/schemas/NullableNumber'
+        bestPerWindowTotalReturn:
+          $ref: '#/components/schemas/NullableNumber'
+    ForecastTimelinePoint:
+      description: One point on the accuracy curve.
+      type: object
+      additionalProperties: false
+      required: [time, resolved, cumulativeAccuracy, rollingAccuracy, cumulativeBrier]
+      properties:
+        time:
+          $ref: '#/components/schemas/SourceTime'
+        resolved:
+          description: Running count of resolved forecasts at this point, counting from one.
+          type: integer
+          minimum: 1
+        cumulativeAccuracy:
+          $ref: '#/components/schemas/Ratio'
+        rollingAccuracy:
+          description: Accuracy over the trailing 25 resolved forecasts.
+          $ref: '#/components/schemas/Ratio'
+        cumulativeBrier:
+          type: number
+    PaperTrackRecord:
+      description: >-
+        The full simulated trade record. Every counterfactual field here is an
+        observation about a decision that was not taken; none of them describes a
+        position that existed.
+      type: object
+      additionalProperties: false
+      required:
+        - mode
+        - settled
+        - pending
+        - windows
+        - wins
+        - losses
+        - invalid
+        - sold
+        - unfilled
+        - rejected
+        - stakedCents
+        - returnedCents
+        - realizedPnlCents
+        - roi
+        - winRate
+        - meanPredictedEdge
+        - meanRealizedReturn
+        - standardError
+        - switchesEvaluated
+        - meanSwitchVsHoldCents
+        - standaloneExitsEvaluated
+        - actionCounterfactualVersion
+        - actionCounterfactuals
+        - principalRecoveryExitsEvaluated
+        - principalRecoveryVsFullExitCents
+        - meanPrincipalRecoveryVsFullExitCents
+        - segments
+      properties:
+        mode:
+          type: string
+          const: paper
+        settled:
+          $ref: '#/components/schemas/Count'
+        pending:
+          $ref: '#/components/schemas/Count'
+        windows:
+          $ref: '#/components/schemas/Count'
+        wins:
+          $ref: '#/components/schemas/Count'
+        losses:
+          $ref: '#/components/schemas/Count'
+        invalid:
+          $ref: '#/components/schemas/Count'
+        sold:
+          description: Positions exited before settlement.
+          $ref: '#/components/schemas/Count'
+        unfilled:
+          $ref: '#/components/schemas/Count'
+        rejected:
+          $ref: '#/components/schemas/Count'
+        stakedCents:
+          description: Exact amount staked across settled positions.
+          $ref: '#/components/schemas/Cents'
+        returnedCents:
+          description: Exact amount returned by settled positions.
+          $ref: '#/components/schemas/Cents'
+        realizedPnlCents:
+          description: '`returnedCents` minus `stakedCents`.'
+          $ref: '#/components/schemas/Cents'
+        roi:
+          $ref: '#/components/schemas/NullableRatio'
+        winRate:
+          description: Wins over settled, with the same denominator caveat as the bounded summary.
+          $ref: '#/components/schemas/NullableRatio'
+        meanPredictedEdge:
+          $ref: '#/components/schemas/NullableRatio'
+        meanRealizedReturn:
+          $ref: '#/components/schemas/NullableNumber'
+        standardError:
+          $ref: '#/components/schemas/NullableNumber'
+        switchesEvaluated:
+          $ref: '#/components/schemas/Count'
+        meanSwitchVsHoldCents:
+          description: Mean cents per evaluated switch against holding instead. Observation only.
+          $ref: '#/components/schemas/NullableNumber'
+        standaloneExitsEvaluated:
+          $ref: '#/components/schemas/Count'
+        actionCounterfactualVersion:
+          description: The source's version for the counterfactual method below.
+          type: string
+          minLength: 1
+          maxLength: 120
+        actionCounterfactuals:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActionCounterfactualArm'
+        principalRecoveryExitsEvaluated:
+          $ref: '#/components/schemas/Count'
+        principalRecoveryVsFullExitCents:
+          $ref: '#/components/schemas/NullableNumber'
+        meanPrincipalRecoveryVsFullExitCents:
+          $ref: '#/components/schemas/NullableNumber'
+        segments:
+          description: >-
+            Empty when nothing has settled; otherwise the source's dimensions in
+            its own order.
+          type: array
+          items:
+            $ref: '#/components/schemas/SegmentGroup'
+    ActionCounterfactualArm:
+      description: >-
+        One alternative action, scored against the action actually taken on the
+        same positions.
+      type: object
+      additionalProperties: false
+      required:
+        - action
+        - alternative
+        - policy
+        - basis
+        - description
+        - decisions
+        - windows
+        - decisionsBeatingAlternative
+        - hitRate
+        - takenPnlCents
+        - alternativePnlCents
+        - incrementalCents
+        - meanIncrementalCents
+        - meanIncrementalReturn
+        - incrementalReturnStandardError
+        - credible
+      properties:
+        action:
+          description: The action taken. Known values are `HOLD`, `EXIT` and `SWITCH`.
+          type: string
+          minLength: 1
+          maxLength: 32
+        alternative:
+          $ref: '#/components/schemas/OpaqueLabel'
+        policy:
+          $ref: '#/components/schemas/OpaqueLabel'
+        basis:
+          description: >-
+            How the alternative's outcome was established. Known values are
+            `authoritative` (the settled outcome) and `approximate` (an estimate
+            from a recorded quote).
+          type: string
+          minLength: 1
+          maxLength: 32
+        description:
+          type: string
+          minLength: 1
+          maxLength: 500
+        decisions:
+          $ref: '#/components/schemas/Count'
+        windows:
+          $ref: '#/components/schemas/Count'
+        decisionsBeatingAlternative:
+          $ref: '#/components/schemas/Count'
+        hitRate:
+          $ref: '#/components/schemas/NullableRatio'
+        takenPnlCents:
+          $ref: '#/components/schemas/Cents'
+        alternativePnlCents:
+          $ref: '#/components/schemas/Cents'
+        incrementalCents:
+          description: '`takenPnlCents` minus `alternativePnlCents`.'
+          $ref: '#/components/schemas/Cents'
+        meanIncrementalCents:
+          $ref: '#/components/schemas/NullableNumber'
+        meanIncrementalReturn:
+          $ref: '#/components/schemas/NullableNumber'
+        incrementalReturnStandardError:
+          $ref: '#/components/schemas/NullableNumber'
+        credible:
+          description: >-
+            Whether the source saw enough independent settlement windows to treat
+            the mean as readable. False is not evidence of no effect.
+          type: boolean
+    ProviderTrackRecord:
+      description: The same simulated trade record, scoped to one venue and market.
+      type: object
+      additionalProperties: false
+      required: [providerId, marketId, record]
+      properties:
+        providerId:
+          description: >-
+            The venue. Known values are `polymarket`, `kalshi`, `crypto-com`,
+            `forecastex` and `robinhood`; stored values outside that set are
+            served as they are.
+          type: string
+          minLength: 1
+          maxLength: 64
+        marketId:
+          description: >-
+            The market family. Known values are `crypto-15m`, `crypto-1h` and
+            `crypto-spot`.
+          type: string
+          minLength: 1
+          maxLength: 64
+        record:
+          $ref: '#/components/schemas/PaperTrackRecord'
+    BankrollEpoch:
+      description: One bankroll funding, from its first position to its last.
+      type: object
+      additionalProperties: false
+      required: [epochId, trades, settled, realizedPnlCents, budgetPnlCents, stakedCents, current]
+      properties:
+        epochId:
+          description: The source's opaque identity for this funding.
+          type: string
+          minLength: 1
+          maxLength: 200
+        trades:
+          $ref: '#/components/schemas/Count'
+        settled:
+          $ref: '#/components/schemas/Count'
+        realizedPnlCents:
+          description: Exact accounting, as on the full record.
+          $ref: '#/components/schemas/Cents'
+        budgetPnlCents:
+          description: >-
+            Whole-cent accounting, as on the budget record; for the current
+            funding it includes the bankroll's recorded corrections.
+          $ref: '#/components/schemas/Cents'
+        stakedCents:
+          $ref: '#/components/schemas/Cents'
+        firstAt:
+          description: Earliest position in this funding. Absent when it has none.
+          $ref: '#/components/schemas/SourceTime'
+        lastAt:
+          description: Latest position in this funding. Absent when it has none.
+          $ref: '#/components/schemas/SourceTime'
+        current:
+          description: True for exactly the funding now backing the simulated bankroll.
+          type: boolean
+    CyclePathReport:
+      description: Observation-only diagnostics about how prices moved within each cycle.
+      type: object
+      additionalProperties: false
+      required: [policyVersion, totalCycles, completedCycles, totalPoints, latestByAsset]
+      properties:
+        policyVersion:
+          type: string
+          minLength: 1
+          maxLength: 120
+        totalCycles:
+          $ref: '#/components/schemas/Count'
+        completedCycles:
+          description: Cycles whose settlement time had passed when the source built this report.
+          $ref: '#/components/schemas/Count'
+        totalPoints:
+          $ref: '#/components/schemas/Count'
+        latestByAsset:
+          type: array
+          items:
+            $ref: '#/components/schemas/CyclePathLatest'
+    CyclePathLatest:
+      type: object
+      additionalProperties: false
+      required: [symbol, closesAt, features]
+      properties:
+        symbol:
+          type: string
+          minLength: 1
+          maxLength: 64
+        closesAt:
+          $ref: '#/components/schemas/SourceTime'
+        features:
+          $ref: '#/components/schemas/CycleRegimeFeatures'
+    CycleRegimeFeatures:
+      description: >-
+        Path diagnostics for one cycle. Percentage-unit fields are **percent**,
+        not ratios: 0.12 means 0.12%. The two optional fields are absent on
+        records the source wrote before they existed.
+      type: object
+      additionalProperties: false
+      required:
+        - observedAt
+        - observationCount
+        - coverageSeconds
+        - signFlipRate
+        - lagOneAutocorrelation
+        - trendEfficiency
+        - rangePercent
+        - localVolatilityPerSecond
+        - localVolatility15mPercent
+        - regime
+      properties:
+        observedAt:
+          $ref: '#/components/schemas/SourceTime'
+        observationCount:
+          $ref: '#/components/schemas/Count'
+        coverageSeconds:
+          description: Seconds between the first and last observation.
+          type: number
+          minimum: 0
+        signFlipRate:
+          $ref: '#/components/schemas/NullableRatio'
+        lagOneAutocorrelation:
+          description: Lag-one autocorrelation of returns, in -1..1.
+          $ref: '#/components/schemas/NullableNumber'
+        trendEfficiency:
+          $ref: '#/components/schemas/NullableRatio'
+        signedTrendEfficiency:
+          description: Trend efficiency with direction, in -1..1. Absent on older records.
+          $ref: '#/components/schemas/NullableNumber'
+        netChangePercent:
+          description: Net change in percent units. Absent on older records.
+          $ref: '#/components/schemas/NullableNumber'
+        rangePercent:
+          description: Observed range in percent units.
+          $ref: '#/components/schemas/NullableNumber'
+        localVolatilityPerSecond:
+          $ref: '#/components/schemas/NullableNumber'
+        localVolatility15mPercent:
+          description: Fifteen-minute volatility in percent units.
+          $ref: '#/components/schemas/NullableNumber'
+        regime:
+          description: >-
+            How the source classified the path. Known values are `insufficient`,
+            `trending`, `mean-reverting` and `mixed`.
+          type: string
+          minLength: 1
+          maxLength: 64
