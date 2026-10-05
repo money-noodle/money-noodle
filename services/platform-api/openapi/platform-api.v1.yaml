@@ -21,6 +21,12 @@ tags:
       read-only projection an existing separate system writes. Simulation only:
       no operation here reaches a funded balance, and none of these figures is a
       real-money position.
+  - name: Market
+    description: >-
+      Read-only public market data from third-party venues and price sources,
+      served through this API's own feed adapters. Observation only: no operation
+      here places an order, holds a venue credential, or reaches a simulated or
+      funded balance.
   - name: Operations
     description: Minimal deployment health probes.
 paths:
@@ -136,6 +142,103 @@ paths:
           $ref: '#/components/responses/Problem'
         '503':
           $ref: '#/components/responses/ReadModelProblem'
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/market/overview:
+    get:
+      operationId: getMarketOverview
+      summary: Read the current public market overview.
+      description: >-
+        Public market data for the assets both fifteen-minute prediction venues
+        list: the spot snapshot with its seven-day series, each venue's current
+        quote for the cycle now trading, the distance from the cycle's settlement
+        reference, a weekly price history, and the headline list.
+
+
+        Market data only. There is no forecast, no entry signal, no fill estimate
+        and no ranking by any model or policy: the assets are published in registry
+        order, and every derived number here is arithmetic over values published
+        beside it in the same response.
+
+
+        Freshness is explicit. Each feed in `feeds` carries `fresh`, `stale` or
+        `unavailable`, the time this API obtained its value, and a fixed reason code
+        when it is not fresh. `stale` means a refresh failed and the previous value
+        is still inside its five-minute limit; past that the feed is `unavailable`
+        and the members it would have filled are absent — never zero, and never
+        inferred. `fetchedAt` is always this API's own clock: these providers
+        publish no source time, so none is invented. A total upstream outage is
+        still a 200 whose every feed says `unavailable`.
+
+
+        Where this response uses the exchange's one-minute series — the cycle's
+        settlement reference, the current price derived from it, and the realized
+        volatility in `basis` — only finished minutes are used. The minute still
+        forming is dropped, so a published close always describes a minute that
+        completed.
+
+
+        No caller-facing refresh control exists. Each feed has its own server-side
+        lifetime and concurrent callers share one refresh, so asking more often
+        cannot make this API ask a provider more often.
+      tags: [Market]
+      responses:
+        '200':
+          description: The current market overview, with a state for every feed.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarketOverview'
+        '404':
+          $ref: '#/components/responses/Problem'
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/market/hourly-thresholds:
+    get:
+      operationId: getHourlyThresholdMarkets
+      summary: Read the hourly above/below threshold contracts and their model probabilities.
+      description: >-
+        One venue's "settles above a strike" and "settles below a strike" contracts
+        for the hour now trading, for every registry asset, each with the
+        probability a zero-drift log-normal diffusion gives it from recent realized
+        volatility.
+
+
+        Research and observation only. The probability beside a quote is arithmetic
+        over public data whose inputs — the current price, the volatility estimate
+        and the sample count — are published with it; it is not advice, not a
+        position and not an entry decision. The difference from the asking price is
+        published because it is the obvious subtraction.
+
+
+        The current price and the volatility sample come from finished one-minute
+        candles only: the minute still forming is dropped before either is computed,
+        so the price is the last completed minute's close and the newest return in
+        the sample describes a whole minute.
+
+
+        Per-asset degradation is normal and is expressed inside a 200. An asset
+        whose listing could not be read, or that has no exact one-hour group
+        trading, carries its reasons in `unavailableReasons` and omits the numbers
+        it cannot support. A listing that offered one usable side publishes that
+        side and names the other. `marketDataAvailable` is true only for a complete,
+        unambiguous pair.
+      tags: [Market]
+      responses:
+        '200':
+          description: The hourly threshold contracts, with a state for every asset.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HourlyThresholdMarkets'
+        '404':
+          $ref: '#/components/responses/Problem'
         default:
           $ref: '#/components/responses/Problem'
   /health/live:
@@ -1487,3 +1590,664 @@ components:
           type: string
           minLength: 1
           maxLength: 64
+    # --- Public market data -------------------------------------------------
+    #
+    # Two rules decide the shape of everything below, and both are the opposite of
+    # what the earlier generation of this product did.
+    #
+    #   * An absent upstream value is an absent member. Nothing here defaults to
+    #     zero, to one half, or to a fabricated placeholder quote, so a published
+    #     number is always a number a provider actually reported.
+    #   * Every feed states its own freshness. A caller can tell a current value
+    #     from a five-minute-old one without inspecting it.
+    ApiTime:
+      description: >-
+        A time on this API's own clock, ISO-8601 UTC. Used where no provider
+        publishes a time of its own: these market sources state when a contract
+        closes, never when the value they just returned was measured, so the only
+        honest time this API can give for a feed value is when it obtained it.
+      type: string
+      format: date-time
+    VenueTime:
+      description: A time a venue or publisher stated, normalized to ISO-8601 UTC.
+      type: string
+      format: date-time
+    MarketFeedReason:
+      description: >-
+        Why a feed is not fresh, in a fixed vocabulary. `upstream-unavailable` is a
+        provider that refused or could not be reached, `upstream-rate-limited` one
+        that declined for rate reasons, `upstream-timeout` one that did not answer
+        within this API's per-call deadline, and `upstream-invalid` a payload whose
+        shape this API does not accept. No upstream status line, host, URL or error
+        text is ever published.
+      type: string
+      enum:
+        - upstream-invalid
+        - upstream-rate-limited
+        - upstream-timeout
+        - upstream-unavailable
+    MarketFeedState:
+      description: >-
+        How current one feed's value is. `fresh` is a value inside its lifetime;
+        `stale` is a successful read of an older value whose refresh failed, still
+        inside the five-minute limit; `unavailable` means there is nothing to
+        publish and the members this feed fills are absent.
+      type: object
+      additionalProperties: false
+      required: [state, ageSeconds]
+      properties:
+        state:
+          type: string
+          enum: [fresh, stale, unavailable]
+        ageSeconds:
+          description: Seconds since the value was obtained. Zero for a value just fetched.
+          type: number
+          minimum: 0
+        fetchedAt:
+          description: >-
+            When this API obtained the value. Absent only when there is no value at
+            all.
+          $ref: '#/components/schemas/ApiTime'
+        reason:
+          $ref: '#/components/schemas/MarketFeedReason'
+    ContractPrice:
+      description: >-
+        A price on a binary contract, as a fraction of its one-dollar settlement:
+        0.62 is sixty-two cents. A bid may be zero; an ask of zero means the side is
+        not offered and is omitted rather than published as zero.
+      type: number
+      minimum: 0
+      maximum: 1
+    MarketChartPoint:
+      type: object
+      additionalProperties: false
+      required: [time, price]
+      properties:
+        time:
+          description: >-
+            The point's time. In a seven-day series this is estimated: the source
+            publishes an unlabelled array of prices with no times, so the points are
+            spaced evenly backwards from `fetchedAt`. In a weekly history it is the
+            exchange's own candle time.
+          $ref: '#/components/schemas/ApiTime'
+        price:
+          description: Price in US dollars, as the source reported it, unrounded.
+          type: number
+          exclusiveMinimum: 0
+    MarketSpot:
+      description: >-
+        The spot snapshot for one asset. Every member except `chart` is absent when
+        the source did not report it; none is defaulted to zero, because a published
+        zero change would read as "unchanged".
+      type: object
+      additionalProperties: false
+      required: [chart]
+      properties:
+        price:
+          description: Spot price in US dollars.
+          type: number
+          exclusiveMinimum: 0
+        change1hPercent:
+          description: Change over the last hour, in percent units.
+          type: number
+        change24hPercent:
+          description: Change over the last 24 hours, in percent units.
+          type: number
+        change7dPercent:
+          description: Change over the last 7 days, in percent units.
+          type: number
+        change30dPercent:
+          description: Change over the last 30 days, in percent units.
+          type: number
+        change1yPercent:
+          description: Change over the last year, in percent units.
+          type: number
+        high24h:
+          description: Highest price in the last 24 hours, in US dollars.
+          type: number
+          exclusiveMinimum: 0
+        low24h:
+          description: Lowest price in the last 24 hours, in US dollars.
+          type: number
+          exclusiveMinimum: 0
+        volume24h:
+          description: Reported 24-hour volume in US dollars.
+          type: number
+          minimum: 0
+        iconUrl:
+          description: >-
+            The source's own icon URL, published only when it is an http or https
+            URL.
+          type: string
+          format: uri
+          maxLength: 2048
+        chart:
+          description: The seven-day series, oldest first. Empty when the source sent none.
+          type: array
+          maxItems: 400
+          items:
+            $ref: '#/components/schemas/MarketChartPoint'
+    MarketVenueQuote:
+      description: >-
+        One venue's quote on the up/down contract for the cycle now trading. A side
+        the venue is not quoting is absent. No placeholder quote is ever published:
+        an asset the venue has not listed for this cycle has no quote here at all.
+      type: object
+      additionalProperties: false
+      required: [venue, contractId, url, closesAt, live]
+      properties:
+        venue:
+          type: string
+          enum: [kalshi, polymarket]
+        contractId:
+          description: The venue's own identifier for the contract.
+          type: string
+          minLength: 1
+          maxLength: 128
+        ticker:
+          description: The venue's ticker, where it publishes one.
+          type: string
+          minLength: 1
+          maxLength: 128
+        url:
+          description: The venue's own public page for this market.
+          type: string
+          format: uri
+          maxLength: 2048
+        closesAt:
+          description: When the venue settles this contract.
+          $ref: '#/components/schemas/VenueTime'
+        live:
+          description: Whether the venue reported the contract as open for orders.
+          type: boolean
+        probabilityUp:
+          description: >-
+            The venue's implied probability of settling up, as a fraction. The
+            midpoint of the quoted bid and ask where both exist, otherwise the last
+            trade. Absent when the venue is quoting neither.
+          $ref: '#/components/schemas/Ratio'
+        probabilityDown:
+          description: The same for the down outcome.
+          $ref: '#/components/schemas/Ratio'
+        bidUp:
+          $ref: '#/components/schemas/ContractPrice'
+        askUp:
+          $ref: '#/components/schemas/ContractPrice'
+        bidDown:
+          $ref: '#/components/schemas/ContractPrice'
+        askDown:
+          $ref: '#/components/schemas/ContractPrice'
+        liquidityUsd:
+          description: Liquidity in US dollars, as the venue reports it.
+          type: number
+          minimum: 0
+        volumeUsd:
+          description: Volume in US dollars, as the venue reports it.
+          type: number
+          minimum: 0
+        volumeContracts:
+          description: Volume in contracts, where the venue reports it that way.
+          type: number
+          minimum: 0
+        floorStrike:
+          description: The contract's floor strike in US dollars, where the venue states one.
+          type: number
+          exclusiveMinimum: 0
+    MarketContractBasis:
+      description: >-
+        How far spot has moved from the level the cycle's contract settles against,
+        and what the recent minutes imply about that distance. Public arithmetic
+        only: every input is published here beside its result.
+      type: object
+      additionalProperties: false
+      required:
+        - referencePrice
+        - referenceSource
+        - currentPrice
+        - basisPercent
+        - secondsRemaining
+        - volatilityPerSecond
+        - volatilitySamples
+        - standardDeviationPercent
+        - zScore
+        - probabilityUp
+      properties:
+        referencePrice:
+          description: The settlement reference in US dollars.
+          type: number
+          exclusiveMinimum: 0
+        referenceSource:
+          description: >-
+            Where the reference came from. `Kraken 1m series at cycle open` is the
+            close of the minute that ended as the cycle opened; `Kalshi floor
+            strike` is the venue's own stated strike, used when the exchange series
+            has no such minute.
+          type: string
+          minLength: 1
+          maxLength: 120
+        currentPrice:
+          description: >-
+            The current price in US dollars: the last completed one-minute close, or
+            the exchange's last trade, falling back to the spot snapshot.
+          type: number
+          exclusiveMinimum: 0
+        basisPercent:
+          description: Distance from the reference in percent units.
+          type: number
+        secondsRemaining:
+          description: Seconds until the contract settles, fractional.
+          type: number
+          minimum: 0
+        volatilityPerSecond:
+          description: >-
+            Realized volatility as the standard deviation of log return per root
+            second, estimated from completed one-minute closes.
+          type: number
+          exclusiveMinimum: 0
+        volatilitySamples:
+          description: One-minute returns the estimate used.
+          $ref: '#/components/schemas/Count'
+        standardDeviationPercent:
+          description: >-
+            Expected movement to settlement in percent units, from the estimate
+            above over the effective time remaining.
+          type: number
+        zScore:
+          description: The distance from the reference in standard deviations.
+          type: number
+        probabilityUp:
+          description: >-
+            The probability of settling above the reference under a zero-drift
+            log-normal diffusion, bounded to 0.05..0.95 because the estimate is a
+            sample of roughly two hours of minutes and its tails are not worth the
+            precision they would suggest.
+          $ref: '#/components/schemas/Ratio'
+        impliedVolatilityPerSecond:
+          description: >-
+            The volatility the venues' own probability implies, read back through
+            the same model. Absent without a live venue probability.
+          type: number
+          exclusiveMinimum: 0
+        volatilityRatio:
+          description: Realized volatility divided by the implied figure above.
+          type: number
+    MarketAssetOverview:
+      type: object
+      additionalProperties: false
+      required: [symbol, name, longHistory]
+      properties:
+        symbol:
+          type: string
+          minLength: 1
+          maxLength: 16
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        spot:
+          $ref: '#/components/schemas/MarketSpot'
+        polymarket:
+          $ref: '#/components/schemas/MarketVenueQuote'
+        kalshi:
+          description: >-
+            Published only when this venue's contract settles within five seconds of
+            the other venue's and that settlement is still ahead. Without that, the
+            two quotes would answer different questions and inviting the comparison
+            would be misleading.
+          $ref: '#/components/schemas/MarketVenueQuote'
+        basis:
+          $ref: '#/components/schemas/MarketContractBasis'
+        venueProbabilityUp:
+          description: >-
+            The venues' combined implied probability of settling up, weighted 0.75
+            to Polymarket and 0.25 to Kalshi where both are live and aligned, and
+            the single live venue otherwise. Computed from the quotes in this
+            response only, so every instance of this API answers the same figure at
+            the same instant.
+          $ref: '#/components/schemas/Ratio'
+        venueDisagreement:
+          description: >-
+            The absolute difference between the two venues' implied probabilities.
+            Needs both, aligned.
+          $ref: '#/components/schemas/Ratio'
+        longHistory:
+          description: Weekly closes, oldest first. Empty when the feed has none for this asset.
+          type: array
+          maxItems: 1024
+          items:
+            $ref: '#/components/schemas/MarketChartPoint'
+    MarketHeadline:
+      type: object
+      additionalProperties: false
+      required: [title]
+      properties:
+        title:
+          description: >-
+            Plain text, bounded in length. Markup is removed and a fixed set of
+            character entities is decoded once; no sentiment, score or label is
+            derived from it.
+          type: string
+          minLength: 1
+          maxLength: 300
+        link:
+          description: >-
+            The publisher's URL, published only when it is an http or https URL.
+          type: string
+          format: uri
+          maxLength: 2048
+        publishedAt:
+          description: >-
+            The publisher's stated time, normalized. Absent when it was missing or
+            unparseable.
+          $ref: '#/components/schemas/VenueTime'
+    MarketOverviewFeeds:
+      description: >-
+        One state per upstream feed behind this response. A feed assembled from
+        several calls reports the worst state and the oldest fetch time of the calls
+        behind it, so a partial answer is labelled as one.
+      type: object
+      additionalProperties: false
+      required:
+        - spot
+        - polymarketQuotes
+        - kalshiQuotes
+        - referencePrices
+        - longHistory
+        - news
+      properties:
+        spot:
+          $ref: '#/components/schemas/MarketFeedState'
+        polymarketQuotes:
+          $ref: '#/components/schemas/MarketFeedState'
+        kalshiQuotes:
+          $ref: '#/components/schemas/MarketFeedState'
+        referencePrices:
+          description: The exchange one-minute series the reference and volatility come from.
+          $ref: '#/components/schemas/MarketFeedState'
+        longHistory:
+          $ref: '#/components/schemas/MarketFeedState'
+        news:
+          $ref: '#/components/schemas/MarketFeedState'
+    MarketOverview:
+      type: object
+      additionalProperties: false
+      required:
+        - schemaVersion
+        - requestId
+        - marketId
+        - generatedAt
+        - feeds
+        - assets
+        - headlines
+      properties:
+        schemaVersion:
+          type: string
+          const: '1'
+        requestId:
+          $ref: '#/components/schemas/RequestId'
+        marketId:
+          type: string
+          const: crypto-15m
+        generatedAt:
+          description: When this API assembled the record, on its own clock.
+          $ref: '#/components/schemas/ApiTime'
+        feeds:
+          $ref: '#/components/schemas/MarketOverviewFeeds'
+        assets:
+          description: >-
+            The assets both fifteen-minute venues list, in registry order. The order
+            is fixed and carries no ranking: the earlier generation of this product
+            sorted by a policy-derived score, which is model output and not part of
+            this capability.
+          type: array
+          maxItems: 32
+          items:
+            $ref: '#/components/schemas/MarketAssetOverview'
+        headlines:
+          description: Headlines in the publisher's own order, at most twelve.
+          type: array
+          maxItems: 12
+          items:
+            $ref: '#/components/schemas/MarketHeadline'
+    HourlyUnavailableReason:
+      description: >-
+        Why an asset has no complete threshold pair. The four `upstream-` codes are
+        a failed listing read, in the same fixed vocabulary as a feed state;
+        `no-active-hour-group` is a venue that answered and lists no exact one-hour
+        contract trading now; the four side codes name a side the venue listed zero
+        or more than one usable row for.
+      type: string
+      enum:
+        - above-ambiguous
+        - above-missing
+        - below-ambiguous
+        - below-missing
+        - no-active-hour-group
+        - upstream-invalid
+        - upstream-rate-limited
+        - upstream-timeout
+        - upstream-unavailable
+    HourlyThresholdCandidate:
+      type: object
+      additionalProperties: false
+      required:
+        - direction
+        - displaySide
+        - relation
+        - label
+        - ticker
+        - strike
+        - marketUrl
+        - rulesFingerprint
+        - settlementPriceMethod
+      properties:
+        direction:
+          description: >-
+            Which side of the strike the contract settles yes on. `ABOVE` and
+            `BELOW` have different strikes and are not complements of each other.
+          type: string
+          enum: [ABOVE, BELOW]
+        displaySide:
+          description: The direction as an interface would label it.
+          type: string
+          enum: [UP, DOWN]
+        relation:
+          type: string
+          enum: [greater-than, less-than]
+        label:
+          description: An unformatted label for the contract, e.g. `Above 64000`.
+          type: string
+          minLength: 1
+          maxLength: 64
+        ticker:
+          description: The venue's public contract identifier.
+          type: string
+          minLength: 1
+          maxLength: 128
+        strike:
+          description: The strike in US dollars.
+          type: number
+          exclusiveMinimum: 0
+        marketUrl:
+          description: >-
+            The venue's public page for the series. The venue publishes no
+            per-contract page.
+          type: string
+          format: uri
+          maxLength: 2048
+        bidYes:
+          $ref: '#/components/schemas/ContractPrice'
+        askYes:
+          $ref: '#/components/schemas/ContractPrice'
+        bidNo:
+          $ref: '#/components/schemas/ContractPrice'
+        askNo:
+          $ref: '#/components/schemas/ContractPrice'
+        modelProbabilityYes:
+          description: >-
+            The probability this contract settles yes under a zero-drift log-normal
+            diffusion from the realized volatility of completed minutes.
+            Unclamped, so it may be arbitrarily close to zero or one, and it carries
+            no fee, no spread and no execution assumption. Absent when no usable
+            volatility estimate exists.
+          $ref: '#/components/schemas/Ratio'
+        modelMinusAsk:
+          description: >-
+            `modelProbabilityYes` minus `askYes`, as a fraction. Published because
+            it is the obvious subtraction of two numbers already here; it is not an
+            edge, a recommendation or a position.
+          $ref: '#/components/schemas/Ratio'
+        modelUnavailableReason:
+          description: Present exactly when `modelProbabilityYes` is absent.
+          type: string
+          enum: [volatility-unavailable]
+        rulesFingerprint:
+          description: >-
+            Hex SHA-256 over the settlement-defining terms of this contract — the
+            reference index, the averaging method and window, the rounding and the
+            strike — and over nothing that moves. It changes when the terms change,
+            so a caller can tell "the same contract, requoted" from "a contract
+            whose settlement definition was edited".
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        settlementPriceMethod:
+          description: >-
+            How the venue's rules text says the settlement price is determined, as
+            parsed from that public prose. `unknown` is an explicit value rather
+            than a default that would read as a finding.
+          type: string
+          enum: [point-in-time, simple-average, time-weighted-average, unknown]
+    HourlyThresholdMarket:
+      type: object
+      additionalProperties: false
+      required:
+        - symbol
+        - name
+        - marketDataAvailable
+        - listing
+        - candidates
+        - unavailableReasons
+      properties:
+        symbol:
+          type: string
+          minLength: 1
+          maxLength: 16
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        marketDataAvailable:
+          description: >-
+            True only for a complete, unambiguous pair: exactly one contract above a
+            strike and exactly one below one.
+          type: boolean
+        listing:
+          description: How current this asset's contract listing is.
+          $ref: '#/components/schemas/MarketFeedState'
+        spot:
+          description: >-
+            How current this asset's price series is. Absent when no candidate
+            survived, because the series is then not read at all.
+          $ref: '#/components/schemas/MarketFeedState'
+        openAt:
+          description: When the venue opened the hour group.
+          $ref: '#/components/schemas/VenueTime'
+        closesAt:
+          description: When the venue settles the hour group.
+          $ref: '#/components/schemas/VenueTime'
+        currentPrice:
+          description: >-
+            The close of the last completed one-minute candle, in US dollars. The
+            minute still forming is never used.
+          type: number
+          exclusiveMinimum: 0
+        volatilityPerSecond:
+          description: >-
+            Realized volatility as the standard deviation of log return per root
+            second, from completed one-minute closes. No annualization, no
+            weighting, no outlier handling and no safety multiplier.
+          type: number
+          exclusiveMinimum: 0
+        volatilitySamples:
+          description: One-minute returns the estimate used.
+          $ref: '#/components/schemas/Count'
+        candidates:
+          description: The usable contracts, above before below. Zero, one or two.
+          type: array
+          maxItems: 2
+          items:
+            $ref: '#/components/schemas/HourlyThresholdCandidate'
+        unavailableReasons:
+          description: Empty exactly when a complete, unambiguous pair was published.
+          type: array
+          maxItems: 4
+          items:
+            $ref: '#/components/schemas/HourlyUnavailableReason'
+    MarketCapability:
+      description: >-
+        What this operation's data may be used for, as constants. Market data only:
+        nothing here reaches a simulated balance, and this API has no real-money
+        authority at all.
+      type: object
+      additionalProperties: false
+      required: [marketData, paper, live]
+      properties:
+        marketData:
+          type: boolean
+          const: true
+        paper:
+          type: boolean
+          const: false
+        live:
+          type: boolean
+          const: false
+    HourlyThresholdMarkets:
+      type: object
+      additionalProperties: false
+      required:
+        - schemaVersion
+        - requestId
+        - marketId
+        - providerId
+        - marketDataVersion
+        - modelVersion
+        - referenceSource
+        - capability
+        - generatedAt
+        - markets
+      properties:
+        schemaVersion:
+          type: string
+          const: '1'
+        requestId:
+          $ref: '#/components/schemas/RequestId'
+        marketId:
+          type: string
+          const: crypto-1h
+        providerId:
+          type: string
+          const: kalshi
+        marketDataVersion:
+          description: The read's own version label, for a client that pins behaviour.
+          type: string
+          const: kalshi-hourly-threshold-read-v1
+        modelVersion:
+          description: The probability model's version label.
+          type: string
+          const: strike-threshold-zero-drift-v1
+        referenceSource:
+          description: The index the venue settles these contracts against.
+          type: string
+          minLength: 1
+          maxLength: 120
+        capability:
+          $ref: '#/components/schemas/MarketCapability'
+        generatedAt:
+          description: When this API assembled the record, on its own clock.
+          $ref: '#/components/schemas/ApiTime'
+        markets:
+          description: One entry per registry asset, in registry order, always present.
+          type: array
+          maxItems: 32
+          items:
+            $ref: '#/components/schemas/HourlyThresholdMarket'

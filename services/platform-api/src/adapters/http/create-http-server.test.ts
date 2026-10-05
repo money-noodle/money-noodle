@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { GetPlatformStatus } from '../../application/get-platform-status.js';
 import type { PaperReadFailure } from '../../application/read-paper-dashboard.js';
+import { syntheticHourlyThresholds } from '../../domain/hourly-thresholds.test.js';
+import { syntheticOverview } from '../../domain/market-overview.test.js';
 import { readPaperBudget } from '../../domain/read-paper-budget.js';
 import { syntheticBudgetRow, syntheticOpenExecution } from '../../domain/read-paper-budget.test.js';
 import {
@@ -29,6 +31,12 @@ const publishedBudget = readPaperBudget(syntheticBudgetRow, [syntheticOpenExecut
 const publishedSummary = readPaperPerformanceSummary(syntheticPerformanceRow());
 const publishedPerformance = readPaperPerformance(syntheticPerformanceRow());
 
+// The market views, built by the real assemblies from the synthetic feed readings the
+// domain tests own. Same reason as above: this is where "what the assembly produces"
+// and "what the contract publishes" are checked against each other.
+const publishedOverview = syntheticOverview();
+const publishedHourly = syntheticHourlyThresholds();
+
 const read =
   <T>(value: T) =>
   async () => ({ ok: true as const, value });
@@ -44,6 +52,8 @@ function createServer(
   const server = createHttpServer({
     contract,
     generateRequestId: () => 'request-123',
+    getHourlyThresholdMarkets: async () => publishedHourly,
+    getMarketOverview: async () => publishedOverview,
     getPaperBudget: read(publishedBudget),
     getPaperPerformance: read(publishedPerformance),
     getPaperPerformanceSummary: read(publishedSummary),
@@ -365,5 +375,98 @@ describe('createHttpServer', () => {
       '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
       'request-123',
     );
+  });
+  it('serves the contract-valid market overview with its per-feed states', async () => {
+    const response = await createServer().inject({ method: 'GET', url: '/v1/market/overview' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['x-request-id']).toBe('request-123');
+    const body = response.json() as Record<string, unknown>;
+    expect(body.schemaVersion).toBe('1');
+    expect(body.requestId).toBe('request-123');
+    expect(body.marketId).toBe('crypto-15m');
+    expect(body.feeds).toMatchObject({ spot: { state: 'fresh' } });
+    // The envelope is added here and nowhere else; the view itself is published whole.
+    expect(body).toEqual({
+      ...publishedOverview,
+      requestId: 'request-123',
+      schemaVersion: '1',
+    });
+  });
+
+  it('serves the contract-valid hourly threshold view', async () => {
+    const response = await createServer().inject({
+      method: 'GET',
+      url: '/v1/market/hourly-thresholds',
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as Record<string, unknown>;
+    expect(body.marketId).toBe('crypto-1h');
+    expect(body.capability).toEqual({ live: false, marketData: true, paper: false });
+    expect(body).toEqual({
+      ...publishedHourly,
+      requestId: 'request-123',
+      schemaVersion: '1',
+    });
+  });
+
+  it('answers the market reads even when every feed is unavailable', async () => {
+    // A total upstream outage is a two hundred that says so. These routes have no
+    // failure branch at all, which is the point: a status code cannot carry "the
+    // headline feed is stale but the quotes are current".
+    const emptyOverview = {
+      ...publishedOverview,
+      assets: publishedOverview.assets.map((asset) => ({
+        longHistory: [],
+        name: asset.name,
+        symbol: asset.symbol,
+      })),
+      feeds: Object.fromEntries(
+        Object.keys(publishedOverview.feeds).map((name) => [
+          name,
+          { ageSeconds: 0, reason: 'upstream-unavailable', state: 'unavailable' },
+        ]),
+      ),
+      headlines: [],
+    };
+
+    const response = await createServer({
+      getMarketOverview: async () =>
+        emptyOverview as unknown as ReturnType<typeof syntheticOverview>,
+    }).inject({ method: 'GET', url: '/v1/market/overview' });
+
+    expect(response.statusCode).toBe(200);
+    expect((response.json() as Record<string, unknown>).feeds).toMatchObject({
+      news: { state: 'unavailable' },
+    });
+  });
+
+  it('refuses to publish a market view that does not satisfy the contract', async () => {
+    // The guard that stops a drifted response reaching a client: it fails here, in
+    // this service, as a 500 rather than as a silently wrong field.
+    const response = await createServer({
+      getHourlyThresholdMarkets: async () =>
+        ({ ...publishedHourly, providerId: 'somewhere-else' }) as unknown as ReturnType<
+          typeof syntheticHourlyThresholds
+        >,
+    }).inject({ method: 'GET', url: '/v1/market/hourly-thresholds' });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toMatchObject({ errorCode: 'MN-INTERNAL-ERROR' });
+  });
+
+  it('keeps readiness independent of the market feeds', async () => {
+    // A provider outage must not stop this revision serving or make the platform
+    // restart it: readiness answers for this service's own dependencies only.
+    const response = await createServer({
+      checkReadiness: async () => ({ ready: true }),
+      getMarketOverview: async () => {
+        throw new Error('every provider is down');
+      },
+    }).inject({ method: 'GET', url: '/health/ready' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ status: 'ready' });
   });
 });

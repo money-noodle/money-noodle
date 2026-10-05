@@ -752,6 +752,424 @@ export type CycleRegimeFeatures = {
     regime: string;
 };
 
+/**
+ * A time on this API's own clock, ISO-8601 UTC. Used where no provider publishes a time of its own: these market sources state when a contract closes, never when the value they just returned was measured, so the only honest time this API can give for a feed value is when it obtained it.
+ */
+export type ApiTime = string;
+
+/**
+ * A time a venue or publisher stated, normalized to ISO-8601 UTC.
+ */
+export type VenueTime = string;
+
+/**
+ * Why a feed is not fresh, in a fixed vocabulary. `upstream-unavailable` is a provider that refused or could not be reached, `upstream-rate-limited` one that declined for rate reasons, `upstream-timeout` one that did not answer within this API's per-call deadline, and `upstream-invalid` a payload whose shape this API does not accept. No upstream status line, host, URL or error text is ever published.
+ */
+export type MarketFeedReason = 'upstream-invalid' | 'upstream-rate-limited' | 'upstream-timeout' | 'upstream-unavailable';
+
+/**
+ * How current one feed's value is. `fresh` is a value inside its lifetime; `stale` is a successful read of an older value whose refresh failed, still inside the five-minute limit; `unavailable` means there is nothing to publish and the members this feed fills are absent.
+ */
+export type MarketFeedState = {
+    state: 'fresh' | 'stale' | 'unavailable';
+    /**
+     * Seconds since the value was obtained. Zero for a value just fetched.
+     */
+    ageSeconds: number;
+    /**
+     * When this API obtained the value. Absent only when there is no value at all.
+     */
+    fetchedAt?: ApiTime;
+    reason?: MarketFeedReason;
+};
+
+/**
+ * A price on a binary contract, as a fraction of its one-dollar settlement: 0.62 is sixty-two cents. A bid may be zero; an ask of zero means the side is not offered and is omitted rather than published as zero.
+ */
+export type ContractPrice = number;
+
+export type MarketChartPoint = {
+    /**
+     * The point's time. In a seven-day series this is estimated: the source publishes an unlabelled array of prices with no times, so the points are spaced evenly backwards from `fetchedAt`. In a weekly history it is the exchange's own candle time.
+     */
+    time: ApiTime;
+    /**
+     * Price in US dollars, as the source reported it, unrounded.
+     */
+    price: number;
+};
+
+/**
+ * The spot snapshot for one asset. Every member except `chart` is absent when the source did not report it; none is defaulted to zero, because a published zero change would read as "unchanged".
+ */
+export type MarketSpot = {
+    /**
+     * Spot price in US dollars.
+     */
+    price?: number;
+    /**
+     * Change over the last hour, in percent units.
+     */
+    change1hPercent?: number;
+    /**
+     * Change over the last 24 hours, in percent units.
+     */
+    change24hPercent?: number;
+    /**
+     * Change over the last 7 days, in percent units.
+     */
+    change7dPercent?: number;
+    /**
+     * Change over the last 30 days, in percent units.
+     */
+    change30dPercent?: number;
+    /**
+     * Change over the last year, in percent units.
+     */
+    change1yPercent?: number;
+    /**
+     * Highest price in the last 24 hours, in US dollars.
+     */
+    high24h?: number;
+    /**
+     * Lowest price in the last 24 hours, in US dollars.
+     */
+    low24h?: number;
+    /**
+     * Reported 24-hour volume in US dollars.
+     */
+    volume24h?: number;
+    /**
+     * The source's own icon URL, published only when it is an http or https URL.
+     */
+    iconUrl?: string;
+    /**
+     * The seven-day series, oldest first. Empty when the source sent none.
+     */
+    chart: Array<MarketChartPoint>;
+};
+
+/**
+ * One venue's quote on the up/down contract for the cycle now trading. A side the venue is not quoting is absent. No placeholder quote is ever published: an asset the venue has not listed for this cycle has no quote here at all.
+ */
+export type MarketVenueQuote = {
+    venue: 'kalshi' | 'polymarket';
+    /**
+     * The venue's own identifier for the contract.
+     */
+    contractId: string;
+    /**
+     * The venue's ticker, where it publishes one.
+     */
+    ticker?: string;
+    /**
+     * The venue's own public page for this market.
+     */
+    url: string;
+    /**
+     * When the venue settles this contract.
+     */
+    closesAt: VenueTime;
+    /**
+     * Whether the venue reported the contract as open for orders.
+     */
+    live: boolean;
+    /**
+     * The venue's implied probability of settling up, as a fraction. The midpoint of the quoted bid and ask where both exist, otherwise the last trade. Absent when the venue is quoting neither.
+     */
+    probabilityUp?: Ratio;
+    /**
+     * The same for the down outcome.
+     */
+    probabilityDown?: Ratio;
+    bidUp?: ContractPrice;
+    askUp?: ContractPrice;
+    bidDown?: ContractPrice;
+    askDown?: ContractPrice;
+    /**
+     * Liquidity in US dollars, as the venue reports it.
+     */
+    liquidityUsd?: number;
+    /**
+     * Volume in US dollars, as the venue reports it.
+     */
+    volumeUsd?: number;
+    /**
+     * Volume in contracts, where the venue reports it that way.
+     */
+    volumeContracts?: number;
+    /**
+     * The contract's floor strike in US dollars, where the venue states one.
+     */
+    floorStrike?: number;
+};
+
+/**
+ * How far spot has moved from the level the cycle's contract settles against, and what the recent minutes imply about that distance. Public arithmetic only: every input is published here beside its result.
+ */
+export type MarketContractBasis = {
+    /**
+     * The settlement reference in US dollars.
+     */
+    referencePrice: number;
+    /**
+     * Where the reference came from. `Kraken 1m series at cycle open` is the close of the minute that ended as the cycle opened; `Kalshi floor strike` is the venue's own stated strike, used when the exchange series has no such minute.
+     */
+    referenceSource: string;
+    /**
+     * The current price in US dollars: the last completed one-minute close, or the exchange's last trade, falling back to the spot snapshot.
+     */
+    currentPrice: number;
+    /**
+     * Distance from the reference in percent units.
+     */
+    basisPercent: number;
+    /**
+     * Seconds until the contract settles, fractional.
+     */
+    secondsRemaining: number;
+    /**
+     * Realized volatility as the standard deviation of log return per root second, estimated from completed one-minute closes.
+     */
+    volatilityPerSecond: number;
+    /**
+     * One-minute returns the estimate used.
+     */
+    volatilitySamples: Count;
+    /**
+     * Expected movement to settlement in percent units, from the estimate above over the effective time remaining.
+     */
+    standardDeviationPercent: number;
+    /**
+     * The distance from the reference in standard deviations.
+     */
+    zScore: number;
+    /**
+     * The probability of settling above the reference under a zero-drift log-normal diffusion, bounded to 0.05..0.95 because the estimate is a sample of roughly two hours of minutes and its tails are not worth the precision they would suggest.
+     */
+    probabilityUp: Ratio;
+    /**
+     * The volatility the venues' own probability implies, read back through the same model. Absent without a live venue probability.
+     */
+    impliedVolatilityPerSecond?: number;
+    /**
+     * Realized volatility divided by the implied figure above.
+     */
+    volatilityRatio?: number;
+};
+
+export type MarketAssetOverview = {
+    symbol: string;
+    name: string;
+    spot?: MarketSpot;
+    polymarket?: MarketVenueQuote;
+    /**
+     * Published only when this venue's contract settles within five seconds of the other venue's and that settlement is still ahead. Without that, the two quotes would answer different questions and inviting the comparison would be misleading.
+     */
+    kalshi?: MarketVenueQuote;
+    basis?: MarketContractBasis;
+    /**
+     * The venues' combined implied probability of settling up, weighted 0.75 to Polymarket and 0.25 to Kalshi where both are live and aligned, and the single live venue otherwise. Computed from the quotes in this response only, so every instance of this API answers the same figure at the same instant.
+     */
+    venueProbabilityUp?: Ratio;
+    /**
+     * The absolute difference between the two venues' implied probabilities. Needs both, aligned.
+     */
+    venueDisagreement?: Ratio;
+    /**
+     * Weekly closes, oldest first. Empty when the feed has none for this asset.
+     */
+    longHistory: Array<MarketChartPoint>;
+};
+
+export type MarketHeadline = {
+    /**
+     * Plain text, bounded in length. Markup is removed and a fixed set of character entities is decoded once; no sentiment, score or label is derived from it.
+     */
+    title: string;
+    /**
+     * The publisher's URL, published only when it is an http or https URL.
+     */
+    link?: string;
+    /**
+     * The publisher's stated time, normalized. Absent when it was missing or unparseable.
+     */
+    publishedAt?: VenueTime;
+};
+
+/**
+ * One state per upstream feed behind this response. A feed assembled from several calls reports the worst state and the oldest fetch time of the calls behind it, so a partial answer is labelled as one.
+ */
+export type MarketOverviewFeeds = {
+    spot: MarketFeedState;
+    polymarketQuotes: MarketFeedState;
+    kalshiQuotes: MarketFeedState;
+    /**
+     * The exchange one-minute series the reference and volatility come from.
+     */
+    referencePrices: MarketFeedState;
+    longHistory: MarketFeedState;
+    news: MarketFeedState;
+};
+
+export type MarketOverview = {
+    schemaVersion: '1';
+    requestId: RequestId;
+    marketId: 'crypto-15m';
+    /**
+     * When this API assembled the record, on its own clock.
+     */
+    generatedAt: ApiTime;
+    feeds: MarketOverviewFeeds;
+    /**
+     * The assets both fifteen-minute venues list, in registry order. The order is fixed and carries no ranking: the earlier generation of this product sorted by a policy-derived score, which is model output and not part of this capability.
+     */
+    assets: Array<MarketAssetOverview>;
+    /**
+     * Headlines in the publisher's own order, at most twelve.
+     */
+    headlines: Array<MarketHeadline>;
+};
+
+/**
+ * Why an asset has no complete threshold pair. The four `upstream-` codes are a failed listing read, in the same fixed vocabulary as a feed state; `no-active-hour-group` is a venue that answered and lists no exact one-hour contract trading now; the four side codes name a side the venue listed zero or more than one usable row for.
+ */
+export type HourlyUnavailableReason = 'above-ambiguous' | 'above-missing' | 'below-ambiguous' | 'below-missing' | 'no-active-hour-group' | 'upstream-invalid' | 'upstream-rate-limited' | 'upstream-timeout' | 'upstream-unavailable';
+
+export type HourlyThresholdCandidate = {
+    /**
+     * Which side of the strike the contract settles yes on. `ABOVE` and `BELOW` have different strikes and are not complements of each other.
+     */
+    direction: 'ABOVE' | 'BELOW';
+    /**
+     * The direction as an interface would label it.
+     */
+    displaySide: 'UP' | 'DOWN';
+    relation: 'greater-than' | 'less-than';
+    /**
+     * An unformatted label for the contract, e.g. `Above 64000`.
+     */
+    label: string;
+    /**
+     * The venue's public contract identifier.
+     */
+    ticker: string;
+    /**
+     * The strike in US dollars.
+     */
+    strike: number;
+    /**
+     * The venue's public page for the series. The venue publishes no per-contract page.
+     */
+    marketUrl: string;
+    bidYes?: ContractPrice;
+    askYes?: ContractPrice;
+    bidNo?: ContractPrice;
+    askNo?: ContractPrice;
+    /**
+     * The probability this contract settles yes under a zero-drift log-normal diffusion from the realized volatility of completed minutes. Unclamped, so it may be arbitrarily close to zero or one, and it carries no fee, no spread and no execution assumption. Absent when no usable volatility estimate exists.
+     */
+    modelProbabilityYes?: Ratio;
+    /**
+     * `modelProbabilityYes` minus `askYes`, as a fraction. Published because it is the obvious subtraction of two numbers already here; it is not an edge, a recommendation or a position.
+     */
+    modelMinusAsk?: Ratio;
+    /**
+     * Present exactly when `modelProbabilityYes` is absent.
+     */
+    modelUnavailableReason?: 'volatility-unavailable';
+    /**
+     * Hex SHA-256 over the settlement-defining terms of this contract — the reference index, the averaging method and window, the rounding and the strike — and over nothing that moves. It changes when the terms change, so a caller can tell "the same contract, requoted" from "a contract whose settlement definition was edited".
+     */
+    rulesFingerprint: string;
+    /**
+     * How the venue's rules text says the settlement price is determined, as parsed from that public prose. `unknown` is an explicit value rather than a default that would read as a finding.
+     */
+    settlementPriceMethod: 'point-in-time' | 'simple-average' | 'time-weighted-average' | 'unknown';
+};
+
+export type HourlyThresholdMarket = {
+    symbol: string;
+    name: string;
+    /**
+     * True only for a complete, unambiguous pair: exactly one contract above a strike and exactly one below one.
+     */
+    marketDataAvailable: boolean;
+    /**
+     * How current this asset's contract listing is.
+     */
+    listing: MarketFeedState;
+    /**
+     * How current this asset's price series is. Absent when no candidate survived, because the series is then not read at all.
+     */
+    spot?: MarketFeedState;
+    /**
+     * When the venue opened the hour group.
+     */
+    openAt?: VenueTime;
+    /**
+     * When the venue settles the hour group.
+     */
+    closesAt?: VenueTime;
+    /**
+     * The close of the last completed one-minute candle, in US dollars. The minute still forming is never used.
+     */
+    currentPrice?: number;
+    /**
+     * Realized volatility as the standard deviation of log return per root second, from completed one-minute closes. No annualization, no weighting, no outlier handling and no safety multiplier.
+     */
+    volatilityPerSecond?: number;
+    /**
+     * One-minute returns the estimate used.
+     */
+    volatilitySamples?: Count;
+    /**
+     * The usable contracts, above before below. Zero, one or two.
+     */
+    candidates: Array<HourlyThresholdCandidate>;
+    /**
+     * Empty exactly when a complete, unambiguous pair was published.
+     */
+    unavailableReasons: Array<HourlyUnavailableReason>;
+};
+
+/**
+ * What this operation's data may be used for, as constants. Market data only: nothing here reaches a simulated balance, and this API has no real-money authority at all.
+ */
+export type MarketCapability = {
+    marketData: true;
+    paper: false;
+    live: false;
+};
+
+export type HourlyThresholdMarkets = {
+    schemaVersion: '1';
+    requestId: RequestId;
+    marketId: 'crypto-1h';
+    providerId: 'kalshi';
+    /**
+     * The read's own version label, for a client that pins behaviour.
+     */
+    marketDataVersion: 'kalshi-hourly-threshold-read-v1';
+    /**
+     * The probability model's version label.
+     */
+    modelVersion: 'strike-threshold-zero-drift-v1';
+    /**
+     * The index the venue settles these contracts against.
+     */
+    referenceSource: string;
+    capability: MarketCapability;
+    /**
+     * When this API assembled the record, on its own clock.
+     */
+    generatedAt: ApiTime;
+    /**
+     * One entry per registry asset, in registry order, always present.
+     */
+    markets: Array<HourlyThresholdMarket>;
+};
+
 export type GetPlatformStatusData = {
     body?: never;
     path?: never;
@@ -879,6 +1297,64 @@ export type GetPaperPerformanceResponses = {
 };
 
 export type GetPaperPerformanceResponse = GetPaperPerformanceResponses[keyof GetPaperPerformanceResponses];
+
+export type GetMarketOverviewData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/v1/market/overview';
+};
+
+export type GetMarketOverviewErrors = {
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    404: Problem;
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    default: Problem;
+};
+
+export type GetMarketOverviewError = GetMarketOverviewErrors[keyof GetMarketOverviewErrors];
+
+export type GetMarketOverviewResponses = {
+    /**
+     * The current market overview, with a state for every feed.
+     */
+    200: MarketOverview;
+};
+
+export type GetMarketOverviewResponse = GetMarketOverviewResponses[keyof GetMarketOverviewResponses];
+
+export type GetHourlyThresholdMarketsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/v1/market/hourly-thresholds';
+};
+
+export type GetHourlyThresholdMarketsErrors = {
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    404: Problem;
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    default: Problem;
+};
+
+export type GetHourlyThresholdMarketsError = GetHourlyThresholdMarketsErrors[keyof GetHourlyThresholdMarketsErrors];
+
+export type GetHourlyThresholdMarketsResponses = {
+    /**
+     * The hourly threshold contracts, with a state for every asset.
+     */
+    200: HourlyThresholdMarkets;
+};
+
+export type GetHourlyThresholdMarketsResponse = GetHourlyThresholdMarketsResponses[keyof GetHourlyThresholdMarketsResponses];
 
 export type GetLivenessData = {
     body?: never;

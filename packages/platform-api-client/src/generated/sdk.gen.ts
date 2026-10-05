@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { GetLivenessData, GetLivenessErrors, GetLivenessResponses, GetPaperBudgetData, GetPaperBudgetErrors, GetPaperBudgetResponses, GetPaperPerformanceData, GetPaperPerformanceErrors, GetPaperPerformanceResponses, GetPaperPerformanceSummaryData, GetPaperPerformanceSummaryErrors, GetPaperPerformanceSummaryResponses, GetPlatformStatusData, GetPlatformStatusErrors, GetPlatformStatusResponses, GetReadinessData, GetReadinessErrors, GetReadinessResponses } from './types.gen';
+import type { GetHourlyThresholdMarketsData, GetHourlyThresholdMarketsErrors, GetHourlyThresholdMarketsResponses, GetLivenessData, GetLivenessErrors, GetLivenessResponses, GetMarketOverviewData, GetMarketOverviewErrors, GetMarketOverviewResponses, GetPaperBudgetData, GetPaperBudgetErrors, GetPaperBudgetResponses, GetPaperPerformanceData, GetPaperPerformanceErrors, GetPaperPerformanceResponses, GetPaperPerformanceSummaryData, GetPaperPerformanceSummaryErrors, GetPaperPerformanceSummaryResponses, GetPlatformStatusData, GetPlatformStatusErrors, GetPlatformStatusResponses, GetReadinessData, GetReadinessErrors, GetReadinessResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -49,6 +49,34 @@ export const getPaperPerformanceSummary = <ThrowOnError extends boolean = false>
  * Intended for on-demand reads rather than polling: the document is large. Every field is rebuilt from the stored record rather than passed through, so a field withdrawn from this contract cannot reappear from an older stored document, and an unknown field in the stored record is dropped rather than served.
  */
 export const getPaperPerformance = <ThrowOnError extends boolean = false>(options?: Options<GetPaperPerformanceData, ThrowOnError>): RequestResult<GetPaperPerformanceResponses, GetPaperPerformanceErrors, ThrowOnError> => (options?.client ?? client).get<GetPaperPerformanceResponses, GetPaperPerformanceErrors, ThrowOnError>({ url: '/v1/paper/performance', ...options });
+
+/**
+ * Read the current public market overview.
+ *
+ * Public market data for the assets both fifteen-minute prediction venues list: the spot snapshot with its seven-day series, each venue's current quote for the cycle now trading, the distance from the cycle's settlement reference, a weekly price history, and the headline list.
+ *
+ * Market data only. There is no forecast, no entry signal, no fill estimate and no ranking by any model or policy: the assets are published in registry order, and every derived number here is arithmetic over values published beside it in the same response.
+ *
+ * Freshness is explicit. Each feed in `feeds` carries `fresh`, `stale` or `unavailable`, the time this API obtained its value, and a fixed reason code when it is not fresh. `stale` means a refresh failed and the previous value is still inside its five-minute limit; past that the feed is `unavailable` and the members it would have filled are absent — never zero, and never inferred. `fetchedAt` is always this API's own clock: these providers publish no source time, so none is invented. A total upstream outage is still a 200 whose every feed says `unavailable`.
+ *
+ * Where this response uses the exchange's one-minute series — the cycle's settlement reference, the current price derived from it, and the realized volatility in `basis` — only finished minutes are used. The minute still forming is dropped, so a published close always describes a minute that completed.
+ *
+ * No caller-facing refresh control exists. Each feed has its own server-side lifetime and concurrent callers share one refresh, so asking more often cannot make this API ask a provider more often.
+ */
+export const getMarketOverview = <ThrowOnError extends boolean = false>(options?: Options<GetMarketOverviewData, ThrowOnError>): RequestResult<GetMarketOverviewResponses, GetMarketOverviewErrors, ThrowOnError> => (options?.client ?? client).get<GetMarketOverviewResponses, GetMarketOverviewErrors, ThrowOnError>({ url: '/v1/market/overview', ...options });
+
+/**
+ * Read the hourly above/below threshold contracts and their model probabilities.
+ *
+ * One venue's "settles above a strike" and "settles below a strike" contracts for the hour now trading, for every registry asset, each with the probability a zero-drift log-normal diffusion gives it from recent realized volatility.
+ *
+ * Research and observation only. The probability beside a quote is arithmetic over public data whose inputs — the current price, the volatility estimate and the sample count — are published with it; it is not advice, not a position and not an entry decision. The difference from the asking price is published because it is the obvious subtraction.
+ *
+ * The current price and the volatility sample come from finished one-minute candles only: the minute still forming is dropped before either is computed, so the price is the last completed minute's close and the newest return in the sample describes a whole minute.
+ *
+ * Per-asset degradation is normal and is expressed inside a 200. An asset whose listing could not be read, or that has no exact one-hour group trading, carries its reasons in `unavailableReasons` and omits the numbers it cannot support. A listing that offered one usable side publishes that side and names the other. `marketDataAvailable` is true only for a complete, unambiguous pair.
+ */
+export const getHourlyThresholdMarkets = <ThrowOnError extends boolean = false>(options?: Options<GetHourlyThresholdMarketsData, ThrowOnError>): RequestResult<GetHourlyThresholdMarketsResponses, GetHourlyThresholdMarketsErrors, ThrowOnError> => (options?.client ?? client).get<GetHourlyThresholdMarketsResponses, GetHourlyThresholdMarketsErrors, ThrowOnError>({ url: '/v1/market/hourly-thresholds', ...options });
 
 /**
  * Confirm that the API process can answer HTTP requests.

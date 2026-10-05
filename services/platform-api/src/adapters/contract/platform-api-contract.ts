@@ -6,6 +6,8 @@ import Ajv2020Module, {
 import formatsModule, { type FormatsPlugin } from 'ajv-formats';
 import { parse } from 'yaml';
 
+import type { PublishedHourlyThresholds } from '../../domain/hourly-thresholds.js';
+import type { PublishedMarketOverview } from '../../domain/market-overview.js';
 import type {
   PublishedBudget,
   PublishedPerformance,
@@ -61,6 +63,23 @@ export type PaperPerformanceResponse = PublishedPerformance & {
   readonly schemaVersion: '1';
 };
 
+/**
+ * The market reads, as they go over the wire.
+ *
+ * Same envelope rule as the paper reads. Note what is not added here: no freshness
+ * member is synthesized at the edge, because freshness belongs to the feed that
+ * produced the value and is already in the view.
+ */
+export type MarketOverviewResponse = PublishedMarketOverview & {
+  readonly requestId: string;
+  readonly schemaVersion: '1';
+};
+
+export type HourlyThresholdMarketsResponse = PublishedHourlyThresholds & {
+  readonly requestId: string;
+  readonly schemaVersion: '1';
+};
+
 export interface ProblemResponse {
   readonly detail?: string;
   readonly errorCode: string;
@@ -73,6 +92,8 @@ export interface ProblemResponse {
 
 export interface PlatformApiContract {
   assertHealth(value: unknown): asserts value is HealthResponse;
+  assertHourlyThresholdMarkets(value: unknown): asserts value is HourlyThresholdMarketsResponse;
+  assertMarketOverview(value: unknown): asserts value is MarketOverviewResponse;
   assertPaperBudget(value: unknown): asserts value is PaperBudgetResponse;
   assertPaperPerformance(value: unknown): asserts value is PaperPerformanceResponse;
   assertPaperPerformanceSummary(value: unknown): asserts value is PaperPerformanceSummaryResponse;
@@ -177,6 +198,14 @@ export function createPlatformApiContract(source: string): PlatformApiContract {
 
   return {
     assertHealth: createAssertion<HealthResponse>('Health', validator('Health')),
+    assertHourlyThresholdMarkets: createAssertion<HourlyThresholdMarketsResponse>(
+      'HourlyThresholdMarkets',
+      validator('HourlyThresholdMarkets'),
+    ),
+    assertMarketOverview: createAssertion<MarketOverviewResponse>(
+      'MarketOverview',
+      validator('MarketOverview'),
+    ),
     // The read endpoints validate against the same document they are published
     // from, for the same reason the status endpoint does: a response that drifts
     // from the contract fails here, in this service, rather than in a client.
