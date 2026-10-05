@@ -71,16 +71,17 @@ locals {
 
   # The secret bindings this revision actually renders.
   #
-  # Cloud Run refuses a revision whose referenced secret does not exist, and the
-  # container plus its accessor grant are created by a maintainer-applied platform
-  # stack — not by this deploy, which holds no Secret Manager authority at all. So
-  # the binding is withheld until that has happened, and a routine deploy before it
-  # renders no reference and succeeds, with the API running with no projection
-  # configured and saying so through readiness (#217, ADR-0012).
+  # Enabled since #219, which merges only after the maintainer has applied the
+  # container and its accessor grant from the platform stack and entered the first
+  # secret version out of band (#217, ADR-0012). None of that is this deploy's to do —
+  # this apply holds no Secret Manager authority at all — so what happens here is a
+  # reference and nothing more.
   #
-  # Flipping `projection_secret_binding_enabled` to true is a one-line reviewed
-  # change, which is the point: enabling a credential path is a decision with a
-  # pull request behind it rather than a side effect of a release.
+  # The gate stays, switched on, because it is the off-switch: setting
+  # `projection_secret_binding_enabled` to false renders a revision that binds no
+  # secret, which contains a projection incident without reverting the port. Either
+  # direction is a reviewed one-line change, because a credential path is a decision
+  # with a pull request behind it rather than a side effect of a release.
   secret_environment = var.projection_secret_binding_enabled ? var.secret_environment : {}
 }
 

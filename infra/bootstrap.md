@@ -264,10 +264,10 @@ Cloud Run refuses a revision whose referenced secret does not exist, and the
 deployer identity that a merge deploys as holds **no Secret Manager role at all**,
 so none of the three is inside what a merge can do (#217).
 
-1. **Merge the change.** It declares the container and its single accessor grant in
-   the platform stack, declares the API's intent to read it in the api stack, and
-   leaves `projection_secret_binding_enabled = false` so the api deploy that
-   follows the merge references no secret and succeeds.
+1. **Merge the change** — done by #217. It declares the container and its single
+   accessor grant in the platform stack, declares the API's intent to read it in the
+   api stack, and left `projection_secret_binding_enabled = false` so the api deploy
+   that followed the merge referenced no secret and succeeded.
 2. **Apply the platform stack**, which creates the empty container and grants
    `roles/secretmanager.secretAccessor` on exactly that secret to exactly the API's
    own runtime identity:
@@ -307,16 +307,24 @@ so none of the three is inside what a merge can do (#217).
    not pass through this repository, an OpenTofu variable, a plan, state, a workflow
    input, or a job log. Nothing here holds or can reconstruct it. The SELECT-only
    database role it names is created at the database provider, not here.
-4. **Flip the binding on** — a reviewed one-line change setting
-   `projection_secret_binding_enabled` to `true` in `infra/stacks/api/variables.tf`.
-   The merge's own routine api deploy then renders the reference, and the revision's
-   readiness probe is the proof that the credential resolves and that the role is
-   SELECT-only: a revision whose projection is unreachable, or whose role holds more
-   than SELECT, never serves traffic.
+4. **Flip the binding on** — carried by #219, which sets
+   `projection_secret_binding_enabled` to `true` in `infra/stacks/api/variables.tf`
+   and nothing else. **That change merges only after steps 2 and 3 are confirmed
+   done**, which is why it is prepared as a draft: merging it while the container has
+   no version, or no container exists, makes Cloud Run refuse every revision the api
+   deploy creates. The merge's own routine api deploy then renders the reference, and
+   the revision's readiness probe is the proof that the credential resolves and that
+   the role is SELECT-only: a revision whose projection is unreachable, or whose role
+   holds more than SELECT, never serves traffic.
+
+Steps 2 and 3 are the maintainer's and leave no trace in this repository, so the
+dated evidence that they happened is the first api revision that passes readiness
+with the binding rendered. Until then, step 4 is written and unmerged.
 
 Rotation and revocation need none of this again: the grant and the reference pin
 `latest`, so adding a version takes effect on the next instance start without a
-deployment.
+deployment. Taking the reference back out is the same one-line change in reverse,
+and is how a projection incident is contained without reverting the port.
 
 ## Step 7 — prove state is recoverable
 
