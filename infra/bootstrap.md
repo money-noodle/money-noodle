@@ -301,6 +301,23 @@ so none of the three is inside what a merge can do (#217).
      a value. That is an ADR-0005 amendment and a bootstrap change, not a step in
      this procedure.
 
+   The maintainer chose the first route on 2026-10-05. A plan of this stack run
+   with a person's own credentials needs a quota project for the budget API, which
+   the pipeline's service account supplies implicitly and a user login does not:
+   without it the refresh of the existing budget is refused before any plan exists.
+   Set the provider's two standard switches first, naming this project:
+
+   ```sh
+   export USER_PROJECT_OVERRIDE=true
+   export GOOGLE_BILLING_PROJECT="$(gh variable get GCP_PROJECT_ID -R money-noodle/money-noodle)"
+   ```
+
+   Initialise against the platform state exactly as the workflow does
+   (`-backend-config="bucket=<state-bucket-prefix>-platform"`,
+   `-backend-config="prefix=stacks/platform"`), supply the stack's required
+   variables from the repository variables, and apply only a saved plan that reads
+   `2 to add, 0 to change, 0 to destroy`.
+
 3. **Add the secret version out of band**, in the provider's protected secret
    interface. This is the audited payload-ingress exception recorded in
    [`../docs/operations/delivery.md`](../docs/operations/delivery.md): the value must
