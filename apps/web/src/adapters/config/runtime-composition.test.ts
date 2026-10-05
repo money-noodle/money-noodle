@@ -74,20 +74,28 @@ describe('web invocation-time configuration composition', () => {
   );
   it('does not retain an earlier available observation after upstream failure or invalid configuration', async () => {
     install();
-    const fetch = vi
-      .fn<typeof globalThis.fetch>()
-      .mockResolvedValueOnce(
-        Response.json({
+    // The home page reads four operations per render (#212). Only the status read answers,
+    // and only on the first render: the rest of the page is irrelevant to what this is
+    // about, which is that a success is never carried into a later render.
+    let statusAnswers = true;
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      const { url } = input as Request;
+      if (url.endsWith('/v1/platform/status') && statusAnswers) {
+        return Response.json({
           asOf: '2026-08-29T12:34:56.000Z',
           requestId: 'synthetic-request',
           schemaVersion: '1',
           service: { name: 'platform-api', version: 'release-1.2.3' },
           state: 'available',
-        }),
-      )
-      .mockRejectedValue(new Error('private-upstream-marker'));
+        });
+      }
+      throw new Error('private-upstream-marker');
+    });
     vi.stubGlobal('fetch', fetch);
     expect(renderToStaticMarkup(await PlatformPage())).toContain('Available');
+    const renderedReads = fetch.mock.calls.length;
+    expect(renderedReads).toBe(4);
+    statusAnswers = false;
     const failed = renderToStaticMarkup(await PlatformPage());
     expect(failed).toContain('Status unknown');
     expect(failed).not.toContain('<time');
@@ -97,6 +105,7 @@ describe('web invocation-time configuration composition', () => {
     const response = getReadiness();
     expect(response.status).toBe(503);
     expect(await response.text()).not.toContain('private-config-marker');
-    expect(fetch).toHaveBeenCalledTimes(2);
+    // Two renders read, the misconfigured third read nothing at all.
+    expect(fetch).toHaveBeenCalledTimes(renderedReads * 2);
   });
 });

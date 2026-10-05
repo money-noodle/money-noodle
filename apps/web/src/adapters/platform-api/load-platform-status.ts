@@ -1,52 +1,24 @@
-import { randomBytes, randomUUID } from 'node:crypto';
-
-import { SpanKind, SpanStatusCode, context, propagation, trace } from '@opentelemetry/api';
+import { SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
 import { getPlatformStatus } from '@money-noodle/platform-api-client';
 
 import type { PlatformStatusObservation } from '../../presentation/platform-status-view-model';
+import {
+  createCorrelationContext,
+  resolveCorrelation,
+  type CorrelationContext,
+} from './correlation';
 import { isPlatformStatus } from './validate-platform-status';
 
 const DEFAULT_TIMEOUT_MS = 1_500;
 
-export interface CorrelationContext {
-  readonly requestId: string;
-  readonly traceparent: string;
-}
+export { createCorrelationContext };
+export type { CorrelationContext };
 
 export interface LoadPlatformStatusOptions {
   readonly baseUrl: string;
   readonly correlation?: CorrelationContext;
   readonly fetch?: typeof fetch;
   readonly timeoutMs?: number;
-}
-
-/**
- * A correlation context with no active span.
- *
- * Kept as the fallback for a runtime with no registered tracer — a unit test, a
- * build-time render — so the API still receives a well-formed, validatable
- * `traceparent`. It is explicitly *not* the production path: when telemetry is
- * registered, the header below is injected from a real active span, so the
- * API's server span is a genuine child rather than a child of an identifier
- * nothing ever recorded.
- */
-export function createCorrelationContext(): CorrelationContext {
-  const traceId = randomBytes(16).toString('hex');
-  const parentId = randomBytes(8).toString('hex');
-  return {
-    requestId: randomUUID(),
-    traceparent: `00-${traceId}-${parentId}-01`,
-  };
-}
-
-/** W3C headers for the current active span, or undefined when there is none. */
-function injectedCorrelation(requestId: string): CorrelationContext | undefined {
-  const carrier: Record<string, string> = {};
-  propagation.inject(context.active(), carrier);
-  const traceparent = carrier.traceparent;
-  return typeof traceparent === 'string' && traceparent.length > 0
-    ? { requestId, traceparent }
-    : undefined;
 }
 
 export async function loadPlatformStatus(
@@ -60,9 +32,7 @@ export async function loadPlatformStatus(
   // after it, because a span that starts when the response arrives measures
   // nothing useful.
   return tracer.startActiveSpan('platform-status.load', { kind: SpanKind.CLIENT }, async (span) => {
-    const requestId = options.correlation?.requestId ?? randomUUID();
-    const correlation =
-      options.correlation ?? injectedCorrelation(requestId) ?? createCorrelationContext();
+    const correlation = resolveCorrelation(options.correlation);
 
     try {
       const result = await getPlatformStatus({

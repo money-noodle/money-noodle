@@ -95,9 +95,13 @@ describe('evaluated telemetry correlation', () => {
     });
     expect(webTelemetry.enabled).toBe(true);
 
+    // Since #212 the page makes four reads, each under its own client span. The status
+    // read is the one whose span this contract follows into the API, so that request is
+    // the one kept; the last request sent would belong to a different span.
     let outgoing: Request | undefined;
     const fetchStub = vi.fn<typeof globalThis.fetch>().mockImplementation((input) => {
-      outgoing = input as Request;
+      const request = input as Request;
+      if (new URL(request.url).pathname === '/v1/platform/status') outgoing = request;
       return Promise.resolve(Response.json(status));
     });
     vi.stubGlobal('fetch', fetchStub);
@@ -203,7 +207,9 @@ describe('evaluated telemetry correlation', () => {
       exporters: { traces: failing },
     });
 
-    const fetchStub = vi.fn<typeof globalThis.fetch>().mockResolvedValue(Response.json(status));
+    // A response per read: a body can be consumed once, and the page reads four.
+    const respond = () => Promise.resolve(Response.json(status));
+    const fetchStub = vi.fn<typeof globalThis.fetch>().mockImplementation(respond);
     vi.stubGlobal('fetch', fetchStub);
 
     // Telemetry loss is degraded observability. It does not change what the
@@ -212,6 +218,8 @@ describe('evaluated telemetry correlation', () => {
     expect(html).toContain('Available');
     expect(html).toContain(status.asOf);
     await telemetry.flush();
-    expect(fetchStub).toHaveBeenCalledTimes(1);
+    // The status card plus the market overview and the two simulated records (#212),
+    // each read once: a failing export causes no retry.
+    expect(fetchStub).toHaveBeenCalledTimes(4);
   });
 });

@@ -69,10 +69,22 @@ describe.each(web)('evaluated web $run', (rendering) => {
     }
     expect(fetch).not.toHaveBeenCalled();
     const html = renderToStaticMarkup(await PlatformPage());
-    expect(fetch).toHaveBeenCalledTimes(1);
-    const request = fetch.mock.calls[0]?.[0] as Request;
-    expect(request.url).toBe(`${rendering.expected.origin}/v1/platform/status`);
-    expect(request.cache).toBe('no-store');
+    // Since #212 the home page reads four operations: the status card plus the market
+    // overview and the two simulated records. Each is read once, uncached, from the
+    // evaluated origin; the three that are answered with a status document here fail their
+    // own guards and render as unavailable, which is the point of asserting on the URLs
+    // rather than on the count alone.
+    expect(fetch).toHaveBeenCalledTimes(4);
+    const requests = fetch.mock.calls.map((call) => call[0] as Request);
+    expect(requests.map((request) => request.url).sort()).toEqual(
+      [
+        '/v1/market/overview',
+        '/v1/paper/budget',
+        '/v1/paper/performance/summary',
+        '/v1/platform/status',
+      ].map((path) => `${rendering.expected.origin}${path}`),
+    );
+    for (const request of requests) expect(request.cache).toBe('no-store');
     expect(html).toContain('Available');
     expect(html).toContain(status.asOf);
     for (const value of [
@@ -111,8 +123,12 @@ describe.each(web)('evaluated web $run', (rendering) => {
       expect(html).toContain('Status unknown');
       expect(html).not.toContain(status.asOf);
       expect(html).not.toContain('private-');
-      expect(fetch).toHaveBeenCalledTimes(1);
-      expect((fetch.mock.calls[0]?.[0] as Request).url).toBe(
+      // Every panel reports what it could not read, and none of them retries. Which
+      // notice appears depends on the failure: a refused connection is this site's own
+      // reachability, while an answer that is not this contract is the API's.
+      expect(html).toMatch(/Not available|API unreachable/u);
+      expect(fetch).toHaveBeenCalledTimes(4);
+      expect(fetch.mock.calls.map((call) => (call[0] as Request).url)).toContain(
         `${rendering.expected.origin}/v1/platform/status`,
       );
     },

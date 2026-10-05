@@ -133,12 +133,27 @@ test(
     await t.test('a normal journey shows the state and the API-provided time', async () => {
       const forwarded = await load('proxy');
 
+      // Since #212 the page reads four operations. The status read is the one this journey
+      // is about, and there must still be exactly one of it per render.
+      const status = forwarded.filter((read) => read.path === '/v1/platform/status');
       assert.equal(
-        forwarded.length,
+        status.length,
         1,
         'one page render must make exactly one upstream status request',
       );
-      const [observation] = forwarded;
+      // The simulated reads reach the packaged API too, and it refuses them: this journey
+      // configures no read model, so the real artifacts' refusal path is exercised here.
+      const paper = forwarded.filter((read) => read.path.startsWith('/v1/paper/'));
+      assert.equal(paper.length, 2, 'the page reads the two simulated summaries');
+      for (const read of paper) {
+        assert.equal(read.status, 503, 'a journey with no read model must refuse a paper read');
+      }
+      // The public market read is never sent to a third party from a CI runner.
+      assert.ok(
+        fixture.unproxied.some((path) => path.startsWith('/v1/market/')),
+        'the fixture must answer the public market read itself',
+      );
+      const [observation] = status;
       assert.equal(observation.status, 200);
       assert.match(observation.asOf, RFC_3339, 'the packaged API must supply an RFC 3339 time');
 
@@ -184,7 +199,7 @@ test(
 
     await t.test('recovery after a failure needs no redeployment', async () => {
       const forwarded = await load('proxy');
-      assert.equal(forwarded.length, 1);
+      assert.equal(forwarded.filter((read) => read.path === '/v1/platform/status').length, 1);
       const title = (await page.locator('#status-title').innerText()).trim();
       assert.ok(['Available', 'Degraded', 'Maintenance'].includes(title));
     });
