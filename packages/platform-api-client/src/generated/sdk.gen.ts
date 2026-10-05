@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { GetLivenessData, GetLivenessErrors, GetLivenessResponses, GetPlatformStatusData, GetPlatformStatusErrors, GetPlatformStatusResponses, GetReadinessData, GetReadinessErrors, GetReadinessResponses } from './types.gen';
+import type { GetLivenessData, GetLivenessErrors, GetLivenessResponses, GetPaperBudgetData, GetPaperBudgetErrors, GetPaperBudgetResponses, GetPaperPerformanceData, GetPaperPerformanceErrors, GetPaperPerformanceResponses, GetPaperPerformanceSummaryData, GetPaperPerformanceSummaryErrors, GetPaperPerformanceSummaryResponses, GetPlatformStatusData, GetPlatformStatusErrors, GetPlatformStatusResponses, GetReadinessData, GetReadinessErrors, GetReadinessResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -22,6 +22,33 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
  * Read the current public platform availability observation.
  */
 export const getPlatformStatus = <ThrowOnError extends boolean = false>(options?: Options<GetPlatformStatusData, ThrowOnError>): RequestResult<GetPlatformStatusResponses, GetPlatformStatusErrors, ThrowOnError> => (options?.client ?? client).get<GetPlatformStatusResponses, GetPlatformStatusErrors, ThrowOnError>({ url: '/v1/platform/status', ...options });
+
+/**
+ * Read the simulated bankroll and its most recent executions.
+ *
+ * The singleton simulated budget row and the executions recorded beside it, newest first. Amounts are US cents, as the source records them; the client decides how to display them.
+ *
+ * The record is never inferred. When the read model has published no budget row, or cannot be reached, or returns a record this API does not understand, the response is a problem document with 503 and a distinct code — never a zero balance and never an empty record.
+ */
+export const getPaperBudget = <ThrowOnError extends boolean = false>(options?: Options<GetPaperBudgetData, ThrowOnError>): RequestResult<GetPaperBudgetResponses, GetPaperBudgetErrors, ThrowOnError> => (options?.client ?? client).get<GetPaperBudgetResponses, GetPaperBudgetErrors, ThrowOnError>({ url: '/v1/paper/budget', ...options });
+
+/**
+ * Read the bounded forecast and simulated-trade summary.
+ *
+ * The small summary record a front page can poll: forecast accuracy counters, calibration progress, the simulated trade record, and the four most recent forecasts.
+ *
+ * `generatedAt` is the source system's own clock when it last wrote this summary, never this API's clock. No staleness threshold is applied: a summary of any age is served as published, and the times needed to judge its freshness are in the response.
+ */
+export const getPaperPerformanceSummary = <ThrowOnError extends boolean = false>(options?: Options<GetPaperPerformanceSummaryData, ThrowOnError>): RequestResult<GetPaperPerformanceSummaryResponses, GetPaperPerformanceSummaryErrors, ThrowOnError> => (options?.client ?? client).get<GetPaperPerformanceSummaryResponses, GetPaperPerformanceSummaryErrors, ThrowOnError>({ url: '/v1/paper/performance/summary', ...options });
+
+/**
+ * Read the full forecast and simulated-trade record.
+ *
+ * The complete analytical record: the full forecast summary with its segments, benchmarks, calibration bins and timeline, the simulated trade record, per-provider records, per-funding epochs, the bounded forecast history, and the optional cycle-path diagnostics.
+ *
+ * Intended for on-demand reads rather than polling: the document is large. Every field is rebuilt from the stored record rather than passed through, so a field withdrawn from this contract cannot reappear from an older stored document, and an unknown field in the stored record is dropped rather than served.
+ */
+export const getPaperPerformance = <ThrowOnError extends boolean = false>(options?: Options<GetPaperPerformanceData, ThrowOnError>): RequestResult<GetPaperPerformanceResponses, GetPaperPerformanceErrors, ThrowOnError> => (options?.client ?? client).get<GetPaperPerformanceResponses, GetPaperPerformanceErrors, ThrowOnError>({ url: '/v1/paper/performance', ...options });
 
 /**
  * Confirm that the API process can answer HTTP requests.

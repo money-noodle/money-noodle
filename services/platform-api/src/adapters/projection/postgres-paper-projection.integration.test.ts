@@ -17,6 +17,11 @@
 
 import { describe, expect, it } from 'vitest';
 
+import {
+  createGetPaperBudget,
+  createGetPaperPerformance,
+  createGetPaperPerformanceSummary,
+} from '../../application/read-paper-dashboard.js';
 import { MAX_EXECUTION_ROWS } from '../../domain/paper-projection.js';
 import { evaluateProjectionPrivileges } from '../../domain/projection-privileges.js';
 import { createPostgresProjectionClient } from './postgres-client.js';
@@ -99,5 +104,35 @@ describe.skipIf(!configured)('createPostgresPaperProjection against a real proje
     const projection = open();
     await projection.close();
     await expect(projection.close()).resolves.toBeUndefined();
+  });
+
+  // #210: the published reads against the real stored records. This is the only
+  // place the actual document the separate writer produces meets the validation
+  // this API applies to it, so a field that changed shape upstream surfaces here as
+  // a named path rather than as a 503 in production.
+  //
+  // A `not-published` outcome is a pass: the projection may legitimately have no
+  // row yet. An `invalid` outcome is a real finding and prints the path.
+  it.each([
+    ['budget', createGetPaperBudget],
+    ['performance summary', createGetPaperPerformanceSummary],
+    ['full performance record', createGetPaperPerformance],
+  ])('reads the published %s, or says honestly that there is none', async (_label, create) => {
+    const projection = open();
+    try {
+      const outcome = await create({ projection })();
+      if (!outcome.ok) {
+        expect(outcome.failure, `detail: ${outcome.detail ?? 'none'}`).toBe('not-published');
+        return;
+      }
+
+      // Published source times are the source's, normalized, and never this
+      // process's clock. A record stamped in the future would mean the opposite.
+      const published = outcome.value as { readonly sourceUpdatedAt: string };
+      expect(Number.isNaN(Date.parse(published.sourceUpdatedAt))).toBe(false);
+      expect(Date.parse(published.sourceUpdatedAt)).toBeLessThanOrEqual(Date.now() + 60_000);
+    } finally {
+      await projection.close();
+    }
   });
 });

@@ -15,11 +15,9 @@
 // reading the provider's own logs rather than this service's. That is the right
 // trade when the alternative is a connection string in a public job summary.
 
-export type ProjectionFailureCode =
-  | 'projection-privilege-probe-failed'
-  | 'projection-query-failed'
-  | 'projection-unavailable'
-  | 'projection-unexpected-shape';
+import type { ProjectionFailureCode } from '../../domain/paper-projection.js';
+
+export type { ProjectionFailureCode };
 
 const SAFE_MESSAGES: Readonly<Record<ProjectionFailureCode, string>> = Object.freeze({
   'projection-privilege-probe-failed': 'The projection privilege probe did not complete.',
@@ -39,6 +37,9 @@ export class ProjectionFailure extends Error {
 
   constructor(code: ProjectionFailureCode) {
     super(SAFE_MESSAGES[code]);
+    // Matched structurally by `projectionFailureCode` in the domain, which is how
+    // a use case tells an unreachable projection from an unreadable one without
+    // importing this adapter. Renaming this is a contract change.
     this.name = 'ProjectionFailure';
     this.code = code;
   }

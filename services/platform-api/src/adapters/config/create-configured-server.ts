@@ -2,6 +2,11 @@ import { readFileSync } from 'node:fs';
 
 import { createCheckProjectionReadiness } from '../../application/check-projection-readiness.js';
 import { createGetPlatformStatus } from '../../application/get-platform-status.js';
+import {
+  createGetPaperBudget,
+  createGetPaperPerformance,
+  createGetPaperPerformanceSummary,
+} from '../../application/read-paper-dashboard.js';
 import type { PaperProjectionPort } from '../../domain/paper-projection.js';
 import { createPlatformApiContract } from '../contract/platform-api-contract.js';
 import { createHttpServer } from '../http/create-http-server.js';
@@ -87,11 +92,22 @@ export async function createConfiguredServer(
   const checkReadiness = createCheckProjectionReadiness({
     expectedTables: expectedTableList(projectionConfig.tables),
     projection,
-    // This slice adds no read endpoint (#210 does), so a revision with no
-    // projection configured still serves its entire declared contract and is
-    // honestly ready. The day a read endpoint depends on the projection, this
-    // becomes `false` and a missing projection is an unready revision.
-    readyWithoutProjection: true,
+    // #210 added three read endpoints over the projection, so a revision without a
+    // working, SELECT-only one cannot serve its declared contract and must never
+    // report ready. That is the fail-closed half of ADR-0012, and from here it is
+    // also the gate on a deployment: Cloud Run has no separate readiness probe, so
+    // a revision that never reports ready never receives traffic and the previous
+    // one keeps serving.
+    //
+    // Cold start is the cost, and it is accepted rather than hidden. The projection's
+    // provider autosuspends, so the first connect after an idle period can take
+    // seconds; the driver waits up to ten, while the startup probe times out at three
+    // and is retried ten times over roughly half a minute. An early probe can
+    // therefore fail while the connection it opened is still being established, and
+    // a later probe in the same window finds the pool warm. A database that stays
+    // asleep longer than the startup window fails the revision, which is the correct
+    // outcome: traffic stays where it is.
+    readyWithoutProjection: false,
   });
 
   const contract = createPlatformApiContract(readFileSync(config.contractPath, 'utf8'));
@@ -103,6 +119,10 @@ export async function createConfiguredServer(
   const server = createHttpServer({
     checkReadiness,
     contract,
+    // One port instance, three use cases, no cache between them: a read reads.
+    getPaperBudget: createGetPaperBudget({ projection }),
+    getPaperPerformance: createGetPaperPerformance({ projection }),
+    getPaperPerformanceSummary: createGetPaperPerformanceSummary({ projection }),
     getPlatformStatus,
     service: config.service,
     telemetry,

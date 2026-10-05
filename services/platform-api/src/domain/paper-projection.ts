@@ -129,6 +129,41 @@ export interface PaperProjectionPort {
 /** The largest number of execution rows a single read may return. */
 export const MAX_EXECUTION_ROWS = 500;
 
+/**
+ * How a port call failed, in the only vocabulary the inner layers get.
+ *
+ * The adapter reduces everything a driver said to one of these before throwing
+ * (`adapters/projection/projection-errors.ts`), and the codes live here rather
+ * than there for a layering reason: a use case has to tell "could not reach it"
+ * apart from "it returned something I cannot read", and a use case may not import
+ * an adapter. So the vocabulary is part of the port, and the adapter implements it.
+ */
+export const PROJECTION_FAILURE_CODES = Object.freeze([
+  'projection-privilege-probe-failed',
+  'projection-query-failed',
+  'projection-unavailable',
+  'projection-unexpected-shape',
+] as const);
+
+export type ProjectionFailureCode = (typeof PROJECTION_FAILURE_CODES)[number];
+
+/**
+ * The code of a port failure, or `null` for anything else.
+ *
+ * Read structurally, so no inner layer needs the adapter's class. Deliberately
+ * strict about both fields: an arbitrary object carrying a `code` is not a port
+ * failure, and treating one as if it were would let a thrown value from anywhere
+ * choose how this service reports an outage.
+ */
+export function projectionFailureCode(error: unknown): ProjectionFailureCode | null {
+  if (typeof error !== 'object' || error === null) return null;
+  const candidate = error as { readonly code?: unknown; readonly name?: unknown };
+  if (candidate.name !== 'ProjectionFailure' || typeof candidate.code !== 'string') return null;
+  return (PROJECTION_FAILURE_CODES as readonly string[]).includes(candidate.code)
+    ? (candidate.code as ProjectionFailureCode)
+    : null;
+}
+
 /** One grant the database reported for the connected role. */
 export interface ObservedTableGrant {
   readonly privilege: string;
