@@ -3,11 +3,17 @@ import { readFileSync } from 'node:fs';
 import { createCheckProjectionReadiness } from '../../application/check-projection-readiness.js';
 import { createGetPlatformStatus } from '../../application/get-platform-status.js';
 import {
+  createGetHourlyThresholdMarkets,
+  createGetMarketOverview,
+} from '../../application/read-market-data.js';
+import {
   createGetPaperBudget,
   createGetPaperPerformance,
   createGetPaperPerformanceSummary,
 } from '../../application/read-paper-dashboard.js';
+import type { MarketFeedPort } from '../../domain/market-feeds.js';
 import type { PaperProjectionPort } from '../../domain/paper-projection.js';
+import { createMarketFeeds } from '../feeds/create-market-feeds.js';
 import { createPlatformApiContract } from '../contract/platform-api-contract.js';
 import { createHttpServer } from '../http/create-http-server.js';
 import { createPostgresProjectionClient } from '../projection/postgres-client.js';
@@ -31,6 +37,11 @@ export interface ConfiguredServerOverrides {
     CreateTelemetryOptions,
     'exporters' | 'tokenSource' | 'degradationSink' | 'allowLoopbackEndpointForTests' | 'endpoint'
   >;
+  /**
+   * Test seam for the market feed port, so the public reads can be exercised
+   * against recorded payloads without reaching a provider.
+   */
+  readonly marketFeeds?: MarketFeedPort;
   /**
    * Test seam for the projection port, so readiness can be exercised against a
    * double. `null` is "configured as absent" and is distinct from omitting the
@@ -110,6 +121,13 @@ export async function createConfiguredServer(
     readyWithoutProjection: false,
   });
 
+  // The feed port holds the bounded in-process cache, so it is constructed once per
+  // process rather than per request. Constructing it reaches no provider and needs no
+  // credential: every endpoint behind it is public and keyless. Readiness does not
+  // consult it — a provider outage is published in a 200, and is never a reason for
+  // this revision to stop serving or for the platform to restart it.
+  const marketFeeds = overrides.marketFeeds ?? createMarketFeeds();
+
   const contract = createPlatformApiContract(readFileSync(config.contractPath, 'utf8'));
   const getPlatformStatus = createGetPlatformStatus({
     clock: { now: () => new Date() },
@@ -119,6 +137,8 @@ export async function createConfiguredServer(
   const server = createHttpServer({
     checkReadiness,
     contract,
+    getHourlyThresholdMarkets: createGetHourlyThresholdMarkets({ feeds: marketFeeds }),
+    getMarketOverview: createGetMarketOverview({ feeds: marketFeeds }),
     // One port instance, three use cases, no cache between them: a read reads.
     getPaperBudget: createGetPaperBudget({ projection }),
     getPaperPerformance: createGetPaperPerformance({ projection }),

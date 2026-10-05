@@ -4,6 +4,10 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 
 import type { GetPlatformStatus } from '../../application/get-platform-status.js';
 import type {
+  GetHourlyThresholdMarkets,
+  GetMarketOverview,
+} from '../../application/read-market-data.js';
+import type {
   GetPaperBudget,
   GetPaperPerformance,
   GetPaperPerformanceSummary,
@@ -87,6 +91,16 @@ export interface HttpServerDependencies {
   }>;
   readonly contract: PlatformApiContract;
   readonly generateRequestId?: () => string;
+  /**
+   * The two public market reads.
+   *
+   * Neither has a failure outcome, and that is deliberate rather than optimistic:
+   * every feed answers with a state, so an upstream outage is a two hundred whose
+   * feeds say `unavailable`. A thrown error from one of these is a defect in this
+   * service and becomes a 500 like any other.
+   */
+  readonly getHourlyThresholdMarkets: GetHourlyThresholdMarkets;
+  readonly getMarketOverview: GetMarketOverview;
   readonly getPaperBudget: GetPaperBudget;
   readonly getPaperPerformance: GetPaperPerformance;
   readonly getPaperPerformanceSummary: GetPaperPerformanceSummary;
@@ -227,6 +241,22 @@ export function createHttpServer(dependencies: HttpServerDependencies): FastifyI
 
     const response = { ...outcome.value, requestId: request.id, schemaVersion: '1' as const };
     dependencies.contract.assertPaperPerformance(response);
+    return reply.headers(requestIdHeader(request)).send(response);
+  });
+
+  // The market reads. No failure branch: the view carries its own per-feed state,
+  // and an upstream outage is published rather than signalled with a status code.
+  server.get('/v1/market/overview', async (request, reply) => {
+    const overview = await dependencies.getMarketOverview();
+    const response = { ...overview, requestId: request.id, schemaVersion: '1' as const };
+    dependencies.contract.assertMarketOverview(response);
+    return reply.headers(requestIdHeader(request)).send(response);
+  });
+
+  server.get('/v1/market/hourly-thresholds', async (request, reply) => {
+    const markets = await dependencies.getHourlyThresholdMarkets();
+    const response = { ...markets, requestId: request.id, schemaVersion: '1' as const };
+    dependencies.contract.assertHourlyThresholdMarkets(response);
     return reply.headers(requestIdHeader(request)).send(response);
   });
 
