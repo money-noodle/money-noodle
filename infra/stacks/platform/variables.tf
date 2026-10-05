@@ -115,9 +115,12 @@ variable "secret_consumer_services" {
 
     This is the only place `secretAccessor` is granted. The service stacks declare
     which secrets they intend to read, and the module validates that a bound
-    reference is a declared one, but they create no Secret Manager IAM: the
-    deployer identity that runs a routine deploy holds no Secret Manager role, so
-    a grant declared there could only fail the deploy (#217).
+    reference is a declared one, but they create no Secret Manager IAM: the deployer
+    identity that runs a routine deploy can mutate nothing in Secret Manager, so a
+    grant declared there could only fail the deploy (#217). Since 2026-10-05 that
+    identity does hold secret-level metadata read on each declared container, which
+    is what lets it plan this stack at all and carries no access to a value (#224,
+    ADR-0005).
   EOT
   type        = map(list(string))
 

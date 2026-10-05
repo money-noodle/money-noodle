@@ -193,6 +193,11 @@ export const RESOURCE_OPERATIONS = Object.freeze({
     'infrastructure.apply',
     'Per-secret read access for the one workload declared as its consumer, applied with the container it applies to rather than by the release that references it: a release identity cannot set secret IAM, and a grant declared in the release path could only fail the deploy that needed it (#217).',
   ),
+  'modules/secret-store:google_secret_manager_secret_iam_member.metadata_reader': own(
+    'stack-executor',
+    'infrastructure.apply',
+    'Secret-level metadata read for the identity that plans this stack. Without it a plan refreshing a declared container is refused outright, which blocked every routine deploy after the first container existed (#224); it carries no secretmanager.versions.access, so the planner can see that a secret exists and never what it holds.',
+  ),
   'modules/telemetry-retention:google_logging_project_bucket_config.default': own(
     'telemetry-configurator',
     'telemetry.configuration.change',

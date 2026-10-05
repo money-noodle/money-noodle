@@ -68,3 +68,14 @@ output "secret_accessor_register" {
   EOT
   value       = module.secret_store.accessor_register
 }
+
+output "secret_metadata_reader_register" {
+  description = <<-EOT
+    Members holding secret-level metadata read per declared secret, and the role they
+    hold. The deployer is here so that a pipeline plan of this stack can refresh the
+    containers and their IAM members; it is deliberately absent from
+    `secret_accessor_register`, because seeing that a secret exists is not reading it
+    (#224). Contains no secret value.
+  EOT
+  value       = module.secret_store.metadata_reader_register
+}

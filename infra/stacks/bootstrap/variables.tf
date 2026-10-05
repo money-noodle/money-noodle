@@ -48,9 +48,14 @@ variable "deployer_roles" {
     # role is confined to Artifact Registry and also covers pushing images.
     "roles/artifactregistry.admin",
     "roles/iam.serviceAccountUser", # act as the runtime identities it deploys
-    # No Secret Manager administrative role: it could grant the deployer
-    # secretAccessor and collapse the custody boundary. Revisit with the first
-    # real secret and a separate policy-administration design.
+    # No Secret Manager role at project level, and no administrative one anywhere:
+    # an administrative role could grant the deployer secretAccessor and collapse
+    # the custody boundary. The first real secret arrived and did need one thing
+    # here — a plan must refresh the container it declares — and that was answered
+    # at secret level in the maintainer-applied platform stack rather than by a
+    # role in this list: `roles/secretmanager.viewer` on each declared container,
+    # carrying no versions.access and no mutation (#224, ADR-0005 2026-10-05
+    # amendment).
     "roles/logging.admin",     # configure log buckets, sinks, and retention
     "roles/monitoring.editor", # notification channels and dashboards
     "roles/serviceusage.serviceUsageAdmin",

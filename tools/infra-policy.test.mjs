@@ -407,11 +407,12 @@ test('a service apply declares no identity, project-level, or secret IAM resourc
   // #178: the first authorized `api` apply failed on `iam.serviceAccounts.create`
   // because the module asked the deployer to create its runtime identity. #217: the
   // first routine deploy after #216 failed again, on a Secret Manager IAM member —
-  // the deployer holds no Secret Manager role at all, and the secret container is
+  // the deployer can mutate nothing in Secret Manager, and the secret container is
   // created by a maintainer-applied stack, so a grant declared in the release path
-  // could only fail the deploy that needed it. The deployer holds no identity,
-  // project-IAM or secret authority by design, so a plan for either service must
-  // contain Cloud Run resources and service-level bindings only.
+  // could only fail the deploy that needed it. The deployer administers no identity
+  // and no project IAM, and in Secret Manager it holds secret-level metadata read
+  // and nothing else (#224), so a plan for either service must contain Cloud Run
+  // resources and service-level bindings only.
   const forbidden = [
     [/resource\s+"google_service_account"/, 'a service account'],
     [/resource\s+"google_project_iam_(member|binding|policy)"/, 'a project IAM binding'],
@@ -438,7 +439,7 @@ test('a service apply declares no identity, project-level, or secret IAM resourc
       for (const [pattern, description] of forbidden) {
         assert.ok(
           !pattern.test(source),
-          `${relative(path)} declares ${description}. A service apply runs as the deployer, which holds no identity, project-IAM or Secret Manager authority (ADR-0005, 2026-09-19 amendment; #217); declare it in a maintainer-applied stack instead.`,
+          `${relative(path)} declares ${description}. A service apply runs as the deployer, which administers no identity or project IAM and can mutate nothing in Secret Manager (ADR-0005, 2026-09-19 and 2026-10-05 amendments; #217, #224); declare it in a maintainer-applied stack instead.`,
         );
       }
     }
@@ -510,6 +511,104 @@ test('the deployer cannot read secret values or hold administrative roles', () =
       `the deployer role validation must explicitly reject ${rejected} rather than merely omitting it`,
     );
   }
+});
+
+test('the only Secret Manager grant the deployer can receive is secret-level metadata read', () => {
+  // #224: once the first container existed, every pipeline plan of the platform
+  // stack refreshed it as the deployer and failed with 403 on
+  // `secretmanager.secrets.get`, so no routine deploy could run. The resolution is a
+  // read-only grant at secret level. These assertions are what keep it read-only and
+  // at secret level: the roles that may appear anywhere under `infra/`, where the
+  // plan-only grant is declared, and who receives it.
+  const allowedRoles = new Set([
+    'roles/secretmanager.secretAccessor',
+    'roles/secretmanager.viewer',
+  ]);
+
+  for (const path of [...tofuFiles, ...testFiles]) {
+    const source = read(path);
+    // Every Secret Manager role this configuration *grants*, as a `role =` or
+    // `…_role =` assignment. A role named in a refusal list — the bootstrap
+    // validation that rejects `roles/secretmanager.admin`, for instance — is the
+    // opposite of a grant and is deliberately not matched.
+    for (const [, role] of source.matchAll(
+      /\b(?:role|[a-z_]*_role)\s*=\s*"(roles\/secretmanager\.[A-Za-z.]+)"/g,
+    )) {
+      assert.ok(
+        allowedRoles.has(role),
+        `${relative(path)} grants ${role}. Secret Manager carries exactly two grants in this platform: secretAccessor for a declared value consumer, and viewer at secret level for the identity that must plan the container (#224).`,
+      );
+    }
+
+    // A permission granting `versions.access` reads values. It is matched as a
+    // quoted literal, which is the only way it could reach a provider — a custom
+    // role's permission list or a role name. Prose about its absence uses backticks
+    // and is deliberately not caught here.
+    assert.ok(
+      !/"[a-z.]*secretmanager\.versions\.access"/.test(source),
+      `${relative(path)} declares secretmanager.versions.access. Only a declared runtime consumer reads a value, and it does so through secretAccessor rather than through a hand-built role.`,
+    );
+  }
+
+  // No Secret Manager role at project level, by any resource, and no custom role: a
+  // `google_project_iam_custom_role` in a pipeline-planned stack would itself need
+  // `iam.roles.get` to refresh, which the deployer does not have, so it would move
+  // the same denial rather than remove it.
+  for (const path of tofuFiles) {
+    const source = read(path);
+    assert.ok(
+      !/resource\s+"google_project_iam_custom_role"/.test(source),
+      `${relative(path)} declares a project custom role. The deployer cannot refresh one (no iam.roles.get), so a custom role moves the 403 of #224 instead of fixing it.`,
+    );
+    const projectBindings = source.match(
+      /resource\s+"google_project_iam_(?:member|binding|policy)"[\s\S]*?\n}/g,
+    );
+    for (const binding of projectBindings ?? []) {
+      assert.ok(
+        !/roles\/secretmanager/.test(binding),
+        `${relative(path)} grants a Secret Manager role at project level. Every Secret Manager grant in this platform is bound to one secret (ADR-0005).`,
+      );
+    }
+  }
+
+  // The plan-only grant is declared beside the container, as a secret-level member,
+  // with its role fixed in the module rather than taken as an input.
+  const store = read(join(infraRoot, 'modules', 'secret-store', 'main.tf'));
+  assert.match(
+    store,
+    /resource\s+"google_secret_manager_secret_iam_member"\s+"metadata_reader"/,
+    'the secret store must declare the plan-only grant as a secret-level IAM member',
+  );
+  assert.match(
+    store,
+    /metadata_reader_role\s*=\s*"roles\/secretmanager\.viewer"/,
+    'the plan-only role must be fixed in the module; an input here is where a future edit would pass admin',
+  );
+  assert.ok(
+    !/variable\s+"metadata_reader_role"/.test(
+      read(join(infraRoot, 'modules', 'secret-store', 'variables.tf')),
+    ),
+    'the plan-only role must not be configurable',
+  );
+
+  // And the deployer receives exactly that, from the maintainer-applied stack, while
+  // never appearing among the identities that can read a value.
+  const platform = read(join(infraRoot, 'stacks', 'platform', 'main.tf'));
+  const metadataLocal = platform.match(
+    /secret_metadata_reader_members\s*=\s*\{[\s\S]*?\n {2}\}/,
+  )?.[0];
+  assert.ok(metadataLocal, 'the platform stack must declare who may plan the secret containers');
+  assert.match(
+    metadataLocal,
+    /local\.deployer/,
+    'the plan-only reader is the deployer, named from the bootstrap contract rather than written down',
+  );
+  const accessorLocal = platform.match(/secret_accessor_members\s*=\s*\{[\s\S]*?\n {2}\}/)?.[0];
+  assert.ok(accessorLocal, 'the platform stack must declare who may read each secret');
+  assert.ok(
+    !/local\.deployer/.test(accessorLocal),
+    'the deployer must never be derived into the accessor list: it plans containers and does not read contents',
+  );
 });
 
 test('budget management has an explicit billing-account authority boundary', () => {

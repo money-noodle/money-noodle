@@ -261,8 +261,10 @@ The read-only paper projection the platform API reads (ADR-0012) needs three
 things a routine deploy cannot produce — the secret container, its access grant,
 and its value — and they arrive in the order below. The order is not a preference:
 Cloud Run refuses a revision whose referenced secret does not exist, and the
-deployer identity that a merge deploys as holds **no Secret Manager role at all**,
-so none of the three is inside what a merge can do (#217).
+deployer identity that a merge deploys as **can mutate nothing in Secret Manager**,
+so none of the three is inside what a merge can do (#217). Step 5 adds the one
+thing that identity does need, and it needs it only to *plan*: metadata read on the
+containers this stack declares (#224).
 
 1. **Merge the change** — done by #217. It declares the container and its single
    accessor grant in the platform stack, declares the API's intent to read it in the
@@ -286,7 +288,7 @@ so none of the three is inside what a merge can do (#217).
    and no secret **version**.
 
    **Authority precondition.** That apply authenticates as the federated deployer,
-   whose enumerated roles include nothing from Secret Manager — it can neither
+   whose enumerated roles include no Secret Manager mutation at all — it can neither
    create the container nor set IAM on it. Until that is resolved the apply fails on
    `secretmanager.secrets.create`. Two ways to resolve it, and the choice is the
    maintainer's:
@@ -324,19 +326,44 @@ so none of the three is inside what a merge can do (#217).
    not pass through this repository, an OpenTofu variable, a plan, state, a workflow
    input, or a job log. Nothing here holds or can reconstruct it. The SELECT-only
    database role it names is created at the database provider, not here.
-4. **Flip the binding on** — carried by #219, which sets
-   `projection_secret_binding_enabled` to `true` in `infra/stacks/api/variables.tf`
-   and nothing else. **That change merges only after steps 2 and 3 are confirmed
-   done**, which is why it is prepared as a draft: merging it while the container has
-   no version, or no container exists, makes Cloud Run refuse every revision the api
-   deploy creates. The merge's own routine api deploy then renders the reference, and
+4. **Flip the binding on** — done by #219, merged once steps 2 and 3 were confirmed,
+   which was the whole reason it was a separate change: merging it while the container
+   had no version, or no container existed, would make Cloud Run refuse every revision
+   the api deploy creates. The first routine api deploy to render the reference has
+   not run yet, because the plan failure of step 5 skipped the deploy. When it does,
    the revision's readiness probe is the proof that the credential resolves and that
    the role is SELECT-only: a revision whose projection is unreachable, or whose role
    holds more than SELECT, never serves traffic.
 
-Steps 2 and 3 are the maintainer's and leave no trace in this repository, so the
-dated evidence that they happened is the first api revision that passes readiness
-with the binding rendered. Until then, step 4 is written and unmerged.
+5. **Let the pipeline plan what now exists** — carried by #224, and the last
+   maintainer apply in this sequence. The moment step 2 created the container, every
+   pipeline plan of this stack began refreshing it as the deployer and being refused:
+   `403 Permission 'secretmanager.secrets.get' denied` in `plan platform`, with the
+   deploy skipped, so no routine deploy could run and the scheduled drift plan was
+   blind the same way. #224 declares `roles/secretmanager.viewer` for the deployer,
+   bound to each declared container: it reads the container and its IAM policy,
+   carries no `secretmanager.versions.access` and nothing that mutates (ADR-0005,
+   2026-10-05 amendment).
+
+   Apply it the same way as step 2, with the same quota-project switches, and read
+   the plan before approving. It must be **additions only** — one
+   `google_secret_manager_secret_iam_member` per declared container, which today is
+   one:
+
+   ```text
+   Plan: 1 to add, 0 to change, 0 to destroy.
+   ```
+
+   If the plan proposes anything against `module.secret_store.google_secret_manager_secret.secret`
+   or against the existing `…secret_iam_member.accessor`, stop: this change must not
+   touch the container or the accessor grant, and a change there means something else
+   drifted. After the apply, the next pipeline plan of this stack succeeds, and the
+   failed Delivery run can be re-run.
+
+Steps 2, 3 and 5 are the maintainer's. Steps 2 and 3 leave no trace in this
+repository, so the dated evidence that they happened is the first api revision that
+passes readiness with the binding rendered. Step 5 is visible as its own effect: a
+pipeline plan of this stack that completes.
 
 Rotation and revocation need none of this again: the grant and the reference pin
 `latest`, so adding a version takes effect on the next instance start without a

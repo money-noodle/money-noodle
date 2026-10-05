@@ -32,3 +32,19 @@ output "accessor_register" {
     secret_id => sort(members)
   }
 }
+
+output "metadata_reader_register" {
+  description = <<-EOT
+    Members holding secret-level metadata read per declared secret, and the role they
+    hold. Published so "who can see that this secret exists" is answerable separately
+    from "who can read it", which is `accessor_register`. Contains no secret value,
+    and a metadata reader cannot obtain one.
+  EOT
+  value = {
+    for secret_id, members in var.metadata_reader_members :
+    secret_id => {
+      members = sort(members)
+      role    = local.metadata_reader_role
+    }
+  }
+}
