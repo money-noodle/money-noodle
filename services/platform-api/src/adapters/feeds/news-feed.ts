@@ -22,7 +22,10 @@ import { MAX_HEADLINES } from '../../domain/market-registry.js';
 import { FeedFailure } from './feed-failure.js';
 import type { FeedHttpClient } from './feed-http-client.js';
 
-const FEED_URL = 'https://www.coindesk.com/arc/outboundfeeds/rss/';
+// No trailing slash: the publisher answers the slashed form with a redirect to this
+// one, and the feed client refuses redirects by design, so the slashed address is
+// simply unavailable from here.
+const FEED_URL = 'https://www.coindesk.com/arc/outboundfeeds/rss';
 
 /** The longest headline published. Past this it is cut at a word and marked. */
 export const MAX_HEADLINE_LENGTH = 300;

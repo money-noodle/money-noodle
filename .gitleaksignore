@@ -1,2 +1,7 @@
 # Synthetic credential-shaped test fixture on the #70 claim branch; assembled at runtime from the next commit on. Not a secret.
 9de402ac7f4ab6e1f366ef9d04a4a03a8b31a5ff:tools/delivery-control-policy.test.mjs:generic-api-key:1126
+# Synthetic simulated-execution identities on the #212 claim branch; assembled at runtime
+# from the next commit on. Not secrets: the contract field is named `executionKey`, which is
+# what the generic rule matched.
+d3a586a78d2a29806e6dcba5ca80244c68d4468e:apps/web/src/presentation/synthetic-records.test.ts:generic-api-key:213
+d3a586a78d2a29806e6dcba5ca80244c68d4468e:apps/web/src/presentation/synthetic-records.test.ts:generic-api-key:229
