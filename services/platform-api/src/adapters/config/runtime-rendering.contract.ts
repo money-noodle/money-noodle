@@ -32,9 +32,17 @@ describe.each(api)('evaluated production API', (rendering) => {
       expect(rendering.image.endsWith(`@${rendering.expected.digest}`)).toBe(true);
       for (const url of [rendering.livePath, rendering.readyPath, '/v1/platform/status']) {
         const response = await server.inject({ method: 'GET', url });
-        expect(response.statusCode).toBe(200);
         const body = response.json();
-        if (url === '/v1/platform/status') {
+        if (url === rendering.readyPath) {
+          // The evaluated rendering carries the projection connection string only
+          // as a secret reference, so this composition is handed no read model, and
+          // since #210 readiness refuses without one (ADR-0012). The refusal is the
+          // evidence here; a ready answer would mean a value had been rendered into
+          // the plain environment or the gate had been removed.
+          expect(response.statusCode).toBe(503);
+          expect(body.errorCode).toBe('MN-NOT-READY');
+        } else if (url === '/v1/platform/status') {
+          expect(response.statusCode).toBe(200);
           expect(body.schemaVersion).toBe('1');
           expect(body.service).toEqual(config.service);
           expect(Object.keys(body).sort()).toEqual([
@@ -45,10 +53,11 @@ describe.each(api)('evaluated production API', (rendering) => {
             'state',
           ]);
         } else {
+          expect(response.statusCode).toBe(200);
           expect(body).toEqual({
             service: 'platform-api',
             version: rendering.expected.version,
-            status: url === rendering.livePath ? 'live' : 'ready',
+            status: 'live',
           });
         }
         for (const value of [config.sourceCommit, rendering.image, 'MONEY_NOODLE_', 'OTEL_']) {
