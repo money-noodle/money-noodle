@@ -180,6 +180,18 @@ export function extractRuntimeRendering(raw, stack) {
     if (stack === 'web') {
       assert.deepEqual(secretEnv, {}, 'The web stack may hold no secret reference.');
     }
+    // Since #219 the api runtime binds the projection connection string, so the
+    // expected rendering is a fixed one rather than "whatever this stack declares".
+    // Matching the declaration alone would also accept a stack that quietly declared
+    // nothing, which is the shape of a credential path switched off by accident.
+    if (stack === 'api') {
+      assert.deepEqual(secretEnv, {
+        PLATFORM_API_PROJECTION_DATABASE_URL: {
+          secret: 'platform-api-projection-database-url',
+          version: 'latest',
+        },
+      });
+    }
     const required = [
       'NODE_ENV',
       'ARTIFACT_VERSION',
@@ -313,8 +325,9 @@ function verifyExtractionFailures(raw, stack) {
               version: 'latest',
             });
           },
-          // The reference survives but the plan stops declaring it: a literal in
-          // this file would have passed here.
+          // The reference survives but the plan stops declaring it. The
+          // plan-derived comparison is what refuses this, which is why the secret
+          // id is read from the evaluated plan rather than only pinned below.
           (records) => {
             delete planOf(records).variables.secret_environment;
           },
@@ -326,6 +339,16 @@ function verifyExtractionFailures(raw, stack) {
           (records) => {
             const env = containerEnv(records);
             env.splice(env.indexOf(secretReferenceEntry(records)), 1);
+          },
+          // Both sides dropped together, so declaration and rendering still agree
+          // and only the fixed expectation is left to refuse it. This is what a
+          // credential path switched off by accident looks like: nothing
+          // contradicts itself, and the api simply stops reading the projection
+          // (#219).
+          (records) => {
+            const env = containerEnv(records);
+            env.splice(env.indexOf(secretReferenceEntry(records)), 1);
+            planOf(records).variables.secret_environment.value = {};
           },
         ]
       : [

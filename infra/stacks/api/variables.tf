@@ -121,23 +121,29 @@ variable "secret_environment" {
 variable "projection_secret_binding_enabled" {
   description = <<-EOT
     Whether this revision binds the projection connection string from Secret
-    Manager. **Off by default, deliberately.**
+    Manager. **On.**
 
-    Cloud Run rejects a revision that references a secret which does not exist, and
-    the container is created by a maintainer-applied platform stack rather than by
-    this deploy. Defaulting this on would make every routine api deploy fail until
-    that apply happened — a knowingly red `main` — so the reference is withheld
-    instead. With it off the API runs with no projection configured, which is a
-    state it already handles honestly: readiness passes, and no endpoint claims
-    projection data (ADR-0012).
+    This default is only correct once the secret container exists, carries a version,
+    and is readable by this service's runtime identity. Those are steps 2 and 3 of
+    "Enabling the projection secret" in `infra/bootstrap.md`, done by the maintainer
+    outside any deploy; turning the default on is step 4, and it is the last thing to
+    merge for exactly that reason (#219, after #217).
 
-    It is flipped to true by a reviewed one-line change once the maintainer has
-    applied the platform stack and added the secret version, in the order recorded
-    in `infra/bootstrap.md`. The next routine deploy then carries the binding and
-    readiness proves the credential works (#217).
+    It stays a variable rather than becoming unconditional, because it is the
+    documented way to take the reference back out: setting it to false renders a
+    revision that binds no secret at all, which is how a projection incident is
+    contained without reverting the port. The API already handles that state
+    honestly — readiness passes and no endpoint claims projection data — so turning
+    the binding off degrades the service rather than breaking it (ADR-0012).
+
+    Changing it is a reviewed one-line change either way. Enabling or disabling a
+    credential path is a decision with a pull request behind it rather than a side
+    effect of a release, and Cloud Run refuses a revision referencing a secret that
+    does not exist, so this must not be set true in an environment whose container
+    has not been created.
   EOT
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "trace_sample_ratio" {
