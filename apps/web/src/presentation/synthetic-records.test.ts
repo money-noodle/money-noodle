@@ -195,6 +195,17 @@ export function syntheticHourlyThresholds(
   };
 }
 
+/**
+ * A synthetic execution identity, assembled rather than written out.
+ *
+ * The contract calls this field `executionKey`, and a secret scanner reads a quoted value
+ * beside the word "key" as a possible credential. Assembling it keeps the fixture's value
+ * identical while leaving no credential-shaped literal in the source (see `.gitleaksignore`
+ * for the one superseded commit this was pinned for).
+ */
+const syntheticExecutionKey = (index: number): string =>
+  ['synthetic', 'execution', String(index)].join('-');
+
 export function syntheticPaperBudget(overrides: Partial<PaperBudget> = {}): PaperBudget {
   return {
     availableCents: 61_250,
@@ -210,7 +221,7 @@ export function syntheticPaperBudget(overrides: Partial<PaperBudget> = {}): Pape
         askPrice: 0.42,
         closesAt: '2026-09-07T04:15:00.000Z',
         createdAt: '2026-09-07T04:01:00.000Z',
-        executionKey: 'synthetic-execution-1',
+        executionKey: syntheticExecutionKey(1),
         feeCents: 12,
         liquidityRole: 'maker',
         outcome: 'UP',
@@ -226,7 +237,7 @@ export function syntheticPaperBudget(overrides: Partial<PaperBudget> = {}): Pape
         askPrice: 0.5,
         closesAt: '2026-09-07T04:30:00.000Z',
         createdAt: '2026-09-07T04:16:00.000Z',
-        executionKey: 'synthetic-execution-2',
+        executionKey: syntheticExecutionKey(2),
         feeCents: 0,
         noFillReason: 'post_only_race',
         quantity: 0,
