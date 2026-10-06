@@ -14,6 +14,8 @@ This architecture establishes the smallest current boundary that can prove Money
 
 The original boundary admitted no database and no provider credential at all. Working [`ADR-0012`](decisions/ADR-0012-read-only-projection-port.md) amends that on 2026-10-04, and only this far: the **platform API** may read the four public paper projection tables an existing separate system writes, through a typed read-only port, as a database role holding nothing but `SELECT` — a property the service verifies at readiness rather than trusts. Its connection string is the first real use of the managed secret store under ADR-0005. Nothing else changes: the API owns no schema and performs no write, the **web gains no database access of any kind**, and a second store, a provider SDK, a scheduler or funded authority still needs its own accepted boundary.
 
+Working [`ADR-0013`](decisions/ADR-0013-m4-engine-boundary.md) amends it a second time on 2026-10-06, and this time the property that goes is **no background work**. M4 moves the platform's producing activity — collection, forecasts, the paper engine, the hourly observer and the daily archive — off a stopped single-process v1 worker into a **`jobs` deployment family**: one job per capability, each a scheduled isolated execution under its own workload identity, writing an **engine store** that is a separate schema from the public projection it already reads. The request-serving boundary does not move with it. The API stays stateless and request-driven, reads the engine store through a second read-only adapter, and records a control action as a durable **intent row** that the owning job applies on its next run rather than performing the effect itself; the **web gains nothing at all** — no store, no job module, no scheduler. ADR-0013 also ends the deferral of identity as a *direction* — Google Identity Platform behind the API's authentication adapter, MFA from the start, and one account holding a paper and a live budget where the live budget is a record with no execution path. Nothing in that record is built: no job, schema, role, identity provider or schedule exists.
+
 It is intentionally not a complete platform decomposition. New domains, stores, jobs, and providers require their own accepted boundaries and diagrams before implementation.
 
 ## Facts, assumptions, and unknowns
@@ -23,7 +25,7 @@ It is intentionally not a complete platform decomposition. New domains, stores, 
 - The repository implements pnpm workspaces and Nx projects for the Next.js web, Fastify API, and generated OpenAPI client, with exact runtime/tool versions and a frozen lockfile.
 - Current source ownership, repository and Actions controls, hosted validation evidence, and deployment gaps are owned in [`../current-status.md`](../current-status.md); they are not architecture decisions.
 - TypeScript is the default, REST/OpenAPI is required, the API must remain interface-neutral, and deployable projects must build and deploy independently.
-- The web is a presentation client. It cannot become a worker, provider adapter, scheduler, data authority, or direct database client. ADR-0012 admits a read-only projection port in the API only; the boundary checks refuse a database driver, and any projection module, anywhere in `apps/web`.
+- The web is a presentation client. It cannot become a worker, provider adapter, scheduler, data authority, or direct database client. ADR-0012 admits a read-only projection port in the API only; the boundary checks refuse a database driver, and any projection module, anywhere in `apps/web`. ADR-0013 keeps that true against M4: the same checks refuse a scheduler runtime, the engine jobs family and any engine-store module there.
 - Production has no real-money authority. Simulation and funded concepts remain structurally separate when they are introduced.
 - The first standing remote environment is production; CI may create ephemeral resources, and there is no required persistent staging environment.
 - The implemented foundation pins Node.js 22.22.0, pnpm 11.24.0, Nx 23.1.2, TypeScript 6.0.3, Next.js 16.3.3, React 19.2.8, and Fastify 5.12.1.
@@ -39,19 +41,20 @@ It is intentionally not a complete platform decomposition. New domains, stores, 
 
 The accepted first composition is Cloud Run and Artifact Registry in `us-west1`, GitHub OIDC workload-identity federation, OpenTofu with separate lock-protected GCS state, Secret Manager, and Google Cloud OpenTelemetry ingestion. First remote validation uses public `*.run.app` URLs; the target domain cutover is `noodle.money` plus public `api.noodle.money` through a managed load balancer. Existing Vercel DNS remains untouched until that separately reviewed cutover. See [`../operations/deployment-composition.md`](../operations/deployment-composition.md) and accepted [`ADR-0004`](decisions/ADR-0004-first-remote-hosting-composition.md) through [`ADR-0007`](decisions/ADR-0007-first-telemetry-backend.md).
 
-Quantitative service objectives remain open until dated remote evidence exists. Exact provider project, billing, and federation identifiers are bootstrap inputs, not architecture choices. Identity, PostgreSQL provider, tenant schema ownership, and provider integrations are deliberately deferred because the first slice does not need them.
+Quantitative service objectives remain open until dated remote evidence exists. Exact provider project, billing, and federation identifiers are bootstrap inputs, not architecture choices. The first slice deferred identity, the PostgreSQL provider, tenant schema ownership, and provider integrations because it did not need them. Two of those are now decided as direction and not as implementation: Working ADR-0013 names **Neon** as the engine store's PostgreSQL provider, in a schema separate from the public projection, and **Google Identity Platform** as the identity provider behind the API's authentication adapter. Tenant schema ownership and provider integrations remain deferred, and neither a database nor a login has been created.
 
 ## Accepted boundary
 
-Create two deployable projects and one generated client package:
+Create two deployable projects and one generated client package. Working ADR-0013 accepts a third deployment family, `services/engine-jobs`, which is listed here as an accepted boundary and **does not exist**; it appears in the [source and deployment map](#source-and-deployment-map) only when its project does.
 
 | Project | Path | Owns | Must not own |
 | --- | --- | --- | --- |
 | Web | `apps/web` | Next.js routes, rendering, accessibility, browser state, presentation mapping, web telemetry, server-only API-client composition | Canonical API behavior, database access, platform jobs, provider SDKs/secrets, funded or simulation authority |
-| Platform API | `services/platform-api` | HTTP authentication/authorization adapters when introduced, runtime validation, application use-case composition, public/private DTOs, API telemetry, a **read-only projection port** over the existing public paper projection (ADR-0012), its future explicitly owned schema | UI rendering, long-running work, provider automation, writes or migrations against the projection it reads, another service's tables, frontend-specific workflow state |
+| Platform API | `services/platform-api` | HTTP authentication/authorization adapters when introduced, runtime validation, application use-case composition, public/private DTOs, API telemetry, a **read-only projection port** over the existing public paper projection (ADR-0012), a second **read-only engine-store port** as `engine_reader` and the recording of durable intent rows (ADR-0013), its future explicitly owned schema | UI rendering, long-running work, a scheduler, queue consumer or timer, job execution, provider automation, writes or migrations against the projection or the engine schema, another service's tables, frontend-specific workflow state |
 | Generated TypeScript client | `packages/platform-api-client` | Generated transport models and request functions for TypeScript clients | Domain models, hand-maintained request code, business rules, secrets |
+| Engine jobs — accepted, not built | `services/engine-jobs` | One image with one entrypoint per capability, each deployed as its own scheduled job under its own workload identity; the engine domain; `engine_writer` access to the `engine` schema; reading intent and writing its outcome (ADR-0013) | Serving HTTP requests, a resident process between runs, the public projection's schema ownership, identity issuance, migrations of the schema it writes, live execution or any funded authority |
 
-The API begins as one lightweight modular deployment rather than premature domain services. A module may move to its own service only after data ownership, scaling, failure isolation, or authority provides a material reason. The API must never become a resident multipurpose worker: commands that need external effects will persist intent and enqueue an isolated job or service in a later accepted slice.
+The API begins as one lightweight modular deployment rather than premature domain services. A module may move to its own service only after data ownership, scaling, failure isolation, or authority provides a material reason. The API must never become a resident multipurpose worker. A command that needs an external effect persists durable intent and leaves the effect to the isolated job that owns the capability (ADR-0013), in the same intent-then-observe shape Working [`ADR-0010`](decisions/ADR-0010-agent-operated-production-control-plane.md) requires of a production operation. The API acquires no scheduler, queue consumer or timer to do it, and a job reads intent at the start of a run rather than being woken by a request.
 
 Next.js Route Handlers may support web-only session callbacks or a narrow same-origin browser adapter when identity requires one. They are not the canonical platform API and cannot import platform repositories or execution code. The first slice needs no Route Handler: a Server Component calls the generated API client server-side.
 
@@ -140,17 +143,55 @@ flowchart LR
         query["GetPlatformStatus application query"]
         domain["Platform status value and invariants"]
         metadata["Deployment metadata adapter"]
+        projectionPort["Projection adapter<br/>SELECT-only role (ADR-0012)"]
+        enginePort["Engine-store read adapter<br/>engine_reader (ADR-0013)"]
+        recorder["Control recorder<br/>engine_control_recorder, INSERT only (ADR-0013)"]
         http --> query
         query --> domain
         query --> metadata
+        query --> projectionPort
+        query --> enginePort
+        http --> recorder
     end
+
+    subgraph jobsRuntime["services/engine-jobs deployment family — ADR-0013, accepted, not built"]
+        restore["Restore<br/>manual, one-time"]
+        cycle["Collector, forecast<br/>and paper engine"]
+        observer["Hourly observer"]
+        writer["Projection writer"]
+        archiveJob["Daily archive"]
+    end
+
+    schedulerTrigger["Cloud Scheduler<br/>one trigger per job"]
+    engineSchema[("Neon — engine schema<br/>engine_writer / engine_reader")]
+    publicSchema[("Neon — public projection schema<br/>ADR-0012 reads it")]
+    archiveStore[("Scaleway archive<br/>append-only, content-addressed")]
 
     client -->|OpenAPI v1 DTOs over HTTPS| http
     contract["Canonical OpenAPI source"] -->|generates| client
     contract -->|drives validation/conformance| http
+
+    schedulerTrigger --> cycle
+    schedulerTrigger --> observer
+    schedulerTrigger --> writer
+    schedulerTrigger --> archiveJob
+
+    archiveStore -->|verified manifest| restore
+    restore -->|engine_writer| engineSchema
+    cycle -->|engine_writer| engineSchema
+    observer -->|engine_writer| engineSchema
+    writer -->|engine_reader| engineSchema
+    writer -->|upsert| publicSchema
+    archiveJob -->|engine_reader| engineSchema
+    archiveJob --> archiveStore
+
+    projectionPort -->|SELECT| publicSchema
+    enginePort -->|SELECT| engineSchema
+    recorder -->|INSERT intent| engineSchema
+    engineSchema -. "intent read at run start" .-> cycle
 ```
 
-Dependencies point inward: adapters depend on application/domain contracts. The generated transport DTO stops at each adapter boundary and is mapped before domain use.
+Dependencies point inward: adapters depend on application/domain contracts. The generated transport DTO stops at each adapter boundary and is mapped before domain use. The engine jobs family, the engine schema and both engine-store adapters are accepted boundary, not implemented source; no arrow touching them describes anything that runs today. The two directions that matter are that no arrow leaves `apps/web` except to the API, and that none runs from the API to a job: a control action becomes an intent row, and the job reads it on its next scheduled run.
 
 ### Production deployment
 
@@ -491,7 +532,7 @@ Only if both proposals were separately accepted, became Working, and were implem
 
 The workspace, projects, status contract, generated client, web presentation/API adapter, API inner layers/HTTP/deployment adapters, health routes, and container definitions below exist. `infra/` now exists as reviewable, statically validated configuration; **no provider resource has been applied**, and the outstanding items before an apply can be trusted are listed in [`../../infra/README.md`](../../infra/README.md).
 
-No row below is proposed. The administrative-observability proposal-only subsection above is illustrative, is outside this map, and confers no source, storage, job, identity, provider, infrastructure, or deployment authority. `jobs/` does not exist, and neither the administrative ingestion unit, its read model, nor its API operations are represented here, because [`ADR-0009`](decisions/ADR-0009-administrative-observability-surface.md) is Proposed rather than Working. The fixed M1 publisher/journal/witness workflows and the broader administrative operations and secret ingress decided in Working [`ADR-0010`](decisions/ADR-0010-agent-operated-production-control-plane.md) are absent for a different reason: that decision settled their boundary shape without creating any of them. `tools/delivery/` below is the provider-disabled implementation of those contracts and appears because its source exists; the workflows, journal ref, witness issue and provider paths it describes still do not exist. Rows are added when projects exist, not when they are decided or merely proposed. [`../current-status.md`](../current-status.md) owns current host, validation, and deployment truth.
+No row below is proposed. The administrative-observability proposal-only subsection above is illustrative, is outside this map, and confers no source, storage, job, identity, provider, infrastructure, or deployment authority. Neither the administrative ingestion unit, its read model, nor its API operations are represented here, because [`ADR-0009`](decisions/ADR-0009-administrative-observability-surface.md) is Proposed rather than Working. No job project exists either: the `services/engine-jobs` family, the engine schema and the API's engine-store adapter are an accepted boundary in Working [`ADR-0013`](decisions/ADR-0013-m4-engine-boundary.md) and no more, so they get no row until the M4 children create them. The boundary is enforced ahead of the source — `tools/verify-boundary-rules.mjs` already refuses those imports — which is a check passing against modules that do not exist, not evidence that any of them does. The fixed M1 publisher/journal/witness workflows and the broader administrative operations and secret ingress decided in Working [`ADR-0010`](decisions/ADR-0010-agent-operated-production-control-plane.md) are absent for a different reason: that decision settled their boundary shape without creating any of them. `tools/delivery/` below is the provider-disabled implementation of those contracts and appears because its source exists; the workflows, journal ref, witness issue and provider paths it describes still do not exist. Rows are added when projects exist, not when they are decided or merely proposed. [`../current-status.md`](../current-status.md) owns current host, validation, and deployment truth.
 
 | Path | Project/deployment | Boundary and ownership |
 | --- | --- | --- |
@@ -527,7 +568,8 @@ Every created project receives a README declaring purpose, contracts, targets, d
 - API domain/application layers cannot import Fastify, Next.js, cloud SDKs, telemetry backends, or a provider authentication library;
 - exactly two files — each project's `adapters/telemetry/workload-identity-headers.ts` — may import the Google authentication library, under the [2026-09-15 accepted ADR-0007 amendment](decisions/ADR-0007-first-telemetry-backend.md#accepted-amendment-2026-09-15-a-narrow-telemetry-authentication-exception); `tools/verify-boundary-rules.mjs` proves it by probe;
 - the web's presentation layer imports no telemetry and no adapter, so nothing telemetry-owned can reach a browser bundle through it;
-- no request-serving project imports a future job/provider adapter implementation;
+- no request-serving project imports a job or provider adapter implementation: neither `apps/web` nor `services/platform-api` may import `@money-noodle/engine-jobs` or any `services/engine-jobs` module, and neither may import a scheduler, queue or timer runtime (ADR-0013);
+- the web may not import an engine-store module, and the API's inner layers may not import their own `adapters/engine-store` directory, for the reason the projection port already gives;
 - dependency cycles fail CI.
 
 ## API and generated-client policy
