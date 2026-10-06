@@ -47,7 +47,7 @@ run "every_declared_secret_is_readable_by_the_api_runtime_identity_alone" {
   # how many: a container appearing here is a credential path, and it should be
   # impossible to add one without changing this list (#242, ADR-0013).
   assert {
-    condition = setequal(keys(module.secret_store.accessor_register), [
+    condition = toset(keys(module.secret_store.accessor_register)) == toset([
       "platform-api-projection-database-url",
       "platform-api-engine-reader-database-url",
       "platform-api-engine-recorder-database-url",
@@ -99,7 +99,7 @@ run "every_declared_secret_is_readable_by_the_api_runtime_identity_alone" {
   # deliberate and harmless: it is what lets the maintainer add the value without a
   # second apply.
   assert {
-    condition     = setequal(module.secret_store.secret_ids, keys(module.secret_store.accessor_register))
+    condition     = toset(module.secret_store.secret_ids) == toset(keys(module.secret_store.accessor_register))
     error_message = "Every declared container carries an access boundary, and nothing is declared without one; found: ${join(", ", module.secret_store.secret_ids)}"
   }
 }
