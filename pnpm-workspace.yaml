@@ -7,7 +7,6 @@ injectWorkspacePackages: true
 
 overrides:
   js-yaml@4.2.0: 4.3.2
-  nx>smol-toml: 1.7.1
   # 2026-10-04 (#214): vulnerable transitives with no updated parent release yet.
   'axios@<1.20.0': 1.20.0
   'brace-expansion@>=4.0.0 <5.0.11': 5.0.12
@@ -20,6 +19,15 @@ overrides:
   # release, making this a floor rather than a substitute for an upstream fix.
   # Remove it once every path resolves >=1.2.2 on its own.
   'source-map-js@<1.2.2': 1.2.2
+  # 2026-10-06 (GHSA-r4xh-jqrq-34v2, Refs #238): smol-toml <=1.8.0 parses in
+  # quadratic time, because `parseKey` rescans to the end of the document for
+  # every key line. Reached only through nx, which depends on the exact version
+  # 1.6.1 rather than a range, so removing the override resolves back to 1.6.1 —
+  # which also carries the earlier high advisory GHSA-7w5x-hrqm-74c2 (<=1.7.0).
+  # This floor replaces the undated `nx>smol-toml: 1.7.1` pin that cleared that
+  # one and stopped below this fix. Remove it once every path resolves >=1.9.0 on
+  # its own.
+  'smol-toml@<1.9.0': 1.9.0
 
 audit:
   ignore:
