@@ -76,12 +76,43 @@ function directoriesUnder(parent) {
 const targets = [...directoriesUnder('modules'), ...directoriesUnder('stacks')];
 const failures = [];
 
+// A failure as a workflow annotation as well as as log output.
+//
+// Added because the log was the only place a failure appeared, and an Actions log
+// is served from a host that not every client can follow — a reviewer, or an agent
+// fixing the failure, could see that the job exited 1 and nothing about why.
+// `::error::` becomes a check annotation, which is readable through the ordinary
+// checks API and visible in the pull request without opening the run.
+//
+// Bounded and escaped: the first lines only, newlines encoded as `%0A` because a
+// workflow command is one line, and the usual `::` and `,` escapes so a path or a
+// diff cannot terminate the command early. The content is this repository's own
+// OpenTofu output, which holds no secret value — no stack here declares one.
+function annotate(label, output) {
+  if (process.env.GITHUB_ACTIONS !== 'true') return;
+  const excerpt = output
+    // Full escape sequences, not just their prefix: a half-stripped colour code
+    // leaves `0m1m` noise in the middle of the message.
+    .replaceAll(/\u001B\[[0-9;]*[A-Za-z]/gu, '')
+    .split('\n')
+    .filter((line) => line.trim().length > 0)
+    .slice(0, 40)
+    .join('\n')
+    .slice(0, 4000)
+    .replaceAll('%', '%25')
+    .replaceAll('\r', '%0D')
+    .replaceAll('\n', '%0A')
+    .replaceAll('::', '%3A%3A');
+  console.log(`::error title=infra-check ${label}::${excerpt}`);
+}
+
 function run(label, args, cwd, { quiet = false } = {}) {
   const result = tofu(args, cwd);
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trimEnd();
   if (result.status !== 0) {
     failures.push(label);
     console.error(`\nFAIL ${label}\n${output}`);
+    annotate(label, output);
     return false;
   }
   if (!quiet && output) console.log(output);
@@ -122,7 +153,9 @@ if (mode === 'validate' || mode === 'test' || mode === 'all') {
 }
 
 if (failures.length > 0) {
-  console.error(`\n${failures.length} infrastructure check(s) failed: ${failures.join(', ')}`);
+  const summary = `${failures.length} infrastructure check(s) failed: ${failures.join(', ')}`;
+  console.error(`\n${summary}`);
+  annotate('summary', summary);
   process.exit(1);
 }
 
