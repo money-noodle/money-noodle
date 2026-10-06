@@ -28,6 +28,16 @@ overrides:
   # one and stopped below this fix. Remove it once every path resolves >=1.9.0 on
   # its own.
   'smol-toml@<1.9.0': 1.9.0
+  # 2026-10-06 (GHSA-wq5f-xc86-pv6w, Refs #248): sharp <0.35.5 is vulnerable
+  # through the librsvg library bundled in its prebuilt libvips binaries. It is
+  # reached on one path, `apps/web > next > sharp`, where next@16.3.8 declares
+  # the optional dependency as `^0.35.4` and so already accepts the patched
+  # release; a lockfile refresh alone does not move it, because pnpm keeps an
+  # existing resolution that still satisfies the range. This floor is therefore
+  # an explicit, auditable pin to the patch rather than a substitute for an
+  # upstream fix, and `next` itself is untouched. Remove it once the path
+  # resolves >=0.35.5 on its own.
+  'sharp@<0.35.5': 0.35.5
 
 audit:
   ignore:
