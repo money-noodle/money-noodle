@@ -73,6 +73,37 @@ const probes = [
     source:
       "import type { PaperBudgetRow } from '../../../services/platform-api/src/domain/paper-projection.js';\nexport type Probe = PaperBudgetRow;\n",
   },
+  // ADR-0013 puts every cadence in the `services/engine-jobs` family, each job
+  // under its own workload identity, and keeps the engine store behind one
+  // read-only adapter in the API. None of those modules exists yet, which is the
+  // point of probing by import specifier rather than by resolution: the rules
+  // pass against this tree and bite the moment the M4 children land.
+  {
+    path: 'apps/web/src/.engine-jobs-boundary-probe.ts',
+    source: "import '@money-noodle/engine-jobs';\n",
+  },
+  {
+    path: 'apps/web/src/app/.engine-store-boundary-probe.ts',
+    source:
+      "import { createEngineStore } from '../adapters/engine-store/postgres-engine-store.js';\nvoid createEngineStore;\n",
+  },
+  {
+    path: 'apps/web/src/.scheduler-boundary-probe.ts',
+    source: "import cron from 'node-cron';\nvoid cron;\n",
+  },
+  {
+    path: 'services/platform-api/src/adapters/http/.scheduler-boundary-probe.ts',
+    source: "import cron from 'node-cron';\nvoid cron;\n",
+  },
+  {
+    path: 'services/platform-api/src/adapters/http/.engine-jobs-boundary-probe.ts',
+    source: "import '@money-noodle/engine-jobs';\n",
+  },
+  {
+    path: 'services/platform-api/src/application/.engine-store-adapter-boundary-probe.ts',
+    source:
+      "import { createEngineStore } from '../adapters/engine-store/postgres-engine-store.js';\nvoid createEngineStore;\n",
+  },
 ];
 
 try {

@@ -5,6 +5,35 @@ import jsxA11y from 'eslint-plugin-jsx-a11y-x';
 import reactHooks from 'eslint-plugin-react-hooks';
 import tseslint from 'typescript-eslint';
 
+// ADR-0013 draws the M4 engine boundary before any of it is built. Execution
+// belongs to the `services/engine-jobs` family, each job under its own workload
+// identity and schedule; a request-serving deployment never acquires a
+// scheduler, a queue consumer or a timer, and the web reaches engine data only
+// through the API contract. A flat config replaces a rule rather than merging
+// it, so these groups are spread into every block that has to restate them.
+const SCHEDULER_RUNTIME_MODULES = [
+  'node-cron',
+  'node-schedule',
+  'cron',
+  'bull',
+  'bullmq',
+  'agenda',
+  'bree',
+  '@google-cloud/scheduler',
+  '@google-cloud/tasks',
+  '@google-cloud/pubsub',
+];
+
+const ENGINE_JOBS_MODULES = ['@money-noodle/engine-jobs', '**/services/engine-jobs/**'];
+
+const ENGINE_STORE_ADAPTER_MODULES = ['**/adapters/engine-store/**'];
+
+const NO_RESIDENT_WORK_MESSAGE =
+  'Execution belongs to the engine jobs family under its own workload identity and schedule. A request-serving deployment never acquires a scheduler, a queue consumer or a timer (ADR-0013).';
+
+const NO_ENGINE_STORE_MESSAGE =
+  'The engine store is reached through one read-only adapter in the platform API, and never from here (ADR-0013).';
+
 export default tseslint.config(
   {
     ignores: [
@@ -107,6 +136,14 @@ export default tseslint.config(
               message:
                 'Inner API layers depend on the projection port, never on a database driver or its adapter.',
             },
+            {
+              group: [...SCHEDULER_RUNTIME_MODULES, ...ENGINE_JOBS_MODULES],
+              message: NO_RESIDENT_WORK_MESSAGE,
+            },
+            {
+              group: [...ENGINE_STORE_ADAPTER_MODULES],
+              message: NO_ENGINE_STORE_MESSAGE,
+            },
           ],
         },
       ],
@@ -171,6 +208,10 @@ export default tseslint.config(
               message:
                 'The accepted exception is one PostgreSQL adapter for one read-only projection, not a database client anywhere in the service (ADR-0012).',
             },
+            {
+              group: [...SCHEDULER_RUNTIME_MODULES, ...ENGINE_JOBS_MODULES],
+              message: NO_RESIDENT_WORK_MESSAGE,
+            },
           ],
         },
       ],
@@ -200,6 +241,10 @@ export default tseslint.config(
               group: ['google-auth-library/**', 'googleapis', '@google-cloud/**'],
               message:
                 'The projection adapter reads a database. It is not a provider SDK boundary.',
+            },
+            {
+              group: [...SCHEDULER_RUNTIME_MODULES, ...ENGINE_JOBS_MODULES],
+              message: NO_RESIDENT_WORK_MESSAGE,
             },
           ],
         },
@@ -241,6 +286,10 @@ export default tseslint.config(
               ],
               message:
                 'The accepted exception is one PostgreSQL adapter for one read-only projection, not a database client anywhere in the service (ADR-0012).',
+            },
+            {
+              group: [...SCHEDULER_RUNTIME_MODULES, ...ENGINE_JOBS_MODULES],
+              message: NO_RESIDENT_WORK_MESSAGE,
             },
           ],
         },
@@ -309,6 +358,14 @@ export default tseslint.config(
               message:
                 'The web may never be a database client, directly or through an API projection module (overview.md, ADR-0012).',
             },
+            {
+              group: [...SCHEDULER_RUNTIME_MODULES, ...ENGINE_JOBS_MODULES],
+              message: NO_RESIDENT_WORK_MESSAGE,
+            },
+            {
+              group: [...ENGINE_STORE_ADAPTER_MODULES],
+              message: NO_ENGINE_STORE_MESSAGE,
+            },
           ],
         },
       ],
@@ -350,6 +407,10 @@ export default tseslint.config(
               message:
                 'Presentation stays independent of telemetry, adapters, provider authentication and any database client.',
             },
+            {
+              group: [...SCHEDULER_RUNTIME_MODULES, ...ENGINE_JOBS_MODULES],
+              message: NO_RESIDENT_WORK_MESSAGE,
+            },
           ],
         },
       ],
@@ -367,6 +428,14 @@ export default tseslint.config(
             {
               group: ['**/services/platform-api/**', '@money-noodle/platform-api'],
               message: 'The web may use only the generated platform API client.',
+            },
+            {
+              group: [...SCHEDULER_RUNTIME_MODULES, ...ENGINE_JOBS_MODULES],
+              message: NO_RESIDENT_WORK_MESSAGE,
+            },
+            {
+              group: [...ENGINE_STORE_ADAPTER_MODULES],
+              message: NO_ENGINE_STORE_MESSAGE,
             },
           ],
         },
