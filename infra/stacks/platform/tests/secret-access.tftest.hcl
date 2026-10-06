@@ -39,28 +39,46 @@ variables {
   budget_alert_email_addresses = ["alerts@example.test"]
 }
 
-run "the_projection_secret_is_readable_by_the_api_runtime_identity_alone" {
+run "every_declared_secret_is_readable_by_the_api_runtime_identity_alone" {
   command = plan
 
-  # One secret, one consumer, resolved from the service name through the bootstrap
-  # contract rather than from an address written down here.
+  # The exact set of containers this stack declares. Asserted by name rather than
+  # by count, because the question worth failing on is *which* secrets exist, not
+  # how many: a container appearing here is a credential path, and it should be
+  # impossible to add one without changing this list (#242, ADR-0013).
   assert {
-    condition = (
-      length(module.secret_store.accessor_register) == 1 &&
-      contains(keys(module.secret_store.accessor_register), "platform-api-projection-database-url")
-    )
-    error_message = "Exactly the projection connection string carries an accessor grant; found: ${join(", ", keys(module.secret_store.accessor_register))}"
+    condition = setequal(keys(module.secret_store.accessor_register), [
+      "platform-api-projection-database-url",
+      "platform-api-engine-reader-database-url",
+      "platform-api-engine-recorder-database-url",
+      "platform-api-account-database-url",
+      "platform-api-identity-audience",
+      "platform-api-identity-issuer",
+      "platform-api-identity-account-id",
+    ])
+    error_message = "The declared accessor grants are exactly the accepted set; found: ${join(", ", keys(module.secret_store.accessor_register))}"
   }
 
+  # No venue, broker or exchange credential is declared. ADR-0013 §4 gives the live
+  # budget no execution path in M4, and a container is the first thing one would
+  # need.
   assert {
-    condition = (
-      length(module.secret_store.accessor_register["platform-api-projection-database-url"]) == 1 &&
-      contains(
-        module.secret_store.accessor_register["platform-api-projection-database-url"],
-        "serviceAccount:platform-api-runtime@example-project.iam.gserviceaccount.com"
-      )
-    )
-    error_message = "The projection secret is readable by the API's own runtime identity and by nothing else."
+    condition = alltrue([
+      for secret_id in keys(module.secret_store.accessor_register) :
+      length(regexall("(venue|broker|exchange|kalshi|polymarket|kraken)", secret_id)) == 0
+    ])
+    error_message = "A venue credential container is declared. ADR-0013 §4: the live budget has no execution path in M4."
+  }
+
+  # Each one is readable by the API's own runtime identity, once, and by nothing
+  # else. One consumer per container is the whole access boundary.
+  assert {
+    condition = alltrue([
+      for secret_id, members in module.secret_store.accessor_register :
+      length(members) == 1 &&
+      contains(members, "serviceAccount:platform-api-runtime@example-project.iam.gserviceaccount.com")
+    ])
+    error_message = "Every declared secret is readable by the API's own runtime identity and by nothing else."
   }
 
   # The web is never a database client, and the deployer manages containers rather
@@ -77,12 +95,12 @@ run "the_projection_secret_is_readable_by_the_api_runtime_identity_alone" {
     error_message = "Neither the web runtime identity nor the deployer may hold secretAccessor: the first is not a database client, the second manages containers rather than contents (ADR-0005)."
   }
 
-  # The container is still declared empty. A grant on a secret with no version is
+  # Every container is still declared empty. A grant on a secret with no version is
   # deliberate and harmless: it is what lets the maintainer add the value without a
   # second apply.
   assert {
-    condition     = length(module.secret_store.secret_ids) == 1
-    error_message = "The store declares exactly the one projection container."
+    condition     = setequal(module.secret_store.secret_ids, keys(module.secret_store.accessor_register))
+    error_message = "Every declared container carries an access boundary, and nothing is declared without one; found: ${join(", ", module.secret_store.secret_ids)}"
   }
 }
 
