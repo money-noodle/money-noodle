@@ -137,6 +137,17 @@ export function extractRuntimeRendering(raw, stack) {
     const declaredSecretEnv = plan.variables.secret_environment?.value ?? {};
     const grantedSecretIds = plan.variables.accessible_secret_ids?.value ?? [];
 
+    // Which declared references this revision actually binds is decided by the
+    // stack's gates, so the expectation below is read per gate position. Both are
+    // required to be booleans taken from the evaluated plan: a renamed or removed
+    // flag then fails here rather than quietly withholding every binding, which
+    // would look identical to a credential path switched off by accident.
+    const gate = (name) => {
+      const value = plan.variables[name]?.value;
+      assert.equal(typeof value, 'boolean', `Missing boolean gate ${name}.`);
+      return value;
+    };
+
     const env = {};
     const secretEnv = {};
     assert.ok(Array.isArray(container.env) && container.env.length > 0);
@@ -189,9 +200,13 @@ export function extractRuntimeRendering(raw, stack) {
       env[name] = text(entry.value);
     }
 
-    // The rendering must match the declared intent exactly. A dropped binding is a
-    // change to the production runtime, and an extra one is a new credential path.
-    assert.deepEqual(Object.keys(secretEnv).sort(), Object.keys(declaredSecretEnv).sort());
+    // Nothing may render that this stack does not declare. That direction is the one
+    // that matters most — an undeclared reference is a credential path nobody granted
+    // — and it is checked against the declaration itself rather than against a list.
+    assert.ok(
+      Object.keys(secretEnv).every((name) => Object.hasOwn(declaredSecretEnv, name)),
+      'A rendered secret reference must be one this stack declares.',
+    );
     // Stated separately as well as through the empty allowlist above, because
     // "the web is never a database client" is the rule most worth failing loudly.
     if (stack === 'web') {
@@ -201,13 +216,46 @@ export function extractRuntimeRendering(raw, stack) {
     // expected rendering is a fixed one rather than "whatever this stack declares".
     // Matching the declaration alone would also accept a stack that quietly declared
     // nothing, which is the shape of a credential path switched off by accident.
+    //
+    // #242 added six further declared references behind a second gate, so the fixed
+    // expectation is now per gate position rather than a single map. The declaration
+    // and the rendering legitimately differ while a gate is off — Cloud Run refuses a
+    // revision referencing a container that does not exist, so those six wait for the
+    // maintainer — and comparing the two directly is what failed on main at 6142ed1.
+    // Each gate's admitted references are still written out name by name, which is
+    // what keeps this a fixed expectation and not a restatement of the stack.
     if (stack === 'api') {
+      const reference = (secret) => ({ secret, version: 'latest' });
       assert.deepEqual(secretEnv, {
-        PLATFORM_API_PROJECTION_DATABASE_URL: {
-          secret: 'platform-api-projection-database-url',
-          version: 'latest',
-        },
+        ...(gate('projection_secret_binding_enabled')
+          ? {
+              PLATFORM_API_PROJECTION_DATABASE_URL: reference(
+                'platform-api-projection-database-url',
+              ),
+            }
+          : {}),
+        ...(gate('identity_secret_binding_enabled')
+          ? {
+              PLATFORM_API_ACCOUNT_DATABASE_URL: reference('platform-api-account-database-url'),
+              PLATFORM_API_ENGINE_READER_DATABASE_URL: reference(
+                'platform-api-engine-reader-database-url',
+              ),
+              PLATFORM_API_ENGINE_RECORDER_DATABASE_URL: reference(
+                'platform-api-engine-recorder-database-url',
+              ),
+              PLATFORM_API_IDENTITY_ACCOUNT_ID: reference('platform-api-identity-account-id'),
+              PLATFORM_API_IDENTITY_AUDIENCE: reference('platform-api-identity-audience'),
+              PLATFORM_API_IDENTITY_ISSUER: reference('platform-api-identity-issuer'),
+            }
+          : {}),
       });
+
+      // With every gate on, the original rule returns: the rendering is the whole
+      // declaration. This is what refuses a declared reference that silently stopped
+      // rendering once the gates are no longer holding anything back.
+      if (gate('projection_secret_binding_enabled') && gate('identity_secret_binding_enabled')) {
+        assert.deepEqual(Object.keys(secretEnv).sort(), Object.keys(declaredSecretEnv).sort());
+      }
     }
     const required = [
       'NODE_ENV',
@@ -366,6 +414,59 @@ function verifyExtractionFailures(raw, stack) {
             const env = containerEnv(records);
             env.splice(env.indexOf(secretReferenceEntry(records)), 1);
             planOf(records).variables.secret_environment.value = {};
+          },
+          // --- The #242 gates -------------------------------------------------
+          //
+          // One of the six identity references rendered while its gate is off. The
+          // container would reference a container that does not exist, which is a
+          // revision that will not start, so it is refused here instead.
+          (records) => {
+            containerEnv(records).push({
+              name: 'PLATFORM_API_ENGINE_RECORDER_DATABASE_URL',
+              value: null,
+              value_source: [
+                {
+                  secret_key_ref: [
+                    { secret: 'platform-api-engine-recorder-database-url', version: 'latest' },
+                  ],
+                },
+              ],
+            });
+          },
+          // The gate claims to be on while nothing further renders. The fixed
+          // expectation per gate position is what refuses this, and it is the shape
+          // a half-finished rollout would take.
+          (records) => {
+            planOf(records).variables.identity_secret_binding_enabled.value = true;
+          },
+          // Both gates on and the projection alone rendering: declaration and
+          // rendering now have to agree exactly, and do not.
+          (records) => {
+            planOf(records).variables.projection_secret_binding_enabled.value = true;
+            planOf(records).variables.identity_secret_binding_enabled.value = true;
+          },
+          // A gate renamed away. Without the boolean requirement this would read as
+          // `undefined`, withhold everything, and look like a deliberate off-switch.
+          (records) => {
+            delete planOf(records).variables.identity_secret_binding_enabled;
+          },
+          (records) => {
+            planOf(records).variables.projection_secret_binding_enabled.value = 'true';
+          },
+          // An identity reference under a name the allowlist carries, pointing at a
+          // container the plan does not declare for it. The allowlist alone would
+          // admit the name; the plan-derived comparison is what refuses the target.
+          (records) => {
+            planOf(records).variables.identity_secret_binding_enabled.value = true;
+            containerEnv(records).push({
+              name: 'PLATFORM_API_IDENTITY_ISSUER',
+              value: null,
+              value_source: [
+                {
+                  secret_key_ref: [{ secret: 'platform-api-identity-audience', version: 'latest' }],
+                },
+              ],
+            });
           },
         ]
       : [
