@@ -1083,6 +1083,20 @@ test('the evaluated runtime bridge proves telemetry correlation and stays mandat
   assert.match(checks, /node infra\/modules\/cloud-run-service\/tests\/runtime-contract\.mjs/);
   assert.match(checks, /Prove the checks reached no provider/);
   assert.ok(!/id-token:|environment:/.test(checks), 'the bridge must stay credential-free');
+
+  // The bridge's own refusal suite only runs once OpenTofu, a provider download and
+  // a `tofu test` of two stacks have succeeded, which is a CI-only path. So the
+  // extractor also has a provider-free test over a synthetic capture, and it has to
+  // stay wired into the foundation checks: without it the bridge's expectation can
+  // drift from what the stacks render and nothing notices until `main` is red, which
+  // is what happened at 6142ed1.
+  const scripts = read(join(repoRoot, 'package.json'));
+  assert.match(
+    scripts,
+    /node --test tools\/\*\.test\.mjs infra\/modules\/cloud-run-service\/tests\/\*\.test\.mjs/,
+    'the provider-free extractor test must run in verify:foundation',
+  );
+  assert.match(bridge, /export function extractRuntimeRendering/);
 });
 
 test('the narrow telemetry authentication exception is enforced, not merely described', () => {
