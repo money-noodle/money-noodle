@@ -15,6 +15,7 @@ const VIEWS = [
   { href: '/market/hourly', label: 'Hourly thresholds' },
   { href: '/paper/budget', label: 'Simulated budget' },
   { href: '/paper/performance', label: 'Simulated record' },
+  { href: '/control', label: 'Account controls' },
 ] as const;
 
 export function SiteNavigation({ current }: { readonly current: string }) {

@@ -113,7 +113,24 @@ export function extractRuntimeRendering(raw, stack) {
     // a *reference*, so the rendering can be checked without a value existing
     // anywhere — which is the same reason the value is held in a managed secret
     // rather than in configuration.
-    const secretNameAllowlist = stack === 'api' ? ['PLATFORM_API_PROJECTION_DATABASE_URL'] : [];
+    // #242 adds six, each behind `identity_secret_binding_enabled`, which is off
+    // until the maintainer has created those containers. They are allowlisted with
+    // the gate rather than after it, so the flip is a one-line change here too and
+    // the rendered plan is still checked name by name: a name outside this list
+    // fails, an inline value fails, and a reference to a container the plan does
+    // not also declare as granted fails.
+    const secretNameAllowlist =
+      stack === 'api'
+        ? [
+            'PLATFORM_API_PROJECTION_DATABASE_URL',
+            'PLATFORM_API_ENGINE_READER_DATABASE_URL',
+            'PLATFORM_API_ENGINE_RECORDER_DATABASE_URL',
+            'PLATFORM_API_ACCOUNT_DATABASE_URL',
+            'PLATFORM_API_IDENTITY_AUDIENCE',
+            'PLATFORM_API_IDENTITY_ISSUER',
+            'PLATFORM_API_IDENTITY_ACCOUNT_ID',
+          ]
+        : [];
     // Taken from the evaluated plan, never restated here. A literal copied into
     // this file would keep passing after the stack stopped declaring the binding,
     // which is precisely the drift this bridge exists to catch.
