@@ -47,7 +47,7 @@ run "every_declared_secret_is_readable_by_the_api_runtime_identity_alone" {
   # how many: a container appearing here is a credential path, and it should be
   # impossible to add one without changing this list (#242, ADR-0013).
   assert {
-    condition = setequal(keys(module.secret_store.accessor_register), [
+    condition = toset(keys(module.secret_store.accessor_register)) == toset([
       "platform-api-projection-database-url",
       "platform-api-engine-reader-database-url",
       "platform-api-engine-recorder-database-url",
