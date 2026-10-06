@@ -97,8 +97,20 @@ variable "accessible_secret_ids" {
     deliberate and harmless: the grant is what lets the maintainer supply the value
     without a second apply.
   EOT
-  type        = list(string)
-  default     = ["platform-api-projection-database-url"]
+  type = list(string)
+  default = [
+    "platform-api-projection-database-url",
+    # #242, ADR-0013. Three database roles and three identity values, each an
+    # empty container the maintainer fills out of band. Declared intent only: the
+    # `secretAccessor` grant is in the maintainer-applied platform stack, because
+    # this apply holds no Secret Manager authority at all (#217, #224).
+    "platform-api-engine-reader-database-url",
+    "platform-api-engine-recorder-database-url",
+    "platform-api-account-database-url",
+    "platform-api-identity-audience",
+    "platform-api-identity-issuer",
+    "platform-api-identity-account-id",
+  ]
 }
 
 variable "secret_environment" {
@@ -109,12 +121,30 @@ variable "secret_environment" {
     `PLATFORM_API_PROJECTION_DATABASE_URL` is the connection string for the
     SELECT-only role on the existing public paper projection. The API reads four
     tables through it and refuses readiness if the role holds more than SELECT or
-    the database is unreachable (ADR-0012). No value appears here, in a plan, or in
-    state; the maintainer adds the secret version out of band.
+    the database is unreachable (ADR-0012).
+
+    The six that follow are the signed-in surface (#242, ADR-0013). The two engine
+    connections are separate because the roles behind them are separate
+    authorities — `engine_reader` holds SELECT on a granted subset and can record
+    nothing, `engine_control_recorder` holds INSERT on the one append-only control
+    table and can read nothing — and one variable carrying both would be one merge
+    away from a role that does both. The account connection is this service's own
+    schema. The three identity values are the audience, the issuer and the single
+    account's identifier.
+
+    No value appears here, in a plan, or in state; the maintainer adds each secret
+    version out of band. An absent value is a legitimate state: the API serves the
+    public dashboard and answers the signed-in routes as not configured.
   EOT
   type        = map(string)
   default = {
-    PLATFORM_API_PROJECTION_DATABASE_URL = "platform-api-projection-database-url"
+    PLATFORM_API_PROJECTION_DATABASE_URL      = "platform-api-projection-database-url"
+    PLATFORM_API_ENGINE_READER_DATABASE_URL   = "platform-api-engine-reader-database-url"
+    PLATFORM_API_ENGINE_RECORDER_DATABASE_URL = "platform-api-engine-recorder-database-url"
+    PLATFORM_API_ACCOUNT_DATABASE_URL         = "platform-api-account-database-url"
+    PLATFORM_API_IDENTITY_AUDIENCE            = "platform-api-identity-audience"
+    PLATFORM_API_IDENTITY_ISSUER              = "platform-api-identity-issuer"
+    PLATFORM_API_IDENTITY_ACCOUNT_ID          = "platform-api-identity-account-id"
   }
 }
 
@@ -144,6 +174,29 @@ variable "projection_secret_binding_enabled" {
   EOT
   type        = bool
   default     = true
+}
+
+variable "identity_secret_binding_enabled" {
+  description = <<-EOT
+    Whether this revision binds the six signed-in references — the two engine
+    connections, this service's own schema, and the three identity values — from
+    Secret Manager. **Off.**
+
+    Off is the only correct default right now, for the reason `#217` established
+    before `#219` could flip the projection's gate: Cloud Run refuses a revision
+    that references a secret which does not exist, and these containers have not
+    been created. The maintainer creates them from the platform stack, grants
+    access, and enters the first versions out of band; turning this on is then the
+    last one-line change of the rollout, with its own pull request.
+
+    It stays a variable afterwards for the same reason the projection's does: it is
+    the documented way to take the references back out. The API already handles the
+    absent state honestly — it serves the public dashboard and answers the
+    signed-in routes as not configured — so turning the binding off degrades the
+    service rather than breaking it (ADR-0013 §4).
+  EOT
+  type        = bool
+  default     = false
 }
 
 variable "trace_sample_ratio" {

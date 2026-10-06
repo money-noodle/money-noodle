@@ -50,11 +50,27 @@ run "production_api" {
   # checked against, so a binding renamed here fails in HCL rather than only in
   # the bridge's JSON.
   assert {
-    condition = (
-      length(var.secret_environment) == 1 &&
-      contains(keys(var.secret_environment), "PLATFORM_API_PROJECTION_DATABASE_URL")
-    )
-    error_message = "The api runtime may hold exactly one secret-backed variable, the projection connection string; found: ${join(", ", keys(var.secret_environment))}"
+    condition = contains(keys(var.secret_environment), "PLATFORM_API_PROJECTION_DATABASE_URL")
+    error_message = "The api runtime must declare the projection connection string; found: ${join(", ", keys(var.secret_environment))}"
+  }
+
+  # The allowlist of what a secret-backed variable on this runtime may be. #242
+  # adds six, and this list is what stops a seventh arriving without a decision:
+  # the two engine roles ADR-0013 §2 separates, this service's own schema, and the
+  # three identity values. A name outside it fails here rather than in a deploy.
+  assert {
+    condition = alltrue([
+      for name in keys(var.secret_environment) : contains([
+        "PLATFORM_API_PROJECTION_DATABASE_URL",
+        "PLATFORM_API_ENGINE_READER_DATABASE_URL",
+        "PLATFORM_API_ENGINE_RECORDER_DATABASE_URL",
+        "PLATFORM_API_ACCOUNT_DATABASE_URL",
+        "PLATFORM_API_IDENTITY_AUDIENCE",
+        "PLATFORM_API_IDENTITY_ISSUER",
+        "PLATFORM_API_IDENTITY_ACCOUNT_ID",
+      ], name)
+    ])
+    error_message = "A secret-backed variable outside the accepted set is declared; found: ${join(", ", keys(var.secret_environment))}"
   }
 
   assert {

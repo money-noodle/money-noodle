@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { GetHourlyThresholdMarketsData, GetHourlyThresholdMarketsErrors, GetHourlyThresholdMarketsResponses, GetLivenessData, GetLivenessErrors, GetLivenessResponses, GetMarketOverviewData, GetMarketOverviewErrors, GetMarketOverviewResponses, GetPaperBudgetData, GetPaperBudgetErrors, GetPaperBudgetResponses, GetPaperPerformanceData, GetPaperPerformanceErrors, GetPaperPerformanceResponses, GetPaperPerformanceSummaryData, GetPaperPerformanceSummaryErrors, GetPaperPerformanceSummaryResponses, GetPlatformStatusData, GetPlatformStatusErrors, GetPlatformStatusResponses, GetReadinessData, GetReadinessErrors, GetReadinessResponses } from './types.gen';
+import type { GetBudgetDetailData, GetBudgetDetailErrors, GetBudgetDetailResponses, GetBudgetIntentHistoryData, GetBudgetIntentHistoryErrors, GetBudgetIntentHistoryResponses, GetHourlyThresholdMarketsData, GetHourlyThresholdMarketsErrors, GetHourlyThresholdMarketsResponses, GetJobHealthData, GetJobHealthErrors, GetJobHealthResponses, GetLivenessData, GetLivenessErrors, GetLivenessResponses, GetMarketOverviewData, GetMarketOverviewErrors, GetMarketOverviewResponses, GetPaperBudgetData, GetPaperBudgetErrors, GetPaperBudgetResponses, GetPaperPerformanceData, GetPaperPerformanceErrors, GetPaperPerformanceResponses, GetPaperPerformanceSummaryData, GetPaperPerformanceSummaryErrors, GetPaperPerformanceSummaryResponses, GetPlatformStatusData, GetPlatformStatusErrors, GetPlatformStatusResponses, GetReadinessData, GetReadinessErrors, GetReadinessResponses, GetSessionData, GetSessionErrors, GetSessionResponses, ListBudgetsData, ListBudgetsErrors, ListBudgetsResponses, RecordBudgetControlData, RecordBudgetControlErrors, RecordBudgetControlResponses, SignInData, SignInErrors, SignInResponses, SignOutData, SignOutErrors, SignOutResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -77,6 +77,135 @@ export const getMarketOverview = <ThrowOnError extends boolean = false>(options?
  * Per-asset degradation is normal and is expressed inside a 200. An asset whose listing could not be read, or that has no exact one-hour group trading, carries its reasons in `unavailableReasons` and omits the numbers it cannot support. A listing that offered one usable side publishes that side and names the other. `marketDataAvailable` is true only for a complete, unambiguous pair.
  */
 export const getHourlyThresholdMarkets = <ThrowOnError extends boolean = false>(options?: Options<GetHourlyThresholdMarketsData, ThrowOnError>): RequestResult<GetHourlyThresholdMarketsResponses, GetHourlyThresholdMarketsErrors, ThrowOnError> => (options?.client ?? client).get<GetHourlyThresholdMarketsResponses, GetHourlyThresholdMarketsErrors, ThrowOnError>({ url: '/v1/market/hourly-thresholds', ...options });
+
+/**
+ * Revoke the current session.
+ *
+ * Sets the session's revocation time server-side and clears the cookie. Presenting a session that is already unknown, revoked or expired still succeeds, so this operation cannot be used to discover which session identifiers exist; presenting none at all is refused.
+ */
+export const signOut = <ThrowOnError extends boolean = false>(options?: Options<SignOutData, ThrowOnError>): RequestResult<SignOutResponses, SignOutErrors, ThrowOnError> => (options?.client ?? client).delete<SignOutResponses, SignOutErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-mn_session',
+            type: 'apiKey'
+        }],
+    url: '/v1/identity/session',
+    ...options
+});
+
+/**
+ * Read the current session.
+ *
+ * Confirms that the caller holds an accepted session and names the account it is bound to. Carries no identity-provider claim and no personal data: the account identifier and the session's expiry are the whole of it.
+ */
+export const getSession = <ThrowOnError extends boolean = false>(options?: Options<GetSessionData, ThrowOnError>): RequestResult<GetSessionResponses, GetSessionErrors, ThrowOnError> => (options?.client ?? client).get<GetSessionResponses, GetSessionErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-mn_session',
+            type: 'apiKey'
+        }],
+    url: '/v1/identity/session',
+    ...options
+});
+
+/**
+ * Exchange a verified identity-provider token for a server-side session.
+ *
+ * The only sign-in path. The body carries an identity token issued by the configured identity provider; this API verifies it, requires that it proves a second factor was used for this sign-in, and establishes a server-side session bound to the single account.
+ *
+ * The response carries no token and no credential. The session is an opaque identifier returned in an `HttpOnly`, `Secure`, `SameSite=Strict` cookie, and every later request is authorised against a row this platform owns, so revocation is immediate and does not depend on the provider.
+ *
+ * A refusal is a problem document and says only which of the fixed reasons it was. The difference between a bad signature, a wrong audience and an expired token is deliberately not published.
+ */
+export const signIn = <ThrowOnError extends boolean = false>(options: Options<SignInData, ThrowOnError>): RequestResult<SignInResponses, SignInErrors, ThrowOnError> => (options.client ?? client).post<SignInResponses, SignInErrors, ThrowOnError>({
+    url: '/v1/identity/session',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * List the account's budget records.
+ *
+ * Exactly two records, `paper` and `live`, with the same schema. The difference between them is authority, not structure: `live` carries `hasExecutionAuthority: false` and nothing in this platform can act on it.
+ */
+export const listBudgets = <ThrowOnError extends boolean = false>(options?: Options<ListBudgetsData, ThrowOnError>): RequestResult<ListBudgetsResponses, ListBudgetsErrors, ThrowOnError> => (options?.client ?? client).get<ListBudgetsResponses, ListBudgetsErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-mn_session',
+            type: 'apiKey'
+        }],
+    url: '/v1/budgets',
+    ...options
+});
+
+/**
+ * Read one budget record and the control state derived from its intent.
+ *
+ * `desiredState` is what the latest `pause` or `resume` intent asked for. `appliedState` is what a job said it did, and is `null` until a job has read that intent. The two are separate fields rather than one because an operator's request and an engine's action are different facts, and in this milestone no job exists to turn the first into the second.
+ */
+export const getBudgetDetail = <ThrowOnError extends boolean = false>(options: Options<GetBudgetDetailData, ThrowOnError>): RequestResult<GetBudgetDetailResponses, GetBudgetDetailErrors, ThrowOnError> => (options.client ?? client).get<GetBudgetDetailResponses, GetBudgetDetailErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-mn_session',
+            type: 'apiKey'
+        }],
+    url: '/v1/budgets/{kind}',
+    ...options
+});
+
+/**
+ * Record a control action against a budget as durable intent.
+ *
+ * Identical for both budgets. The action is appended to the append-only control table as an intent row carrying the capability, action, actor, epoch, recorded time and run identifier, and **this API performs no effect**: the job that owns the capability reads intent at the start of its next run.
+ *
+ * A 202 therefore means the request is recorded and auditable, never that anything has happened. For the `live` budget no job exists at all, so the row is recorded and audited and nothing will act on it.
+ */
+export const recordBudgetControl = <ThrowOnError extends boolean = false>(options: Options<RecordBudgetControlData, ThrowOnError>): RequestResult<RecordBudgetControlResponses, RecordBudgetControlErrors, ThrowOnError> => (options.client ?? client).post<RecordBudgetControlResponses, RecordBudgetControlErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-mn_session',
+            type: 'apiKey'
+        }],
+    url: '/v1/budgets/{kind}/controls',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Read the recorded control intent and what jobs said about it.
+ *
+ * The audit, newest first, ordered by `(epoch, recordedAt, id)` — the same ordering the staleness rule uses, so the first entry is the one a job would treat as current. Each entry carries the outcome rows a job appended against it, which is empty until a job has run.
+ */
+export const getBudgetIntentHistory = <ThrowOnError extends boolean = false>(options: Options<GetBudgetIntentHistoryData, ThrowOnError>): RequestResult<GetBudgetIntentHistoryResponses, GetBudgetIntentHistoryErrors, ThrowOnError> => (options.client ?? client).get<GetBudgetIntentHistoryResponses, GetBudgetIntentHistoryErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-mn_session',
+            type: 'apiKey'
+        }],
+    url: '/v1/budgets/{kind}/intents',
+    ...options
+});
+
+/**
+ * Read the last recorded run of each engine job.
+ *
+ * One entry per capability the engine store knows about. A job that has never run reports null times and no outcome, which in this milestone is every job: the engine boundary is accepted and no job is built.
+ */
+export const getJobHealth = <ThrowOnError extends boolean = false>(options?: Options<GetJobHealthData, ThrowOnError>): RequestResult<GetJobHealthResponses, GetJobHealthErrors, ThrowOnError> => (options?.client ?? client).get<GetJobHealthResponses, GetJobHealthErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-mn_session',
+            type: 'apiKey'
+        }],
+    url: '/v1/engine/jobs',
+    ...options
+});
 
 /**
  * Confirm that the API process can answer HTTP requests.

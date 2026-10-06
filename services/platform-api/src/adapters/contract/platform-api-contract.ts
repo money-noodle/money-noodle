@@ -80,6 +80,68 @@ export type HourlyThresholdMarketsResponse = PublishedHourlyThresholds & {
   readonly schemaVersion: '1';
 };
 
+/**
+ * The signed-in responses, as they go over the wire.
+ *
+ * Same envelope rule as every other response in this contract. These are
+ * declared structurally rather than from a domain type, because what crosses the
+ * wire is deliberately *less* than what the domain holds: a session summary
+ * carries an account and an expiry and nothing a provider said, and an intent row
+ * carries ISO strings rather than the `Date` objects the store returns.
+ */
+export interface SessionSummaryResponse {
+  readonly accountId: string;
+  readonly expiresAt: string;
+  readonly requestId: string;
+  readonly schemaVersion: '1';
+}
+
+export interface BudgetSummaryPayload {
+  readonly createdAt: string;
+  readonly hasExecutionAuthority: boolean;
+  readonly id: string;
+  readonly kind: 'paper' | 'live';
+}
+
+export interface BudgetListResponse {
+  readonly budgets: readonly BudgetSummaryPayload[];
+  readonly requestId: string;
+  readonly schemaVersion: '1';
+}
+
+export interface BudgetDetailResponse {
+  readonly appliedState: string | null;
+  readonly budget: BudgetSummaryPayload;
+  readonly capability: string;
+  readonly desiredState: 'running' | 'paused' | 'unset';
+  readonly epoch: number;
+  readonly latestIntentAt: string | null;
+  readonly requestId: string;
+  readonly schemaVersion: '1';
+}
+
+export interface ControlAcceptedResponse {
+  readonly action: string;
+  readonly capability: string;
+  readonly intentId: string;
+  readonly recorded: true;
+  readonly requestId: string;
+  readonly schemaVersion: '1';
+}
+
+export interface IntentHistoryResponse {
+  readonly capability: string;
+  readonly entries: readonly unknown[];
+  readonly requestId: string;
+  readonly schemaVersion: '1';
+}
+
+export interface JobHealthResponse {
+  readonly jobs: readonly unknown[];
+  readonly requestId: string;
+  readonly schemaVersion: '1';
+}
+
 export interface ProblemResponse {
   readonly detail?: string;
   readonly errorCode: string;
@@ -91,14 +153,20 @@ export interface ProblemResponse {
 }
 
 export interface PlatformApiContract {
+  assertBudgetDetail(value: unknown): asserts value is BudgetDetailResponse;
+  assertBudgetList(value: unknown): asserts value is BudgetListResponse;
+  assertControlAccepted(value: unknown): asserts value is ControlAcceptedResponse;
   assertHealth(value: unknown): asserts value is HealthResponse;
   assertHourlyThresholdMarkets(value: unknown): asserts value is HourlyThresholdMarketsResponse;
+  assertIntentHistory(value: unknown): asserts value is IntentHistoryResponse;
+  assertJobHealth(value: unknown): asserts value is JobHealthResponse;
   assertMarketOverview(value: unknown): asserts value is MarketOverviewResponse;
   assertPaperBudget(value: unknown): asserts value is PaperBudgetResponse;
   assertPaperPerformance(value: unknown): asserts value is PaperPerformanceResponse;
   assertPaperPerformanceSummary(value: unknown): asserts value is PaperPerformanceSummaryResponse;
   assertPlatformStatus(value: unknown): asserts value is PlatformStatusResponse;
   assertProblem(value: unknown): asserts value is ProblemResponse;
+  assertSessionSummary(value: unknown): asserts value is SessionSummaryResponse;
 }
 
 export class ContractResponseError extends Error {
@@ -197,10 +265,32 @@ export function createPlatformApiContract(source: string): PlatformApiContract {
   };
 
   return {
+    // The signed-in responses validate against the same document they are
+    // published from, exactly as the public reads do. A control response that
+    // drifted from the contract fails here rather than in a client, and that
+    // matters more for these than for a read: a malformed acknowledgement of a
+    // recorded intent is a malformed audit trail.
+    assertBudgetDetail: createAssertion<BudgetDetailResponse>(
+      'BudgetDetail',
+      validator('BudgetDetail'),
+    ),
+    assertBudgetList: createAssertion<BudgetListResponse>('BudgetList', validator('BudgetList')),
+    assertControlAccepted: createAssertion<ControlAcceptedResponse>(
+      'ControlAccepted',
+      validator('ControlAccepted'),
+    ),
     assertHealth: createAssertion<HealthResponse>('Health', validator('Health')),
     assertHourlyThresholdMarkets: createAssertion<HourlyThresholdMarketsResponse>(
       'HourlyThresholdMarkets',
       validator('HourlyThresholdMarkets'),
+    ),
+    assertIntentHistory: createAssertion<IntentHistoryResponse>(
+      'IntentHistory',
+      validator('IntentHistory'),
+    ),
+    assertJobHealth: createAssertion<JobHealthResponse>(
+      'JobHealthReport',
+      validator('JobHealthReport'),
     ),
     assertMarketOverview: createAssertion<MarketOverviewResponse>(
       'MarketOverview',
@@ -226,5 +316,9 @@ export function createPlatformApiContract(source: string): PlatformApiContract {
       validator('PlatformStatus'),
     ),
     assertProblem: createAssertion<ProblemResponse>('Problem', validator('Problem')),
+    assertSessionSummary: createAssertion<SessionSummaryResponse>(
+      'SessionSummary',
+      validator('SessionSummary'),
+    ),
   };
 }

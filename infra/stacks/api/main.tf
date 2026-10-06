@@ -79,10 +79,27 @@ locals {
   #
   # The gate stays, switched on, because it is the off-switch: setting
   # `projection_secret_binding_enabled` to false renders a revision that binds no
-  # secret, which contains a projection incident without reverting the port. Either
-  # direction is a reviewed one-line change, because a credential path is a decision
-  # with a pull request behind it rather than a side effect of a release.
-  secret_environment = var.projection_secret_binding_enabled ? var.secret_environment : {}
+  # projection secret, which contains a projection incident without reverting the
+  # port. Either direction is a reviewed one-line change, because a credential path
+  # is a decision with a pull request behind it rather than a side effect of a
+  # release.
+  #
+  # #242 adds a second gate for the same reason and at the same point in its own
+  # sequence. The six signed-in references are declared here and rendered by
+  # nothing yet: Cloud Run refuses a revision that references a secret which does
+  # not exist, so this must stay off until the maintainer has created those
+  # containers, granted access and entered the first versions. Turning it on is the
+  # last one-line change of #242's rollout, exactly as #219 was for the projection.
+  projection_environment = var.projection_secret_binding_enabled ? {
+    PLATFORM_API_PROJECTION_DATABASE_URL = var.secret_environment["PLATFORM_API_PROJECTION_DATABASE_URL"]
+  } : {}
+
+  identity_environment = var.identity_secret_binding_enabled ? {
+    for name, secret_id in var.secret_environment :
+    name => secret_id if name != "PLATFORM_API_PROJECTION_DATABASE_URL"
+  } : {}
+
+  secret_environment = merge(local.projection_environment, local.identity_environment)
 }
 
 module "service" {

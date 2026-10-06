@@ -160,6 +160,12 @@ export default tseslint.config(
       // granted there rather than by removing every restriction here.
       'services/platform-api/src/adapters/telemetry/workload-identity-headers.ts',
       'services/platform-api/src/adapters/projection/**/*.ts',
+      // #242 adds two more adapter directories that open a connection, each with
+      // its own trailing block below. The engine store connects as the two engine
+      // roles ADR-0013 §2 defines; the account store connects to this service's
+      // own schema, which `overview.md` has always reserved for it.
+      'services/platform-api/src/adapters/engine-store/**/*.ts',
+      'services/platform-api/src/adapters/account-store/**/*.ts',
       // Inner API layers keep their own, stricter rule above; listing them here
       // stops this block from replacing it, because the last matching config
       // wins for a given rule.
@@ -286,6 +292,41 @@ export default tseslint.config(
               ],
               message:
                 'The accepted exception is one PostgreSQL adapter for one read-only projection, not a database client anywhere in the service (ADR-0012).',
+            },
+            {
+              group: [...SCHEDULER_RUNTIME_MODULES, ...ENGINE_JOBS_MODULES],
+              message: NO_RESIDENT_WORK_MESSAGE,
+            },
+          ],
+        },
+      ],
+    },
+  },
+  // #242, ADR-0013 §2. Two more directories may open a connection, and each is the
+  // exception its own restriction above exists for. Declared after that block
+  // because a flat config replaces a rule rather than merging it. The
+  // provider-authentication and no-resident-work restrictions are restated here so
+  // permitting a driver does not quietly permit a provider SDK or a scheduler.
+  {
+    files: [
+      'services/platform-api/src/adapters/engine-store/**/*.ts',
+      'services/platform-api/src/adapters/account-store/**/*.ts',
+    ],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'google-auth-library',
+              message:
+                'Only the telemetry authentication adapter may import a provider authentication library (ADR-0007, 2026-09-15 amendment).',
+            },
+          ],
+          patterns: [
+            {
+              group: ['google-auth-library/**', 'googleapis', '@google-cloud/**'],
+              message: 'These adapters read and append rows. They are not a provider SDK boundary.',
             },
             {
               group: [...SCHEDULER_RUNTIME_MODULES, ...ENGINE_JOBS_MODULES],

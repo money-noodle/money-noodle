@@ -1170,6 +1170,181 @@ export type HourlyThresholdMarkets = {
     markets: Array<HourlyThresholdMarket>;
 };
 
+/**
+ * Which budget record. The two kinds have identical schemas and identical controls; what differs is authority.
+ */
+export type BudgetKind = 'paper' | 'live';
+
+/**
+ * A control, identical for both budgets. `provider-enable` is recordable and, in this milestone, acted on by nothing: there is no provider to enable and no funded authority to grant.
+ */
+export type ControlActionName = 'configure' | 'pause' | 'resume' | 'reset' | 'provider-enable';
+
+/**
+ * What a job said it did with an intent row.
+ */
+export type IntentOutcomeState = 'applied' | 'refused' | 'superseded';
+
+/**
+ * Bounded scalar parameters for a control. An intent row is an audit record a person reads, so keys are short identifiers and values are strings, numbers or booleans; anything richer needs a schema and a version of its own.
+ */
+export type ControlParameters = {
+    [key: string]: string | number | boolean;
+};
+
+export type SignInRequest = {
+    /**
+     * An identity token issued by the configured provider. It is verified and discarded; nothing derived from it is stored beside the session.
+     */
+    idToken: string;
+};
+
+export type SessionSummary = {
+    /**
+     * The single account this session is bound to.
+     */
+    accountId: OpaqueLabel;
+    /**
+     * When this session stops being accepted, on this API's clock.
+     */
+    expiresAt: ApiTime;
+    schemaVersion: '1';
+    requestId: RequestId;
+};
+
+export type BudgetSummary = {
+    id: OpaqueLabel;
+    kind: BudgetKind;
+    createdAt: ApiTime;
+    /**
+     * Whether anything in this platform can act on this budget. False for `live` in this milestone and for as long as no funded-authority design is accepted: the record exists, the controls record intent, and no venue credential, wire module, reconciliation job or arming path exists.
+     */
+    hasExecutionAuthority: boolean;
+};
+
+export type BudgetList = {
+    /**
+     * Exactly two records, `paper` and `live`, in a stable order.
+     */
+    budgets: [
+        BudgetSummary,
+        BudgetSummary
+    ];
+    schemaVersion: '1';
+    requestId: RequestId;
+};
+
+export type BudgetDetail = {
+    budget: BudgetSummary;
+    /**
+     * The capability intent for this budget is recorded against.
+     */
+    capability: OpaqueLabel;
+    /**
+     * What the latest `pause` or `resume` intent asked for. `unset` means no such control has ever been recorded.
+     */
+    desiredState: 'running' | 'paused' | 'unset';
+    /**
+     * What a job last said it did. Null until a job has read an intent row, which in this milestone is always.
+     */
+    appliedState: IntentOutcomeState | null;
+    /**
+     * The control epoch of the latest intent row, or 0 when there is none.
+     */
+    epoch: number;
+    /**
+     * When the latest intent was recorded, or null when there is none.
+     */
+    latestIntentAt: ApiTime | null;
+    schemaVersion: '1';
+    requestId: RequestId;
+};
+
+export type ControlRequest = {
+    action: ControlActionName;
+    parameters?: ControlParameters | null;
+};
+
+export type ControlAccepted = {
+    /**
+     * The identity of the appended intent row.
+     */
+    intentId: OpaqueLabel;
+    capability: OpaqueLabel;
+    action: ControlActionName;
+    /**
+     * Always true, and always only this. The row is recorded; nothing has been performed, and a job will read it at the start of its next run.
+     */
+    recorded: true;
+    schemaVersion: '1';
+    requestId: RequestId;
+};
+
+export type RecordedIntent = {
+    id: OpaqueLabel;
+    capability: OpaqueLabel;
+    action: ControlActionName;
+    /**
+     * The principal, agent or workload identity that recorded the row. This platform has one account, so this is that account's identifier and never an identity-provider subject.
+     */
+    actor: OpaqueLabel;
+    epoch: number;
+    recordedAt: SourceTime;
+    runId: OpaqueLabel;
+    parameters: ControlParameters | null;
+};
+
+export type RecordedOutcome = {
+    id: OpaqueLabel;
+    intentId: OpaqueLabel;
+    appliedRunId: OpaqueLabel;
+    appliedAt: SourceTime;
+    outcome: IntentOutcomeState;
+    /**
+     * A fixed code from the job's own vocabulary. Never provider text.
+     */
+    reason: OpaqueLabel;
+};
+
+export type IntentHistoryEntry = {
+    intent: RecordedIntent;
+    /**
+     * What jobs appended against this intent. Empty until one has run.
+     */
+    outcomes: Array<RecordedOutcome>;
+};
+
+export type IntentHistory = {
+    capability: OpaqueLabel;
+    /**
+     * Newest first, ordered by `(epoch, recordedAt, id)`.
+     */
+    entries: Array<IntentHistoryEntry>;
+    schemaVersion: '1';
+    requestId: RequestId;
+};
+
+export type JobHealthEntry = {
+    capability: OpaqueLabel;
+    lastRunId: OpaqueLabel | null;
+    lastRunAt: SourceTime | null;
+    lastOutcome: IntentOutcomeState | null;
+};
+
+export type JobHealthReport = {
+    /**
+     * One entry per capability the engine store knows about.
+     */
+    jobs: Array<JobHealthEntry>;
+    schemaVersion: '1';
+    requestId: RequestId;
+};
+
+/**
+ * Which of the account's two budget records the operation addresses.
+ */
+export type BudgetKind2 = BudgetKind;
+
 export type GetPlatformStatusData = {
     body?: never;
     path?: never;
@@ -1355,6 +1530,297 @@ export type GetHourlyThresholdMarketsResponses = {
 };
 
 export type GetHourlyThresholdMarketsResponse = GetHourlyThresholdMarketsResponses[keyof GetHourlyThresholdMarketsResponses];
+
+export type SignOutData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/v1/identity/session';
+};
+
+export type SignOutErrors = {
+    /**
+     * The request carried no accepted session, or the session was refused. The `errorCode` distinguishes the reasons this API is willing to publish: `MN-SESSION-REQUIRED` (no session was presented), `MN-SESSION-REJECTED` (the session is unknown, revoked or expired), `MN-IDENTITY-REJECTED` (the presented identity token was not accepted), `MN-SECOND-FACTOR-REQUIRED` (the token did not prove a second factor was used) and `MN-IDENTITY-NOT-CONFIGURED` (this revision has no identity configuration). No provider message is ever carried.
+     */
+    401: Problem;
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    default: Problem;
+};
+
+export type SignOutError = SignOutErrors[keyof SignOutErrors];
+
+export type SignOutResponses = {
+    /**
+     * The session is revoked.
+     */
+    204: void;
+};
+
+export type SignOutResponse = SignOutResponses[keyof SignOutResponses];
+
+export type GetSessionData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/v1/identity/session';
+};
+
+export type GetSessionErrors = {
+    /**
+     * The request carried no accepted session, or the session was refused. The `errorCode` distinguishes the reasons this API is willing to publish: `MN-SESSION-REQUIRED` (no session was presented), `MN-SESSION-REJECTED` (the session is unknown, revoked or expired), `MN-IDENTITY-REJECTED` (the presented identity token was not accepted), `MN-SECOND-FACTOR-REQUIRED` (the token did not prove a second factor was used) and `MN-IDENTITY-NOT-CONFIGURED` (this revision has no identity configuration). No provider message is ever carried.
+     */
+    401: Problem;
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    default: Problem;
+};
+
+export type GetSessionError = GetSessionErrors[keyof GetSessionErrors];
+
+export type GetSessionResponses = {
+    /**
+     * The current session.
+     */
+    200: SessionSummary;
+};
+
+export type GetSessionResponse = GetSessionResponses[keyof GetSessionResponses];
+
+export type SignInData = {
+    body: SignInRequest;
+    path?: never;
+    query?: never;
+    url: '/v1/identity/session';
+};
+
+export type SignInErrors = {
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    400: Problem;
+    /**
+     * The request carried no accepted session, or the session was refused. The `errorCode` distinguishes the reasons this API is willing to publish: `MN-SESSION-REQUIRED` (no session was presented), `MN-SESSION-REJECTED` (the session is unknown, revoked or expired), `MN-IDENTITY-REJECTED` (the presented identity token was not accepted), `MN-SECOND-FACTOR-REQUIRED` (the token did not prove a second factor was used) and `MN-IDENTITY-NOT-CONFIGURED` (this revision has no identity configuration). No provider message is ever carried.
+     */
+    401: Problem;
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    503: Problem;
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    default: Problem;
+};
+
+export type SignInError = SignInErrors[keyof SignInErrors];
+
+export type SignInResponses = {
+    /**
+     * A session was established.
+     */
+    201: SessionSummary;
+};
+
+export type SignInResponse = SignInResponses[keyof SignInResponses];
+
+export type ListBudgetsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/v1/budgets';
+};
+
+export type ListBudgetsErrors = {
+    /**
+     * The request carried no accepted session, or the session was refused. The `errorCode` distinguishes the reasons this API is willing to publish: `MN-SESSION-REQUIRED` (no session was presented), `MN-SESSION-REJECTED` (the session is unknown, revoked or expired), `MN-IDENTITY-REJECTED` (the presented identity token was not accepted), `MN-SECOND-FACTOR-REQUIRED` (the token did not prove a second factor was used) and `MN-IDENTITY-NOT-CONFIGURED` (this revision has no identity configuration). No provider message is ever carried.
+     */
+    401: Problem;
+    /**
+     * The read model could not answer. The `errorCode` distinguishes the three reasons: `MN-READ-MODEL-UNREACHABLE` (the read model could not be reached), `MN-READ-MODEL-NOT-PUBLISHED` (it is reachable and has published no such record yet), and `MN-READ-MODEL-INVALID` (it returned a record this API does not understand; `detail` names the field path that failed and no value from it).
+     */
+    503: Problem;
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    default: Problem;
+};
+
+export type ListBudgetsError = ListBudgetsErrors[keyof ListBudgetsErrors];
+
+export type ListBudgetsResponses = {
+    /**
+     * The account's budget records.
+     */
+    200: BudgetList;
+};
+
+export type ListBudgetsResponse = ListBudgetsResponses[keyof ListBudgetsResponses];
+
+export type GetBudgetDetailData = {
+    body?: never;
+    path: {
+        /**
+         * Which of the account's two budget records the operation addresses.
+         */
+        kind: BudgetKind;
+    };
+    query?: never;
+    url: '/v1/budgets/{kind}';
+};
+
+export type GetBudgetDetailErrors = {
+    /**
+     * The request carried no accepted session, or the session was refused. The `errorCode` distinguishes the reasons this API is willing to publish: `MN-SESSION-REQUIRED` (no session was presented), `MN-SESSION-REJECTED` (the session is unknown, revoked or expired), `MN-IDENTITY-REJECTED` (the presented identity token was not accepted), `MN-SECOND-FACTOR-REQUIRED` (the token did not prove a second factor was used) and `MN-IDENTITY-NOT-CONFIGURED` (this revision has no identity configuration). No provider message is ever carried.
+     */
+    401: Problem;
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    404: Problem;
+    /**
+     * The read model could not answer. The `errorCode` distinguishes the three reasons: `MN-READ-MODEL-UNREACHABLE` (the read model could not be reached), `MN-READ-MODEL-NOT-PUBLISHED` (it is reachable and has published no such record yet), and `MN-READ-MODEL-INVALID` (it returned a record this API does not understand; `detail` names the field path that failed and no value from it).
+     */
+    503: Problem;
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    default: Problem;
+};
+
+export type GetBudgetDetailError = GetBudgetDetailErrors[keyof GetBudgetDetailErrors];
+
+export type GetBudgetDetailResponses = {
+    /**
+     * The budget record and its derived control state.
+     */
+    200: BudgetDetail;
+};
+
+export type GetBudgetDetailResponse = GetBudgetDetailResponses[keyof GetBudgetDetailResponses];
+
+export type RecordBudgetControlData = {
+    body: ControlRequest;
+    path: {
+        /**
+         * Which of the account's two budget records the operation addresses.
+         */
+        kind: BudgetKind;
+    };
+    query?: never;
+    url: '/v1/budgets/{kind}/controls';
+};
+
+export type RecordBudgetControlErrors = {
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    400: Problem;
+    /**
+     * The request carried no accepted session, or the session was refused. The `errorCode` distinguishes the reasons this API is willing to publish: `MN-SESSION-REQUIRED` (no session was presented), `MN-SESSION-REJECTED` (the session is unknown, revoked or expired), `MN-IDENTITY-REJECTED` (the presented identity token was not accepted), `MN-SECOND-FACTOR-REQUIRED` (the token did not prove a second factor was used) and `MN-IDENTITY-NOT-CONFIGURED` (this revision has no identity configuration). No provider message is ever carried.
+     */
+    401: Problem;
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    404: Problem;
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    503: Problem;
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    default: Problem;
+};
+
+export type RecordBudgetControlError = RecordBudgetControlErrors[keyof RecordBudgetControlErrors];
+
+export type RecordBudgetControlResponses = {
+    /**
+     * The intent is recorded. Nothing has been performed.
+     */
+    202: ControlAccepted;
+};
+
+export type RecordBudgetControlResponse = RecordBudgetControlResponses[keyof RecordBudgetControlResponses];
+
+export type GetBudgetIntentHistoryData = {
+    body?: never;
+    path: {
+        /**
+         * Which of the account's two budget records the operation addresses.
+         */
+        kind: BudgetKind;
+    };
+    query?: never;
+    url: '/v1/budgets/{kind}/intents';
+};
+
+export type GetBudgetIntentHistoryErrors = {
+    /**
+     * The request carried no accepted session, or the session was refused. The `errorCode` distinguishes the reasons this API is willing to publish: `MN-SESSION-REQUIRED` (no session was presented), `MN-SESSION-REJECTED` (the session is unknown, revoked or expired), `MN-IDENTITY-REJECTED` (the presented identity token was not accepted), `MN-SECOND-FACTOR-REQUIRED` (the token did not prove a second factor was used) and `MN-IDENTITY-NOT-CONFIGURED` (this revision has no identity configuration). No provider message is ever carried.
+     */
+    401: Problem;
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    404: Problem;
+    /**
+     * The read model could not answer. The `errorCode` distinguishes the three reasons: `MN-READ-MODEL-UNREACHABLE` (the read model could not be reached), `MN-READ-MODEL-NOT-PUBLISHED` (it is reachable and has published no such record yet), and `MN-READ-MODEL-INVALID` (it returned a record this API does not understand; `detail` names the field path that failed and no value from it).
+     */
+    503: Problem;
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    default: Problem;
+};
+
+export type GetBudgetIntentHistoryError = GetBudgetIntentHistoryErrors[keyof GetBudgetIntentHistoryErrors];
+
+export type GetBudgetIntentHistoryResponses = {
+    /**
+     * The bounded intent history for this budget's capability.
+     */
+    200: IntentHistory;
+};
+
+export type GetBudgetIntentHistoryResponse = GetBudgetIntentHistoryResponses[keyof GetBudgetIntentHistoryResponses];
+
+export type GetJobHealthData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/v1/engine/jobs';
+};
+
+export type GetJobHealthErrors = {
+    /**
+     * The request carried no accepted session, or the session was refused. The `errorCode` distinguishes the reasons this API is willing to publish: `MN-SESSION-REQUIRED` (no session was presented), `MN-SESSION-REJECTED` (the session is unknown, revoked or expired), `MN-IDENTITY-REJECTED` (the presented identity token was not accepted), `MN-SECOND-FACTOR-REQUIRED` (the token did not prove a second factor was used) and `MN-IDENTITY-NOT-CONFIGURED` (this revision has no identity configuration). No provider message is ever carried.
+     */
+    401: Problem;
+    /**
+     * The read model could not answer. The `errorCode` distinguishes the three reasons: `MN-READ-MODEL-UNREACHABLE` (the read model could not be reached), `MN-READ-MODEL-NOT-PUBLISHED` (it is reachable and has published no such record yet), and `MN-READ-MODEL-INVALID` (it returned a record this API does not understand; `detail` names the field path that failed and no value from it).
+     */
+    503: Problem;
+    /**
+     * Safe RFC 9457 problem details response.
+     */
+    default: Problem;
+};
+
+export type GetJobHealthError = GetJobHealthErrors[keyof GetJobHealthErrors];
+
+export type GetJobHealthResponses = {
+    /**
+     * The last recorded run of each job.
+     */
+    200: JobHealthReport;
+};
+
+export type GetJobHealthResponse = GetJobHealthResponses[keyof GetJobHealthResponses];
 
 export type GetLivenessData = {
     body?: never;

@@ -22,6 +22,7 @@ import type {
 } from '../contract/platform-api-contract.js';
 import type { Telemetry } from '../telemetry/create-telemetry.js';
 import { registerTelemetryHooks } from '../telemetry/telemetry-hooks.js';
+import { registerSignedInRoutes, type SignedInRouteDependencies } from './signed-in-routes.js';
 
 const TRACEPARENT_PATTERN = /^00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/u;
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/u;
@@ -72,6 +73,9 @@ const READINESS_DETAILS: Readonly<Record<string, string>> = Object.freeze({
   'over-privileged': 'The read model grants more than SELECT.',
   unreachable: 'The read model could not be reached.',
   'unexpected-shape': 'The read model returned data this API does not understand.',
+  // #242. Same rule as the three above: it names what is missing in this API's own
+  // vocabulary and nothing about a provider, a project or a credential.
+  'identity-not-configured': 'No identity configuration is present for this revision.',
 });
 
 export interface HttpServerDependencies {
@@ -107,6 +111,15 @@ export interface HttpServerDependencies {
   readonly getPlatformStatus: GetPlatformStatus;
   readonly onTraceContext?: (traceparent: string, requestId: string) => void;
   readonly service: ServiceDescriptor;
+  /**
+   * The signed-in surface (#242), or absent for a composition without one.
+   *
+   * Optional for the same reason `checkReadiness` is: a server constructed in a
+   * test that is only interested in the public reads should not have to supply
+   * seven use cases it will never call, and the public reads must keep working
+   * identically whether or not identity is composed.
+   */
+  readonly signedIn?: Omit<SignedInRouteDependencies, 'contract' | 'problem' | 'requestIdHeader'>;
   /**
    * Adapter-owned telemetry. Absent leaves the server exactly as it was: the
    * hooks below are the only place telemetry touches the HTTP adapter, and no
@@ -171,6 +184,18 @@ export function createHttpServer(dependencies: HttpServerDependencies): FastifyI
   // already rejected by the time a span is started from it.
   if (dependencies.telemetry !== undefined) {
     registerTelemetryHooks(server, dependencies.telemetry);
+  }
+
+  // Registered before the public reads so a signed-in route is never shadowed by
+  // the not-found handler, and after the telemetry hooks so its spans are the same
+  // spans every other route produces.
+  if (dependencies.signedIn !== undefined) {
+    registerSignedInRoutes(server, {
+      ...dependencies.signedIn,
+      contract: dependencies.contract,
+      problem,
+      requestIdHeader,
+    });
   }
 
   server.get('/v1/platform/status', async (request, reply) => {

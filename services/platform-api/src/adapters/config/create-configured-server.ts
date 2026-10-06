@@ -1,6 +1,22 @@
+import { randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
+import { createCheckIdentityReadiness } from '../../application/check-identity-readiness.js';
 import { createCheckProjectionReadiness } from '../../application/check-projection-readiness.js';
+import {
+  createListBudgets,
+  createReadBudgetDetail,
+  createReadIntentHistory,
+  createReadJobHealth,
+  createRecordBudgetControl,
+  type BudgetControlDependencies,
+} from '../../application/manage-budget-control.js';
+import {
+  createAuthenticateSession,
+  createRevokeSession,
+  createSignIn,
+  type SessionDependencies,
+} from '../../application/manage-session.js';
 import { createGetPlatformStatus } from '../../application/get-platform-status.js';
 import {
   createGetHourlyThresholdMarkets,
@@ -11,8 +27,31 @@ import {
   createGetPaperPerformance,
   createGetPaperPerformanceSummary,
 } from '../../application/read-paper-dashboard.js';
+import type {
+  BudgetRecordStore,
+  ControlRecorderPort,
+  EngineReadPort,
+} from '../../domain/budget-control.js';
+import type { IdentityTokenVerifier, SessionStore } from '../../domain/identity.js';
 import type { MarketFeedPort } from '../../domain/market-feeds.js';
 import type { PaperProjectionPort } from '../../domain/paper-projection.js';
+import { createAccountQueryClient } from '../account-store/account-query-client.js';
+import {
+  createPostgresBudgetRecordStore,
+  createPostgresSessionStore,
+} from '../account-store/postgres-account-store.js';
+import { readAccountStoreConfig } from '../account-store/read-account-store-config.js';
+import {
+  createEngineReaderClient,
+  createEngineRecorderClient,
+} from '../engine-store/engine-query-client.js';
+import {
+  createPostgresControlRecorder,
+  createPostgresEngineReader,
+} from '../engine-store/postgres-engine-store.js';
+import { readEngineStoreConfig } from '../engine-store/read-engine-store-config.js';
+import { createGoogleIdentityPlatformVerifier } from '../identity/google-identity-platform-verifier.js';
+import { identityConfigured, readIdentityConfig } from '../identity/read-identity-config.js';
 import { createMarketFeeds } from '../feeds/create-market-feeds.js';
 import { createPlatformApiContract } from '../contract/platform-api-contract.js';
 import { createHttpServer } from '../http/create-http-server.js';
@@ -48,6 +87,21 @@ export interface ConfiguredServerOverrides {
    * override, which lets the environment decide.
    */
   readonly projection?: PaperProjectionPort | null;
+  /**
+   * Test seams for the signed-in surface (#242), so sign-in, the session
+   * lifecycle and intent recording can be exercised against doubles without a
+   * database and without reaching an identity provider. `null` is "configured as
+   * absent", which is the state of a revision whose Secret Manager values the
+   * maintainer has not entered yet.
+   */
+  readonly identity?: {
+    readonly accountId?: string;
+    readonly budgets?: BudgetRecordStore | null;
+    readonly engine?: EngineReadPort | null;
+    readonly recorder?: ControlRecorderPort | null;
+    readonly sessions?: SessionStore | null;
+    readonly verifier?: IdentityTokenVerifier | null;
+  };
 }
 
 // Validate all configuration before reading the contract or constructing a
@@ -57,6 +111,8 @@ export async function createConfiguredServer(
   env: Readonly<Record<string, string | undefined>>,
   overrides: ConfiguredServerOverrides = {},
 ): Promise<{
+  /** Closed on shutdown beside the projection, for the same reason. */
+  accountClient: { close(): Promise<void> } | null;
   config: ReturnType<typeof readRuntimeConfig>;
   projection: PaperProjectionPort | null;
   server: ReturnType<typeof createHttpServer>;
@@ -128,6 +184,101 @@ export async function createConfiguredServer(
   // this revision to stop serving or for the platform to restart it.
   const marketFeeds = overrides.marketFeeds ?? createMarketFeeds();
 
+  // Identity and the engine store, composed the same way the projection is: every
+  // value arrives from a Secret Manager reference the maintainer fills out of band,
+  // an absent value is a legitimate state rather than a misconfiguration, and
+  // constructing an adapter reaches nothing (ADR-0005, ADR-0012, ADR-0013 §2).
+  const identityConfig = readIdentityConfig(env);
+  const engineConfig = readEngineStoreConfig(env);
+  const accountConfig = readAccountStoreConfig(env);
+
+  const accountClient =
+    overrides.identity?.sessions === undefined && overrides.identity?.budgets === undefined
+      ? accountConfig.connectionString === undefined
+        ? null
+        : createAccountQueryClient(accountConfig.connectionString)
+      : null;
+
+  const sessions: SessionStore | null =
+    overrides.identity?.sessions !== undefined
+      ? overrides.identity.sessions
+      : accountClient === null
+        ? null
+        : createPostgresSessionStore({ client: accountClient, schema: accountConfig.schema });
+
+  const budgets: BudgetRecordStore | null =
+    overrides.identity?.budgets !== undefined
+      ? overrides.identity.budgets
+      : accountClient === null
+        ? null
+        : createPostgresBudgetRecordStore({ client: accountClient, schema: accountConfig.schema });
+
+  const engine: EngineReadPort | null =
+    overrides.identity?.engine !== undefined
+      ? overrides.identity.engine
+      : engineConfig.readerConnectionString === undefined
+        ? null
+        : createPostgresEngineReader({
+            client: createEngineReaderClient(engineConfig.readerConnectionString),
+            schema: engineConfig.schema,
+          });
+
+  const recorder: ControlRecorderPort | null =
+    overrides.identity?.recorder !== undefined
+      ? overrides.identity.recorder
+      : engineConfig.recorderConnectionString === undefined
+        ? null
+        : createPostgresControlRecorder({
+            client: createEngineRecorderClient(engineConfig.recorderConnectionString),
+            schema: engineConfig.schema,
+          });
+
+  const verifier: IdentityTokenVerifier | null =
+    overrides.identity?.verifier !== undefined
+      ? overrides.identity.verifier
+      : identityConfigured(identityConfig) &&
+          identityConfig.audience !== undefined &&
+          identityConfig.issuer !== undefined
+        ? createGoogleIdentityPlatformVerifier({
+            audience: identityConfig.audience,
+            issuer: identityConfig.issuer,
+            keysUrl: identityConfig.keysUrl,
+          })
+        : null;
+
+  const accountId = overrides.identity?.accountId ?? identityConfig.accountId;
+
+  const sessionDependencies: SessionDependencies = {
+    accountId,
+    clock: { now: () => new Date() },
+    // 32 bytes of randomness, base64url. Opaque and unguessable: the identifier is
+    // the whole of what a client holds, so it must carry no structure to attack.
+    newSessionId: () => randomBytes(32).toString('base64url'),
+    sessions,
+    verifier,
+  };
+
+  const budgetDependencies: BudgetControlDependencies = {
+    budgets,
+    clock: { now: () => new Date() },
+    engine,
+    epoch: engineConfig.epoch,
+    newRunId: () => randomUUID(),
+    recorder,
+  };
+
+  // What "configured" means for readiness: everything the signed-in surface needs
+  // to answer. A revision missing any of it answers those routes honestly and is
+  // still allowed to be ready, because the public dashboard — which is the whole of
+  // what M3 promised — is unaffected. The flag is what #210 flipped for the
+  // projection once a read endpoint depended on it, and the identity surface will
+  // flip the same way once something depends on it being there.
+  const checkIdentityReadiness = createCheckIdentityReadiness({
+    configured: () =>
+      verifier !== null && sessions !== null && budgets !== null && accountId !== undefined,
+    readyWithoutIdentity: true,
+  });
+
   const contract = createPlatformApiContract(readFileSync(config.contractPath, 'utf8'));
   const getPlatformStatus = createGetPlatformStatus({
     clock: { now: () => new Date() },
@@ -135,7 +286,16 @@ export async function createConfiguredServer(
     stateReader: { read: () => 'available' },
   });
   const server = createHttpServer({
-    checkReadiness,
+    checkReadiness: async () => {
+      // Both gates, and the projection's answer wins when both fail: it is the one
+      // that already stops a revision from serving its public contract.
+      const projectionVerdict = await checkReadiness();
+      if (!projectionVerdict.ready) return projectionVerdict;
+      const identityVerdict = checkIdentityReadiness();
+      return identityVerdict.ready
+        ? identityVerdict
+        : { ready: false, state: 'identity-not-configured' };
+    },
     contract,
     getHourlyThresholdMarkets: createGetHourlyThresholdMarkets({ feeds: marketFeeds }),
     getMarketOverview: createGetMarketOverview({ feeds: marketFeeds }),
@@ -145,7 +305,17 @@ export async function createConfiguredServer(
     getPaperPerformanceSummary: createGetPaperPerformanceSummary({ projection }),
     getPlatformStatus,
     service: config.service,
+    signedIn: {
+      authenticateSession: createAuthenticateSession(sessionDependencies),
+      listBudgets: createListBudgets(budgetDependencies),
+      readBudgetDetail: createReadBudgetDetail(budgetDependencies),
+      readIntentHistory: createReadIntentHistory(budgetDependencies),
+      readJobHealth: createReadJobHealth(budgetDependencies),
+      recordBudgetControl: createRecordBudgetControl(budgetDependencies),
+      revokeSession: createRevokeSession(sessionDependencies),
+      signIn: createSignIn(sessionDependencies),
+    },
     telemetry,
   });
-  return { config, projection, server, telemetry };
+  return { accountClient, config, projection, server, telemetry };
 }
