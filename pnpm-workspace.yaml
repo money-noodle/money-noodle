@@ -13,6 +13,13 @@ overrides:
   'brace-expansion@>=4.0.0 <5.0.11': 5.0.12
   'fast-uri@>=3.0.0 <3.1.7': 3.1.8
   'fast-uri@>=4.0.0 <4.1.4': 4.2.1
+  # 2026-10-06 (GHSA-68fv-2mgg-jv7q): source-map-js <1.2.2 spends unbounded time
+  # on a crafted indexed source map's section offsets, which stalls the event
+  # loop. Reached only transitively, at build and generate time, through postcss
+  # and magicast; both declare `^1.2.1` and so already accept the patched
+  # release, making this a floor rather than a substitute for an upstream fix.
+  # Remove it once every path resolves >=1.2.2 on its own.
+  'source-map-js@<1.2.2': 1.2.2
 
 audit:
   ignore:
