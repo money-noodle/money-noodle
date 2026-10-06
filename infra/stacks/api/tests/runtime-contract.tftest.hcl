@@ -50,7 +50,7 @@ run "production_api" {
   # checked against, so a binding renamed here fails in HCL rather than only in
   # the bridge's JSON.
   assert {
-    condition = contains(keys(var.secret_environment), "PLATFORM_API_PROJECTION_DATABASE_URL")
+    condition     = contains(keys(var.secret_environment), "PLATFORM_API_PROJECTION_DATABASE_URL")
     error_message = "The api runtime must declare the projection connection string; found: ${join(", ", keys(var.secret_environment))}"
   }
 

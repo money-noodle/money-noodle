@@ -97,7 +97,7 @@ variable "accessible_secret_ids" {
     deliberate and harmless: the grant is what lets the maintainer supply the value
     without a second apply.
   EOT
-  type = list(string)
+  type        = list(string)
   default = [
     "platform-api-projection-database-url",
     # #242, ADR-0013. Three database roles and three identity values, each an

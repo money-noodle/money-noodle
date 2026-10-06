@@ -99,7 +99,7 @@ run "disabling_the_binding_renders_no_reference_and_keeps_the_intent" {
   # Turning the reference off must not also withdraw what this service is declared
   # to be allowed to read, or turning it back on would need two changes.
   assert {
-    condition = contains(var.accessible_secret_ids, "platform-api-projection-database-url")
+    condition     = contains(var.accessible_secret_ids, "platform-api-projection-database-url")
     error_message = "The declared intent is unchanged by the gate; only the rendered reference is withheld. Found: ${join(", ", var.accessible_secret_ids)}"
   }
 }
