@@ -115,7 +115,9 @@ run "applies_the_reviewed_restore_inputs" {
   }
 
   assert {
-    condition = google_cloud_run_v2_job.restore.template[0].template[0].containers[0].args == [
+    # `tolist`: the rendered `args` is a list(string) and a bare literal is a
+    # tuple, which `==` never considers equal even with identical elements.
+    condition = google_cloud_run_v2_job.restore.template[0].template[0].containers[0].args == tolist([
       "dist/restore/main.js",
       "--archive",
       "/mnt/stage/archive",
@@ -123,7 +125,7 @@ run "applies_the_reviewed_restore_inputs" {
       "/mnt/stage/workstation",
       "--evidence-dir",
       "/mnt/stage/evidence",
-    ]
+    ])
     error_message = "The entrypoint must receive the three locations the reviewed inputs name, after its own script path."
   }
 
