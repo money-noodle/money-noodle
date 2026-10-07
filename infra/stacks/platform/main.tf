@@ -43,8 +43,23 @@ locals {
   # Who may read each declared secret, resolved from service name to identity. A
   # service name that bootstrap does not publish fails here rather than granting
   # access to something unintended.
+  # The restore job's writer container joins the declared set only behind the
+  # reviewed gate below (#241, ADR-0013 §2). Its consumer is the restore job's
+  # identity, which the bootstrap contract publishes only once the infrastructure
+  # child declares it; with the gate off, nothing here can reference a name the
+  # contract does not carry, so a routine plan of this stack is unaffected.
+  declared_secrets = merge(
+    var.secrets,
+    var.engine_restore_secrets_enabled ? var.engine_restore_secrets : {},
+  )
+
+  declared_secret_consumer_services = merge(
+    var.secret_consumer_services,
+    var.engine_restore_secrets_enabled ? var.engine_restore_secret_consumer_services : {},
+  )
+
   secret_accessor_members = {
-    for secret_id, services in var.secret_consumer_services :
+    for secret_id, services in local.declared_secret_consumer_services :
     secret_id => [for service in services : "serviceAccount:${local.runtime_identities[service]}"]
   }
 
@@ -59,7 +74,7 @@ locals {
   # the one secret is what it gets: enough to refresh, never a value, never a
   # mutation.
   secret_metadata_reader_members = {
-    for secret_id, _secret in var.secrets :
+    for secret_id, _secret in local.declared_secrets :
     secret_id => ["serviceAccount:${local.deployer}"]
   }
 
@@ -112,7 +127,7 @@ module "secret_store" {
   region     = local.region
   # Empty. The first slice needs no operational secret; the store exists so the
   # first capability that does need one is not also designing custody.
-  secrets = var.secrets
+  secrets = local.declared_secrets
   # The access boundary belongs with the container. Granting `secretAccessor`
   # needs Secret Manager authority the routine deploy's identity does not hold,
   # so the grant is declared in this maintainer-applied stack rather than in the
