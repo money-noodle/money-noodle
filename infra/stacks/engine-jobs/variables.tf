@@ -45,14 +45,37 @@ variable "source_commit" {
   type        = string
 }
 
+variable "stage_mount_path" {
+  description = <<-EOT
+    Where the staging bucket is mounted on the execution. A path inside the
+    container, not an identifier: it names nothing account-specific, which is why
+    it can be a default here and in the committed `restore.tfvars`.
+  EOT
+  type        = string
+  default     = "/mnt/stage"
+
+  validation {
+    condition     = can(regex("^/[a-z0-9/_-]{2,62}$", var.stage_mount_path))
+    error_message = "stage_mount_path must be an absolute container path."
+  }
+}
+
 variable "restore_arguments" {
   description = <<-EOT
     Arguments passed to the restore entrypoint at execution: the staged archive
-    root, the workstation copy and the evidence output directory, as mounted on
-    the execution. Supplied at apply by the maintainer for the one-time run and
-    never committed, because the archive and workstation locations are inputs
-    and not defaults (SECURITY.md). Empty by default, which makes the job print
+    root, the workstation copy and the evidence output directory, which are
+    subdirectories of the staged mount.
+
+    Carried in the committed `restore.tfvars` rather than supplied ad hoc,
+    because the dispatched apply exposes only the digest, the source commit and
+    the confirmation — so there was no reviewed way to set this at all (#241).
+    The file holds mount paths and nothing account-specific, exactly as
+    `exposure.tfvars` holds one boolean, and it is admitted by the same kind of
+    narrow `.gitignore` exception. Empty by default, which makes the job print
     its usage and exit without touching anything.
+
+    An absolute path outside the mount fails the job's own precondition rather
+    than producing an execution that cannot find its inputs.
   EOT
   type        = list(string)
   default     = []
@@ -90,7 +113,8 @@ variable "secret_environment" {
 
 variable "restore_secret_binding_enabled" {
   description = <<-EOT
-    Whether the job binds its secret reference. **Off.** Correct to turn on
+    Whether the job binds its secret reference. **Off** here, and turned on by the
+    committed `restore.tfvars` the dispatched apply passes. Correct to turn on
     only once the container exists, carries a version, and
     `engine-restore-runtime` may read it: the maintainer actions in
     docs/operations/restoring-the-v1-archive.md. Cloud Run refuses a job that

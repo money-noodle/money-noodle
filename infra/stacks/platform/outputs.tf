@@ -39,6 +39,16 @@ output "contract_secret_ids" {
   value       = module.secret_store.secret_ids
 }
 
+output "contract_engine_restore_stage_bucket" {
+  description = <<-EOT
+    Name of the restore job's staging bucket, or null until it is declared. The
+    `engine-jobs` stack reads this to mount it, so the bucket name is not written
+    down in this repository (#241). A bucket name is an address, not a credential:
+    holding it grants nothing, and the bucket enforces public-access prevention.
+  EOT
+  value       = one(google_storage_bucket.engine_restore_stage[*].name)
+}
+
 output "budget_ceiling" {
   description = "Monthly ceiling in force. Not part of the cross-stack contract."
   value       = module.budget.monthly_ceiling

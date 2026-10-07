@@ -166,6 +166,82 @@ module "budget" {
   depends_on = [google_project_service.platform]
 }
 
+# ---------------------------------------------------------------------------
+# The restore job's staging area (#241, ADR-0013 §1).
+#
+# Why it lives in this stack rather than in `infra/stacks/engine-jobs`, which is
+# the stack that mounts it: the deployer that runs a dispatched apply holds
+# `run.admin`, `artifactregistry.admin`, `iam.serviceAccountUser`,
+# `logging.admin`, `monitoring.editor` and `serviceusage.serviceUsageAdmin` — and
+# no Cloud Storage role at all. It can neither create a bucket nor set bucket
+# IAM, so a bucket declared in the release path could only fail the apply that
+# needed it. That is the same reason the secret container and its accessor grant
+# are declared here rather than beside the service that reads them (#217, #224,
+# ADR-0005).
+#
+# What this bucket is not: the single object store of Proposed ADR-0008. ADR-0013
+# §2 is explicit that the accepted object-storage direction is the existing
+# archive and that nothing may depend on ADR-0008. This holds one job's staged
+# inputs and the evidence document it writes back, for the length of one
+# milestone, and it is retired with the job.
+resource "google_storage_bucket" "engine_restore_stage" {
+  count = var.engine_restore_secrets_enabled && var.engine_restore_stage_bucket != null ? 1 : 0
+
+  project  = local.project_id
+  name     = var.engine_restore_stage_bucket
+  location = local.region
+
+  # The staged inputs are a copy of the platform's own authoritative state, so
+  # the bucket is private on the same terms as state itself.
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+
+  # On from the first apply. A re-upload of a staged input must not silently
+  # replace the copy an execution already verified against.
+  versioning {
+    enabled = true
+  }
+
+  # A staging area is not an archive. The inputs are a copy of something that
+  # exists elsewhere and the evidence document is collected into the repository,
+  # so a bounded life keeps a 1.4 GB copy from becoming a second archive nobody
+  # decided to keep.
+  lifecycle_rule {
+    condition {
+      age        = var.engine_restore_stage_retention_days
+      with_state = "ANY"
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
+  # Deleting it is a reviewed code change, as for every other bucket here. The
+  # evidence document is collected into `docs/validation/` before the job is
+  # retired, so nothing unique is lost when it finally goes.
+  force_destroy = false
+
+  labels = merge(var.labels, {
+    "managed-by" = "opentofu"
+    "purpose"    = "engine-restore-staging"
+  })
+}
+
+# Read and create objects on this bucket alone, for the restore job's own
+# identity. `objectUser` covers the read the execution does and the evidence
+# document it writes back; it carries no `storage.objects.delete`, so an
+# execution cannot remove a staged input or a previous evidence document, and it
+# is bound to this bucket rather than at project level.
+#
+# The maintainer is granted nothing here: they upload with their own account.
+resource "google_storage_bucket_iam_member" "engine_restore_stage_object_user" {
+  count = var.engine_restore_secrets_enabled && var.engine_restore_stage_bucket != null ? 1 : 0
+
+  bucket = google_storage_bucket.engine_restore_stage[0].name
+  role   = "roles/storage.objectUser"
+  member = "serviceAccount:${local.runtime_identities["engine-restore"]}"
+}
+
 # Uptime checks against both interim `*.run.app` URLs are deliberately not
 # created here. They belong to the web and api stacks, which own the URLs, and
 # creating them from platform would make platform a dependency of every service

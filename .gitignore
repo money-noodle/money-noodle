@@ -38,6 +38,13 @@ crash.*.log
 # typed confirmation plus the saved-plan exposure guard.
 !infra/stacks/api/exposure.tfvars
 !infra/stacks/web/exposure.tfvars
+# The second reviewed exception, on the same terms. `restore.tfvars` carries one
+# boolean and three container mount paths and no identifier: it is the committed,
+# pull-request-reviewed record of what the one-time restore execution is asked to
+# do, which is what gives the dispatched apply a way to set it at all — that
+# dispatch exposes only the digest, the source commit and the confirmation (#241).
+# Its content and location are pinned by `tools/infra-policy.test.mjs`.
+!infra/stacks/engine-jobs/restore.tfvars
 *.tfbackend
 !*.tfbackend.example
 
