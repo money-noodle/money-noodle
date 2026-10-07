@@ -51,7 +51,8 @@ variables {
 run "the_default_deploy_binds_the_projection_secret_by_reference" {
   command = plan
 
-  # Default state, which is now what every routine api deploy renders.
+  # Default state, which is now what every routine api deploy renders: the
+  # projection reference (#219) and the six signed-in references (#253).
   assert {
     condition     = var.projection_secret_binding_enabled == true
     error_message = "The projection binding is enabled by default since #219; a revision that binds nothing reads the projection as unconfigured."
@@ -59,10 +60,10 @@ run "the_default_deploy_binds_the_projection_secret_by_reference" {
 
   assert {
     condition = (
-      length(module.service.rendered_secret_environment) == 1 &&
+      length(module.service.rendered_secret_environment) == 7 &&
       contains(keys(module.service.rendered_secret_environment), "PLATFORM_API_PROJECTION_DATABASE_URL")
     )
-    error_message = "A routine deploy must render exactly the projection connection string, by name. Found: ${join(", ", keys(module.service.rendered_secret_environment))}"
+    error_message = "A routine deploy must render the projection connection string by name alongside the six signed-in references. Found: ${join(", ", keys(module.service.rendered_secret_environment))}"
   }
 
   assert {
@@ -87,8 +88,11 @@ run "the_default_deploy_binds_the_projection_secret_by_reference" {
 run "disabling_the_binding_renders_no_reference_and_keeps_the_intent" {
   command = plan
 
+  # The identity gate is on by default since #253; it is switched off here so the
+  # run isolates the projection off-switch, as it did before that flip.
   variables {
     projection_secret_binding_enabled = false
+    identity_secret_binding_enabled   = false
   }
 
   assert {
@@ -104,24 +108,24 @@ run "disabling_the_binding_renders_no_reference_and_keeps_the_intent" {
   }
 }
 
-# The signed-in surface (#242, ADR-0013). Declared, granted, and rendered by
-# nothing: Cloud Run refuses a revision referencing a container that does not
-# exist, so the references wait for the maintainer exactly as the projection's did
-# between #217 and #219.
-run "the_signed_in_references_are_declared_and_not_yet_rendered" {
+# The signed-in surface (#242, ADR-0013). Declared, granted, and since #253
+# rendered by default: the maintainer created the containers from the platform
+# stack and entered their versions out of band on 2026-10-07, exactly as the
+# projection's gate waited between #217 and #219 before #220 turned it on.
+run "the_signed_in_references_are_declared_and_rendered_by_default" {
   command = plan
 
   assert {
-    condition     = var.identity_secret_binding_enabled == false
-    error_message = "The signed-in binding stays off until its containers exist and hold versions."
+    condition     = var.identity_secret_binding_enabled == true
+    error_message = "The signed-in binding is on by default since #253; its containers exist and hold versions."
   }
 
   assert {
     condition = (
-      length(module.service.rendered_secret_environment) == 1 &&
+      length(module.service.rendered_secret_environment) == 7 &&
       contains(keys(module.service.rendered_secret_environment), "PLATFORM_API_PROJECTION_DATABASE_URL")
     )
-    error_message = "A routine deploy still renders exactly the projection reference. Found: ${join(", ", keys(module.service.rendered_secret_environment))}"
+    error_message = "A routine deploy renders the projection reference and the six signed-in references. Found: ${join(", ", keys(module.service.rendered_secret_environment))}"
   }
 
   # The intent is declared now, because the grant is applied from the platform
