@@ -314,6 +314,25 @@ const containerEnv = (records) =>
     (entry) => entry.type === 'google_cloud_run_v2_service',
   ).values.template[0].containers[0].env;
 
+// The six #242 references, by environment name. Refusal mutations below strip or
+// re-add them explicitly so they describe one gate position regardless of which
+// position the real capture is in: before #253 the identity gate was off and
+// these did not render; since #253 it is on and all six do.
+const identityReferenceNames = new Set([
+  'PLATFORM_API_ENGINE_READER_DATABASE_URL',
+  'PLATFORM_API_ENGINE_RECORDER_DATABASE_URL',
+  'PLATFORM_API_ACCOUNT_DATABASE_URL',
+  'PLATFORM_API_IDENTITY_AUDIENCE',
+  'PLATFORM_API_IDENTITY_ISSUER',
+  'PLATFORM_API_IDENTITY_ACCOUNT_ID',
+]);
+const stripIdentityReferences = (records) => {
+  const env = containerEnv(records);
+  for (let index = env.length - 1; index >= 0; index -= 1) {
+    if (identityReferenceNames.has(env[index].name)) env.splice(index, 1);
+  }
+};
+
 const secretReferenceEntry = (records) =>
   containerEnv(records).find((entry) => entry.value_source?.length > 0);
 
@@ -421,6 +440,8 @@ function verifyExtractionFailures(raw, stack) {
           // container would reference a container that does not exist, which is a
           // revision that will not start, so it is refused here instead.
           (records) => {
+            planOf(records).variables.identity_secret_binding_enabled.value = false;
+            stripIdentityReferences(records);
             containerEnv(records).push({
               name: 'PLATFORM_API_ENGINE_RECORDER_DATABASE_URL',
               value: null,
@@ -438,12 +459,14 @@ function verifyExtractionFailures(raw, stack) {
           // a half-finished rollout would take.
           (records) => {
             planOf(records).variables.identity_secret_binding_enabled.value = true;
+            stripIdentityReferences(records);
           },
           // Both gates on and the projection alone rendering: declaration and
           // rendering now have to agree exactly, and do not.
           (records) => {
             planOf(records).variables.projection_secret_binding_enabled.value = true;
             planOf(records).variables.identity_secret_binding_enabled.value = true;
+            stripIdentityReferences(records);
           },
           // A gate renamed away. Without the boolean requirement this would read as
           // `undefined`, withhold everything, and look like a deliberate off-switch.
@@ -458,7 +481,10 @@ function verifyExtractionFailures(raw, stack) {
           // admit the name; the plan-derived comparison is what refuses the target.
           (records) => {
             planOf(records).variables.identity_secret_binding_enabled.value = true;
-            containerEnv(records).push({
+            const env = containerEnv(records);
+            const rendered = env.findIndex((entry) => entry.name === 'PLATFORM_API_IDENTITY_ISSUER');
+            if (rendered >= 0) env.splice(rendered, 1);
+            env.push({
               name: 'PLATFORM_API_IDENTITY_ISSUER',
               value: null,
               value_source: [

@@ -68,14 +68,27 @@ describe.each(api)('evaluated production API', (rendering) => {
       await server.close();
     }
   });
-  it('holds the projection connection string only as a reference, never as a value', () => {
-    // The evaluated rendering is the evidence: the one credential this service
-    // consumes arrives by reference, and the plain environment the composition
-    // above was handed carries no connection string at all. A regression here
-    // would mean a value had been rendered into configuration.
-    expect(Object.keys(rendering.secretEnv)).toEqual(['PLATFORM_API_PROJECTION_DATABASE_URL']);
-    expect(rendering.secretEnv.PLATFORM_API_PROJECTION_DATABASE_URL?.version).toBe('latest');
-    expect(Object.keys(rendering.env)).not.toContain('PLATFORM_API_PROJECTION_DATABASE_URL');
+  it('holds every credential only as a reference, never as a value', () => {
+    // The evaluated rendering is the evidence: the projection connection string
+    // (#219) and the six signed-in references (#250, rendered since #253) all
+    // arrive by reference at `latest`, and the plain environment the composition
+    // above was handed carries none of them. A regression here would mean a
+    // value had been rendered into configuration, or a reference had been
+    // dropped or added without the stack saying so.
+    const references = [
+      'PLATFORM_API_ACCOUNT_DATABASE_URL',
+      'PLATFORM_API_ENGINE_READER_DATABASE_URL',
+      'PLATFORM_API_ENGINE_RECORDER_DATABASE_URL',
+      'PLATFORM_API_IDENTITY_ACCOUNT_ID',
+      'PLATFORM_API_IDENTITY_AUDIENCE',
+      'PLATFORM_API_IDENTITY_ISSUER',
+      'PLATFORM_API_PROJECTION_DATABASE_URL',
+    ];
+    expect(Object.keys(rendering.secretEnv).sort()).toEqual(references);
+    for (const name of references) {
+      expect(rendering.secretEnv[name]?.version).toBe('latest');
+      expect(Object.keys(rendering.env)).not.toContain(name);
+    }
   });
 
   it.each([
