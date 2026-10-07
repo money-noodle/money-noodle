@@ -459,7 +459,10 @@ jobs:
       id-token: write # OIDC token for federation
       attestations: write # build provenance
     strategy:
-      fail-fast: true
+      # One image failing its scan must not cancel the other publishes: each
+      # project is qualified on its own, and a cancelled service publish is a
+      # deploy that never happens (Delivery run 37693299189).
+      fail-fast: false
       matrix:
         include:
           - project: platform-api
