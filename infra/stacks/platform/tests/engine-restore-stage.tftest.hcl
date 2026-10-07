@@ -104,8 +104,8 @@ run "the_staging_bucket_is_private_versioned_and_bounded" {
   assert {
     condition = (
       length(google_storage_bucket.engine_restore_stage[0].lifecycle_rule) == 1 &&
-      google_storage_bucket.engine_restore_stage[0].lifecycle_rule[0].action[0].type == "Delete" &&
-      google_storage_bucket.engine_restore_stage[0].lifecycle_rule[0].condition[0].age ==
+      one(google_storage_bucket.engine_restore_stage[0].lifecycle_rule[0].action).type == "Delete" &&
+      one(google_storage_bucket.engine_restore_stage[0].lifecycle_rule[0].condition).age ==
       var.engine_restore_stage_retention_days
     )
     error_message = "The staging bucket must delete staged objects at the declared age."
