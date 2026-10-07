@@ -167,6 +167,12 @@ importers:
 
   packages/platform-api-client: {}
 
+  services/engine-jobs:
+    dependencies:
+      postgres:
+        specifier: 3.4.9
+        version: 3.4.9
+
   services/platform-api:
     dependencies:
       '@opentelemetry/api':

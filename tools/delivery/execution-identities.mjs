@@ -245,6 +245,13 @@ export const RESOURCE_OPERATIONS = Object.freeze({
     'infrastructure.apply',
     'Platform API enablement is ordinary declared infrastructure once bootstrap has established the deployer.',
   ),
+
+  // --- The engine jobs family (ADR-0013 §1). ---
+  'stacks/engine-jobs:google_cloud_run_v2_job.restore': own(
+    'stack-executor',
+    'infrastructure.apply',
+    'The one-time restore job is declared infrastructure with a manual trigger: the apply creates the job definition at one digest under its own identity, and no release vector or pipeline path executes it (#241).',
+  ),
 });
 
 /** The identity that owns `key`, or null when the resource is unmapped. */

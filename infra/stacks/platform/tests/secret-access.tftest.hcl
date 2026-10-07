@@ -183,3 +183,57 @@ run "the_deployer_can_plan_the_container_and_read_no_value" {
     error_message = "The deployer must never appear as an accessor. It plans containers; it does not read contents (ADR-0005)."
   }
 }
+
+run "the_restore_job_container_appears_only_behind_the_gate_and_only_for_its_identity" {
+  command = plan
+
+  variables {
+    engine_restore_secrets_enabled = true
+  }
+
+  override_data {
+    target = data.terraform_remote_state.bootstrap
+    values = {
+      outputs = {
+        contract_project_id                     = "example-project"
+        contract_region                         = "us-west1"
+        contract_deployer_service_account_email = "delivery-deployer@example-project.iam.gserviceaccount.com"
+        contract_runtime_service_account_emails = {
+          "platform-api"   = "platform-api-runtime@example-project.iam.gserviceaccount.com"
+          "web"            = "web-runtime@example-project.iam.gserviceaccount.com"
+          "engine-restore" = "engine-restore-runtime@example-project.iam.gserviceaccount.com"
+        }
+      }
+    }
+  }
+
+  assert {
+    condition = toset(keys(module.secret_store.accessor_register)) == toset([
+      "platform-api-projection-database-url",
+      "platform-api-engine-reader-database-url",
+      "platform-api-engine-recorder-database-url",
+      "platform-api-account-database-url",
+      "platform-api-identity-audience",
+      "platform-api-identity-issuer",
+      "platform-api-identity-account-id",
+      "engine-restore-writer-database-url",
+    ])
+    error_message = "With the gate on, exactly the restore writer container joins the accepted set; found: ${join(", ", keys(module.secret_store.accessor_register))}"
+  }
+
+  assert {
+    condition     = toset(module.secret_store.accessor_register["engine-restore-writer-database-url"]) == toset(["serviceAccount:engine-restore-runtime@example-project.iam.gserviceaccount.com"])
+    error_message = "The restore job's container is readable by the restore identity alone (ADR-0013 §1–2)."
+  }
+
+  assert {
+    condition     = !contains(keys(module.secret_store.accessor_register), "engine-restore-archive-read-credential")
+    error_message = "No archive credential container is declared: the job reads a staged copy and has no consumer for one (#255 review)."
+  }
+
+  assert {
+    condition     = toset(module.secret_store.secret_ids) == toset(keys(module.secret_store.accessor_register))
+    error_message = "Every declared container carries an access boundary, with the gate on as well as off."
+  }
+}
+
