@@ -1,0 +1,42 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "engine-jobs",
+  "projectType": "application",
+  "sourceRoot": "services/engine-jobs/src",
+  "tags": ["type:service", "scope:platform"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/dist"],
+      "options": {
+        "command": "tsc --project services/engine-jobs/tsconfig.build.json"
+      }
+    },
+    "container": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "docker buildx build --load --provenance=true --build-arg SOURCE_REPOSITORY=${SOURCE_REPOSITORY:-unknown} --build-arg SOURCE_COMMIT=${SOURCE_COMMIT:-unknown} --build-arg SOURCE_REF=${SOURCE_REF:-unknown} --build-arg BUILD_WORKFLOW=${BUILD_WORKFLOW:-unknown} --build-arg BUILD_RUN=${BUILD_RUN:-unknown} --build-arg ARTIFACT_VERSION=${ARTIFACT_VERSION:-unknown} --file services/engine-jobs/Dockerfile --tag money-noodle/engine-jobs:local ."
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "eslint services/engine-jobs --max-warnings=0"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "outputs": ["{workspaceRoot}/coverage/services/engine-jobs"],
+      "options": {
+        "command": "vitest run --config services/engine-jobs/vitest.config.ts --coverage"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc --project services/engine-jobs/tsconfig.json --noEmit"
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "@money-noodle/engine-jobs",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "22.22.0"
+  },
+  "main": "dist/restore/main.js",
+  "dependencies": {
+    "postgres": "3.4.9"
+  }
+}
