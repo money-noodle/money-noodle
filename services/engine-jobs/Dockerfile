@@ -24,7 +24,17 @@ FROM node:22.22.3-alpine3.22@sha256:cd7807368cf24826297cbad5dca1a44972ccfd770647
 ENV NODE_ENV=production
 WORKDIR /app
 
-RUN rm -rf /usr/local/lib/node_modules /opt/yarn-v1.22.22 \
+# Same pinned package floor as the two service images: the base tag has not
+# been rebuilt since May and its OpenSSL 3.5.6 carries CVE-2026-14456 and
+# CVE-2026-45447 (fixed in 3.5.7/3.5.8); the publish scan refuses the image
+# without this (Delivery run 37693299189).
+RUN apk add --no-cache --upgrade \
+    'libcrypto3=3.5.9-r0' \
+    'libssl3=3.5.9-r0' \
+    'musl=1.2.5-r12' \
+    'musl-utils=1.2.5-r12' \
+    'zlib=1.3.2-r0' \
+  && rm -rf /usr/local/lib/node_modules /opt/yarn-v1.22.22 \
   && rm -f \
     /usr/local/bin/corepack \
     /usr/local/bin/npm \
