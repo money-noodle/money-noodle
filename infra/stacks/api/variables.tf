@@ -182,12 +182,14 @@ variable "identity_secret_binding_enabled" {
     connections, this service's own schema, and the three identity values — from
     Secret Manager. **Off.**
 
-    Off is the only correct default right now, for the reason `#217` established
-    before `#219` could flip the projection's gate: Cloud Run refuses a revision
-    that references a secret which does not exist, and these containers have not
-    been created. The maintainer creates them from the platform stack, grants
-    access, and enters the first versions out of band; turning this on is then the
-    last one-line change of the rollout, with its own pull request.
+    This default is only correct once the six containers exist, each carries a
+    version, and the service's runtime identity may read them. Those are the
+    maintainer actions of `#250` — platform stack applied, versions entered out of
+    band — completed 2026-10-07; turning the default on is the last one-line change
+    of that rollout, with its own pull request, exactly as `#219`/`#220` did for the
+    projection's gate. Cloud Run refuses a revision that references a secret which
+    does not exist, so this must not be set true in an environment whose containers
+    have not been created.
 
     It stays a variable afterwards for the same reason the projection's does: it is
     the documented way to take the references back out. The API already handles the
@@ -196,7 +198,7 @@ variable "identity_secret_binding_enabled" {
     service rather than breaking it (ADR-0013 §4).
   EOT
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "trace_sample_ratio" {
