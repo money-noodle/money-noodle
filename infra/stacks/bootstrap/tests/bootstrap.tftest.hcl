@@ -148,29 +148,60 @@ run "additional_events_cannot_be_bootstrapped" {
 # declared account id, which is the value that actually decides the identity.
 # ---------------------------------------------------------------------------
 
-run "bootstrap_creates_one_runtime_identity_per_service" {
+run "bootstrap_creates_one_runtime_identity_per_deployable_unit" {
   command = plan
 
+  # The exact set, by name: two services and, since #241, the one-time restore
+  # job (ADR-0013 §1). Asserted as an exact set rather than a count, because an
+  # identity appearing here is authority nobody asked for unless this line
+  # changed with it.
   assert {
-    condition     = toset(keys(google_service_account.runtime)) == toset(["platform-api", "web"])
-    error_message = "Bootstrap must create a runtime identity for each deployable service, keyed by its Cloud Run service name."
+    condition = toset(keys(google_service_account.runtime)) == toset([
+      "engine-restore",
+      "platform-api",
+      "web",
+    ])
+    error_message = "Bootstrap must create a runtime identity for each deployable service and each declared job, keyed by the name that unit's stack pins."
   }
 
   assert {
     condition = (
       google_service_account.runtime["platform-api"].account_id == "platform-api-runtime" &&
-      google_service_account.runtime["web"].account_id == "web-runtime"
+      google_service_account.runtime["web"].account_id == "web-runtime" &&
+      google_service_account.runtime["engine-restore"].account_id == "engine-restore-runtime"
     )
-    error_message = "The runtime account ids must stay the ones the service stacks already use, so bootstrap adopts rather than renames them."
+    error_message = "The runtime account ids must stay the ones the stacks already use, so bootstrap adopts rather than renames them. ADR-0013 §1 names engine-restore-runtime."
   }
 
+  # Distinct across every identity, not just the two services: a shared one makes
+  # blast radius conventional rather than mechanical (ADR-0005).
   assert {
     condition = (
-      google_service_account.runtime["platform-api"].account_id !=
-      google_service_account.runtime["web"].account_id
+      length(distinct([for account in google_service_account.runtime : account.account_id])) ==
+      length(google_service_account.runtime)
     )
-    error_message = "The web and API runtime identities must be mechanically distinct; a shared one makes blast radius conventional (ADR-0005)."
+    error_message = "Every runtime identity must be mechanically distinct from every other."
   }
+
+  # The job identity is a job identity. Wording, but wording a maintainer reads in
+  # the plan before approving it.
+  assert {
+    condition = (
+      strcontains(google_service_account.runtime["engine-restore"].description, "Cloud Run job") &&
+      strcontains(google_service_account.runtime["web"].description, "Cloud Run service")
+    )
+    error_message = "Each identity's description must name the kind of unit it runs."
+  }
+}
+
+run "a_declared_job_name_must_name_an_identity_this_stack_creates" {
+  command = plan
+
+  variables {
+    runtime_job_names = ["engine-cycle"]
+  }
+
+  expect_failures = [var.runtime_job_names]
 }
 
 run "each_runtime_identity_holds_only_telemetry_write_authority" {
@@ -228,6 +259,20 @@ run "a_runtime_identity_cannot_be_granted_deployment_authority" {
   expect_failures = [var.runtime_telemetry_roles]
 }
 
+run "a_job_cannot_share_a_service_runtime_identity" {
+  command = plan
+
+  variables {
+    runtime_service_accounts = {
+      "platform-api"   = "platform-api-runtime"
+      "web"            = "web-runtime"
+      "engine-restore" = "platform-api-runtime"
+    }
+  }
+
+  expect_failures = [var.runtime_service_accounts]
+}
+
 run "two_services_cannot_share_one_runtime_identity" {
   command = plan
 
@@ -236,6 +281,9 @@ run "two_services_cannot_share_one_runtime_identity" {
       "platform-api" = "shared-runtime"
       "web"          = "shared-runtime"
     }
+    # Emptied with the map, because the default names a job this override removes
+    # and that validation would otherwise fail alongside the one under test.
+    runtime_job_names = []
   }
 
   expect_failures = [var.runtime_service_accounts]

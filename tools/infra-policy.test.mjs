@@ -341,38 +341,63 @@ test('images deploy by digest and never by a mutable tag', () => {
   );
 });
 
-test('runtime identities are distinct per service and hold no registry access', () => {
+test('runtime identities are distinct per deployable unit and hold no registry access', () => {
   // The identities moved to the maintainer-applied bootstrap stack (#178), so
-  // the account ids are declared there. They are still one per service and still
-  // mechanically distinct; a shared identity would make blast radius a
+  // the account ids are declared there. They are still one per deployable unit
+  // and still mechanically distinct; a shared identity would make blast radius a
   // convention rather than a property.
+  //
+  // Since #241 a unit is a deployable service *or* a declared Cloud Run Job
+  // (ADR-0013 §1). The rule is extended rather than relaxed: the set is still
+  // exact, so an identity nobody asked for still fails, and a job key must still
+  // be pinned by the stack that resolves it.
   const bootstrapVariables = read(join(infraRoot, 'stacks', 'bootstrap', 'variables.tf'));
   const declared = bootstrapVariables.match(
     /variable "runtime_service_accounts"[\s\S]*?default = \{([\s\S]*?)\n {2}\}/,
   )?.[1];
-  assert.ok(declared, 'bootstrap must declare one runtime account id per deployable service');
+  assert.ok(declared, 'bootstrap must declare one runtime account id per deployable unit');
 
   const accounts = Object.fromEntries(
     [...declared.matchAll(/"([a-z][-a-z0-9]*)"\s*=\s*"([a-z][-a-z0-9]*)"/g)].map(
-      ([, service, accountId]) => [service, accountId],
+      ([, unit, accountId]) => [unit, accountId],
     ),
   );
   assert.deepEqual(
     Object.keys(accounts).sort(),
-    ['platform-api', 'web'],
-    'bootstrap must declare a runtime identity for each deployable service, keyed by its Cloud Run service name',
+    ['engine-restore', 'platform-api', 'web'],
+    'bootstrap must declare a runtime identity for each deployable service and each declared job, keyed by the name that unit stack pins',
   );
   assert.equal(
     new Set(Object.values(accounts)).size,
     Object.values(accounts).length,
-    'the web and API runtime identities must be mechanically distinct',
+    'every runtime identity must be mechanically distinct from every other',
+  );
+  // ADR-0013 §1 names this one, and the engine-jobs stack resolves it by key.
+  assert.equal(
+    accounts['engine-restore'],
+    'engine-restore-runtime',
+    'the restore job identity must be the account id ADR-0013 §1 names',
   );
 
-  // The service stacks select theirs by their own pinned service name, so the
-  // API cannot be wired to run as the web's identity.
-  for (const [service, stack] of [
-    ['platform-api', 'api'],
-    ['web', 'web'],
+  // Every job key must also be declared as a job, so the identity's own
+  // description says which kind of unit it runs rather than calling a job a
+  // service.
+  const jobNames = bootstrapVariables.match(
+    /variable "runtime_job_names"[\s\S]*?default\s*=\s*\[([^\]]*)\]/,
+  )?.[1];
+  assert.ok(jobNames, 'bootstrap must declare which runtime identities belong to jobs');
+  assert.deepEqual(
+    [...jobNames.matchAll(/"([a-z][-a-z0-9]*)"/g)].map(([, name]) => name).sort(),
+    ['engine-restore'],
+    'the declared job identities must be exactly the jobs that exist',
+  );
+
+  // Each stack selects its own identity by the name it pins, so no unit can be
+  // wired to run as another's identity.
+  for (const [unit, stack, key] of [
+    ['platform-api', 'api', 'service_name'],
+    ['web', 'web', 'service_name'],
+    ['engine-restore', 'engine-jobs', 'job_name'],
   ]) {
     const source = readStack(join(infraRoot, 'stacks', stack));
     assert.ok(
@@ -380,13 +405,17 @@ test('runtime identities are distinct per service and hold no registry access', 
       `the ${stack} stack must read its runtime identity from the bootstrap contract`,
     );
     assert.ok(
-      source.includes('[var.service_name]'),
-      `the ${stack} stack must select its runtime identity by its own pinned service name`,
+      source.includes(`[var.${key}]`),
+      `the ${stack} stack must select its runtime identity by its own pinned ${key}`,
     );
     assert.match(
       read(join(infraRoot, 'stacks', stack, 'variables.tf')),
-      new RegExp(`condition\\s*=\\s*var\\.service_name == "${service}"`),
-      `the ${stack} stack's service name must stay pinned, because it is now the identity key`,
+      new RegExp(`condition\\s*=\\s*var\\.${key} == "${unit}"`),
+      `the ${stack} stack's ${key} must stay pinned, because it is the identity key`,
+    );
+    assert.ok(
+      Object.hasOwn(accounts, unit),
+      `bootstrap must declare the identity the ${stack} stack resolves`,
     );
   }
 

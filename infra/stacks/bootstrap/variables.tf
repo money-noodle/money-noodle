@@ -89,8 +89,16 @@ variable "deployer_roles" {
 
 variable "runtime_service_accounts" {
   description = <<-EOT
-    Runtime identity account id per deployable service, keyed by the Cloud Run
-    service name that service's stack declares.
+    Runtime identity account id per deployable unit, keyed by the Cloud Run
+    service name or job name that unit's stack declares.
+
+    A Cloud Run Job is not a deployable service, but it runs as an identity on
+    exactly the same terms, so it belongs in the same map: one identity per unit,
+    created here, default-deny, holding nothing beyond the telemetry write roles
+    below. ADR-0013 §1 names `engine-restore-runtime` and says it is "declared in
+    the bootstrap stack by the infrastructure child", which is this entry; the key
+    is the job name `infra/stacks/engine-jobs` pins, because that stack resolves
+    its identity by that key from the published contract.
 
     These are created by this maintainer-applied stack rather than by the
     delivery pipeline. Creating a service account needs
@@ -103,6 +111,10 @@ variable "runtime_service_accounts" {
   default = {
     "platform-api" = "platform-api-runtime"
     "web"          = "web-runtime"
+    # The one-time restore job (ADR-0013 §1, #241). Its own identity rather than
+    # the API's, because the restore writes the engine store as `engine_writer`
+    # and the API may not.
+    "engine-restore" = "engine-restore-runtime"
   }
 
   validation {
@@ -118,7 +130,29 @@ variable "runtime_service_accounts" {
       length(distinct(values(var.runtime_service_accounts))) ==
       length(var.runtime_service_accounts)
     )
-    error_message = "Each service must hold its own runtime identity. A shared one makes blast radius conventional rather than mechanical (ADR-0005)."
+    error_message = "Each service or job must hold its own runtime identity. A shared one makes blast radius conventional rather than mechanical (ADR-0005)."
+  }
+}
+
+variable "runtime_job_names" {
+  description = <<-EOT
+    Which keys in `runtime_service_accounts` belong to a Cloud Run **Job** rather
+    than a service. Wording only: a job identity is created on identical terms and
+    holds identical authority, and this exists so each account's own description
+    says which kind of unit it runs.
+
+    Declared explicitly rather than inferred from the key, so adding a job is a
+    visible decision. Every entry must also be a declared identity.
+  EOT
+  type        = list(string)
+  default     = ["engine-restore"]
+
+  validation {
+    condition = alltrue([
+      for name in var.runtime_job_names :
+      contains(keys(var.runtime_service_accounts), name)
+    ])
+    error_message = "A job name here must also be a key in runtime_service_accounts, or it names an identity this stack never creates."
   }
 }
 

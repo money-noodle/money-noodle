@@ -26,10 +26,12 @@ output "contract_workload_identity_provider" {
 
 output "contract_runtime_service_account_emails" {
   description = <<-EOT
-    Runtime identity email per Cloud Run service name. The `api` and `web` stacks
-    read this instead of creating an identity, so a service apply needs no
-    identity or project-IAM authority (ADR-0005, 2026-09-19 amendment). An
-    address, not a credential: holding it grants nothing.
+    Runtime identity email per Cloud Run service or job name. The `api`, `web` and
+    `engine-jobs` stacks read this instead of creating an identity, so a service or
+    job apply needs no identity or project-IAM authority (ADR-0005, 2026-09-19
+    amendment; ADR-0013 §1). Each stack selects its own entry by the name it pins,
+    so one unit cannot be wired to run as another's identity. An address, not a
+    credential: holding it grants nothing.
   EOT
   value       = { for service, account in google_service_account.runtime : service => account.email }
 }
