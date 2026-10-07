@@ -482,7 +482,9 @@ function verifyExtractionFailures(raw, stack) {
           (records) => {
             planOf(records).variables.identity_secret_binding_enabled.value = true;
             const env = containerEnv(records);
-            const rendered = env.findIndex((entry) => entry.name === 'PLATFORM_API_IDENTITY_ISSUER');
+            const rendered = env.findIndex(
+              (entry) => entry.name === 'PLATFORM_API_IDENTITY_ISSUER',
+            );
             if (rendered >= 0) env.splice(rendered, 1);
             env.push({
               name: 'PLATFORM_API_IDENTITY_ISSUER',
