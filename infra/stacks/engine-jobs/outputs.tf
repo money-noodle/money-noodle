@@ -16,6 +16,19 @@ output "deployed_digest" {
   value       = var.image_digest
 }
 
+# Read back by the scheduled drift job in delivery.yml, as the api and web
+# stacks publish them, so a drift plan reloads the configured artifact rather
+# than an empty value.
+output "artifact_version" {
+  description = "Attributable artifact version the job was applied with."
+  value       = var.artifact_version
+}
+
+output "source_commit" {
+  description = "Reviewed commit the applied artifact was built from."
+  value       = var.source_commit
+}
+
 output "secret_environment_bound" {
   description = "Secret-backed variables this job binds, as name to secret container id. Empty until the binding is enabled. No value exists in this stack, its plan, or its state."
   value       = local.secret_environment

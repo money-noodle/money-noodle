@@ -60,6 +60,44 @@ Not loaded, by decision (maintainer, 2026-10-06; ADR-0013 §1):
 
 {{NOT_LOADED}}
 
+### 3a. Manifest-to-load reconciliation
+
+Every entry of the manifest is classified exactly once. An `UNMAPPED` entry is one the transform neither loads nor lists as intentionally not loaded; the job refuses to load while any exists unless the documented `--allow-unmapped` override is passed, and the list is recorded here either way.
+
+| Measure | Value |
+| --- | --- |
+| Entries in the manifest | {{CLASSIFIED_TOTAL}} |
+| Loaded | {{CLASSIFIED_LOADED}} |
+| Intentionally not loaded | {{CLASSIFIED_NOT_LOADED}} |
+| UNMAPPED | {{CLASSIFIED_UNMAPPED}} |
+| Classified (sum) | {{CLASSIFIED_SUM}} |
+| Sum equals the manifest total | {{CLASSIFIED_RECONCILES}} |
+| `--allow-unmapped` override | {{ALLOW_UNMAPPED}} |
+
+Intentionally not loaded, by reason:
+
+| Reason | Entries |
+| --- | --- |
+{{NOT_LOADED_BY_REASON}}
+
+Loaded entries (manifest path, relative to the data directory, and the table(s) its rows went to):
+
+| Path | Table(s) |
+| --- | --- |
+{{LOADED_FILE_ROWS}}
+
+Intentionally not loaded entries:
+
+| Path | Reason | Note |
+| --- | --- | --- |
+{{NOT_LOADED_FILE_ROWS}}
+
+UNMAPPED entries:
+
+| Path |
+| --- |
+{{UNMAPPED_FILE_ROWS}}
+
 ## 4. Paper bankroll recomputed from its orders and three correction classes
 
 | Measure | Value |

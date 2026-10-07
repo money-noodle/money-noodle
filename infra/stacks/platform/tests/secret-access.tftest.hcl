@@ -184,7 +184,7 @@ run "the_deployer_can_plan_the_container_and_read_no_value" {
   }
 }
 
-run "the_restore_job_containers_appear_only_behind_the_gate_and_only_for_its_identity" {
+run "the_restore_job_container_appears_only_behind_the_gate_and_only_for_its_identity" {
   command = plan
 
   variables {
@@ -217,17 +217,18 @@ run "the_restore_job_containers_appear_only_behind_the_gate_and_only_for_its_ide
       "platform-api-identity-issuer",
       "platform-api-identity-account-id",
       "engine-restore-writer-database-url",
-      "engine-restore-archive-read-credential",
     ])
-    error_message = "With the gate on, exactly the two restore containers join the accepted set; found: ${join(", ", keys(module.secret_store.accessor_register))}"
+    error_message = "With the gate on, exactly the restore writer container joins the accepted set; found: ${join(", ", keys(module.secret_store.accessor_register))}"
   }
 
   assert {
-    condition = alltrue([
-      for secret_id in ["engine-restore-writer-database-url", "engine-restore-archive-read-credential"] :
-      toset(module.secret_store.accessor_register[secret_id]) == toset(["serviceAccount:engine-restore-runtime@example-project.iam.gserviceaccount.com"])
-    ])
-    error_message = "The restore job's containers are readable by the restore identity alone (ADR-0013 §1–2)."
+    condition     = toset(module.secret_store.accessor_register["engine-restore-writer-database-url"]) == toset(["serviceAccount:engine-restore-runtime@example-project.iam.gserviceaccount.com"])
+    error_message = "The restore job's container is readable by the restore identity alone (ADR-0013 §1–2)."
+  }
+
+  assert {
+    condition     = !contains(keys(module.secret_store.accessor_register), "engine-restore-archive-read-credential")
+    error_message = "No archive credential container is declared: the job reads a staged copy and has no consumer for one (#255 review)."
   }
 
   assert {

@@ -9,6 +9,7 @@ import { RestoreRefusedError } from '../domain/engine-store.js';
 import { renderEvidence, type EvidenceInput, type ReconciliationRow } from '../domain/evidence.js';
 import { verifyForecastStorage, type ForecastVerification } from '../domain/forecast-v3.js';
 import { verifyLedgerV9, type LedgerVerification } from '../domain/ledger-v9.js';
+import { classifyManifest } from '../domain/manifest-classification.js';
 import { recomputePaperBankroll, type BankrollRecomputation } from '../domain/paper-bankroll.js';
 import { buildRestorePlan, type RestorePlan } from '../domain/restore-plan.js';
 import { restoreTreeFromArchive, type BlobVerification } from '../domain/restore-tree.js';
@@ -27,6 +28,12 @@ export interface RestoreJobInput {
   now: () => Date;
   /** Documented override: proceed when the workstation copy is absent. Never a default. */
   allowWorkstationAbsent?: boolean;
+  /**
+   * Documented override: proceed although the manifest holds entries the
+   * transform neither loads nor lists as intentionally not loaded. The unmapped
+   * list is recorded in the evidence document either way. Never a default.
+   */
+  allowUnmapped?: boolean;
   schemaVersion?: string;
 }
 
@@ -121,6 +128,25 @@ export async function runRestoreJob(input: RestoreJobInput): Promise<RestoreJobR
   };
   evidence.forecastRowsPlanned =
     plan.rowSets.find((s) => s.table === 'engine.forecast_row')?.rows.length ?? 0;
+
+  // Manifest-to-load reconciliation: every manifest entry is loaded, intentionally
+  // not loaded for a stated reason, or unmapped; an unmapped entry refuses the load
+  // unless the documented override is passed, and is recorded either way.
+  const classification = classifyManifest(manifest, plan.consumption);
+  evidence.classification = classification;
+  evidence.allowUnmapped = input.allowUnmapped === true;
+  if (classification.classified !== classification.manifestFiles) {
+    return finish(
+      'refused',
+      `Classified ${classification.classified} manifest entries of ${classification.manifestFiles}; the manifest is not reconciled and nothing was loaded.`,
+    );
+  }
+  if (classification.unmapped.length > 0 && input.allowUnmapped !== true) {
+    return finish(
+      'refused',
+      `${classification.unmapped.length} manifest entr${classification.unmapped.length === 1 ? 'y is' : 'ies are'} neither loaded nor intentionally not loaded (${classification.unmapped.join(', ')}); nothing was loaded. Map each one or pass --allow-unmapped and record why.`,
+    );
+  }
   if (!plan.paperBudget) {
     return finish('refused', 'The restored ledger carries no paper bankroll; nothing was loaded.');
   }

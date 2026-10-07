@@ -34,6 +34,7 @@ export const RESTORE_TARGET_TABLES = [
   'engine.evidence_row',
   'engine.trading_control',
   'engine.provider_registry',
+  'engine.provider_budget',
   'engine.forecast_journal_event',
   'engine.forecast_shard',
   'engine.forecast_row',

@@ -78,6 +78,18 @@ create table if not exists engine.provider_registry (
   restore_run_id  text not null references engine.restore_run (run_id)
 );
 
+-- 4b. Provider budget configuration (v1 store `provider-budgets.json`), paper
+--     ceilings only: the live ceiling is live-side and dropped at the seam.
+create table if not exists engine.provider_budget (
+  provider_id               text primary key,
+  paper_limit_cents         bigint not null,
+  allocations               jsonb not null,
+  updated_at                text,
+  configuration_revision    bigint,
+  configuration_updated_at  text,
+  restore_run_id            text not null references engine.restore_run (run_id)
+);
+
 -- 5. Forecast journal, the suffix the last sealed generation had not incorporated.
 create table if not exists engine.forecast_journal_event (
   sequence        bigint primary key,
@@ -143,6 +155,7 @@ grant select, insert, update on
   engine.evidence_row,
   engine.trading_control,
   engine.provider_registry,
+  engine.provider_budget,
   engine.forecast_journal_event,
   engine.forecast_shard,
   engine.forecast_row,
@@ -158,6 +171,7 @@ grant select on
   engine.ledger_state,
   engine.trading_control,
   engine.provider_registry,
+  engine.provider_budget,
   engine.forecast_shard,
   engine.forecast_row,
   engine.model_promotion
@@ -174,6 +188,6 @@ commit;
 --
 --   truncate engine.research_snapshot, engine.research_journal_event,
 --     engine.model_promotion, engine.contract_provenance, engine.forecast_row,
---     engine.forecast_shard, engine.forecast_journal_event, engine.provider_registry,
---     engine.trading_control, engine.evidence_row, engine.ledger_state,
+--     engine.forecast_shard, engine.forecast_journal_event, engine.provider_budget,
+--     engine.provider_registry, engine.trading_control, engine.evidence_row, engine.ledger_state,
 --     engine.ledger_order, engine.restore_run;

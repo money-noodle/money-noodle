@@ -5,6 +5,7 @@ import { runRestoreJob, type RestoreJobInput } from './application/restore.js';
 import { isArchiveCandidate, parseArchiveManifest } from './domain/archive-manifest.js';
 import { verifyForecastStorage } from './domain/forecast-v3.js';
 import { readLedger, verifyLedgerV9 } from './domain/ledger-v9.js';
+import { classifyManifest, countByReason } from './domain/manifest-classification.js';
 import { recomputePaperBankroll } from './domain/paper-bankroll.js';
 import { buildRestorePlan, paperSeam } from './domain/restore-plan.js';
 import { restoreTreeFromArchive } from './domain/restore-tree.js';
@@ -216,7 +217,102 @@ describe('the transform at the paper seam', () => {
     expect(plan.rowSets.find((s) => s.table === 'engine.forecast_row')!.rows).toHaveLength(4);
     expect(
       plan.rowSets.find((s) => s.table === 'engine.research_journal_event')!.rows,
-    ).toHaveLength(2);
+    ).toHaveLength(3);
+  });
+
+  it('loads provider budgets as paper ceilings and the frozen sentinel snapshots as rows', () => {
+    const plan = buildRestorePlan(syntheticDataTree());
+    const budgets = plan.rowSets.find((s) => s.table === 'engine.provider_budget')!.rows;
+    expect(budgets).toEqual([
+      {
+        provider_id: 'venue-a',
+        paper_limit_cents: 2_500,
+        allocations: [{ marketId: 'market-1', percent: 100 }],
+        updated_at: '2026-01-02T00:00:00.000Z',
+        configuration_revision: 2,
+        configuration_updated_at: '2026-01-02T00:00:00.000Z',
+      },
+    ]);
+    expect(JSON.stringify(budgets)).not.toContain('liveLimitCents');
+    expect(plan.notLoaded).toContain('provider-budgets.json: liveLimitCents per provider');
+    const snapshots = plan.rowSets.find((s) => s.table === 'engine.research_snapshot')!.rows;
+    expect(snapshots.map((r) => r.store).sort()).toEqual([
+      'exit-policy-sentinels-v2',
+      'exit-policy-sentinels-v3',
+      'maker-lifecycle-sentinels',
+      'paper-execution-timing-shadows',
+    ]);
+    const absent = buildRestorePlan(syntheticDataTree({ withoutProviderBudgets: true }));
+    expect(absent.rowSets.find((s) => s.table === 'engine.provider_budget')!.rows).toEqual([]);
+  });
+
+  it('classifies every manifest entry as loaded, intentionally not loaded or unmapped', () => {
+    const tree = syntheticDataTree({ liveOrders: 2, unmappedFile: true });
+    const { manifest } = syntheticArchive(tree);
+    const plan = buildRestorePlan(tree);
+    const classification = classifyManifest(manifest, plan.consumption);
+    expect(classification.manifestFiles).toBe(manifest.files.length);
+    expect(classification.classified).toBe(manifest.files.length);
+    expect(
+      classification.loaded.length +
+        classification.notLoaded.length +
+        classification.unmapped.length,
+    ).toBe(manifest.totals.files);
+    expect(classification.unmapped).toEqual(['mystery-store.json']);
+    const byPath = new Map(classification.notLoaded.map((e) => [e.path, e.reason]));
+    expect(byPath.get('live-skips.json')).toBe('live-side');
+    expect(byPath.get('execution-ledger-legacy/paper-orders.v8.json')).toBe('superseded');
+    expect(byPath.get('regime-gate.json')).toBe('superseded');
+    expect(byPath.get('trading-control.json.superseded-2026-01-01T00-00-00')).toBe('superseded');
+    expect(countByReason(classification.notLoaded)).toEqual({
+      'live-side': 1,
+      'lease/lock/archive-state': 0,
+      superseded: 5,
+      'evidence-frozen': 0,
+    });
+    const loaded = new Map(classification.loaded.map((e) => [e.path, e.tables]));
+    expect(loaded.get('paper-orders.json')).toEqual(['engine.ledger_order', 'engine.ledger_state']);
+    expect(loaded.get('provider-budgets.json')).toEqual(['engine.provider_budget']);
+    expect(loaded.get('forecast-history-shards/index.json')).toEqual(['engine.forecast_shard']);
+    expect(
+      [...loaded.keys()].filter((p) => p.startsWith('execution-order-evidence/')),
+    ).toHaveLength(1);
+    // Every file the current forecast index names is loaded; the fixture has no stale generation.
+    expect(
+      manifest.files
+        .filter((f) => f.path.startsWith('forecast-history-shards/'))
+        .every((f) => loaded.has(f.path)),
+    ).toBe(true);
+  });
+
+  it('classifies a batch referenced only by live orders as live-side and an orphan as frozen', () => {
+    const tree = syntheticDataTree({ liveOrders: 1 });
+    const batch = (suffix: string) =>
+      Buffer.from(
+        `${JSON.stringify({ version: 'execution-evidence-batch-v1', orders: {} })}${suffix}`,
+      );
+    const liveOnly = batch('');
+    const orphan = batch('\n');
+    tree.set(`execution-order-evidence/batch.${sha256Hex(liveOnly)}.json`, liveOnly);
+    tree.set(`execution-order-evidence/batch.${sha256Hex(orphan)}.json`, orphan);
+    const ledger = readLedger(tree);
+    const live = ledger.orders.find((o) => o.executionMode === 'live')!;
+    live.archivedEvidence = {
+      ...live.archivedEvidence!,
+      file: `batch.${sha256Hex(liveOnly)}.json`,
+      sha256: sha256Hex(liveOnly),
+    };
+    tree.set('paper-orders.json', Buffer.from(`${JSON.stringify(ledger)}\n`));
+    const { manifest } = syntheticArchive(tree);
+    const classification = classifyManifest(manifest, buildRestorePlan(tree).consumption);
+    const byPath = new Map(classification.notLoaded.map((e) => [e.path, e.reason]));
+    expect(byPath.get(`execution-order-evidence/batch.${sha256Hex(liveOnly)}.json`)).toBe(
+      'live-side',
+    );
+    expect(byPath.get(`execution-order-evidence/batch.${sha256Hex(orphan)}.json`)).toBe(
+      'evidence-frozen',
+    );
+    expect(classification.unmapped).toEqual([]);
   });
 
   it('recomputes the paper bankroll from its orders and three correction classes', () => {
@@ -261,7 +357,36 @@ describe('the restore job end to end over a fake store', () => {
     const inspection = await store.inspect();
     expect(inspection.counts['engine.ledger_order']).toBe(4);
     expect(inspection.counts['engine.forecast_row']).toBe(4);
+    expect(inspection.counts['engine.provider_budget']).toBe(1);
     expect(inspection.priorRuns).toHaveLength(1);
+    // The evidence carries the manifest-to-load reconciliation with counts that add up.
+    expect(result.evidence).toContain('| UNMAPPED | 0 |');
+    expect(result.evidence).toContain('| Sum equals the manifest total | yes |');
+    expect(result.evidence).toContain('| `--allow-unmapped` override | no |');
+    expect(result.evidence).toContain('| `provider-budgets.json` | `engine.provider_budget` |');
+  });
+
+  it('refuses a manifest with an unmapped entry unless --allow-unmapped is passed, and records it', async () => {
+    const refused = job({ tree: syntheticDataTree({ liveOrders: 1, unmappedFile: true }) });
+    const result = await runRestoreJob(refused.input);
+    expect(result.outcome).toBe('refused');
+    expect(result.reason).toMatch(/neither loaded nor intentionally not loaded/);
+    expect(result.reason).toContain('mystery-store.json');
+    expect((await refused.store.inspect()).priorRuns).toHaveLength(0);
+    expect(result.evidence).toContain('| UNMAPPED | **1** |');
+    expect(result.evidence).toContain('| `mystery-store.json` |');
+
+    const overridden = job({
+      tree: syntheticDataTree({ liveOrders: 1, unmappedFile: true }),
+      allowUnmapped: true,
+    });
+    const loaded = await runRestoreJob(overridden.input);
+    expect(loaded.outcome, loaded.reason).toBe('loaded');
+    expect(loaded.evidence).toContain('`--allow-unmapped` was passed');
+    expect(loaded.evidence).toContain('| `mystery-store.json` |');
+    // The override loads nothing extra: the unmapped store reaches no table.
+    const everyRow = [...overridden.store.tables.values()].flat().map((r) => JSON.stringify(r));
+    expect(everyRow.some((r) => r.includes('nobody knows'))).toBe(false);
   });
 
   it('refuses to load when the manifest is not complete and nothing reaches the store', async () => {

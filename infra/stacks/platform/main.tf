@@ -43,8 +43,8 @@ locals {
   # Who may read each declared secret, resolved from service name to identity. A
   # service name that bootstrap does not publish fails here rather than granting
   # access to something unintended.
-  # The restore job's two containers join the declared set only behind the
-  # reviewed gate below (#241, ADR-0013 §2). Their consumer is the restore job's
+  # The restore job's writer container joins the declared set only behind the
+  # reviewed gate below (#241, ADR-0013 §2). Its consumer is the restore job's
   # identity, which the bootstrap contract publishes only once the infrastructure
   # child declares it; with the gate off, nothing here can reference a name the
   # contract does not carry, so a routine plan of this stack is unaffected.

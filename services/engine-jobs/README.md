@@ -14,7 +14,8 @@ The `services/engine-jobs` deployment family of Working [ADR-0013](../../docs/ar
 - `src/application/restore.ts` — the job over ports: archive source, engine store, evidence writer.
 - `src/adapters/archive/` — a filesystem archive source over a staged copy of the bucket layout.
 - `src/adapters/engine-store/` — the one place that opens a database connection, as `engine_writer`, plus the in-memory fake the tests use.
-- `src/restore/main.ts` — the entrypoint. Every location is an argument; the connection string arrives by reference as `ENGINE_RESTORE_WRITER_DATABASE_URL`.
+- `src/domain/manifest-classification.ts` — manifest-to-load reconciliation: every manifest entry is loaded, intentionally not loaded for a stated reason, or unmapped; an unmapped entry refuses the load unless `--allow-unmapped` is passed, and is recorded either way.
+- `src/restore/main.ts` — the entrypoint. Every location is an argument; the connection string arrives by reference as `ENGINE_RESTORE_WRITER_DATABASE_URL`. Flags: `--allow-workstation-absent`, `--allow-unmapped`; both are documented overrides, never defaults.
 - `templates/` — the evidence document template, also committed under `docs/validation/templates/`.
 
 Ported logic is attributed in a comment at the top of each module ("ported from the v1 archive's … , sanitized"). Nothing here names a bucket, endpoint, path, project or credential, and no test needs a database or a network.

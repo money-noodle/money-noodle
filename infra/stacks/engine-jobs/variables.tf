@@ -61,15 +61,17 @@ variable "restore_arguments" {
 variable "accessible_secret_ids" {
   description = <<-EOT
     Secret Manager secret ids this job may read: the `engine_writer` connection
-    string and the archive read credential, both declared as empty containers in
-    the platform stack with their accessor grant to `engine-restore-runtime`
-    (ADR-0013 §2, #250 pattern). Declared intent only; the grant lives beside the
-    container, because this apply holds no Secret Manager authority (#217).
+    string alone, declared as an empty container in the platform stack with its
+    accessor grant to `engine-restore-runtime` (ADR-0013 §2, #250 pattern).
+    Declared intent only; the grant lives beside the container, because this
+    apply holds no Secret Manager authority (#217). The archive read credential
+    is deliberately absent: the job reads a staged filesystem copy and never
+    opens the bucket, so a binding would be a credential path with no consumer.
+    The maintainer stages the archive with a credential this stack never sees.
   EOT
   type        = list(string)
   default = [
     "engine-restore-writer-database-url",
-    "engine-restore-archive-read-credential",
   ]
 }
 
@@ -77,25 +79,23 @@ variable "secret_environment" {
   description = <<-EOT
     Environment variables injected from Secret Manager by reference, keyed by
     variable name. `ENGINE_RESTORE_WRITER_DATABASE_URL` is the connection string
-    for `engine_writer`; `ENGINE_RESTORE_ARCHIVE_READ_CREDENTIAL` is the read-only
-    credential the operator uses to stage the archive for the execution. No value
-    appears here, in a plan, or in state.
+    for `engine_writer`, the only secret this job consumes. No value appears
+    here, in a plan, or in state.
   EOT
   type        = map(string)
   default = {
-    ENGINE_RESTORE_WRITER_DATABASE_URL     = "engine-restore-writer-database-url"
-    ENGINE_RESTORE_ARCHIVE_READ_CREDENTIAL = "engine-restore-archive-read-credential"
+    ENGINE_RESTORE_WRITER_DATABASE_URL = "engine-restore-writer-database-url"
   }
 }
 
 variable "restore_secret_binding_enabled" {
   description = <<-EOT
-    Whether the job binds its two secret references. **Off.** Correct to turn on
-    only once both containers exist, each carries a version, and
-    `engine-restore-runtime` may read them: the maintainer actions in
+    Whether the job binds its secret reference. **Off.** Correct to turn on
+    only once the container exists, carries a version, and
+    `engine-restore-runtime` may read it: the maintainer actions in
     docs/operations/restoring-the-v1-archive.md. Cloud Run refuses a job that
     references a secret which does not exist, so this must not be set true in an
-    environment whose containers have not been created. Turning it on is the last
+    environment whose container has not been created. Turning it on is the last
     one-line change before the one-time execution, exactly as #219 and #250 did.
   EOT
   type        = bool

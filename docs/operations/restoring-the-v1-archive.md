@@ -24,9 +24,9 @@ Every location is an input to the execution. None is a default anywhere in this 
 
 1. Apply `services/platform-api/migrations/0001-identity-budgets-and-control.sql`, then `services/platform-api/migrations/0002-engine-restore-tables.sql`, as the schema owner. The job cannot create tables and will fail its first `select` without them.
 2. Publish the `engine-restore-runtime` identity from the bootstrap stack (the infrastructure child's declaration, keyed `engine-restore`), so `infra/stacks/engine-jobs` can read it from the contract.
-3. Apply `infra/stacks/platform` with `engine_restore_secrets_enabled = true`, which declares the two empty containers (`engine-restore-writer-database-url`, `engine-restore-archive-read-credential`) and grants their accessor to the restore identity. Enter both secret versions out of band.
-4. Apply `infra/stacks/engine-jobs` at the published `engine-jobs` image digest with `restore_secret_binding_enabled = true` and the three locations in `restore_arguments`.
-5. Stage the archive prefix and the workstation copy on the execution's mounts. Nothing in the pipeline does this, and no credential value passes through the repository.
+3. Apply `infra/stacks/platform` with `engine_restore_secrets_enabled = true`, which declares the one empty container (`engine-restore-writer-database-url`) and grants its accessor to the restore identity. Enter the secret version out of band. No archive credential is declared anywhere in this repository: the job reads a staged copy and never opens the bucket, so the credential the maintainer stages with stays in the maintainer's custody.
+4. **Prerequisite: #257 merged** (`ci(delivery): dispatch plan/apply/drift and build the image for the engine-jobs stack`). It is the only reviewed route to the next two steps; applying the stack with `tofu` by hand is forbidden (`AGENTS.md`, `docs/operations/delivery.md`). Once it is merged, the next push to `main` publishes the `engine-jobs` image digest, and a dispatched `apply` for the `engine-jobs` stack applies `infra/stacks/engine-jobs` at that digest with `restore_secret_binding_enabled = true` and the three locations in `restore_arguments`.
+5. Stage the archive prefix and the workstation copy on the execution's mounts, then start one execution by hand. Nothing in the pipeline stages anything or executes the job, and no credential value passes through the repository.
 
 ## The verify-first rule
 
@@ -45,7 +45,7 @@ When the finding is `incomplete` or `differing`, the workstation copy is the tru
 
 1. Verifies every sha256 in the manifest against the blobs (decompressed digest and byte count). One failure refuses the load.
 2. Runs the ledger v9 verifier (every evidence reference resolves to a checksummed batch holding that order's row; every row structurally sound) and the forecast storage verifier (shard, rollup, id-artifact and open-set checksums against the index; counts; terminal-only shards; no duplicate or colliding ids; journal replay). Either failing refuses the load. The forecast verifier's rollup-summary equivalence check is **not** ported and the evidence document says so.
-3. Transforms at the paper seam and recomputes the paper bankroll's realized figure from its orders and three correction classes. A non-zero discrepancy refuses the load.
+3. Transforms at the paper seam and reconciles the manifest to the load: every manifest entry is classified as **loaded** (with its target table), **intentionally not loaded** with a reason (`live-side`, `lease/lock/archive-state`, `superseded`, `evidence-frozen`), or **UNMAPPED**. The counts sum to the manifest total, and the evidence document lists all three classes by name. Any UNMAPPED entry refuses the load unless `--allow-unmapped` is passed; the override loads nothing extra, and the list is recorded either way, so the pull request carrying the evidence must say why each unmapped entry was acceptable. It then recomputes the paper bankroll's realized figure from its orders and three correction classes. A non-zero discrepancy refuses the load.
 4. Inspects the engine schema. Any row in a restore target table, or a prior `engine.restore_run` for the same manifest digest and schema version, refuses the load (ADR-0013 §1 idempotency).
 5. Loads every row set in **one transaction**, re-counts inside it, and rolls back on any count that differs from the plan. Exit code 0 only on `loaded`.
 
@@ -67,7 +67,8 @@ Rollback is to **discard the schema contents**: the schema owner runs the `trunc
 
 ## What this job does not do
 
-- It does not read the archive over the network from inside the execution. The archive is staged for it; the read credential exists so the maintainer can stage it.
+- It does not read the archive over the network from inside the execution, and it binds no archive credential. The archive is staged for it by the maintainer with a credential this repository never declares.
+- It does not silently drop a store. Every manifest entry is loaded, intentionally not loaded for a stated reason, or refused as unmapped; `provider-budgets.json` is loaded with its paper ceiling only, and the `.json` halves of the frozen sentinel stores are loaded as snapshot rows beside their journals.
 - It does not create, migrate or drop any table, and it does not touch the public projection schema.
 - It does not schedule anything, start any engine, or write an intent row. Incrementing the control epoch after a reseed (ADR-0013 §3) is the cycle child's contract to honour and is recorded here as a follow-up for #243.
 - It does not provision a second archive copy (maintainer, 2026-10-06).

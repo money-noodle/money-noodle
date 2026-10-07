@@ -26,6 +26,10 @@ export interface SyntheticOptions {
   liveOrders?: number;
   /** Make the restored bankroll disagree with its orders by this many cents. */
   bankrollDriftCents?: number;
+  /** Add a store the transform has never heard of, so the manifest holds an UNMAPPED entry. */
+  unmappedFile?: boolean;
+  /** Leave `provider-budgets.json` out of the tree. */
+  withoutProviderBudgets?: boolean;
   prefix?: string;
 }
 
@@ -233,8 +237,45 @@ export function syntheticDataTree(options: SyntheticOptions = {}): DataTree {
     ),
   );
   tree.set('exit-policy-sentinels-v3.json', json({ sentinels: [] }));
+  // Store 6: provider budget configuration, paper and live ceilings side by side.
+  if (!options.withoutProviderBudgets) {
+    tree.set(
+      'provider-budgets.json',
+      json({
+        version: 'provider-budget-v1',
+        revision: 2,
+        updatedAt: '2026-01-02T00:00:00.000Z',
+        providers: [
+          {
+            providerId: 'venue-a',
+            liveLimitCents: 5_000,
+            paperLimitCents: 2_500,
+            allocations: [{ marketId: 'market-1', percent: 100 }],
+            updatedAt: '2026-01-02T00:00:00.000Z',
+          },
+        ],
+      }),
+    );
+  }
+  // The `.json` halves of the frozen or concluded sentinel stores (15, 17, 20).
+  tree.set('exit-policy-sentinels-v2.json', json({ sentinels: [], retired: true }));
+  tree.set('maker-lifecycle-sentinels.json', json({ sentinels: [], concluded: true }));
+  tree.set('paper-execution-timing-shadows.json', json({ shadows: [] }));
+  tree.set(
+    'maker-lifecycle-sentinels.journal.jsonl',
+    text(`${JSON.stringify({ sentinel: 's-1', at: '2026-01-01T00:00:00.000Z' })}\n`),
+  );
+  // Derived, rebuildable and quarantine entries the v1 archive also captured.
+  tree.set('regime-gate.json', json({ candidates: [] }));
+  tree.set('cycle-paths.json', json({ paths: [] }));
+  tree.set('paper-fill-calibration.json', json({ version: 'neutral' }));
+  tree.set('trading-control.json.superseded-2026-01-01T00-00-00', json({ control: {} }));
+  tree.set('execution-ledger-legacy/paper-orders.v8.json', json({ version: 8, orders: [] }));
   if (options.liveOrders) {
     tree.set('live-skips.json', json({ episodes: [{ reason: 'synthetic' }] }));
+  }
+  if (options.unmappedFile) {
+    tree.set('mystery-store.json', json({ what: 'nobody knows' }));
   }
   return tree;
 }

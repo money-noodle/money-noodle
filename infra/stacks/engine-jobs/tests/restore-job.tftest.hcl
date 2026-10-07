@@ -55,7 +55,7 @@ run "runs_as_its_own_identity_with_no_secret_bound_by_default" {
   }
 }
 
-run "binds_exactly_the_declared_references_when_enabled" {
+run "binds_exactly_the_declared_reference_when_enabled" {
   command = plan
 
   variables {
@@ -63,7 +63,12 @@ run "binds_exactly_the_declared_references_when_enabled" {
   }
 
   assert {
-    condition     = toset(keys(local.secret_environment)) == toset(["ENGINE_RESTORE_WRITER_DATABASE_URL", "ENGINE_RESTORE_ARCHIVE_READ_CREDENTIAL"])
-    error_message = "Enabling the gate binds the two declared references and nothing else."
+    condition     = toset(keys(local.secret_environment)) == toset(["ENGINE_RESTORE_WRITER_DATABASE_URL"])
+    error_message = "Enabling the gate binds the engine_writer reference and nothing else; the job reads a staged archive copy and holds no archive credential."
+  }
+
+  assert {
+    condition     = !contains(var.accessible_secret_ids, "engine-restore-archive-read-credential")
+    error_message = "No archive credential may be declared for a job that never opens the bucket (#255 review)."
   }
 }

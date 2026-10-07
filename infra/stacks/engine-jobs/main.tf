@@ -54,8 +54,9 @@ locals {
   # The secret references this execution renders, gated exactly as #250 gated the
   # API's: Cloud Run refuses a job that references a secret which does not exist,
   # so this stays off until the maintainer has applied the platform stack with the
-  # two containers, granted the restore identity access and entered the versions
-  # out of band. Turning it on is a reviewed one-line change.
+  # writer container, granted the restore identity access and entered the version
+  # out of band. Turning it on is a reviewed one-line change. The archive is
+  # staged for the execution; no archive credential is bound (#255 review).
   secret_environment = var.restore_secret_binding_enabled ? var.secret_environment : {}
 }
 

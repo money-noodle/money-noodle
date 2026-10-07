@@ -27,10 +27,11 @@ async function main(): Promise<number> {
   const workstationRoot = argument('workstation');
   const evidenceDirectory = argument('evidence-dir');
   const allowWorkstationAbsent = process.argv.includes('--allow-workstation-absent');
+  const allowUnmapped = process.argv.includes('--allow-unmapped');
   const connectionString = process.env.ENGINE_RESTORE_WRITER_DATABASE_URL;
   if (!archiveRoot || !evidenceDirectory) {
     console.error(
-      'usage: restore --archive <staged archive root> --evidence-dir <docs/validation> [--workstation <data directory copy>] [--allow-workstation-absent]',
+      'usage: restore --archive <staged archive root> --evidence-dir <docs/validation> [--workstation <data directory copy>] [--allow-workstation-absent] [--allow-unmapped]',
     );
     return 2;
   }
@@ -59,6 +60,7 @@ async function main(): Promise<number> {
       runId: process.env.CLOUD_RUN_EXECUTION ?? randomUUID(),
       now: () => now,
       allowWorkstationAbsent,
+      allowUnmapped,
     });
     console.log(
       JSON.stringify(

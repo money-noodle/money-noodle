@@ -3,6 +3,7 @@
 
 import type { ForecastVerification } from './forecast-v3.js';
 import type { LedgerVerification } from './ledger-v9.js';
+import { countByReason, type ManifestClassification } from './manifest-classification.js';
 import type { BankrollRecomputation } from './paper-bankroll.js';
 import type { BlobVerification } from './restore-tree.js';
 import type { VerifyFirstFinding } from './verify-first.js';
@@ -38,6 +39,10 @@ export interface EvidenceInput {
   bankroll?: BankrollRecomputation;
   reconciliation?: ReconciliationRow[];
   forecastRowsPlanned?: number;
+  /** Every manifest entry, classified; present once the transform ran. */
+  classification?: ManifestClassification;
+  /** Whether `--allow-unmapped` was passed; recorded whenever a load was attempted. */
+  allowUnmapped?: boolean;
 }
 
 const yes = (ok: boolean) => (ok ? 'yes' : '**no**');
@@ -66,6 +71,15 @@ export function renderEvidence(template: string, input: EvidenceInput): string {
   const ledger = input.ledger;
   const forecast = input.forecast;
   const bankroll = input.bankroll;
+  const classification = input.classification;
+  const reasonCounts = classification ? countByReason(classification.notLoaded) : undefined;
+  const loadedRows = (classification?.loaded ?? []).map(
+    (entry) => `| \`${entry.path}\` | ${entry.tables.map((t) => `\`${t}\``).join(', ')} |`,
+  );
+  const notLoadedRows = (classification?.notLoaded ?? []).map(
+    (entry) => `| \`${entry.path}\` | ${entry.reason} | ${entry.note} |`,
+  );
+  const unmappedRows = (classification?.unmapped ?? []).map((path) => `| \`${path}\` |`);
   const values: Record<string, string> = {
     COLLECTED_AT: input.collectedAt,
     RUN_ID: input.runId,
@@ -122,6 +136,27 @@ export function renderEvidence(template: string, input: EvidenceInput): string {
         ].join('\n')
       : '| not computed | |',
     FORECAST_ROWS_PLANNED: String(input.forecastRowsPlanned ?? 0),
+    CLASSIFIED_TOTAL: String(classification?.manifestFiles ?? 0),
+    CLASSIFIED_LOADED: String(classification?.loaded.length ?? 0),
+    CLASSIFIED_NOT_LOADED: String(classification?.notLoaded.length ?? 0),
+    CLASSIFIED_UNMAPPED: classification
+      ? classification.unmapped.length
+        ? `**${classification.unmapped.length}**`
+        : '0'
+      : '0',
+    CLASSIFIED_SUM: String(classification?.classified ?? 0),
+    CLASSIFIED_RECONCILES: classification
+      ? yes(classification.classified === classification.manifestFiles)
+      : 'not run',
+    NOT_LOADED_BY_REASON: reasonCounts
+      ? Object.entries(reasonCounts)
+          .map(([reason, count]) => `| ${reason} | ${count} |`)
+          .join('\n')
+      : '| not classified | |',
+    ALLOW_UNMAPPED: input.allowUnmapped === true ? '**yes** (`--allow-unmapped` was passed)' : 'no',
+    LOADED_FILE_ROWS: loadedRows.length ? loadedRows.join('\n') : '| _none_ | |',
+    NOT_LOADED_FILE_ROWS: notLoadedRows.length ? notLoadedRows.join('\n') : '| _none_ | | |',
+    UNMAPPED_FILE_ROWS: unmappedRows.length ? unmappedRows.join('\n') : '| _none_ |',
     RECONCILIATION_ROWS: reconciliationRows.length
       ? reconciliationRows.join('\n')
       : '| _no load attempted_ | | | | | |',

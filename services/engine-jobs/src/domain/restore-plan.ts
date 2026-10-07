@@ -15,6 +15,7 @@ import {
   type StoredLedger,
 } from './ledger-v9.js';
 import { readForecastLayout } from './forecast-v3.js';
+import type { ConsumptionRecord } from './manifest-classification.js';
 import { rowSetDigest } from './sha256.js';
 
 export interface RowSet {
@@ -33,6 +34,23 @@ export interface RestorePlan {
   mirrorPairIdsCarried: number;
   droppedTradingControlKeys: string[];
   notLoaded: string[];
+  /** Which files the plan consumed, for manifest-to-load reconciliation. */
+  consumption: ConsumptionRecord;
+}
+
+/** The paper-side shape of v1's provider budget configuration (store 6). */
+interface ProviderBudgetConfiguration {
+  version?: string;
+  revision?: number;
+  updatedAt?: string;
+  seededFrom?: string;
+  providers?: Array<{
+    providerId?: string;
+    liveLimitCents?: number;
+    paperLimitCents?: number;
+    allocations?: Array<{ marketId?: string; percent?: number }>;
+    updatedAt?: string;
+  }>;
 }
 
 /** The paper-side fields of v1's trading control. Everything else is live-side. */
@@ -69,6 +87,11 @@ export const RESEARCH_SNAPSHOTS: ReadonlyArray<{ file: string; store: string }> 
   { file: 'calendar-evaluation.json', store: 'calendar-evaluation' },
   { file: 'persistence-candidate.json', store: 'persistence-candidate' },
   { file: 'model-evaluations.json', store: 'model-evaluations' },
+  // The `.json` halves of the frozen or concluded sentinel stores (sanitized
+  // inventory 15, 17, 20), loaded as frozen rows beside their journals.
+  { file: 'exit-policy-sentinels-v2.json', store: 'exit-policy-sentinels-v2' },
+  { file: 'maker-lifecycle-sentinels.json', store: 'maker-lifecycle-sentinels' },
+  { file: 'paper-execution-timing-shadows.json', store: 'paper-execution-timing-shadows' },
 ];
 
 /** Live-side stores that are never loaded (maintainer decision 2026-10-06). */
@@ -114,10 +137,25 @@ export function paperSeam(ledger: StoredLedger): {
 export function buildRestorePlan(tree: DataTree): RestorePlan {
   const rowSets: RowSet[] = [];
   const notLoaded = [...NEVER_LOADED];
+  const consumption: ConsumptionRecord = {
+    consumed: new Map(),
+    paperBatchFiles: new Set(),
+    liveOnlyBatchFiles: new Set(),
+    currentForecastFiles: new Set(),
+  };
+  /** Records that `path` was read and its rows went to `table`; absent files are not recorded. */
+  const consumed = (path: string, table: string) => {
+    if (!tree.has(path)) return;
+    const tables = consumption.consumed.get(path) ?? new Set<string>();
+    tables.add(table);
+    consumption.consumed.set(path, tables);
+  };
 
   // 1. The execution ledger, paper rows only.
   const ledger = readLedger(tree);
   const seam = paperSeam(ledger);
+  consumed('paper-orders.json', 'engine.ledger_order');
+  consumed('paper-orders.json', 'engine.ledger_state');
   rowSets.push(
     rowSet(
       'engine.ledger_order',
@@ -163,8 +201,15 @@ export function buildRestorePlan(tree: DataTree): RestorePlan {
         order.id,
       ]),
   );
+  for (const order of ledger.orders) {
+    if (order.executionMode === 'paper' || !order.archivedEvidence) continue;
+    const path = evidenceBatchPath(order.archivedEvidence);
+    if (!batches.has(order.archivedEvidence.sha256)) consumption.liveOnlyBatchFiles.add(path);
+  }
   for (const reference of [...batches.values()].sort((a, b) => (a.sha256 < b.sha256 ? -1 : 1))) {
     const batch = readEvidenceBatch(tree, reference);
+    consumption.paperBatchFiles.add(evidenceBatchPath(reference));
+    consumed(evidenceBatchPath(reference), 'engine.evidence_row');
     for (const [rowKey, stored] of Object.entries(batch.orders).sort(([a], [b]) =>
       a < b ? -1 : 1,
     )) {
@@ -191,6 +236,7 @@ export function buildRestorePlan(tree: DataTree): RestorePlan {
     tree,
     'trading-control.json',
   );
+  consumed('trading-control.json', 'engine.trading_control');
   const droppedTradingControlKeys: string[] = [];
   const paperControl: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(control?.control ?? {})) {
@@ -208,6 +254,7 @@ export function buildRestorePlan(tree: DataTree): RestorePlan {
 
   // 4. Provider registry, live flag dropped.
   const providers = readTreeJson<Record<string, unknown>>(tree, 'trading-providers.json');
+  consumed('trading-providers.json', 'engine.provider_registry');
   const providerRows: Record<string, unknown>[] = [];
   const providerEntries =
     providers && typeof providers === 'object'
@@ -229,8 +276,49 @@ export function buildRestorePlan(tree: DataTree): RestorePlan {
     ),
   );
 
+  // 4b. Provider budget configuration (store 6, authoritative config), paper
+  // ceilings only: `liveLimitCents` is live-side and dropped at the seam.
+  const budgets = readTreeJson<ProviderBudgetConfiguration>(tree, 'provider-budgets.json');
+  consumed('provider-budgets.json', 'engine.provider_budget');
+  const budgetRows: Record<string, unknown>[] = [];
+  const budgetEntries = Array.isArray(budgets?.providers) ? budgets.providers : [];
+  for (const entry of [...budgetEntries].sort((a, b) =>
+    (a?.providerId ?? '') < (b?.providerId ?? '') ? -1 : 1,
+  )) {
+    if (!entry || typeof entry !== 'object' || typeof entry.providerId !== 'string') continue;
+    budgetRows.push({
+      provider_id: entry.providerId,
+      paper_limit_cents: Number.isSafeInteger(entry.paperLimitCents) ? entry.paperLimitCents : 0,
+      allocations: Array.isArray(entry.allocations) ? entry.allocations : [],
+      updated_at: entry.updatedAt ?? null,
+      configuration_revision: Number.isSafeInteger(budgets?.revision) ? budgets?.revision : null,
+      configuration_updated_at: budgets?.updatedAt ?? null,
+    });
+  }
+  rowSets.push(
+    rowSet('engine.provider_budget', 'provider-budgets.json (liveLimitCents dropped)', budgetRows),
+  );
+  notLoaded.push('provider-budgets.json: liveLimitCents per provider');
+
   // 5 and 6. Forecast journal and sealed shards.
   const layout = readForecastLayout(tree);
+  consumed('forecast-history.journal.jsonl', 'engine.forecast_journal_event');
+  consumed('forecast-history-shards/index.json', 'engine.forecast_shard');
+  for (const entry of layout?.index.shards ?? []) {
+    for (const [file, table] of [
+      [entry.file, 'engine.forecast_row'],
+      [entry.rollupFile, 'engine.forecast_shard'],
+      [entry.idsFile, 'engine.forecast_shard'],
+    ] as const) {
+      if (!file) continue;
+      consumption.currentForecastFiles.add(`forecast-history-shards/${file}`);
+      consumed(`forecast-history-shards/${file}`, table);
+    }
+  }
+  if (layout?.index.openFile) {
+    consumption.currentForecastFiles.add(`forecast-history-shards/${layout.index.openFile}`);
+    consumed(`forecast-history-shards/${layout.index.openFile}`, 'engine.forecast_row');
+  }
   rowSets.push(
     rowSet(
       'engine.forecast_journal_event',
@@ -266,6 +354,7 @@ export function buildRestorePlan(tree: DataTree): RestorePlan {
 
   // 7. Contract provenance.
   const provenance = readTreeJson<unknown>(tree, 'contract-provenance.json');
+  consumed('contract-provenance.json', 'engine.contract_provenance');
   const provenanceEntries: unknown[] = Array.isArray(provenance)
     ? provenance
     : provenance && typeof provenance === 'object'
@@ -287,6 +376,7 @@ export function buildRestorePlan(tree: DataTree): RestorePlan {
 
   // 8. Model promotions.
   const promotions = readTreeJson<unknown>(tree, 'model-promotions.json');
+  consumed('model-promotions.json', 'engine.model_promotion');
   const promotionEntries: unknown[] = Array.isArray(promotions)
     ? promotions
     : ((promotions as { promotions?: unknown[] } | undefined)?.promotions ?? []);
@@ -303,6 +393,7 @@ export function buildRestorePlan(tree: DataTree): RestorePlan {
   for (const { file, store } of RESEARCH_JOURNALS) {
     const raw = readTreeText(tree, file);
     if (raw === undefined) continue;
+    consumed(file, 'engine.research_journal_event');
     parseJsonl(raw).forEach((event, index) => {
       journalRows.push({ store, sequence: index + 1, event });
     });
@@ -314,6 +405,7 @@ export function buildRestorePlan(tree: DataTree): RestorePlan {
   for (const { file, store } of RESEARCH_SNAPSHOTS) {
     const value = readTreeJson<unknown>(tree, file);
     if (value === undefined) continue;
+    consumed(file, 'engine.research_snapshot');
     snapshotRows.push({ store, snapshot: value });
   }
   rowSets.push(rowSet('engine.research_snapshot', 'research snapshot *.json files', snapshotRows));
@@ -326,5 +418,9 @@ export function buildRestorePlan(tree: DataTree): RestorePlan {
     mirrorPairIdsCarried: seam.mirrorPairIdsCarried,
     droppedTradingControlKeys,
     notLoaded,
+    consumption,
   };
 }
+
+const evidenceBatchPath = (reference: EvidenceReference) =>
+  `execution-order-evidence/${reference.file ?? `batch.${reference.sha256}.json`}`;
