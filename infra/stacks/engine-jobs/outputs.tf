@@ -29,6 +29,20 @@ output "source_commit" {
   value       = var.source_commit
 }
 
+output "stage_bucket" {
+  description = <<-EOT
+    The staging bucket this job mounts, or null before the platform stack declares
+    it. Published so the maintainer reads the name from `tofu output` or the apply
+    log rather than from this repository, which never contains it (#241).
+  EOT
+  value       = local.stage_bucket
+}
+
+output "stage_mount_path" {
+  description = "Where the staging bucket is mounted on the execution, so the runbook's upload paths and the applied arguments cannot drift apart."
+  value       = var.stage_mount_path
+}
+
 output "secret_environment_bound" {
   description = "Secret-backed variables this job binds, as name to secret container id. Empty until the binding is enabled. No value exists in this stack, its plan, or its state."
   value       = local.secret_environment

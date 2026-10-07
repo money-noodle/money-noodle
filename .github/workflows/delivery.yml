@@ -908,6 +908,7 @@ jobs:
     env:
       TF_VAR_bootstrap_state_bucket: ${{ format('{0}-bootstrap', vars.GCP_STATE_BUCKET_PREFIX) }}
       TF_VAR_platform_state_bucket: ${{ format('{0}-platform', vars.GCP_STATE_BUCKET_PREFIX) }}
+      TF_VAR_engine_restore_stage_bucket: ${{ format('{0}-engine-restore-stage', vars.GCP_STATE_BUCKET_PREFIX) }}
       TF_VAR_api_state_bucket: ${{ format('{0}-api', vars.GCP_STATE_BUCKET_PREFIX) }}
       TF_VAR_project_number: ${{ vars.GCP_PROJECT_NUMBER }}
       TF_VAR_billing_account_id: ${{ vars.GCP_BILLING_ACCOUNT_ID }}
@@ -1088,6 +1089,15 @@ jobs:
           if [[ -f exposure.tfvars ]]; then
             exposure_args+=(-var-file=exposure.tfvars)
           fi
+          # The reviewed restore inputs live in `restore.tfvars` on the same terms
+          # (#241): the dispatched apply exposes only the digest, the source commit
+          # and the confirmation, so without this there is no reviewed way to set
+          # what the one-time execution is asked to do. Only the engine-jobs stack
+          # has such a file, and passing it only when it exists leaves every other
+          # stack untouched.
+          if [[ -f restore.tfvars ]]; then
+            exposure_args+=(-var-file=restore.tfvars)
+          fi
           # Plan and apply the same plan file, so what was planned is what runs.
           tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -out=stack.tfplan
           # Between plan and apply, because the saved plan is what actually runs.
@@ -1217,6 +1227,15 @@ jobs:
           if [[ -f exposure.tfvars ]]; then
             exposure_args+=(-var-file=exposure.tfvars)
           fi
+          # The reviewed restore inputs live in `restore.tfvars` on the same terms
+          # (#241): the dispatched apply exposes only the digest, the source commit
+          # and the confirmation, so without this there is no reviewed way to set
+          # what the one-time execution is asked to do. Only the engine-jobs stack
+          # has such a file, and passing it only when it exists leaves every other
+          # stack untouched.
+          if [[ -f restore.tfvars ]]; then
+            exposure_args+=(-var-file=restore.tfvars)
+          fi
           tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -out=rollback.tfplan \
             -var="rollback_revision=${revision}"
           # Between plan and apply, because the saved plan is what actually runs.
@@ -1285,6 +1304,15 @@ jobs:
           exposure_args=()
           if [[ -f exposure.tfvars ]]; then
             exposure_args+=(-var-file=exposure.tfvars)
+          fi
+          # The reviewed restore inputs live in `restore.tfvars` on the same terms
+          # (#241): the dispatched apply exposes only the digest, the source commit
+          # and the confirmation, so without this there is no reviewed way to set
+          # what the one-time execution is asked to do. Only the engine-jobs stack
+          # has such a file, and passing it only when it exists leaves every other
+          # stack untouched.
+          if [[ -f restore.tfvars ]]; then
+            exposure_args+=(-var-file=restore.tfvars)
           fi
           tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -out=stack.tfplan
           # Between plan and apply, because the saved plan is what actually runs.
@@ -1407,6 +1435,15 @@ jobs:
           if [[ -f exposure.tfvars ]]; then
             exposure_args+=(-var-file=exposure.tfvars)
           fi
+          # The reviewed restore inputs live in `restore.tfvars` on the same terms
+          # (#241): the dispatched apply exposes only the digest, the source commit
+          # and the confirmation, so without this there is no reviewed way to set
+          # what the one-time execution is asked to do. Only the engine-jobs stack
+          # has such a file, and passing it only when it exists leaves every other
+          # stack untouched.
+          if [[ -f restore.tfvars ]]; then
+            exposure_args+=(-var-file=restore.tfvars)
+          fi
           tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -out=rollback.tfplan \
             -var="rollback_revision=${revision}"
           # Between plan and apply, because the saved plan is what actually runs.
@@ -1502,6 +1539,7 @@ jobs:
     env:
       TF_VAR_bootstrap_state_bucket: ${{ format('{0}-bootstrap', vars.GCP_STATE_BUCKET_PREFIX) }}
       TF_VAR_platform_state_bucket: ${{ format('{0}-platform', vars.GCP_STATE_BUCKET_PREFIX) }}
+      TF_VAR_engine_restore_stage_bucket: ${{ format('{0}-engine-restore-stage', vars.GCP_STATE_BUCKET_PREFIX) }}
       TF_VAR_api_state_bucket: ${{ format('{0}-api', vars.GCP_STATE_BUCKET_PREFIX) }}
       TF_VAR_project_number: ${{ vars.GCP_PROJECT_NUMBER }}
       TF_VAR_billing_account_id: ${{ vars.GCP_BILLING_ACCOUNT_ID }}
@@ -1647,6 +1685,15 @@ jobs:
           if [[ -f exposure.tfvars ]]; then
             exposure_args+=(-var-file=exposure.tfvars)
           fi
+          # The reviewed restore inputs live in `restore.tfvars` on the same terms
+          # (#241): the dispatched apply exposes only the digest, the source commit
+          # and the confirmation, so without this there is no reviewed way to set
+          # what the one-time execution is asked to do. Only the engine-jobs stack
+          # has such a file, and passing it only when it exists leaves every other
+          # stack untouched.
+          if [[ -f restore.tfvars ]]; then
+            exposure_args+=(-var-file=restore.tfvars)
+          fi
           # `-lock-timeout` waits for a concurrent operation rather than failing
           # immediately or, worse, proceeding without the lock.
           tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -out=stack.tfplan
@@ -1693,6 +1740,7 @@ jobs:
     env:
       TF_VAR_bootstrap_state_bucket: ${{ format('{0}-bootstrap', vars.GCP_STATE_BUCKET_PREFIX) }}
       TF_VAR_platform_state_bucket: ${{ format('{0}-platform', vars.GCP_STATE_BUCKET_PREFIX) }}
+      TF_VAR_engine_restore_stage_bucket: ${{ format('{0}-engine-restore-stage', vars.GCP_STATE_BUCKET_PREFIX) }}
       TF_VAR_api_state_bucket: ${{ format('{0}-api', vars.GCP_STATE_BUCKET_PREFIX) }}
       TF_VAR_project_number: ${{ vars.GCP_PROJECT_NUMBER }}
       TF_VAR_billing_account_id: ${{ vars.GCP_BILLING_ACCOUNT_ID }}
@@ -1820,6 +1868,15 @@ jobs:
           if [[ -f exposure.tfvars ]]; then
             exposure_args+=(-var-file=exposure.tfvars)
           fi
+          # The reviewed restore inputs live in `restore.tfvars` on the same terms
+          # (#241): the dispatched apply exposes only the digest, the source commit
+          # and the confirmation, so without this there is no reviewed way to set
+          # what the one-time execution is asked to do. Only the engine-jobs stack
+          # has such a file, and passing it only when it exists leaves every other
+          # stack untouched.
+          if [[ -f restore.tfvars ]]; then
+            exposure_args+=(-var-file=restore.tfvars)
+          fi
           # `-refresh-only` compares reviewed desired state with observed reality
           # and proposes no changes. `-detailed-exitcode` returns 2 on difference.
           set +e
@@ -1874,6 +1931,7 @@ jobs:
     env:
       TF_VAR_bootstrap_state_bucket: ${{ format('{0}-bootstrap', vars.GCP_STATE_BUCKET_PREFIX) }}
       TF_VAR_platform_state_bucket: ${{ format('{0}-platform', vars.GCP_STATE_BUCKET_PREFIX) }}
+      TF_VAR_engine_restore_stage_bucket: ${{ format('{0}-engine-restore-stage', vars.GCP_STATE_BUCKET_PREFIX) }}
       TF_VAR_api_state_bucket: ${{ format('{0}-api', vars.GCP_STATE_BUCKET_PREFIX) }}
       TF_VAR_project_number: ${{ vars.GCP_PROJECT_NUMBER }}
       TF_VAR_billing_account_id: ${{ vars.GCP_BILLING_ACCOUNT_ID }}
@@ -2037,6 +2095,15 @@ jobs:
           if [[ -f exposure.tfvars ]]; then
             exposure_args+=(-var-file=exposure.tfvars)
           fi
+          # The reviewed restore inputs live in `restore.tfvars` on the same terms
+          # (#241): the dispatched apply exposes only the digest, the source commit
+          # and the confirmation, so without this there is no reviewed way to set
+          # what the one-time execution is asked to do. Only the engine-jobs stack
+          # has such a file, and passing it only when it exists leaves every other
+          # stack untouched.
+          if [[ -f restore.tfvars ]]; then
+            exposure_args+=(-var-file=restore.tfvars)
+          fi
           # Plan and apply the same plan file, so what was reviewed is what runs.
           tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -out=stack.tfplan
           # Between plan and apply, because the saved plan is what actually runs.
@@ -2118,6 +2185,15 @@ jobs:
           exposure_args=()
           if [[ -f exposure.tfvars ]]; then
             exposure_args+=(-var-file=exposure.tfvars)
+          fi
+          # The reviewed restore inputs live in `restore.tfvars` on the same terms
+          # (#241): the dispatched apply exposes only the digest, the source commit
+          # and the confirmation, so without this there is no reviewed way to set
+          # what the one-time execution is asked to do. Only the engine-jobs stack
+          # has such a file, and passing it only when it exists leaves every other
+          # stack untouched.
+          if [[ -f restore.tfvars ]]; then
+            exposure_args+=(-var-file=restore.tfvars)
           fi
           tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -out=stack.tfplan
           # Between plan and apply, because the saved plan is what actually runs.
@@ -2231,6 +2307,7 @@ jobs:
       # provider job that plans or applies one supplies its bucket.
       TF_VAR_bootstrap_state_bucket: ${{ format('{0}-bootstrap', vars.GCP_STATE_BUCKET_PREFIX) }}
       TF_VAR_platform_state_bucket: ${{ format('{0}-platform', vars.GCP_STATE_BUCKET_PREFIX) }}
+      TF_VAR_engine_restore_stage_bucket: ${{ format('{0}-engine-restore-stage', vars.GCP_STATE_BUCKET_PREFIX) }}
       TF_VAR_api_state_bucket: ${{ format('{0}-api', vars.GCP_STATE_BUCKET_PREFIX) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -2381,6 +2458,15 @@ jobs:
           exposure_args=()
           if [[ -f exposure.tfvars ]]; then
             exposure_args+=(-var-file=exposure.tfvars)
+          fi
+          # The reviewed restore inputs live in `restore.tfvars` on the same terms
+          # (#241): the dispatched apply exposes only the digest, the source commit
+          # and the confirmation, so without this there is no reviewed way to set
+          # what the one-time execution is asked to do. Only the engine-jobs stack
+          # has such a file, and passing it only when it exists leaves every other
+          # stack untouched.
+          if [[ -f restore.tfvars ]]; then
+            exposure_args+=(-var-file=restore.tfvars)
           fi
           tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -out=rollback.tfplan \
             -var="rollback_revision=${ROLLBACK_REVISION}"

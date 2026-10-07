@@ -246,6 +246,17 @@ export const RESOURCE_OPERATIONS = Object.freeze({
     'Platform API enablement is ordinary declared infrastructure once bootstrap has established the deployer.',
   ),
 
+  'stacks/platform:google_storage_bucket.engine_restore_stage': own(
+    'stack-executor',
+    'infrastructure.apply',
+    'The restore job\u2019s staging area is declared infrastructure, applied here rather than beside the job that mounts it because the release identity holds no Cloud Storage role at all and could neither create the bucket nor set its IAM (#241, ADR-0005). Private, versioned, with a bounded object life: a staging copy of state that exists elsewhere, not the single object store Proposed ADR-0008 would decide.',
+  ),
+  'stacks/platform:google_storage_bucket_iam_member.engine_restore_stage_object_user': own(
+    'iam-executor',
+    'workload.access.change',
+    'Object read and create for the restore job\u2019s own identity, on this one bucket. An access binding with its own approval, like every other: it carries no delete, so an execution can read a staged input and append its evidence and can never remove either.',
+  ),
+
   // --- The engine jobs family (ADR-0013 §1). ---
   'stacks/engine-jobs:google_cloud_run_v2_job.restore': own(
     'stack-executor',

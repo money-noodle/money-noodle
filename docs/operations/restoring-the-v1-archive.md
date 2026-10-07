@@ -10,13 +10,15 @@ The restore is a **transform, not a byte-exact copy**: live rows are dropped at 
 
 ## Inputs
 
-Every location is an input to the execution. None is a default anywhere in this repository, and none appears in the evidence document (`SECURITY.md`).
+Every location is a path inside the execution, under one mounted staging bucket. The three paths are a committed, reviewed record — `infra/stacks/engine-jobs/restore.tfvars` — because the dispatched apply exposes only the image digest, the source commit and the confirmation, so there is otherwise no reviewed way to tell the job what to do. The **bucket name** is not in this repository: the platform stack creates it from a name supplied at apply, and the `engine-jobs` stack publishes it as the `stage_bucket` output, so read it from `tofu output` or from the apply log (`SECURITY.md`).
+
+That bucket is the restore's staging area and nothing more: private, versioned, with a bounded object life, readable and appendable by the restore job's own identity alone. It is **not** the single object store Proposed [ADR-0008](../architecture/decisions/ADR-0008-single-object-store.md) would decide, and declaring it does not promote that record — ADR-0013 §2 is explicit that the accepted object-storage direction is the existing archive. It is retired with the job.
 
 | Input | How it reaches the job | Notes |
 | --- | --- | --- |
-| Staged archive root (`--archive`) | a directory mounted on the execution, holding the bucket prefix's `manifests/` and `blobs/` as laid out in the bucket | Staged read-only by the maintainer with the archive read credential. The job reads the **last** manifest by key order and never writes to the archive. |
-| Workstation copy (`--workstation`) | a directory mounted on the execution, holding the v1 data directory as last written | Comes from the maintainer's workstation. Supply it; the job cannot establish completeness without it. |
-| Evidence output (`--evidence-dir`) | a directory the maintainer collects after the run | The job writes `<date>-v1-archive-restore.md` there from the committed template, before and after the load. |
+| Staged archive root (`--archive`) | `/mnt/stage/archive`, a prefix of the staging bucket mounted on the execution, holding the archive's `manifests/` and `blobs/` as laid out in the bucket | Uploaded by the maintainer with their own account and the archive read credential. The job reads the **last** manifest by key order; its grant carries no delete, so it cannot write to the staged copy. |
+| Workstation copy (`--workstation`) | `/mnt/stage/workstation`, a prefix of the same mount, holding the v1 data directory as last written | Comes from the maintainer's workstation. Supply it; the job cannot establish completeness without it. |
+| Evidence output (`--evidence-dir`) | `/mnt/stage/evidence`, the one place the execution writes | The job writes `<date>-v1-archive-restore.md` there from the committed template, before and after the load. The maintainer downloads it and opens the evidence pull request. |
 | `engine_writer` connection string | `ENGINE_RESTORE_WRITER_DATABASE_URL`, bound by reference from Secret Manager | The job holds no DDL and refuses a non-empty schema. |
 | `--allow-workstation-absent` | an explicit flag | The documented override, see below. Never a default. |
 
@@ -25,8 +27,43 @@ Every location is an input to the execution. None is a default anywhere in this 
 1. Apply `services/platform-api/migrations/0001-identity-budgets-and-control.sql`, then `services/platform-api/migrations/0002-engine-restore-tables.sql`, as the schema owner. The job cannot create tables and will fail its first `select` without them.
 2. Publish the `engine-restore-runtime` identity from the bootstrap stack (the infrastructure child's declaration, keyed `engine-restore`), so `infra/stacks/engine-jobs` can read it from the contract.
 3. Apply `infra/stacks/platform` with `engine_restore_secrets_enabled = true`, which declares the one empty container (`engine-restore-writer-database-url`) and grants its accessor to the restore identity. Enter the secret version out of band. No archive credential is declared anywhere in this repository: the job reads a staged copy and never opens the bucket, so the credential the maintainer stages with stays in the maintainer's custody.
-4. **Prerequisite: #257 merged** (`ci(delivery): dispatch plan/apply/drift and build the image for the engine-jobs stack`). It is the only reviewed route to the next two steps; applying the stack with `tofu` by hand is forbidden (`AGENTS.md`, `docs/operations/delivery.md`). Once it is merged, the next push to `main` publishes the `engine-jobs` image digest, and a dispatched `apply` for the `engine-jobs` stack applies `infra/stacks/engine-jobs` at that digest with `restore_secret_binding_enabled = true` and the three locations in `restore_arguments`.
-5. Stage the archive prefix and the workstation copy on the execution's mounts, then start one execution by hand. Nothing in the pipeline stages anything or executes the job, and no credential value passes through the repository.
+4. Apply `infra/stacks/platform` again with `engine_restore_secrets_enabled = true` and `engine_restore_stage_bucket` set, which creates the staging bucket and grants the restore identity object read and create on it alone. The pipeline cannot do this: the deployer that runs a dispatched apply holds no Cloud Storage role at all, so a bucket declared in the release path could only fail the apply that needed it. Follow the same convention the state buckets use, `<state-bucket-prefix>-engine-restore-stage`, which is what the workflow derives for its own plans.
+5. **Prerequisite: #257 merged** (`ci(delivery): dispatch plan/apply/drift and build the image for the engine-jobs stack`). It is the only reviewed route to the next steps; applying the stack with `tofu` by hand is forbidden (`AGENTS.md`, `docs/operations/delivery.md`). Once it is merged, the next push to `main` publishes the `engine-jobs` image digest, and a dispatched `apply` for the `engine-jobs` stack applies `infra/stacks/engine-jobs` at that digest. The gate and the three locations come from the committed `restore.tfvars`, which the workflow passes with `-var-file` when the stack has one; nothing needs to be typed into the dispatch beyond the digest, the source commit and the confirmation.
+
+## Staging the inputs and running the one execution
+
+The bucket name is published, not written down. Read it once:
+
+```bash
+# From the engine-jobs stack, after the dispatched apply. The apply log carries
+# it too, with the account-chosen part of the name redacted.
+tofu output -raw stage_bucket
+```
+
+Then upload with your own account — the job's identity can read and append, and
+nothing in the pipeline stages anything:
+
+```bash
+# Placeholders only. Neither local path nor the bucket name belongs in a commit.
+gcloud storage cp -r <local archive copy>/ "gs://<stage-bucket>/archive/"
+gcloud storage cp -r <workstation data directory>/ "gs://<stage-bucket>/workstation/"
+```
+
+Start exactly one execution by hand:
+
+```bash
+gcloud run jobs execute engine-restore --region <region> --wait
+```
+
+Collect the evidence document and open its pull request:
+
+```bash
+gcloud storage cp "gs://<stage-bucket>/evidence/*.md" docs/validation/
+```
+
+Nothing in the pipeline executes the job, and no credential value passes through
+the repository. Read the finding in the evidence document before reading anything
+else: the verify-first rule below decides whether a load was permitted at all.
 
 ## The verify-first rule
 

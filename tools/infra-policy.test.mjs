@@ -1170,6 +1170,21 @@ test('the narrow telemetry authentication exception is enforced, not merely desc
 const EXPOSURE_FILE = 'exposure.tfvars';
 const EXPOSURE_STACKS = ['api', 'web'];
 
+// The second reviewed file, on the same terms (#241). The dispatched apply
+// exposes only the digest, the source commit and the confirmation, so the one-time
+// restore had no reviewed way to be told what to do at all. `restore.tfvars` is
+// that record: one boolean and three container mount paths, nothing
+// account-specific, pinned here exactly as the exposure file is.
+const RESTORE_FILE = 'restore.tfvars';
+const RESTORE_STACKS = ['engine-jobs'];
+const RESTORE_MOUNT = '/mnt/stage';
+
+/** Every committed tfvars this repository admits, as `<stack>/<file>`. */
+const COMMITTED_TFVARS = [
+  ...EXPOSURE_STACKS.map((stack) => `infra/stacks/${stack}/${EXPOSURE_FILE}`),
+  ...RESTORE_STACKS.map((stack) => `infra/stacks/${stack}/${RESTORE_FILE}`),
+];
+
 test('no automatically loaded tfvars exists anywhere under infra', () => {
   // `tofu` loads `*.auto.tfvars` without being asked, including during
   // `tofu test`. One would flip the creating-plan assertions in every
@@ -1215,7 +1230,7 @@ test('an exposure file, when one exists, may say only that the service is public
   }
 });
 
-test('the gitignore exception admits exactly the two exposure files', () => {
+test('the gitignore exception admits exactly the reviewed tfvars files', () => {
   const gitignore = read(join(repoRoot, '.gitignore'));
   assert.ok(
     gitignore.split('\n').includes('*.tfvars'),
@@ -1230,7 +1245,109 @@ test('the gitignore exception admits exactly the two exposure files', () => {
     );
   assert.deepEqual(
     exceptions.sort(),
-    EXPOSURE_STACKS.map((stack) => `!infra/stacks/${stack}/${EXPOSURE_FILE}`).sort(),
-    'the tfvars exception must name exactly the two stack exposure files, so no other tfvars can be committed by a wildcard',
+    COMMITTED_TFVARS.map((path) => `!${path}`).sort(),
+    'the tfvars exception must name exactly the reviewed files, so no other tfvars can be committed by a wildcard',
+  );
+});
+
+test('a restore inputs file may exist only in the stack that owns the one-time job', () => {
+  const found = infraFiles.filter((path) => basename(path) === RESTORE_FILE);
+  const permitted = RESTORE_STACKS.map((stack) => join(infraRoot, 'stacks', stack, RESTORE_FILE));
+
+  for (const path of found) {
+    assert.ok(
+      permitted.includes(path),
+      `${relative(path)} is a restore inputs file outside the engine-jobs stack. Only that stack declares the one-time job, so only that stack can be told what to restore.`,
+    );
+  }
+});
+
+test('the restore inputs file may say only what the one-time execution is asked to do', () => {
+  // The same rule as the exposure file: an approval record, not a configuration
+  // surface. Anything else in it would be a second way to change the job that
+  // nobody reviewed as a change to the job.
+  for (const stack of RESTORE_STACKS) {
+    const path = join(infraRoot, 'stacks', stack, RESTORE_FILE);
+    if (!existsSync(path)) continue;
+
+    const body = read(path)
+      .split('\n')
+      .map((line) => line.replace(/#.*$/, ''))
+      .join('\n');
+
+    const assignments = [...body.matchAll(/^\s*([a-z_]+)\s*=/gmu)].map(([, name]) => name);
+    assert.deepEqual(
+      assignments.sort(),
+      ['restore_arguments', 'restore_secret_binding_enabled'],
+      `${relative(path)} must set exactly the secret-binding gate and the restore arguments. A restore inputs file that can set anything else is not a reviewed record of one execution.`,
+    );
+
+    assert.match(
+      body,
+      /restore_secret_binding_enabled\s*=\s*true/u,
+      `${relative(path)} exists to turn the declared secret reference on; with it off the job cannot connect at all`,
+    );
+
+    // Every location is a path under the mount, so the file carries no bucket
+    // name, project id or address of any kind (SECURITY.md). The bucket itself is
+    // read from the platform stack's published contract.
+    const values = [...body.matchAll(/"([^"]*)"/gu)].map(([, value]) => value);
+    for (const value of values) {
+      assert.ok(
+        value.startsWith('--') || value.startsWith(`${RESTORE_MOUNT}/`),
+        `${relative(path)} carries ${JSON.stringify(value)}, which is neither a flag nor a path under ${RESTORE_MOUNT}. A restore inputs file must hold no identifier.`,
+      );
+    }
+
+    // The three locations the entrypoint requires, by the names it parses.
+    for (const flag of ['--archive', '--workstation', '--evidence-dir']) {
+      assert.ok(
+        values.includes(flag),
+        `${relative(path)} must pass ${flag}; the entrypoint parses that exact name`,
+      );
+    }
+  }
+});
+
+test('the restore job mounts the staging bucket it is told to read from', () => {
+  // The gap this closed: a container reads its image and its mounts and nothing
+  // else, so arguments naming paths the job never mounts describe an execution
+  // that cannot find its inputs (#241).
+  const stack = readStack(join(infraRoot, 'stacks', 'engine-jobs'));
+  assert.match(stack, /dynamic "volumes"/u, 'the job must declare the staged volume');
+  assert.match(stack, /dynamic "volume_mounts"/u, 'the job must mount the staged volume');
+  assert.match(
+    stack,
+    /contract_engine_restore_stage_bucket/u,
+    'the bucket must be read from the platform contract, never written down here',
+  );
+  assert.ok(
+    !/read_only\s*=\s*true/u.test(stack),
+    'the mount is writable, because the job writes its evidence document back under --evidence-dir',
+  );
+
+  // The bucket and its grant live where they can actually be applied: the
+  // deployer that runs a dispatched apply holds no Cloud Storage role at all.
+  const platform = readStack(join(infraRoot, 'stacks', 'platform'));
+  assert.match(platform, /resource "google_storage_bucket" "engine_restore_stage"/u);
+  assert.match(
+    platform,
+    /resource "google_storage_bucket_iam_member" "engine_restore_stage_object_user"/u,
+  );
+  assert.match(platform, /uniform_bucket_level_access = true/u);
+  assert.match(platform, /public_access_prevention {4}= "enforced"/u);
+  assert.match(platform, /roles\/storage\.objectUser/u);
+  assert.ok(
+    !/resource "google_storage_bucket"/u.test(readStack(join(infraRoot, 'stacks', 'engine-jobs'))),
+    'the engine-jobs stack must declare no bucket: its apply holds no Cloud Storage authority',
+  );
+
+  const deployerRoles = read(join(infraRoot, 'stacks', 'bootstrap', 'variables.tf')).match(
+    /variable "deployer_roles"[\s\S]*?default = \[([\s\S]*?)\n {2}\]/,
+  )?.[1];
+  assert.ok(deployerRoles, 'the deployer roles must stay enumerated');
+  assert.ok(
+    !/roles\/storage\./u.test(deployerRoles),
+    'the deployer must hold no Cloud Storage role; if that changes, the staging bucket could move to the release path and this reasoning needs revisiting',
   );
 });

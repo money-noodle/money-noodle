@@ -51,6 +51,12 @@ locals {
   # as the API's or the web's identity: `var.job_name` is validated to one value.
   runtime_service_account_email = local.runtime_identities[var.job_name]
 
+  # The staging bucket the platform stack created, read from its published
+  # contract so the name is not written down here (#241). Null until the
+  # maintainer has applied platform with the restore prerequisites on, which is
+  # the same ordering the secret container follows.
+  stage_bucket = data.terraform_remote_state.platform.outputs.contract_engine_restore_stage_bucket
+
   # The secret references this execution renders, gated exactly as #250 gated the
   # API's: Cloud Run refuses a job that references a secret which does not exist,
   # so this stays off until the maintainer has applied the platform stack with the
@@ -81,6 +87,28 @@ resource "google_cloud_run_v2_job" "restore" {
       max_retries     = 0
       timeout         = "${var.timeout_seconds}s"
 
+      # A container reads its image and its mounts and nothing else, so without
+      # this the three locations in `restore_arguments` would not exist at
+      # execution time and the job could only print its usage. The staged archive
+      # copy, the workstation copy and the evidence output directory are all
+      # subdirectories of one mount: one bucket, one grant, one thing to retire.
+      #
+      # Writable, because the job writes its evidence document back under
+      # `--evidence-dir`. The identity's grant carries no delete, so a writable
+      # mount cannot remove a staged input (ADR-0013 §1).
+      dynamic "volumes" {
+        for_each = local.stage_bucket == null ? [] : [local.stage_bucket]
+
+        content {
+          name = "stage"
+
+          gcs {
+            bucket    = volumes.value
+            read_only = false
+          }
+        }
+      }
+
       containers {
         image   = "${local.registry_url}/${var.image_name}@${var.image_digest}"
         command = ["node"]
@@ -90,6 +118,15 @@ resource "google_cloud_run_v2_job" "restore" {
           limits = {
             cpu    = var.cpu
             memory = var.memory
+          }
+        }
+
+        dynamic "volume_mounts" {
+          for_each = local.stage_bucket == null ? [] : [local.stage_bucket]
+
+          content {
+            name       = "stage"
+            mount_path = var.stage_mount_path
           }
         }
 
@@ -130,6 +167,20 @@ resource "google_cloud_run_v2_job" "restore" {
         contains(var.accessible_secret_ids, secret_id)
       ])
       error_message = "Every bound secret must be one this job was declared to read; a reference nobody was asked to grant fails at plan time (#217)."
+    }
+
+    # Every argument that names a location must name one under the mount, and the
+    # mount must exist. Otherwise the execution starts, finds nothing at the path,
+    # and the failure looks like a bad archive rather than a missing volume.
+    precondition {
+      condition = (
+        length(var.restore_arguments) == 0 ||
+        (local.stage_bucket != null && alltrue([
+          for argument in var.restore_arguments :
+          !startswith(argument, "/") || startswith(argument, "${var.stage_mount_path}/")
+        ]))
+      )
+      error_message = "A restore argument names an absolute path outside the staged mount, or the staging bucket is not declared yet. Apply the platform stack with the restore prerequisites on first (#241)."
     }
   }
 }

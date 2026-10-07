@@ -2790,6 +2790,22 @@ test('every stack plan passes the reviewed exposure file when it exists', () => 
     );
   }
 
+  // The reviewed restore inputs ride the same argument array, on the same terms
+  // (#241): the dispatched apply exposes only the digest, the source commit and
+  // the confirmation, so without this the one-time job has no reviewed way to be
+  // told what to do. Only the engine-jobs stack carries such a file, so the `if`
+  // leaves every other stack untouched.
+  const restoreBlocks = [
+    ...delivery.matchAll(
+      /if \[\[ -f restore\.tfvars \]\]; then\n {12}exposure_args\+=\(-var-file=restore\.tfvars\)\n {10}fi\n/g,
+    ),
+  ];
+  assert.equal(
+    restoreBlocks.length,
+    plans.length,
+    'every plan must also pass the reviewed restore inputs when the stack has them',
+  );
+
   // Drift reports; it still never applies.
   const drift = deliveryJobs().find(({ name }) => name === 'drift');
   assert.ok(!/tofu apply/.test(drift.body), 'drift must still never apply');

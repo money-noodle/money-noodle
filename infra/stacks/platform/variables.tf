@@ -229,6 +229,52 @@ variable "secret_consumer_services" {
   }
 }
 
+variable "engine_restore_stage_bucket" {
+  description = <<-EOT
+    Name of the bucket the restore's staged inputs and evidence output live in,
+    created only when `engine_restore_secrets_enabled` is true.
+
+    Supplied at apply and never committed, exactly like the state buckets: a
+    bucket name is globally unique and account-specific, so it is account data
+    rather than a repository default (SECURITY.md). Follow the same convention the
+    state buckets use — `<state_bucket_prefix>-engine-restore-stage` — which is
+    what `.github/workflows/delivery.yml` derives it as, so a plan run by the
+    pipeline and one run by hand name the same bucket.
+
+    This is the restore's **staging area**, not a platform object store. ADR-0013
+    §2 says the only accepted object-storage direction is the existing archive and
+    that ADR-0008 is Proposed and may not be depended on; this bucket holds one
+    job's inputs and its evidence for the length of one milestone, and declaring
+    it neither promotes ADR-0008 nor creates a general object store.
+  EOT
+  type        = string
+  default     = null
+
+  validation {
+    condition = (
+      var.engine_restore_stage_bucket == null ||
+      can(regex("^[a-z0-9][a-z0-9._-]{2,61}[a-z0-9]$", var.engine_restore_stage_bucket))
+    )
+    error_message = "engine_restore_stage_bucket must be a valid Cloud Storage bucket name."
+  }
+}
+
+variable "engine_restore_stage_retention_days" {
+  description = <<-EOT
+    Age at which a staged object is deleted. A staging area is not an archive: the
+    inputs are a copy of state that exists elsewhere and the evidence document is
+    collected into `docs/validation/`, so a bounded life keeps the staged copy
+    from quietly becoming a second archive nobody decided to keep.
+  EOT
+  type        = number
+  default     = 90
+
+  validation {
+    condition     = var.engine_restore_stage_retention_days > 0
+    error_message = "A staging bucket with no deletion age is an archive nobody decided to keep."
+  }
+}
+
 variable "labels" {
   description = "Additional resource labels."
   type        = map(string)
@@ -237,9 +283,11 @@ variable "labels" {
 
 variable "engine_restore_secrets_enabled" {
   description = <<-EOT
-    Whether the container the one-time restore job reads is declared, with its
-    accessor grant to the restore job's runtime identity (#241, ADR-0013 §1–2).
-    **Off.**
+    Whether this stack declares the one-time restore job's platform-side
+    prerequisites: the container it reads, with its accessor grant to the restore
+    job's runtime identity, and the staging bucket its inputs are uploaded to with
+    the object grant that lets the execution read them and write its evidence back
+    (#241, ADR-0013 §1–2). **Off.**
 
     Off is correct until the bootstrap contract publishes `engine-restore` among
     its runtime identities, because the accessor grant is resolved through that
