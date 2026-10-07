@@ -234,3 +234,74 @@ variable "labels" {
   type        = map(string)
   default     = {}
 }
+
+variable "engine_restore_secrets_enabled" {
+  description = <<-EOT
+    Whether the two containers the one-time restore job reads are declared, with
+    their accessor grant to the restore job's runtime identity (#241, ADR-0013
+    §1–2). **Off.**
+
+    Off is correct until the bootstrap contract publishes `engine-restore` among
+    its runtime identities, because the accessor grant is resolved through that
+    contract and a name it does not carry fails the plan. Turning this on is a
+    reviewed one-line change made by the maintainer immediately before entering
+    the two secret versions out of band, exactly as #250 gated the API's
+    references. It stays a variable afterwards so the containers' grant can be
+    taken back out once the one-time job is retired.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "engine_restore_secrets" {
+  description = <<-EOT
+    The restore job's containers, declared only when `engine_restore_secrets_enabled`
+    is true. Both are created empty; no value is supplied here or anywhere in the
+    repository. Neither is a venue, broker or exchange credential.
+  EOT
+  type = map(object({
+    owner                  = string
+    consuming_principal    = string
+    rotation_interval_days = number
+    revocation_procedure   = string
+    recovery_path          = string
+  }))
+  default = {
+    # SELECT, INSERT, UPDATE on the restore target tables in the `engine` schema,
+    # no DDL (ADR-0013 §2). The job refuses to load into a non-empty schema, so a
+    # leaked or stale value cannot double-load.
+    "engine-restore-writer-database-url" = {
+      owner                  = "maintainer"
+      consuming_principal    = "engine-restore runtime service account"
+      rotation_interval_days = 90
+      revocation_procedure   = "Drop or alter the engine_writer role at the provider, then add a new secret version. The job is one-time and manual; with no working value an execution fails its first read and loads nothing."
+      recovery_path          = "Recreate the engine_writer role with the grants of migrations 0001 and 0002 and add a new secret version. Nothing in this repository holds or can reconstruct the value."
+    }
+
+    # The read-only credential the maintainer uses to stage the archive prefix
+    # for the execution. Object read and bucket read; no delete, exactly as the
+    # v1 archive credential was scoped (sanitized inventory, B.2).
+    "engine-restore-archive-read-credential" = {
+      owner                  = "maintainer"
+      consuming_principal    = "engine-restore runtime service account"
+      rotation_interval_days = 90
+      revocation_procedure   = "Revoke the application key at the archive provider, then add a new secret version. The archive is append-only and the key could never delete, so revocation costs nothing but the next staging."
+      recovery_path          = "Issue a new read-only application key at the archive provider and add a new secret version. No value is held in this repository."
+    }
+  }
+}
+
+variable "engine_restore_secret_consumer_services" {
+  description = <<-EOT
+    Who may read the restore job's containers, by Cloud Run job name resolved
+    through the bootstrap contract, applied only when `engine_restore_secrets_enabled`
+    is true. The restore job's identity alone (ADR-0013 §1: `engine-restore-runtime`).
+    The API and the web are deliberately absent.
+  EOT
+  type        = map(list(string))
+  default = {
+    "engine-restore-writer-database-url"     = ["engine-restore"]
+    "engine-restore-archive-read-credential" = ["engine-restore"]
+  }
+}
+
