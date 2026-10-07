@@ -3077,3 +3077,183 @@ test('the ungated identity is still pinned by the committed federation trust', (
     'the trust module must refuse a pull-request event allowlist by validation, not by convention',
   );
 });
+
+// ---------------------------------------------------------------------------
+// The engine-jobs stack: a Cloud Run Job, reached only by dispatch and drift
+// (ADR-0013 §1, #241).
+//
+// The restore job has a stack and an image but is not a service: it has no
+// URI, no revision to send traffic to and no public invoker binding, and it is
+// executed by hand by the maintainer after its apply. The workflow gives it
+// exactly the reviewed routes a job can use and refuses the ones it cannot.
+// ---------------------------------------------------------------------------
+
+test('the engine-jobs stack is reachable by dispatched plan and apply and by scheduled drift', () => {
+  const options = delivery.match(
+    /\n {6}stack:\n[\s\S]*?options:\n([\s\S]*?)\n {6}confirmation:/,
+  )?.[1];
+  assert.ok(options, 'the dispatch must declare its stack choice');
+  assert.deepEqual(
+    options.split('\n').map((line) => line.trim().replace(/^- /, '')),
+    ['platform', 'api', 'web', 'engine-jobs'],
+    'the dispatched plan and apply must offer the engine-jobs stack',
+  );
+
+  const drift = deliveryJobs().find(({ name }) => name === 'drift');
+  assert.match(
+    drift.body,
+    /stack: \[platform, api, web, engine-jobs\]/,
+    'scheduled drift must observe the engine-jobs stack',
+  );
+  // The engine-jobs stack publishes its digest only, so drift reads the two
+  // service-stack outputs with a fallback rather than ending on the stack that
+  // lacks them. The digest itself is never optional.
+  assert.match(drift.body, /tofu output -raw deployed_digest\)"/);
+  for (const output of ['artifact_version', 'source_commit']) {
+    assert.match(
+      drift.body,
+      new RegExp(`tofu output -raw ${output} 2>/dev/null \\|\\| true`),
+      `drift must tolerate a stack that publishes no ${output}`,
+    );
+  }
+
+  // A push plans shared platform drift only; the engine-jobs stack joins no
+  // push matrix.
+  const plan = deliveryJobs().find(({ name }) => name === 'plan');
+  assert.match(
+    plan.body,
+    /format\('\["\{0\}"\]', github\.event\.inputs\.stack\) \|\| '\["platform"\]'/,
+    'a push must still plan the platform stack alone',
+  );
+});
+
+test('the engine-jobs image is published but joins no routine deploy vector', () => {
+  const publish = deliveryJobs().find(({ name }) => name === 'publish');
+  const entries = [
+    ...publish.body.matchAll(/- project: (\S+)\n {12}image: (\S+)\n {12}kind: (\S+)/g),
+  ].map(([, project, image, kind]) => [project, image, kind]);
+  assert.deepEqual(
+    entries,
+    [
+      ['platform-api', 'platform-api', 'service'],
+      ['web', 'web', 'service'],
+      ['engine-jobs', 'engine-jobs', 'job'],
+    ],
+    'publish must build the two service images and the one job image, each declaring its kind',
+  );
+  assert.match(
+    publish.body,
+    /matrix\.project == 'engine-jobs' && 'services\/engine-jobs'/,
+    'the job image must be built from its own Dockerfile',
+  );
+
+  // The HTTP acceptance cannot apply to a job image, and a job image is not
+  // published unproven: it must refuse to run without a named entrypoint.
+  const service = stepBody(publish.body, 'Prove the candidate digest serves its runtime contract');
+  assert.match(
+    service,
+    /^ {8}if: matrix\.kind != 'job'\n/,
+    'the HTTP probe must skip the job image',
+  );
+  const job = stepBody(
+    publish.body,
+    'Prove the candidate job image does nothing until an entrypoint is named',
+  );
+  assert.match(
+    job,
+    /^ {8}if: matrix\.kind == 'job'\n/,
+    'the job probe must run for the job image only',
+  );
+  assert.match(job, /if \[\[ "\$status" != '2' \]\]/, 'a job image started bare must exit 2');
+  assert.match(
+    job,
+    /grep -Fq 'name an entrypoint'/,
+    'a job image started bare must print its usage',
+  );
+  assert.match(
+    job,
+    /org\.opencontainers\.image\.revision/,
+    'the job image must name the commit it was built from, as the service images do',
+  );
+  assert.ok(
+    stepIndex(
+      publish.body,
+      'Prove the candidate job image does nothing until an entrypoint is named',
+    ) < stepIndex(publish.body, 'Scan the candidate digest before publication'),
+    'the job probe must precede the scan, so an unproven job image is never published',
+  );
+
+  // The release vector admits only projects that declare a deployment manifest,
+  // and the engine-jobs project declares none. The project may not exist yet on
+  // this branch; when it does, it must still declare no deployment.
+  const manifest = join(repoRoot, 'services', 'engine-jobs', 'project.json');
+  if (existsSync(manifest)) {
+    assert.equal(
+      JSON.parse(read(manifest)).metadata?.deployment,
+      undefined,
+      'engine-jobs must declare no deployment manifest; a job is never deployed by a push',
+    );
+  }
+});
+
+test('a Cloud Run Job cannot be probed, rolled back or exposed', () => {
+  const apply = deliveryJobs().find(({ name }) => name === 'apply');
+  for (const image of [
+    stepBody(apply.body, 'Verify the artifact carries provenance from this repository'),
+    stepBody(apply.body, 'Load the configured artifact for a reviewed access change'),
+  ]) {
+    assert.match(
+      image,
+      /github\.event\.inputs\.stack == 'engine-jobs' && 'engine-jobs'/,
+      'the apply must verify the engine-jobs image, not the platform-api image, for the engine-jobs stack',
+    );
+  }
+  const plan = deliveryJobs().find(({ name }) => name === 'plan');
+  assert.match(
+    stepBody(plan.body, 'Verify selected service artifact'),
+    /matrix\.stack == 'engine-jobs' && 'engine-jobs'/,
+    'the plan must verify the engine-jobs image for the engine-jobs stack',
+  );
+
+  // No URI, nothing to probe: the post-apply verification is a service property.
+  const skipsJob =
+    "if: github\\.event\\.inputs\\.stack != 'platform' && github\\.event\\.inputs\\.stack != 'engine-jobs'\\n";
+  assert.match(
+    apply.body,
+    new RegExp(`- id: apply-service\\n {8}name: Read the applied service URI\\n {8}${skipsJob}`),
+    'there is no service URI to read for a job, so the step must skip the engine-jobs stack',
+  );
+  assert.match(
+    apply.body,
+    new RegExp(`- id: apply-probe-auth\\n {8}${skipsJob}`),
+    'no probe token is minted for a job; there is no audience to bind it to',
+  );
+  assert.match(
+    stepBody(apply.body, 'Verify health and the public contract'),
+    new RegExp(`^ {8}${skipsJob}`),
+    'there is nothing to probe for a job, so the verification must skip the engine-jobs stack',
+  );
+
+  // No invoker binding: the access change refuses the job as it refuses platform.
+  const loader = stepBody(apply.body, 'Load the configured artifact for a reviewed access change');
+  assert.match(
+    loader,
+    /if \[\[ "\$STACK" == 'engine-jobs' \]\]; then\n[\s\S]*?exit 1\n {10}fi/,
+    'a reviewed access change must refuse the engine-jobs stack',
+  );
+
+  // No revision: rollback refuses the job in its guard, before any step runs.
+  const rollback = deliveryJobs().find(({ name }) => name === 'rollback');
+  const condition = rollback.body.match(/if: >-\n([\s\S]*?)\n {4}runs-on:/)?.[1];
+  assert.ok(
+    condition.includes("github.event.inputs.stack != 'engine-jobs'"),
+    'rollback must refuse the engine-jobs stack; a job has no revision to send traffic to',
+  );
+
+  // Executing a job is a maintainer action. The workflow defines and verifies
+  // the job; it never runs one.
+  assert.ok(
+    !/gcloud run jobs execute|run\.jobs\.run|jobs\.run\b/.test(delivery),
+    'the workflow must never execute a Cloud Run Job',
+  );
+});
