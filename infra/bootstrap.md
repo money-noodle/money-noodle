@@ -154,6 +154,37 @@ Re-apply before the first `api` apply. The service stacks read
 plan against a bootstrap state that predates this change fails at `init` with a
 missing output rather than deploying something unintended.
 
+### Re-applying bootstrap for the engine-restore job identity (#241)
+
+A project already carrying the two service identities needs one more before the
+first `engine-jobs` apply: the restore job's own identity, which ADR-0013 §1 names
+`engine-restore-runtime` and says is declared here. Re-applying with the same
+variables plans exactly this delta:
+
+| Change | Address | Why |
+| --- | --- | --- |
+| add | `google_service_account.runtime["engine-restore"]` | The restore job's runtime identity, keyed by the job name `infra/stacks/engine-jobs` pins |
+| add | `google_project_iam_member.runtime_telemetry["engine-restore:roles/cloudtrace.agent"]` and its four siblings | The job's telemetry write grants, the same five every runtime identity holds |
+
+**Six adds, no changes and no destroys.** Nothing about the existing identities
+moves: the conditional that makes the new account's description say "Cloud Run
+job" renders the two service descriptions exactly as before, so neither is
+updated in place. The deployer needs no new grant either — it already holds
+`roles/iam.serviceAccountUser` at project level, so it can act as any runtime
+identity this stack creates.
+
+Read the plan before applying it, and confirm it adds exactly one service account
+and five project IAM members, destroys nothing, and contains no state-bucket,
+federation, billing or deployer-role change. Apply it with your own credentials,
+exactly as for the platform stack: a pipeline identity cannot create an identity
+or set project IAM, which is the whole reason this lives here (ADR-0005,
+2026-09-19 amendment).
+
+Re-apply before the first `engine-jobs` apply. That stack resolves
+`local.runtime_identities[var.job_name]` from this stack's published contract, so
+a job plan against a bootstrap state without this entry fails on a missing map key
+rather than deploying a job as some other unit's identity.
+
 ## Step 3 — migrate bootstrap's own state into the bucket it created
 
 This is what stops the bootstrap from being a special case that lives on a

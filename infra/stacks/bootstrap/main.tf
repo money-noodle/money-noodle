@@ -119,8 +119,10 @@ resource "google_project_iam_member" "deployer" {
   depends_on = [google_project_service.bootstrap]
 }
 
-# Each deployable service's own runtime identity, created here rather than by
-# the delivery pipeline.
+# Each deployable unit's own runtime identity, created here rather than by the
+# delivery pipeline. One per Cloud Run service, and since #241 one per Cloud Run
+# Job as well: a job runs as an identity on exactly the same terms, so it is the
+# same resource with the same default-deny shape (ADR-0013 §1).
 #
 # ADR-0005's 2026-09-19 amendment: creating a service account needs
 # `iam.serviceAccounts.create`, and granting it a project role needs
@@ -136,7 +138,10 @@ resource "google_service_account" "runtime" {
   project      = var.project_id
   account_id   = each.value
   display_name = "${each.key} runtime"
-  description  = "Runtime identity for the ${each.key} Cloud Run service. Default-deny: it holds no project role beyond the telemetry write roles granted here."
+  # Says which kind of unit the identity runs, so a job is not described as a
+  # service. The service renderings are unchanged by the conditional, so adding a
+  # job identity plans no update to the identities that already exist.
+  description = "Runtime identity for the ${each.key} Cloud Run ${contains(var.runtime_job_names, each.key) ? "job" : "service"}. Default-deny: it holds no project role beyond the telemetry write roles granted here."
 
   depends_on = [google_project_service.bootstrap]
 }
@@ -144,6 +149,12 @@ resource "google_service_account" "runtime" {
 # Telemetry export is the only project-level authority a runtime identity holds
 # in the first slice. Writing telemetry is not reading anything and not deploying
 # anything, and `var.runtime_telemetry_roles` is validated to keep it that way.
+#
+# Every identity in the map receives every declared role, so a job identity gets
+# the same telemetry grants and nothing else: no Secret Manager role, no
+# `run.invoker`, no registry access. The engine store connections a job needs are
+# Secret Manager containers granted beside the container in the platform stack,
+# never a project role here (ADR-0005, ADR-0013 §2).
 resource "google_project_iam_member" "runtime_telemetry" {
   for_each = {
     for pair in setproduct(keys(var.runtime_service_accounts), var.runtime_telemetry_roles) :
