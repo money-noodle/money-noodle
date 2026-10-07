@@ -72,16 +72,17 @@ on:
           - platform
           - api
           - web
+          - engine-jobs
       confirmation:
         description: 'Type APPLY-TO-PRODUCTION to authorise an apply, or CHANGE-PUBLIC-ACCESS to authorise a reviewed public-access change. Ignored for plan.'
         required: false
         type: string
       image_digest:
-        description: 'sha256: digest to deploy. Required when applying the web or api stack.'
+        description: 'sha256: digest to deploy. Required when applying the web, api or engine-jobs stack.'
         required: false
         type: string
       source_commit:
-        description: 'Full reviewed source commit that produced image_digest. Required for web or api plan/apply.'
+        description: 'Full reviewed source commit that produced image_digest. Required for web, api or engine-jobs plan/apply.'
         required: false
         type: string
       rollback_revision:
@@ -463,6 +464,7 @@ jobs:
         include:
           - project: platform-api
             image: platform-api
+            kind: service
             service: platform-api
             port: '3001'
             contract_path: /v1/platform/status
@@ -475,6 +477,7 @@ jobs:
             ready_expect: '"errorCode":"MN-NOT-READY"'
           - project: web
             image: web
+            kind: service
             service: web
             port: '3000'
             contract_path: /
@@ -482,6 +485,17 @@ jobs:
             # The web depends on no read model, so its readiness is unchanged.
             ready_status: '200'
             ready_expect: '"status":"ready"'
+          # The engine-jobs image is one image with one entrypoint per Cloud Run
+          # Job (ADR-0013 §1, #241). It is built, proven, scanned, published and
+          # attested here exactly as the two services are, and that is where the
+          # push path ends for it: `tools/release/affected-services.mjs` admits
+          # only projects that declare `metadata.deployment` in their
+          # `project.json`, and `services/engine-jobs` declares none, so this
+          # image never enters the routine deploy vector. Its stack is reached
+          # only by a dispatched `plan` or `apply` and by the scheduled `drift`.
+          - project: engine-jobs
+            image: engine-jobs
+            kind: job
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -615,7 +629,7 @@ jobs:
             --build-arg BUILD_WORKFLOW="$BUILD_WORKFLOW" \
             --build-arg BUILD_RUN="$BUILD_RUN" \
             --build-arg ARTIFACT_VERSION="$ARTIFACT_VERSION" \
-            --file ${{ matrix.project == 'web' && 'apps/web' || 'services/platform-api' }}/Dockerfile \
+            --file ${{ matrix.project == 'web' && 'apps/web' || matrix.project == 'engine-jobs' && 'services/engine-jobs' || 'services/platform-api' }}/Dockerfile \
             --tag "$image:${{ github.sha }}" \
             --metadata-file metadata.json \
             .
@@ -633,6 +647,7 @@ jobs:
       # injects, so an image that cannot start under it fails before publication
       # rather than after a Cloud Run revision has been created.
       - name: Prove the candidate digest serves its runtime contract
+        if: matrix.kind != 'job'
         env:
           IMAGE: ${{ steps.build.outputs.image }}
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -718,6 +733,48 @@ jobs:
           fi
 
           echo "The candidate digest served its runtime contract and names this source commit."
+
+      # A job image serves no HTTP contract and declares no HEALTHCHECK, so the
+      # probe above cannot apply to it. Its contract is the inverse: started
+      # with no entrypoint named it must do no work, print its usage and exit 2
+      # (ADR-0013 §1). The Cloud Run Job names the entrypoint in `args`; this
+      # step proves the image refuses to guess one. The provenance label check
+      # is the same one the service images pass.
+      - name: Prove the candidate job image does nothing until an entrypoint is named
+        if: matrix.kind == 'job'
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          reference="$IMAGE@$DIGEST"
+
+          set +e
+          usage="$(docker run --rm --env NODE_ENV=production "$reference" 2>&1)"
+          status=$?
+          set -e
+          if [[ "$status" != '2' ]]; then
+            echo "The job image exited ${status} with no entrypoint named; it must exit 2 and do nothing." >&2
+            exit 1
+          fi
+          grep -Fq 'name an entrypoint' <<< "$usage" || {
+            echo 'The job image did not print its usage when started with no entrypoint.' >&2
+            exit 1
+          }
+
+          # The artifact must name the commit it was built from, so a digest can
+          # be traced to its source without an external lookup.
+          revision="$(
+            docker image inspect \
+              --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$reference"
+          )"
+          if [[ "$revision" != "$SOURCE_COMMIT" ]]; then
+            echo 'The candidate image does not carry this run'"'"'s source commit.' >&2
+            exit 1
+          fi
+
+          echo "The candidate job image refused to run without an entrypoint and names this source commit."
 
       # Scanning gates publication. A HIGH or CRITICAL finding stops the release
       # here, with nothing in the registry to withdraw.
@@ -1553,7 +1610,7 @@ jobs:
         if: matrix.stack != 'platform'
         env:
           GH_TOKEN: ${{ github.token }}
-          IMAGE: ${{ vars.GCP_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REGISTRY_REPOSITORY }}/${{ matrix.stack == 'web' && 'web' || 'platform-api' }}
+          IMAGE: ${{ vars.GCP_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REGISTRY_REPOSITORY }}/${{ matrix.stack == 'web' && 'web' || matrix.stack == 'engine-jobs' && 'engine-jobs' || 'platform-api' }}
           DIGEST: ${{ github.event.inputs.image_digest }}
           SOURCE_COMMIT: ${{ github.event.inputs.source_commit }}
         run: |
@@ -1629,7 +1686,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        stack: [platform, api, web]
+        stack: [platform, api, web, engine-jobs]
     env:
       TF_VAR_bootstrap_state_bucket: ${{ format('{0}-bootstrap', vars.GCP_STATE_BUCKET_PREFIX) }}
       TF_VAR_platform_state_bucket: ${{ format('{0}-platform', vars.GCP_STATE_BUCKET_PREFIX) }}
@@ -1740,8 +1797,13 @@ jobs:
             -backend-config="prefix=stacks/${STACK}"
           if [[ "$STACK" != 'platform' ]]; then
             TF_VAR_image_digest="$(tofu output -raw deployed_digest)"
-            TF_VAR_artifact_version="$(tofu output -raw artifact_version)"
-            TF_VAR_source_commit="$(tofu output -raw source_commit)"
+            # The service stacks publish the version and commit they were
+            # configured with; the engine-jobs stack publishes its digest only.
+            # A refresh-only plan compares state with reality and changes
+            # nothing, so an absent output is passed as empty rather than
+            # ending drift detection for the stack that lacks it.
+            TF_VAR_artifact_version="$(tofu output -raw artifact_version 2>/dev/null || true)"
+            TF_VAR_source_commit="$(tofu output -raw source_commit 2>/dev/null || true)"
             export TF_VAR_image_digest TF_VAR_artifact_version TF_VAR_source_commit
             revision_suffix="$(tofu output -raw configured_revision_suffix 2>/dev/null || true)"
             [[ -z "$revision_suffix" ]] || export TF_VAR_revision_suffix="$revision_suffix"
@@ -1934,7 +1996,7 @@ jobs:
           github.event.inputs.confirmation != 'CHANGE-PUBLIC-ACCESS'
         env:
           GH_TOKEN: ${{ github.token }}
-          IMAGE: ${{ vars.GCP_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REGISTRY_REPOSITORY }}/${{ github.event.inputs.stack == 'web' && 'web' || 'platform-api' }}
+          IMAGE: ${{ vars.GCP_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REGISTRY_REPOSITORY }}/${{ github.event.inputs.stack == 'web' && 'web' || github.event.inputs.stack == 'engine-jobs' && 'engine-jobs' || 'platform-api' }}
           DIGEST: ${{ github.event.inputs.image_digest }}
         run: |
           set -euo pipefail
@@ -1999,13 +2061,17 @@ jobs:
         working-directory: infra/stacks/${{ github.event.inputs.stack }}
         env:
           GH_TOKEN: ${{ github.token }}
-          IMAGE: ${{ vars.GCP_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REGISTRY_REPOSITORY }}/${{ github.event.inputs.stack == 'web' && 'web' || 'platform-api' }}
+          IMAGE: ${{ vars.GCP_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REGISTRY_REPOSITORY }}/${{ github.event.inputs.stack == 'web' && 'web' || github.event.inputs.stack == 'engine-jobs' && 'engine-jobs' || 'platform-api' }}
           STACK: ${{ github.event.inputs.stack }}
           STATE_BUCKET_PREFIX: ${{ vars.GCP_STATE_BUCKET_PREFIX }}
         run: |
           set -euo pipefail
           if [[ "$STACK" == 'platform' ]]; then
             echo 'The platform stack declares no public invoker binding, so it has no access change to apply.' >&2
+            exit 1
+          fi
+          if [[ "$STACK" == 'engine-jobs' ]]; then
+            echo 'A Cloud Run Job has no public invoker binding, so the engine-jobs stack has no access change to apply.' >&2
             exit 1
           fi
           tofu init -input=false \
@@ -2064,9 +2130,14 @@ jobs:
           tofu apply -input=false -lock-timeout=5m -auto-approve stack.tfplan
           rm -f stack.tfplan
 
+      # A Cloud Run Job has no URI and serves nothing, so the three post-apply
+      # steps below have nothing to read or probe for the engine-jobs stack.
+      # Applying that stack creates or updates the job definition only. The
+      # restore job is executed by hand by the maintainer after the apply, under
+      # ADR-0013 §1 (#241); this workflow never executes a job.
       - id: apply-service
         name: Read the applied service URI
-        if: github.event.inputs.stack != 'platform'
+        if: github.event.inputs.stack != 'platform' && github.event.inputs.stack != 'engine-jobs'
         working-directory: infra/stacks/${{ github.event.inputs.stack }}
         run: |
           set -euo pipefail
@@ -2076,7 +2147,7 @@ jobs:
       # short-lived ID token for the same federated deployer, bound to this
       # service as its audience. The action masks the token.
       - id: apply-probe-auth
-        if: github.event.inputs.stack != 'platform'
+        if: github.event.inputs.stack != 'platform' && github.event.inputs.stack != 'engine-jobs'
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
@@ -2087,7 +2158,7 @@ jobs:
           id_token_audience: ${{ steps.apply-service.outputs.uri }}
 
       - name: Verify health and the public contract
-        if: github.event.inputs.stack != 'platform'
+        if: github.event.inputs.stack != 'platform' && github.event.inputs.stack != 'engine-jobs'
         env:
           SERVICE_URI: ${{ steps.apply-service.outputs.uri }}
           PROBE_ID_TOKEN: ${{ steps.apply-probe-auth.outputs.id_token }}
@@ -2140,6 +2211,7 @@ jobs:
       github.event.inputs.action == 'rollback' &&
       github.event.inputs.rollback_revision != '' &&
       github.event.inputs.stack != 'platform' &&
+      github.event.inputs.stack != 'engine-jobs' &&
       needs.authorization.outputs.federation_configured == 'true' &&
       needs.authorization.outputs.provider_configured == 'true' &&
       needs.authorization.outputs.apply_authorized == 'true' &&

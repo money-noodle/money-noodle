@@ -104,6 +104,8 @@ Removing the file is the same guarded operation in reverse: it plans a delete of
 
 Every job that plans a service stack, drift included, passes `-var-file=exposure.tfvars` only when the file exists, so a reviewed exposure is neither planned away by the next release nor reported as drift.
 
+The `engine-jobs` stack — the Cloud Run Job that restores the engine store ([ADR-0013](../architecture/decisions/ADR-0013-m4-engine-boundary.md) §1, [#241](https://github.com/money-noodle/money-noodle/issues/241)) — is not a service and takes none of the service routes. It is reachable only by a dispatched `plan` or `apply` and by the scheduled `drift`; its image is built, proven, scanned, published and attested by `publish` on every qualifying push exactly as the two service images are, but the project declares no deployment manifest, so [`tools/release/affected-services.mjs`](../../tools/release/affected-services.mjs) never admits it to the routine deploy vector and no push deploys it. A job has no URI, no revision and no public invoker binding, so the post-apply probe is skipped for it, `rollback` refuses it in its guard, and the `CHANGE-PUBLIC-ACCESS` path refuses it as it refuses `platform`. Applying the stack creates or updates the job definition only: executing a job is a maintainer action outside this workflow, which never runs one.
+
 ### Status, rendering and trace evidence
 
 The actual API-owned [OpenAPI v1 schema](../../services/platform-api/openapi/platform-api.v1.yaml), not a subset health check, is the acceptance source. `PlatformStatus` and nested `service` disallow additional properties and require exactly:
