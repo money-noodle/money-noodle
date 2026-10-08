@@ -42,6 +42,14 @@ variables {
 run "every_declared_secret_is_readable_by_the_api_runtime_identity_alone" {
   command = plan
 
+  # The restore gate is on by default since the maintainer completed #241's
+  # platform prerequisites (2026-10-07); it is switched off here so this run keeps
+  # describing the API's own set alone. The gated run below covers the restore
+  # container.
+  variables {
+    engine_restore_secrets_enabled = false
+  }
+
   # The exact set of containers this stack declares. Asserted by name rather than
   # by count, because the question worth failing on is *which* secrets exist, not
   # how many: a container appearing here is a credential path, and it should be

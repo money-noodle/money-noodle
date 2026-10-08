@@ -287,18 +287,21 @@ variable "engine_restore_secrets_enabled" {
     prerequisites: the container it reads, with its accessor grant to the restore
     job's runtime identity, and the staging bucket its inputs are uploaded to with
     the object grant that lets the execution read them and write its evidence back
-    (#241, ADR-0013 §1–2). **Off.**
+    (#241, ADR-0013 §1–2). **On.**
 
-    Off is correct until the bootstrap contract publishes `engine-restore` among
-    its runtime identities, because the accessor grant is resolved through that
-    contract and a name it does not carry fails the plan. Turning this on is a
-    reviewed one-line change made by the maintainer immediately before entering
-    the secret version out of band, exactly as #250 gated the API's references.
+    On is correct since 2026-10-07: the bootstrap contract publishes
+    `engine-restore` among its runtime identities (#259), the maintainer applied
+    this stack with the flag set and entered the secret version out of band, and
+    the staging bucket exists (#261). Turning the default on is the one-line
+    change that makes the pipeline's own plan of this stack agree with what the
+    maintainer applied: a plan without it wants to destroy the container, which
+    `prevent_destroy` refuses, exactly as #219/#220 found for the projection secret.
+
     It stays a variable afterwards so the container's grant can be taken back
     out once the one-time job is retired.
   EOT
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "engine_restore_secrets" {
