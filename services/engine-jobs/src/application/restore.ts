@@ -9,11 +9,18 @@ import { RestoreRefusedError } from '../domain/engine-store.js';
 import { renderEvidence, type EvidenceInput, type ReconciliationRow } from '../domain/evidence.js';
 import { verifyForecastStorage, type ForecastVerification } from '../domain/forecast-v3.js';
 import { verifyLedgerV9, type LedgerVerification } from '../domain/ledger-v9.js';
+import {
+  classifyPath,
+  DEFAULT_LOAD_SCOPE,
+  rulesFor,
+  type LoadScope,
+} from '../domain/load-scope.js';
 import { classifyManifest } from '../domain/manifest-classification.js';
 import { recomputePaperBankroll, type BankrollRecomputation } from '../domain/paper-bankroll.js';
 import { buildRestorePlan, type RestorePlan } from '../domain/restore-plan.js';
 import { restoreTreeFromArchive, type BlobVerification } from '../domain/restore-tree.js';
 import { sha256Hex } from '../domain/sha256.js';
+import { planStaging, stagedPaths } from '../domain/stage-list.js';
 import { compareManifestWithWorkstation, type VerifyFirstFinding } from '../domain/verify-first.js';
 
 export const ENGINE_RESTORE_SCHEMA_VERSION = '0002-engine-restore-tables';
@@ -35,6 +42,12 @@ export interface RestoreJobInput {
    */
   allowUnmapped?: boolean;
   schemaVersion?: string;
+  /**
+   * Which v1 stores to load. One value today, `authoritative`: the stores the
+   * engine resumes from, with the histories they index left in the archive
+   * (maintainer decision 2026-10-08). `tools`/`stage-list` print the same set.
+   */
+  scope?: LoadScope;
 }
 
 export interface RestoreJobResult {
@@ -49,14 +62,28 @@ export interface RestoreJobResult {
 export async function runRestoreJob(input: RestoreJobInput): Promise<RestoreJobResult> {
   const collectedAt = input.now().toISOString();
   const schemaVersion = input.schemaVersion ?? ENGINE_RESTORE_SCHEMA_VERSION;
+  const scope = input.scope ?? DEFAULT_LOAD_SCOPE;
+  const rules = rulesFor(scope);
   const keys = await input.archive.listManifestKeys();
   const manifestKey = keys.at(-1);
   if (!manifestKey) throw new RestoreRefusedError('The archive source holds no manifest.');
   const { manifest, raw } = await input.archive.readManifest(manifestKey);
   const manifestDigest = sha256Hex(raw);
 
-  // Step 1: verify first. The finding is written before anything else happens.
-  const verifyFirst = compareManifestWithWorkstation(manifest, input.workstation);
+  // Step 0: split the manifest into what this scope loads and what stays in the
+  // archive. Everything downstream — the comparison, the fetch, the verifiers and
+  // the classification — answers to this one split, computed from the manifest
+  // before a single blob is read, which is also what `stage-list` prints.
+  const staging = planStaging(manifest, scope);
+  const load = stagedPaths(staging);
+
+  // Step 1: verify first, over the loaded set. The finding is written before
+  // anything else happens.
+  const verifyFirst = compareManifestWithWorkstation(
+    manifest,
+    input.workstation,
+    (path) => classifyPath(path, rules).kind !== 'not-loaded',
+  );
   const evidence: EvidenceInput = {
     collectedAt,
     runId: input.runId,
@@ -66,6 +93,9 @@ export async function runRestoreJob(input: RestoreJobInput): Promise<RestoreJobR
     outcome: 'refused',
     outcomeReason: '',
     verifyFirst,
+    scope,
+    retained: staging.retained,
+    stagedObjects: staging.staged.length + staging.unmapped.length,
   };
   const finish = async (
     outcome: EvidenceInput['outcome'],
@@ -90,8 +120,10 @@ export async function runRestoreJob(input: RestoreJobInput): Promise<RestoreJobR
     return finish('refused', `Load refused after the verify-first step: ${verifyFirst.reason}`);
   }
 
-  // Step 2: every sha256 in the manifest against the blobs, then both verifiers.
-  const restored = await restoreTreeFromArchive(input.archive, manifest);
+  // Step 2: every sha256 the job loads against the blobs, then both verifiers.
+  // The retained entries are not fetched; their manifest hash and size are
+  // already in the evidence above.
+  const restored = await restoreTreeFromArchive(input.archive, manifest, load);
   evidence.blobs = restored.verifications satisfies BlobVerification[];
   if (!restored.ok) {
     const failed = restored.verifications.filter((v) => v.state !== 'verified').length;
@@ -102,13 +134,15 @@ export async function runRestoreJob(input: RestoreJobInput): Promise<RestoreJobR
   }
   let ledger: LedgerVerification;
   try {
-    ledger = verifyLedgerV9(restored.tree);
+    ledger = verifyLedgerV9(restored.tree, { evidenceBodies: rules.evidenceBodies });
     evidence.ledger = ledger;
   } catch (error) {
     evidence.ledger = { error: (error as Error).message };
     return finish('refused', `The ledger v9 verifier failed: ${(error as Error).message}`);
   }
-  const forecast: ForecastVerification = verifyForecastStorage(restored.tree);
+  const forecast: ForecastVerification = verifyForecastStorage(restored.tree, {
+    sealedShards: rules.sealedForecastShards,
+  });
   evidence.forecast = forecast;
   if (!forecast.ok) {
     return finish(
@@ -118,7 +152,7 @@ export async function runRestoreJob(input: RestoreJobInput): Promise<RestoreJobR
   }
 
   // Step 3: the transform at the paper seam.
-  const plan: RestorePlan = buildRestorePlan(restored.tree);
+  const plan: RestorePlan = buildRestorePlan(restored.tree, rules);
   evidence.seam = {
     paperOrders: plan.paperOrders.length,
     droppedLiveOrders: plan.droppedLiveOrders,
@@ -132,7 +166,7 @@ export async function runRestoreJob(input: RestoreJobInput): Promise<RestoreJobR
   // Manifest-to-load reconciliation: every manifest entry is loaded, intentionally
   // not loaded for a stated reason, or unmapped; an unmapped entry refuses the load
   // unless the documented override is passed, and is recorded either way.
-  const classification = classifyManifest(manifest, plan.consumption);
+  const classification = classifyManifest(manifest, plan.consumption, rules);
   evidence.classification = classification;
   evidence.allowUnmapped = input.allowUnmapped === true;
   if (classification.classified !== classification.manifestFiles) {

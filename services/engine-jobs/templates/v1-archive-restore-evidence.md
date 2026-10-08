@@ -5,6 +5,7 @@
 > **Run id:** `{{RUN_ID}}`
 > **Manifest:** `{{MANIFEST_KEY}}` (sha256 `{{MANIFEST_DIGEST}}`)
 > **Target schema version:** `{{SCHEMA_VERSION}}`
+> **Load scope:** `{{LOAD_SCOPE}}` — the authoritative stores the engine resumes from. The histories they index (sealed forecast shard rows, evidence batch bodies, the research journals) are **not loaded**, were **not staged** and were **not fetched**; they stay in the append-only archive and are listed in section 3a with the manifest's own hash and size (maintainer decision 2026-10-08)
 > **Outcome:** **{{OUTCOME}}** — {{OUTCOME_REASON}}
 > **Owning ticket:** #241. Acceptance is the maintainer's decision under #80.
 
@@ -14,10 +15,15 @@ Counts and hashes only. No row content, no path outside the data directory's own
 
 **Finding: `{{FINDING}}`.** {{FINDING_REASON}}
 
+The comparison is over the **load scope**, not the whole manifest: the question is whether what this run is about to load is the same stopping point the workstation holds, and an entry that is never loaded cannot change a loaded row. Entries outside the scope are counted on both sides and not compared.
+
 | Measure | Value |
 | --- | --- |
 | Manifest created at | {{MANIFEST_CREATED_AT}} |
 | Files listed in the manifest | {{MANIFEST_FILES}} |
+| Files compared (inside the load scope) | {{COMPARED_FILES}} |
+| Manifest entries outside the scope, counted only | {{RETAINED_MANIFEST_FILES}} |
+| Workstation files outside the scope, counted only | {{RETAINED_WORKSTATION_ONLY}} |
 | Archive-eligible files in the workstation copy | {{WORKSTATION_FILES}} |
 | Equal (same sha256 and byte count) | {{EQUAL}} |
 | Differing | {{DIFFERING}} |
@@ -34,7 +40,7 @@ A load proceeds only on `complete`, or on `workstation-absent` with the document
 
 ## 2. Blob verification and the semantic verifiers
 
-Blobs verified against the manifest: **{{BLOBS_VERIFIED}} of {{BLOBS_TOTAL}}**.
+Every blob this run loads is verified against the manifest: its decompressed sha256 and its byte count. Blobs verified: **{{BLOBS_VERIFIED}} of {{BLOBS_TOTAL}}** staged objects ({{STAGED_OBJECTS}} planned). The {{RETAINED_TOTAL}} retained entries ({{RETAINED_BYTES}} uncompressed bytes) were not staged and not fetched, so a blob absent for one of them is not a failure; the manifest's hash and size for each is in section 3a.
 
 | Path | State | Expected sha256 (prefix) | Actual sha256 (prefix) |
 | --- | --- | --- | --- |
@@ -56,7 +62,7 @@ Not verified by the ported forecast verifier (named so nobody reads a pass as mo
 | Mirror-pair identifiers carried as inert metadata | {{MIRROR_PAIR_IDS}} |
 | Trading-control keys dropped as live-side | {{DROPPED_CONTROL_KEYS}} |
 
-Not loaded, by decision (maintainer, 2026-10-06; ADR-0013 §1):
+Not loaded, by decision (maintainer, 2026-10-06 and 2026-10-08; ADR-0013 §1–2):
 
 {{NOT_LOADED}}
 
@@ -86,10 +92,10 @@ Loaded entries (manifest path, relative to the data directory, and the table(s) 
 | --- | --- |
 {{LOADED_FILE_ROWS}}
 
-Intentionally not loaded entries:
+Intentionally not loaded entries, with the manifest's own sha256 and uncompressed size. These were not fetched; the hash and the size are the manifest's record of what stays in the archive.
 
-| Path | Reason | Note |
-| --- | --- | --- |
+| Path | Reason | Manifest sha256 (prefix) | Bytes | Note |
+| --- | --- | --- | --- | --- |
 {{NOT_LOADED_FILE_ROWS}}
 
 UNMAPPED entries:
@@ -104,7 +110,7 @@ UNMAPPED entries:
 | --- | --- |
 {{BANKROLL_ROWS}}
 
-Forecast rows planned for the engine store (sealed plus current open): {{FORECAST_ROWS_PLANNED}}.
+Forecast rows planned for the engine store: {{FORECAST_ROWS_PLANNED}}. Under the `authoritative` scope that is the current open set after the journal replay; the sealed terminal rows stay in the archive and the shard index that names them is loaded instead.
 
 ## 5. Reconciliation: per-store row counts and digests
 

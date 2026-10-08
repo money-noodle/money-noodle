@@ -85,6 +85,18 @@ export interface LedgerVerification {
   liveOrders: number;
   compactOrders: number;
   evidenceBatches: number;
+  /**
+   * False when the active load scope leaves the batch bodies in the archive. The
+   * references are still checked — version, content-addressed file name against
+   * the hash, and no two orders claiming the same file at different hashes — but
+   * the row inside the batch cannot be resolved without the body.
+   */
+  evidenceBodiesVerified: boolean;
+}
+
+export interface LedgerVerificationOptions {
+  /** Read each referenced batch and resolve the row it must hold. Default true. */
+  readonly evidenceBodies?: boolean;
 }
 
 function validateReference(reference: EvidenceReference): void {
@@ -153,8 +165,17 @@ export function readEvidenceBatch(tree: DataTree, reference: EvidenceReference):
  * The ledger v9 semantic verifier: every evidence reference resolves to a batch
  * whose checksum matches and which holds the referenced row for that order, and
  * every row is structurally sound. Throws on the first failure, as v1 did.
+ *
+ * With `evidenceBodies: false` the batch bodies are not in the restored tree at
+ * all, because the active load scope left them in the archive. The reference
+ * checks still run — they are what the restore loads as the evidence batch index —
+ * and the result says the bodies were not verified rather than implying they were.
  */
-export function verifyLedgerV9(tree: DataTree): LedgerVerification {
+export function verifyLedgerV9(
+  tree: DataTree,
+  options: LedgerVerificationOptions = {},
+): LedgerVerification {
+  const evidenceBodies = options.evidenceBodies !== false;
   const stored = readLedger(tree);
   const byFile = new Map<string, { reference: EvidenceReference; orders: LedgerOrder[] }>();
   for (const order of stored.orders) {
@@ -170,14 +191,16 @@ export function verifyLedgerV9(tree: DataTree): LedgerVerification {
     if (current) current.orders.push(order);
     else byFile.set(reference.file, { reference, orders: [order] });
   }
-  for (const { reference, orders } of byFile.values()) {
-    const batch = readEvidenceBatch(tree, reference);
-    for (const order of orders) {
-      const stored = batch.orders[order.archivedEvidence!.rowKey];
-      if (!stored || stored.orderId !== order.id) {
-        throw new LedgerVerificationError(
-          `Execution evidence batch ${reference.file} does not contain referenced row ${order.archivedEvidence!.rowKey} for ${order.id}.`,
-        );
+  if (evidenceBodies) {
+    for (const { reference, orders } of byFile.values()) {
+      const batch = readEvidenceBatch(tree, reference);
+      for (const order of orders) {
+        const stored = batch.orders[order.archivedEvidence!.rowKey];
+        if (!stored || stored.orderId !== order.id) {
+          throw new LedgerVerificationError(
+            `Execution evidence batch ${reference.file} does not contain referenced row ${order.archivedEvidence!.rowKey} for ${order.id}.`,
+          );
+        }
       }
     }
   }
@@ -195,5 +218,6 @@ export function verifyLedgerV9(tree: DataTree): LedgerVerification {
     liveOrders: stored.orders.filter((order) => order.executionMode !== 'paper').length,
     compactOrders: stored.orders.filter((order) => order.archivedEvidence).length,
     evidenceBatches: byFile.size,
+    evidenceBodiesVerified: evidenceBodies,
   };
 }

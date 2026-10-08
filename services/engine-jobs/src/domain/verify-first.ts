@@ -1,6 +1,14 @@
 // The verify-first step of ADR-0013 §1: whether a successful archive run completed
 // after the v1 worker's final write is unknown, so the last manifest is compared
 // with the workstation copy and the finding is written down before anything loads.
+//
+// The comparison is over the **load scope**, not the whole manifest (maintainer
+// decision 2026-10-08): the question it answers is whether what the job is about
+// to load is the same stopping point the workstation holds, and an entry the scope
+// leaves in the archive is never loaded, so a difference in it cannot change a
+// loaded row. Entries outside the scope are counted — on both sides — and the
+// counts are in the evidence document, so "we compared a subset" is a number a
+// reader can see rather than something they have to infer.
 
 import { isArchiveCandidate, type ArchiveManifest } from './archive-manifest.js';
 import type { DataTree } from './archive-source.js';
@@ -27,6 +35,12 @@ export interface VerifyFirstFinding {
   missingInWorkstation: number;
   missingInManifest: number;
   files: FileComparison[];
+  /** Manifest entries inside the load scope. Only these are compared. */
+  comparedFiles: number;
+  /** Manifest entries the scope leaves in the archive: counted, not compared. */
+  retainedManifestFiles: number;
+  /** Archive-eligible workstation files outside the scope: counted, not compared. */
+  retainedWorkstationOnly: number;
   /** True when the job may proceed to load from the archive. */
   loadPermitted: boolean;
   reason: string;
@@ -35,8 +49,12 @@ export interface VerifyFirstFinding {
 /**
  * Classifies the last manifest against the workstation copy.
  *
- * - `complete`: every manifest file exists in the workstation copy with the same
- *   sha256, and the workstation holds no archive-eligible file the manifest lacks.
+ * Only manifest entries inside `load` take part; the rest are counted. With no
+ * `load` the whole manifest is compared, which is what the unit tests do.
+ *
+ * - `complete`: every compared manifest file exists in the workstation copy with
+ *   the same sha256, and the workstation holds no in-scope archive-eligible file
+ *   the manifest lacks.
  * - `incomplete`: the workstation holds eligible files the manifest does not list,
  *   which is what a final write after the last archive run looks like.
  * - `differing`: the same set of files, but at least one hash differs.
@@ -52,10 +70,21 @@ export interface VerifyFirstFinding {
 export function compareManifestWithWorkstation(
   manifest: ArchiveManifest,
   workstation: DataTree | undefined,
+  /**
+   * Whether a data-directory path is inside the active load scope. Absent
+   * compares everything. It is a predicate rather than the staged set because the
+   * workstation side asks the question of paths the manifest has never seen,
+   * which is exactly the "a store was written after the last archive run" case
+   * the finding exists to catch.
+   */
+  inScope: (path: string) => boolean = () => true,
 ): VerifyFirstFinding {
+  const compared = manifest.files.filter((file) => inScope(file.path));
   const base = {
     manifestCreatedAt: manifest.createdAt,
     manifestFiles: manifest.files.length,
+    comparedFiles: compared.length,
+    retainedManifestFiles: manifest.files.length - compared.length,
   };
   if (!workstation) {
     return {
@@ -64,9 +93,10 @@ export function compareManifestWithWorkstation(
       workstationFiles: 0,
       equal: 0,
       differing: 0,
-      missingInWorkstation: manifest.files.length,
+      missingInWorkstation: compared.length,
       missingInManifest: 0,
-      files: manifest.files.map((file) => ({
+      retainedWorkstationOnly: 0,
+      files: compared.map((file) => ({
         path: file.path,
         state: 'missing-in-workstation' as const,
         manifestSha256: file.sha256,
@@ -79,9 +109,10 @@ export function compareManifestWithWorkstation(
   }
 
   const files: FileComparison[] = [];
-  const manifestPaths = new Set<string>();
-  for (const file of manifest.files) {
-    manifestPaths.add(file.path);
+  // Every manifest path, in scope or not: a retained entry the workstation also
+  // holds is not "absent from the manifest".
+  const manifestPaths = new Set(manifest.files.map((file) => file.path));
+  for (const file of compared) {
     const bytes = workstation.get(file.path);
     if (bytes === undefined) {
       files.push({
@@ -103,17 +134,21 @@ export function compareManifestWithWorkstation(
     });
   }
   let workstationFiles = 0;
+  let retainedWorkstationOnly = 0;
   for (const [path, bytes] of [...workstation.entries()].sort(([a], [b]) => (a < b ? -1 : 1))) {
     if (!isArchiveCandidate(path)) continue;
     workstationFiles += 1;
-    if (!manifestPaths.has(path)) {
-      files.push({
-        path,
-        state: 'missing-in-manifest',
-        workstationSha256: sha256Hex(bytes),
-        workstationBytes: bytes.byteLength,
-      });
+    if (manifestPaths.has(path)) continue;
+    if (!inScope(path)) {
+      retainedWorkstationOnly += 1;
+      continue;
     }
+    files.push({
+      path,
+      state: 'missing-in-manifest',
+      workstationSha256: sha256Hex(bytes),
+      workstationBytes: bytes.byteLength,
+    });
   }
   const count = (state: FileComparison['state']) => files.filter((f) => f.state === state).length;
   const equal = count('equal');
@@ -125,13 +160,13 @@ export function compareManifestWithWorkstation(
   let reason: string;
   if (missingInManifest > 0) {
     finding = 'incomplete';
-    reason = `The workstation copy holds ${missingInManifest} archive-eligible file(s) the last manifest does not list; the last archive run did not capture the final state.`;
+    reason = `The workstation copy holds ${missingInManifest} archive-eligible file(s) inside the load scope that the last manifest does not list; the last archive run did not capture the final state.`;
   } else if (differing > 0 || missingInWorkstation > 0) {
     finding = 'differing';
     reason = `${differing} file(s) differ between the last manifest and the workstation copy and ${missingInWorkstation} manifest file(s) are absent from it; the two copies are not the same stopping point.`;
   } else {
     finding = 'complete';
-    reason = `All ${equal} manifest files are present in the workstation copy with matching sha256 and byte counts, and the workstation holds no eligible file outside the manifest.`;
+    reason = `All ${equal} manifest files inside the load scope are present in the workstation copy with matching sha256 and byte counts, and the workstation holds no in-scope eligible file outside the manifest. ${base.retainedManifestFiles} manifest entr${base.retainedManifestFiles === 1 ? 'y' : 'ies'} and ${retainedWorkstationOnly} workstation file(s) are outside the scope and were counted, not compared.`;
   }
   return {
     ...base,
@@ -141,6 +176,7 @@ export function compareManifestWithWorkstation(
     differing,
     missingInWorkstation,
     missingInManifest,
+    retainedWorkstationOnly,
     files: files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
     loadPermitted: finding === 'complete',
     reason,

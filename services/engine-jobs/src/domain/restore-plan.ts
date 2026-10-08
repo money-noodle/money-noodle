@@ -1,8 +1,16 @@
-// The transform at the paper seam (ADR-0013 §1, maintainer decision 2026-10-06):
-// the restored v1 tree becomes row sets for the `engine` schema. Live rows are
-// dropped; paper rows keep their mirror-pair identifier as inert metadata with
-// nothing to join to; live-skip and mirror-pair evidence are not loaded; the
-// eight authoritative stores and the research journals are loaded as rows.
+// The transform at the paper seam (ADR-0013 §1, maintainer decisions 2026-10-06
+// and 2026-10-08): the restored v1 tree becomes row sets for the `engine` schema.
+// Live rows are dropped; paper rows keep their mirror-pair identifier as inert
+// metadata with nothing to join to; live-skip and mirror-pair evidence are not
+// loaded.
+//
+// What is loaded is the active load scope's business, not this module's:
+// `load-scope.ts` holds the table, and the rules it yields decide whether the
+// archive-backed stores arrive as rows or only as the indexes that name them.
+// Under `authoritative` the evidence batch bodies, the sealed forecast shard rows
+// and the research stores are never in the tree at all — they were not staged —
+// so the row sets for them are present and empty, which is what makes the
+// reconciliation table in the evidence document say so out loud.
 
 import type { DataTree } from './archive-source.js';
 import { readTreeJson, readTreeText } from './archive-source.js';
@@ -15,6 +23,13 @@ import {
   type StoredLedger,
 } from './ledger-v9.js';
 import { readForecastLayout } from './forecast-v3.js';
+import {
+  DEFAULT_LOAD_SCOPE,
+  RESEARCH_JOURNALS,
+  RESEARCH_SNAPSHOTS,
+  rulesFor,
+  type LoadScopeRules,
+} from './load-scope.js';
 import type { ConsumptionRecord } from './manifest-classification.js';
 import { rowSetDigest } from './sha256.js';
 
@@ -65,35 +80,6 @@ export const PAPER_TRADING_CONTROL_KEYS = [
   'updatedAt',
 ] as const;
 
-/** v1 file name → table and whether it is a JSONL journal or a JSON document. */
-export const RESEARCH_JOURNALS: ReadonlyArray<{ file: string; store: string }> = [
-  { file: 'hourly-threshold-observations.journal.jsonl', store: 'hourly-threshold-observations' },
-  { file: 'exit-policy-sentinels-v3.journal.jsonl', store: 'exit-policy-sentinels-v3' },
-  { file: 'maker-restriction-sentinels.journal.jsonl', store: 'maker-restriction-sentinels' },
-  { file: 'portfolio-choice-sets.journal.jsonl', store: 'portfolio-choice-sets' },
-  { file: 'contract-paths.journal.jsonl', store: 'contract-paths' },
-  { file: 'calendar-evaluation.journal.jsonl', store: 'calendar-evaluation' },
-  { file: 'exit-policy-sentinels-v2.journal.jsonl', store: 'exit-policy-sentinels-v2' },
-  { file: 'maker-lifecycle-sentinels.journal.jsonl', store: 'maker-lifecycle-sentinels' },
-  { file: 'paper-execution-timing-shadows.journal.jsonl', store: 'paper-execution-timing-shadows' },
-];
-
-export const RESEARCH_SNAPSHOTS: ReadonlyArray<{ file: string; store: string }> = [
-  { file: 'edge-spike-sentinels.json', store: 'edge-spike-sentinels' },
-  { file: 'exit-policy-sentinels-v3.json', store: 'exit-policy-sentinels-v3' },
-  { file: 'maker-restriction-sentinels.json', store: 'maker-restriction-sentinels' },
-  { file: 'portfolio-choice-sets.json', store: 'portfolio-choice-sets' },
-  { file: 'contract-paths.json', store: 'contract-paths' },
-  { file: 'calendar-evaluation.json', store: 'calendar-evaluation' },
-  { file: 'persistence-candidate.json', store: 'persistence-candidate' },
-  { file: 'model-evaluations.json', store: 'model-evaluations' },
-  // The `.json` halves of the frozen or concluded sentinel stores (sanitized
-  // inventory 15, 17, 20), loaded as frozen rows beside their journals.
-  { file: 'exit-policy-sentinels-v2.json', store: 'exit-policy-sentinels-v2' },
-  { file: 'maker-lifecycle-sentinels.json', store: 'maker-lifecycle-sentinels' },
-  { file: 'paper-execution-timing-shadows.json', store: 'paper-execution-timing-shadows' },
-];
-
 /** Live-side stores that are never loaded (maintainer decision 2026-10-06). */
 export const NEVER_LOADED = [
   'live-skips.json',
@@ -134,15 +120,13 @@ export function paperSeam(ledger: StoredLedger): {
   };
 }
 
-export function buildRestorePlan(tree: DataTree): RestorePlan {
+export function buildRestorePlan(
+  tree: DataTree,
+  rules: LoadScopeRules = rulesFor(DEFAULT_LOAD_SCOPE),
+): RestorePlan {
   const rowSets: RowSet[] = [];
   const notLoaded = [...NEVER_LOADED];
-  const consumption: ConsumptionRecord = {
-    consumed: new Map(),
-    paperBatchFiles: new Set(),
-    liveOnlyBatchFiles: new Set(),
-    currentForecastFiles: new Set(),
-  };
+  const consumption: ConsumptionRecord = { consumed: new Map() };
   /** Records that `path` was read and its rows went to `table`; absent files are not recorded. */
   const consumed = (path: string, table: string) => {
     if (!tree.has(path)) return;
@@ -187,7 +171,12 @@ export function buildRestorePlan(tree: DataTree): RestorePlan {
   );
   notLoaded.push('paper-orders.json: liveCorrections, lastLiveSkip, every executionMode=live row');
 
-  // 2. Evidence batches as rows, paper rows only.
+  // 2. The evidence batch index, and the bodies only if the scope loads them.
+  //
+  // The index is what each paper ledger order already carries: the batch's
+  // content address and the row key inside it. That is loaded with the order
+  // above, which is why the bodies can stay in the archive without losing the
+  // pointer to them (maintainer decision 2026-10-08).
   const evidenceRows: Record<string, unknown>[] = [];
   const batches = new Map<string, EvidenceReference>();
   for (const order of seam.paperOrders) {
@@ -201,31 +190,33 @@ export function buildRestorePlan(tree: DataTree): RestorePlan {
         order.id,
       ]),
   );
-  for (const order of ledger.orders) {
-    if (order.executionMode === 'paper' || !order.archivedEvidence) continue;
-    const path = evidenceBatchPath(order.archivedEvidence);
-    if (!batches.has(order.archivedEvidence.sha256)) consumption.liveOnlyBatchFiles.add(path);
-  }
-  for (const reference of [...batches.values()].sort((a, b) => (a.sha256 < b.sha256 ? -1 : 1))) {
-    const batch = readEvidenceBatch(tree, reference);
-    consumption.paperBatchFiles.add(evidenceBatchPath(reference));
-    consumed(evidenceBatchPath(reference), 'engine.evidence_row');
-    for (const [rowKey, stored] of Object.entries(batch.orders).sort(([a], [b]) =>
-      a < b ? -1 : 1,
-    )) {
-      if (!paperRowKeys.has(`${reference.sha256}/${rowKey}`)) continue;
-      evidenceRows.push({
-        batch_sha256: reference.sha256,
-        row_key: rowKey,
-        order_id: stored.orderId,
-        evidence: stored.evidence,
-      });
+  if (rules.evidenceBodies) {
+    for (const reference of [...batches.values()].sort((a, b) => (a.sha256 < b.sha256 ? -1 : 1))) {
+      const batch = readEvidenceBatch(tree, reference);
+      consumed(evidenceBatchPath(reference), 'engine.evidence_row');
+      for (const [rowKey, stored] of Object.entries(batch.orders).sort(([a], [b]) =>
+        a < b ? -1 : 1,
+      )) {
+        if (!paperRowKeys.has(`${reference.sha256}/${rowKey}`)) continue;
+        evidenceRows.push({
+          batch_sha256: reference.sha256,
+          row_key: rowKey,
+          order_id: stored.orderId,
+          evidence: stored.evidence,
+        });
+      }
     }
+  } else {
+    notLoaded.push(
+      `execution-order-evidence: every batch body (${batches.size} batch(es) referenced by paper orders); the index of each is loaded on its engine.ledger_order row as evidence_sha256 and evidence_row_key`,
+    );
   }
   rowSets.push(
     rowSet(
       'engine.evidence_row',
-      'execution-order-evidence/batch.<sha256>.json (paper rows)',
+      rules.evidenceBodies
+        ? 'execution-order-evidence/batch.<sha256>.json (paper rows)'
+        : 'not loaded: evidence batch bodies stay in the archive; the index is on engine.ledger_order',
       evidenceRows,
     ),
   );
@@ -304,19 +295,23 @@ export function buildRestorePlan(tree: DataTree): RestorePlan {
   const layout = readForecastLayout(tree);
   consumed('forecast-history.journal.jsonl', 'engine.forecast_journal_event');
   consumed('forecast-history-shards/index.json', 'engine.forecast_shard');
-  for (const entry of layout?.index.shards ?? []) {
-    for (const [file, table] of [
-      [entry.file, 'engine.forecast_row'],
-      [entry.rollupFile, 'engine.forecast_shard'],
-      [entry.idsFile, 'engine.forecast_shard'],
-    ] as const) {
-      if (!file) continue;
-      consumption.currentForecastFiles.add(`forecast-history-shards/${file}`);
-      consumed(`forecast-history-shards/${file}`, table);
+  if (rules.sealedForecastShards) {
+    for (const entry of layout?.index.shards ?? []) {
+      for (const [file, table] of [
+        [entry.file, 'engine.forecast_row'],
+        [entry.rollupFile, 'engine.forecast_shard'],
+        [entry.idsFile, 'engine.forecast_shard'],
+      ] as const) {
+        if (!file) continue;
+        consumed(`forecast-history-shards/${file}`, table);
+      }
     }
+  } else {
+    notLoaded.push(
+      `forecast-history-shards: the sealed rows, rollups and id artifacts of ${layout?.index.shards.length ?? 0} shard(s); the shard index that names them, with each one's hashes and row count, is loaded as engine.forecast_shard`,
+    );
   }
   if (layout?.index.openFile) {
-    consumption.currentForecastFiles.add(`forecast-history-shards/${layout.index.openFile}`);
     consumed(`forecast-history-shards/${layout.index.openFile}`, 'engine.forecast_row');
   }
   rowSets.push(
@@ -329,19 +324,26 @@ export function buildRestorePlan(tree: DataTree): RestorePlan {
   rowSets.push(
     rowSet(
       'engine.forecast_shard',
-      'forecast-history-shards/index.json and sealed artifacts',
-      (layout?.shards ?? []).map(({ entry, rollup }) => ({
+      rules.sealedForecastShards
+        ? 'forecast-history-shards/index.json and sealed artifacts'
+        : 'forecast-history-shards/index.json (the shard index; the sealed artifacts stay in the archive)',
+      (layout?.index.shards ?? []).map((entry) => ({
         shard_id: entry.shardId,
         rows_sha256: entry.sha256,
         rollup_sha256: entry.rollupSha256,
         ids_sha256: entry.idsSha256 ?? null,
         row_count: entry.rowCount,
-        rollup,
+        // The rollup body is a sealed artifact. Under a scope that retains them
+        // the index row carries the hash and not the body, whatever happens to be
+        // in the tree: what is loaded follows the rules, never what was staged.
+        rollup: rules.sealedForecastShards
+          ? (layout?.shards.find((shard) => shard.entry.shardId === entry.shardId)?.rollup ?? null)
+          : null,
       })),
     ),
   );
   const forecastRows: Record<string, unknown>[] = [];
-  for (const { entry, rows } of layout?.shards ?? []) {
+  for (const { entry, rows } of rules.sealedForecastShards ? (layout?.shards ?? []) : []) {
     for (const row of rows)
       forecastRows.push({ forecast_id: row.id, shard_id: entry.shardId, status: row.status, row });
   }
@@ -349,7 +351,13 @@ export function buildRestorePlan(tree: DataTree): RestorePlan {
     forecastRows.push({ forecast_id: row.id, shard_id: null, status: row.status, row });
   }
   rowSets.push(
-    rowSet('engine.forecast_row', 'sealed shard rows plus the current open set', forecastRows),
+    rowSet(
+      'engine.forecast_row',
+      rules.sealedForecastShards
+        ? 'sealed shard rows plus the current open set'
+        : 'the current open set only (the journal replayed onto the open set at the last seal)',
+      forecastRows,
+    ),
   );
 
   // 7. Contract provenance.
@@ -388,27 +396,44 @@ export function buildRestorePlan(tree: DataTree): RestorePlan {
     ),
   );
 
-  // Research journals and snapshots.
+  // Research journals and snapshots: history for analysis, read by neither the
+  // engine nor the UI, so they stay in the archive under the authoritative scope
+  // (maintainer decision 2026-10-08).
   const journalRows: Record<string, unknown>[] = [];
-  for (const { file, store } of RESEARCH_JOURNALS) {
-    const raw = readTreeText(tree, file);
-    if (raw === undefined) continue;
-    consumed(file, 'engine.research_journal_event');
-    parseJsonl(raw).forEach((event, index) => {
-      journalRows.push({ store, sequence: index + 1, event });
-    });
-  }
-  rowSets.push(
-    rowSet('engine.research_journal_event', 'research *.journal.jsonl files', journalRows),
-  );
   const snapshotRows: Record<string, unknown>[] = [];
-  for (const { file, store } of RESEARCH_SNAPSHOTS) {
-    const value = readTreeJson<unknown>(tree, file);
-    if (value === undefined) continue;
-    consumed(file, 'engine.research_snapshot');
-    snapshotRows.push({ store, snapshot: value });
+  if (rules.researchStores) {
+    for (const { file, store } of RESEARCH_JOURNALS) {
+      const raw = readTreeText(tree, file);
+      if (raw === undefined) continue;
+      consumed(file, 'engine.research_journal_event');
+      parseJsonl(raw).forEach((event, index) => {
+        journalRows.push({ store, sequence: index + 1, event });
+      });
+    }
+    for (const { file, store } of RESEARCH_SNAPSHOTS) {
+      const value = readTreeJson<unknown>(tree, file);
+      if (value === undefined) continue;
+      consumed(file, 'engine.research_snapshot');
+      snapshotRows.push({ store, snapshot: value });
+    }
+  } else {
+    notLoaded.push(
+      'the research stores: sentinels, choice sets, timing shadows and calendar evaluation, journals and snapshots alike',
+    );
   }
-  rowSets.push(rowSet('engine.research_snapshot', 'research snapshot *.json files', snapshotRows));
+  const researchSource = rules.researchStores
+    ? 'research *.journal.jsonl files'
+    : 'not loaded: the research journals stay in the archive';
+  rowSets.push(rowSet('engine.research_journal_event', researchSource, journalRows));
+  rowSets.push(
+    rowSet(
+      'engine.research_snapshot',
+      rules.researchStores
+        ? 'research snapshot *.json files'
+        : 'not loaded: the research snapshots stay in the archive',
+      snapshotRows,
+    ),
+  );
 
   return {
     rowSets,

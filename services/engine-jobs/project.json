@@ -19,6 +19,14 @@
         "command": "docker buildx build --load --provenance=true --build-arg SOURCE_REPOSITORY=${SOURCE_REPOSITORY:-unknown} --build-arg SOURCE_COMMIT=${SOURCE_COMMIT:-unknown} --build-arg SOURCE_REF=${SOURCE_REF:-unknown} --build-arg BUILD_WORKFLOW=${BUILD_WORKFLOW:-unknown} --build-arg BUILD_RUN=${BUILD_RUN:-unknown} --build-arg ARTIFACT_VERSION=${ARTIFACT_VERSION:-unknown} --file services/engine-jobs/Dockerfile --tag money-noodle/engine-jobs:local ."
       }
     },
+    "stage-list": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "dependsOn": ["build"],
+      "options": {
+        "command": "node services/engine-jobs/dist/restore/main.js stage-list"
+      }
+    },
     "lint": {
       "executor": "nx:run-commands",
       "options": {

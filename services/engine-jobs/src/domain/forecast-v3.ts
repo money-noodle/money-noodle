@@ -108,12 +108,26 @@ export interface ForecastVerification {
   version: string;
   shards: number;
   sealedRows: number;
+  /** Terminal rows the index claims across its shards, whether or not they were read. */
+  indexedTerminalRows: number;
+  /** False when the active load scope left the sealed shard artifacts in the archive. */
+  sealedRowsVerified: boolean;
   openRowsAtLastSeal: number;
   journalEvents: number;
   currentOpenRows: number;
   currentTotalRows: number;
   /** Named so the evidence document can say what was not checked. */
   notVerified: string[];
+}
+
+export interface ForecastVerificationOptions {
+  /**
+   * Read each sealed shard, rollup and id artifact and check it against the
+   * index. Default true. False when the load scope leaves those blobs in the
+   * archive: the index, the open set and the journal are still verified, and the
+   * result says the shard bodies were not.
+   */
+  readonly sealedShards?: boolean;
 }
 
 export interface ForecastLayout {
@@ -154,7 +168,11 @@ export function readForecastLayout(tree: DataTree): ForecastLayout | undefined {
   };
 }
 
-export function verifyForecastStorage(tree: DataTree): ForecastVerification {
+export function verifyForecastStorage(
+  tree: DataTree,
+  options: ForecastVerificationOptions = {},
+): ForecastVerification {
+  const sealedShards = options.sealedShards !== false;
   const errors: string[] = [];
   const layout = readForecastLayout(tree);
   if (!layout) {
@@ -164,6 +182,8 @@ export function verifyForecastStorage(tree: DataTree): ForecastVerification {
       version: 'absent',
       shards: 0,
       sealedRows: 0,
+      indexedTerminalRows: 0,
+      sealedRowsVerified: sealedShards,
       openRowsAtLastSeal: 0,
       journalEvents: 0,
       currentOpenRows: 0,
@@ -179,7 +199,18 @@ export function verifyForecastStorage(tree: DataTree): ForecastVerification {
     errors.push(`Unsupported forecast storage version ${String(index.version)}.`);
   }
   const sealed: ForecastRow[] = [];
-  for (const { entry, rows, rollup, ids } of layout.shards) {
+  const indexedTerminalRows = index.shards.reduce((total, entry) => total + entry.rowCount, 0);
+  if (!sealedShards && index.version === FORECAST_STORAGE_VERSION) {
+    // The one shard check that needs no shard body: v4 publishes exact-ID
+    // metadata per shard, and an entry without it is an index this verifier
+    // cannot stand behind even when the rows stay in the archive.
+    for (const entry of index.shards) {
+      if (!entry.idsFile || !entry.idsSha256) {
+        errors.push(`Shard ${entry.shardId} lacks v4 exact-ID metadata.`);
+      }
+    }
+  }
+  for (const { entry, rows, rollup, ids } of sealedShards ? layout.shards : []) {
     const rowsRaw = readTreeText(tree, `${FORECAST_SHARD_DIRECTORY}/${entry.file}`);
     const rollupRaw = readTreeText(tree, `${FORECAST_SHARD_DIRECTORY}/${entry.rollupFile}`);
     if (rowsRaw === undefined) {
@@ -239,15 +270,24 @@ export function verifyForecastStorage(tree: DataTree): ForecastVerification {
   else if (sha256Hex(openRaw) !== index.openSha256) {
     errors.push('Open artifact checksum did not match the index.');
   }
-  if (sealed.length !== index.terminalRows) {
-    errors.push(`Indexed terminal rows ${index.terminalRows}; shard files held ${sealed.length}.`);
+  // With the shard bodies retained in the archive the index is checked against
+  // itself instead: its per-shard row counts must add up to the terminal total it
+  // publishes. That is a weaker check than reading the rows, and the evidence
+  // document says so rather than letting a pass read as more than it is.
+  const terminalRows = sealedShards ? sealed.length : indexedTerminalRows;
+  if (terminalRows !== index.terminalRows) {
+    errors.push(
+      sealedShards
+        ? `Indexed terminal rows ${index.terminalRows}; shard files held ${sealed.length}.`
+        : `Indexed terminal rows ${index.terminalRows}; the shard entries sum to ${indexedTerminalRows}.`,
+    );
   }
   if (layout.openAtSeal.length !== index.openRows) {
     errors.push(`Indexed open rows ${index.openRows}; open file held ${layout.openAtSeal.length}.`);
   }
-  if (sealed.length + layout.openAtSeal.length !== index.totalRows) {
+  if (terminalRows + layout.openAtSeal.length !== index.totalRows) {
     errors.push(
-      `Indexed total rows ${index.totalRows}; artifacts held ${sealed.length + layout.openAtSeal.length}.`,
+      `Indexed total rows ${index.totalRows}; artifacts held ${terminalRows + layout.openAtSeal.length}.`,
     );
   }
   const sealedIds = new Set<string>();
@@ -258,7 +298,7 @@ export function verifyForecastStorage(tree: DataTree): ForecastVerification {
   const openIds = new Set<string>();
   for (const row of layout.currentOpen) {
     if (openIds.has(row.id)) errors.push(`Duplicate open forecast id ${row.id}.`);
-    if (sealedIds.has(row.id)) {
+    if (sealedShards && sealedIds.has(row.id)) {
       errors.push(`Open forecast id ${row.id} collided with sealed terminal evidence.`);
     }
     openIds.add(row.id);
@@ -269,13 +309,21 @@ export function verifyForecastStorage(tree: DataTree): ForecastVerification {
     version: index.version,
     shards: index.shards.length,
     sealedRows: sealed.length,
+    indexedTerminalRows,
+    sealedRowsVerified: sealedShards,
     openRowsAtLastSeal: layout.openAtSeal.length,
     journalEvents: layout.journalEvents.length,
     currentOpenRows: layout.currentOpen.length,
-    currentTotalRows: sealed.length + layout.currentOpen.length,
+    currentTotalRows: terminalRows + layout.currentOpen.length,
     notVerified: [
-      'Rollup summary equivalence (direct performance summary versus stored rollups) depends on the v1 performance module and is not ported; rollups are loaded as sealed artifacts with their checksums verified only.',
+      'Rollup summary equivalence (direct performance summary versus stored rollups) depends on the v1 performance module and is not ported.',
       'Legacy-rollup reseal detection against the active buy-policy version is not ported.',
+      ...(sealedShards
+        ? []
+        : [
+            'Sealed shard, rollup and id-artifact checksums: those blobs are retained in the archive under this load scope, were never staged and were not fetched. The index is checked against itself (per-shard row counts against its terminal total) and the manifest hash of each retained blob is recorded.',
+            'Sealed forecast ids: duplicate-id and open/sealed id-collision checks need the shard rows, which were not read.',
+          ]),
     ],
   };
 }
