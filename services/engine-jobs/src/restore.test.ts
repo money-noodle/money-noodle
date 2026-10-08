@@ -323,6 +323,7 @@ describe('the transform at the paper seam', () => {
       'evidence-frozen': 0,
       // One evidence batch body, three sealed forecast artifacts, six research files.
       'historical-archive-retained': 10,
+      'retired-feature': 0,
     });
     const loaded = new Map(classification.loaded.map((e) => [e.path, e.tables]));
     expect(loaded.get('paper-orders.json')).toEqual(['engine.ledger_order', 'engine.ledger_state']);
@@ -601,6 +602,138 @@ describe('the load scope table', () => {
 
   it('calls a store nobody has classified UNMAPPED rather than sweeping it into a reason', () => {
     expect(classify('mystery-store.json')).toEqual({ kind: 'unmapped' });
+    // Sitting in a directory does not make a stranger a copy or a lease.
+    expect(classify('reports/mystery-store.json')).toEqual({ kind: 'unmapped' });
+    expect(classify('mystery-experiment.json')).toEqual({ kind: 'unmapped' });
+  });
+
+  // The 49 entries the second execution (2026-10-08) refused as UNMAPPED (#241).
+  // Synthetic manifest paths only: the names are v1's, the stamps are the ones
+  // the evidence document listed, and no file content is involved.
+  describe('the 49 entries execution 2 refused as UNMAPPED', () => {
+    const quarantinedShardRoot = 'forecast-history-shards.corrupt-2026-08-22T06-16-28-623Z';
+    const shardDays = Array.from(
+      { length: 15 },
+      (_, i) => `2026-08-${String(8 + i).padStart(2, '0')}`,
+    );
+    const quarantinedShards = [
+      `${quarantinedShardRoot}/index.json`,
+      `${quarantinedShardRoot}/open.json`,
+      ...shardDays.flatMap((day) => [
+        `${quarantinedShardRoot}/${day}.json`,
+        `${quarantinedShardRoot}/${day}.rollup.json`,
+      ]),
+    ];
+    const corruptLockOwners = [
+      '2026-08-22T01-12-03-120Z',
+      '2026-08-22T02-00-00-000Z',
+      '2026-08-23T11-45-09-004Z',
+      '2026-08-27T19-30-41-387Z',
+      '2026-09-01T00-00-00-000Z',
+    ].map((stamp) => `forecast-history.write.lock.corrupt-${stamp}/owner.json`);
+
+    const expected: ReadonlyArray<readonly [string, string]> = [
+      ['analysis-bands.json', 'retired-feature'],
+      ['archive/forecast-history-corrupt-1786235151716.json', 'superseded'],
+      ['archive/forecast-history-pre-blend03-20260808T205858Z.json', 'superseded'],
+      ['exit-policy-sentinels.journal.jsonl', 'historical-archive-retained'],
+      ['exit-policy-sentinels.json', 'historical-archive-retained'],
+      ['fine-paths-experiment.jsonl', 'retired-feature'],
+      ['forecast-history-repair-2026-08-22T06-16-28-623Z.json', 'superseded'],
+      ...quarantinedShards.map((path) => [path, 'superseded'] as const),
+      ...corruptLockOwners.map((path) => [path, 'lease/lock/archive-state'] as const),
+      ['hold-sentinels.json', 'retired-feature'],
+      ['llm-control.json', 'superseded'],
+      ['long-shot-candidates.journal.jsonl', 'retired-feature'],
+      ['long-shot-settlements.json', 'retired-feature'],
+      ['maker-depth-experiment.jsonl', 'retired-feature'],
+    ];
+
+    it('is exactly 49 distinct paths', () => {
+      expect(quarantinedShards).toHaveLength(32);
+      expect(corruptLockOwners).toHaveLength(5);
+      expect(new Set(expected.map(([path]) => path)).size).toBe(49);
+    });
+
+    it('classifies each one as intentionally not loaded, with the decided reason', () => {
+      for (const [path, reason] of expected) {
+        expect(classify(path), path).toMatchObject({ kind: 'not-loaded', reason });
+      }
+    });
+
+    it('loads none of them under the widest scope either', () => {
+      for (const [path] of expected) {
+        expect(classify(path, EVERYTHING).kind, path).toBe('not-loaded');
+      }
+    });
+
+    it('reconciles a synthetic manifest of them with zero UNMAPPED', () => {
+      const manifest = {
+        files: expected.map(([path]) => ({ path, sha256: 'd'.repeat(64), sourceBytes: 1 })),
+      };
+      const classification = classifyManifest(
+        manifest as never,
+        { consumed: new Map() },
+        AUTHORITATIVE,
+      );
+      expect(classification.unmapped).toEqual([]);
+      expect(classification.loaded).toEqual([]);
+      expect(classification.notLoaded).toHaveLength(49);
+      expect(countByReason(classification.notLoaded)).toEqual({
+        'live-side': 0,
+        'lease/lock/archive-state': 5,
+        superseded: 36,
+        'evidence-frozen': 0,
+        'historical-archive-retained': 2,
+        'retired-feature': 6,
+      });
+    });
+
+    it('decides by pattern, so the next stamp is classified before it exists', () => {
+      expect(
+        classify('forecast-history-shards.corrupt-2027-01-01T00-00-00-000Z/open.json'),
+      ).toMatchObject({ reason: 'superseded' });
+      expect(
+        classify(
+          `forecast-history-shards.corrupt-2027-01-01T00-00-00-000Z/2027-01-01.rollup.${'e'.repeat(64)}.json`,
+        ),
+      ).toMatchObject({ reason: 'superseded' });
+      expect(
+        classify('forecast-history.journal.jsonl.corrupt-2027-01-01T00-00-00-000Z'),
+      ).toMatchObject({
+        reason: 'superseded',
+      });
+      expect(
+        classify('forecast-history-shards.corrupt-2027-01-01T00-00-00-000Z.journal-copy'),
+      ).toMatchObject({
+        reason: 'superseded',
+      });
+      expect(classify('paper-orders.json.superseded-2027-01-01T00-00-00')).toMatchObject({
+        reason: 'superseded',
+      });
+      expect(
+        classify('forecast-history.write.lock.corrupt-2027-01-01T00-00-00-000Z/owner.json'),
+      ).toMatchObject({ reason: 'lease/lock/archive-state' });
+      expect(classify('forecast-history.write.lock/owner.json')).toMatchObject({
+        reason: 'lease/lock/archive-state',
+      });
+      expect(classify('archive/anything-at-all.json')).toMatchObject({ reason: 'superseded' });
+      expect(classify('archive/nested/copy.jsonl')).toMatchObject({ reason: 'superseded' });
+      expect(classify('forecast-history-repair-2027-01-01T00-00-00-000Z.json')).toMatchObject({
+        reason: 'superseded',
+      });
+      expect(classify('some-other-experiment.jsonl')).toMatchObject({ reason: 'retired-feature' });
+    });
+
+    it('keeps a quarantined copy out of the loaded forecast family', () => {
+      // A quarantined shard root is not the active shard directory, so its
+      // `open.json` and `index.json` are copies, not candidates.
+      expect(classify(`${quarantinedShardRoot}/index.json`).kind).toBe('not-loaded');
+      expect(classify(`${quarantinedShardRoot}/open.json`).kind).toBe('not-loaded');
+      expect(classify(`${quarantinedShardRoot}/open.${'a'.repeat(64)}.json`, EVERYTHING).kind).toBe(
+        'not-loaded',
+      );
+    });
   });
 
   it('loads the retained families when a scope admits them', () => {
