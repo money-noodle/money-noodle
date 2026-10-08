@@ -179,6 +179,18 @@ module "budget" {
 # are declared here rather than beside the service that reads them (#217, #224,
 # ADR-0005).
 #
+# Why no bucket IAM is declared here, unlike those accessor grants: the deployer
+# plans this stack on every push, and a plan refreshes every resource the state
+# holds. Refreshing a `google_storage_bucket_iam_member` needs
+# `storage.buckets.getIamPolicy`, which no Cloud Storage predefined role carries
+# without also carrying `storage.buckets.setIamPolicy` — a role that would let
+# the deployer grant itself read on the staged copy. Secret Manager has
+# `roles/secretmanager.viewer` for exactly this and Cloud Storage has no
+# equivalent, so both grants on this bucket are declared in the bootstrap stack,
+# beside the state buckets' own deployer grants, where the pipeline never plans
+# them (#241 follow-up). What stays here refreshes with `storage.buckets.get`
+# alone, which is `roles/storage.bucketViewer` and nothing more.
+#
 # What this bucket is not: the single object store of Proposed ADR-0008. ADR-0013
 # §2 is explicit that the accepted object-storage direction is the existing
 # archive and that nothing may depend on ADR-0008. This holds one job's staged
@@ -225,21 +237,6 @@ resource "google_storage_bucket" "engine_restore_stage" {
     "managed-by" = "opentofu"
     "purpose"    = "engine-restore-staging"
   })
-}
-
-# Read and create objects on this bucket alone, for the restore job's own
-# identity. `objectUser` covers the read the execution does and the evidence
-# document it writes back; it carries no `storage.objects.delete`, so an
-# execution cannot remove a staged input or a previous evidence document, and it
-# is bound to this bucket rather than at project level.
-#
-# The maintainer is granted nothing here: they upload with their own account.
-resource "google_storage_bucket_iam_member" "engine_restore_stage_object_user" {
-  count = var.engine_restore_secrets_enabled && var.engine_restore_stage_bucket != null ? 1 : 0
-
-  bucket = google_storage_bucket.engine_restore_stage[0].name
-  role   = "roles/storage.objectUser"
-  member = "serviceAccount:${local.runtime_identities["engine-restore"]}"
 }
 
 # Uptime checks against both interim `*.run.app` URLs are deliberately not

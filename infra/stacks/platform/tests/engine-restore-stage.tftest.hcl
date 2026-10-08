@@ -9,6 +9,15 @@
 # declared here because the deployer that runs a dispatched apply holds no Cloud
 # Storage role, so it could neither create the bucket nor set its IAM. That is the
 # same reason the secret container and its grant are declared here (#217, #224).
+#
+# What is deliberately not asserted here: the bucket's grants. Both of them — the
+# restore identity's object access and the deployer's `storage.buckets.get` — are
+# declared in `infra/stacks/bootstrap`, because a bucket IAM resource in this
+# stack would be refreshed by the deployer on every pipeline plan and no Cloud
+# Storage predefined role carries `storage.buckets.getIamPolicy` without also
+# carrying `setIamPolicy`. `infra/stacks/bootstrap/tests/bootstrap.tftest.hcl`
+# owns those assertions; `tools/infra-policy.test.mjs` holds this stack to
+# declaring no bucket IAM at all.
 mock_provider "google" {}
 
 override_data {
@@ -44,11 +53,6 @@ run "no_staging_bucket_exists_until_the_reviewed_gate_is_on" {
   assert {
     condition     = length(google_storage_bucket.engine_restore_stage) == 0
     error_message = "The staging bucket must not exist by default; it is one milestone's staging area, declared when that milestone needs it."
-  }
-
-  assert {
-    condition     = length(google_storage_bucket_iam_member.engine_restore_stage_object_user) == 0
-    error_message = "No object grant may exist without the bucket it is bound to."
   }
 }
 
@@ -114,50 +118,6 @@ run "the_staging_bucket_is_private_versioned_and_bounded" {
   assert {
     condition     = google_storage_bucket.engine_restore_stage[0].force_destroy == false
     error_message = "Removing the bucket must stay a reviewed code change."
-  }
-}
-
-run "exactly_the_restore_identity_may_read_and_append" {
-  command = plan
-
-  variables {
-    engine_restore_secrets_enabled = true
-    engine_restore_stage_bucket    = "example-engine-restore-stage"
-  }
-
-  # Bound to this bucket, not at project level, and to the job's own identity
-  # resolved through the bootstrap contract rather than an address written here.
-  assert {
-    condition = (
-      length(google_storage_bucket_iam_member.engine_restore_stage_object_user) == 1 &&
-      google_storage_bucket_iam_member.engine_restore_stage_object_user[0].bucket ==
-      "example-engine-restore-stage" &&
-      google_storage_bucket_iam_member.engine_restore_stage_object_user[0].member ==
-      "serviceAccount:engine-restore-runtime@example-project.iam.gserviceaccount.com"
-    )
-    error_message = "The grant must bind the restore job's own identity to this bucket alone."
-  }
-
-  # `objectUser` reads and creates. It carries no `storage.objects.delete`, so an
-  # execution cannot remove a staged input or a previous evidence document, and it
-  # is not an admin role.
-  assert {
-    condition = (
-      google_storage_bucket_iam_member.engine_restore_stage_object_user[0].role ==
-      "roles/storage.objectUser"
-    )
-    error_message = "The grant must be objectUser: read and create, never delete and never admin."
-  }
-
-  # The web, the API and the deployer have no business here. The maintainer is
-  # granted nothing either: they upload with their own account.
-  assert {
-    condition = !contains([
-      "serviceAccount:web-runtime@example-project.iam.gserviceaccount.com",
-      "serviceAccount:platform-api-runtime@example-project.iam.gserviceaccount.com",
-      "serviceAccount:delivery-deployer@example-project.iam.gserviceaccount.com",
-    ], google_storage_bucket_iam_member.engine_restore_stage_object_user[0].member)
-    error_message = "Only the restore job's identity may read the staged inputs."
   }
 }
 

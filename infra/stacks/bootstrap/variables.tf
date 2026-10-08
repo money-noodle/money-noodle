@@ -285,6 +285,27 @@ variable "allowed_event_names" {
   }
 }
 
+variable "engine_restore_stage_grants_enabled" {
+  description = <<-EOT
+    Whether this stack declares the two bucket-level grants on the restore job's
+    staging area: object read and create for the job's own runtime identity, and
+    `storage.buckets.get` for the deployer so the pipeline can refresh the bucket
+    the platform stack declares (#241).
+
+    The bucket is `<state_bucket_prefix>-engine-restore-stage`, declared by
+    `infra/stacks/platform` behind its own `engine_restore_secrets_enabled` gate.
+    Keep the two in step: with this on and that off there is no bucket to bind to
+    and the apply fails, and with this off the pipeline's plan of the platform
+    stack is refused on the bucket it has to refresh.
+
+    **On**, because the maintainer has applied the platform stack with the bucket
+    (#261, #262). It stays a variable so both grants come back out with the bucket
+    when the one-time job is retired.
+  EOT
+  type        = bool
+  default     = true
+}
+
 variable "labels" {
   description = "Additional resource labels."
   type        = map(string)

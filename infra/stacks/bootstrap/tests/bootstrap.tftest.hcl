@@ -330,3 +330,103 @@ run "the_deployer_needs_cloud_run_administration_and_no_identity_authority" {
     error_message = "The deployer must hold no owner, editor, project-IAM, service-account-administration or Secret Manager role (ADR-0005)."
   }
 }
+
+run "the_staging_bucket_grants_are_bound_here_and_stay_narrow" {
+  command = plan
+
+  # Both grants on the restore job's staging area are declared in this stack:
+  # setting bucket IAM needs `storage.buckets.setIamPolicy`, which the deployer
+  # does not hold, and a bucket IAM resource in a stack the pipeline plans would
+  # need `storage.buckets.getIamPolicy` to refresh (#241 follow-up, ADR-0005).
+  assert {
+    condition = (
+      length(google_storage_bucket_iam_member.engine_restore_stage_object_user) == 1 &&
+      length(google_storage_bucket_iam_member.engine_restore_stage_plan_reader) == 1
+    )
+    error_message = "Both staging-bucket grants must be declared here while the one-time restore job exists."
+  }
+
+  # One bucket, named by the same convention as the state buckets and derived
+  # from the prefix rather than written down. Neither grant may land on state.
+  assert {
+    condition = (
+      google_storage_bucket_iam_member.engine_restore_stage_object_user[0].bucket ==
+      "${var.state_bucket_prefix}-engine-restore-stage" &&
+      google_storage_bucket_iam_member.engine_restore_stage_plan_reader[0].bucket ==
+      "${var.state_bucket_prefix}-engine-restore-stage"
+    )
+    error_message = "Both grants must bind the staging bucket alone, by the published naming convention."
+  }
+
+  assert {
+    condition = !contains([
+      "${var.state_bucket_prefix}-bootstrap",
+      "${var.state_bucket_prefix}-platform",
+      "${var.state_bucket_prefix}-api",
+      "${var.state_bucket_prefix}-web",
+    ], google_storage_bucket_iam_member.engine_restore_stage_plan_reader[0].bucket)
+    error_message = "The staging bucket is not a state bucket; a grant that landed on one would widen state access."
+  }
+
+  # `objectUser` reads and creates. It carries no `storage.objects.delete`, so an
+  # execution cannot remove a staged input or a previous evidence document.
+  assert {
+    condition = (
+      google_storage_bucket_iam_member.engine_restore_stage_object_user[0].role ==
+      "roles/storage.objectUser"
+    )
+    error_message = "The job's grant must be objectUser: read and create, never delete and never admin."
+  }
+
+  # The narrowest predefined role that lets OpenTofu refresh the bucket the
+  # platform stack declares: `storage.buckets.get` and `storage.buckets.list`,
+  # no `storage.objects.*` of any kind, and no IAM permission.
+  assert {
+    condition = (
+      google_storage_bucket_iam_member.engine_restore_stage_plan_reader[0].role ==
+      "roles/storage.bucketViewer"
+    )
+    error_message = "The deployer's grant must be bucketViewer: enough to refresh the bucket, never enough to read what is staged in it."
+  }
+
+  # The pipeline may see that the bucket exists. It may not read, write or list
+  # the staged copy of the platform's own records, and it may not change who can.
+  assert {
+    condition = !contains([
+      "roles/storage.objectUser",
+      "roles/storage.objectViewer",
+      "roles/storage.objectCreator",
+      "roles/storage.objectAdmin",
+      "roles/storage.legacyBucketOwner",
+      "roles/storage.legacyObjectReader",
+      "roles/storage.admin",
+    ], google_storage_bucket_iam_member.engine_restore_stage_plan_reader[0].role)
+    error_message = "The deployer must hold no object access and no bucket-IAM authority on the staging bucket."
+  }
+
+  assert {
+    condition = !contains([
+      "roles/storage.objectAdmin",
+      "roles/storage.legacyBucketOwner",
+      "roles/storage.admin",
+    ], google_storage_bucket_iam_member.engine_restore_stage_object_user[0].role)
+    error_message = "The restore identity must hold no administrative or bucket-IAM role on the staging bucket."
+  }
+}
+
+run "the_staging_bucket_grants_come_back_out_with_the_job" {
+  command = plan
+
+  variables {
+    engine_restore_stage_grants_enabled = false
+  }
+
+  # Retiring the one-time job retires its access, in one reviewed change.
+  assert {
+    condition = (
+      length(google_storage_bucket_iam_member.engine_restore_stage_object_user) == 0 &&
+      length(google_storage_bucket_iam_member.engine_restore_stage_plan_reader) == 0
+    )
+    error_message = "With the gate off this stack must declare no grant on the staging bucket."
+  }
+}

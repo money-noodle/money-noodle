@@ -135,6 +135,16 @@ export const RESOURCE_OPERATIONS = Object.freeze({
     'bootstrap.initialize',
     'Telemetry export is the runtime identity’s only project-level permission, and project-level grants are never the deployer’s to make.',
   ),
+  'stacks/bootstrap:google_storage_bucket_iam_member.engine_restore_stage_object_user': own(
+    'bootstrap-principal',
+    'bootstrap.initialize',
+    'Object read and create for the restore job\u2019s own identity, on the one staging bucket. Setting bucket IAM needs storage.buckets.setIamPolicy, which the deployer does not hold and must never hold, so the grant is the bootstrap principal\u2019s to make. It carries no delete, so an execution can read a staged input and append its evidence and can never remove either.',
+  ),
+  'stacks/bootstrap:google_storage_bucket_iam_member.engine_restore_stage_plan_reader': own(
+    'bootstrap-principal',
+    'bootstrap.initialize',
+    'storage.buckets.get on the staging bucket for the deployer, so the pipeline can refresh the bucket the platform stack declares. Granted here because no identity may grant itself bucket access, and because a bucket IAM resource in a stack the pipeline plans would itself need storage.buckets.getIamPolicy \u2014 a permission no predefined role carries without setIamPolicy.',
+  ),
   'modules/state-bucket:google_storage_bucket.state': own(
     'bootstrap-principal',
     'bootstrap.initialize',
@@ -250,11 +260,6 @@ export const RESOURCE_OPERATIONS = Object.freeze({
     'stack-executor',
     'infrastructure.apply',
     'The restore job\u2019s staging area is declared infrastructure, applied here rather than beside the job that mounts it because the release identity holds no Cloud Storage role at all and could neither create the bucket nor set its IAM (#241, ADR-0005). Private, versioned, with a bounded object life: a staging copy of state that exists elsewhere, not the single object store Proposed ADR-0008 would decide.',
-  ),
-  'stacks/platform:google_storage_bucket_iam_member.engine_restore_stage_object_user': own(
-    'iam-executor',
-    'workload.access.change',
-    'Object read and create for the restore job\u2019s own identity, on this one bucket. An access binding with its own approval, like every other: it carries no delete, so an execution can read a staged input and append its evidence and can never remove either.',
   ),
 
   // --- The engine jobs family (ADR-0013 §1). ---
