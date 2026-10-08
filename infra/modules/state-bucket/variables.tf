@@ -18,8 +18,8 @@ variable "stack" {
   type        = string
 
   validation {
-    condition     = contains(["bootstrap", "platform", "web", "api"], var.stack)
-    error_message = "stack must be one of bootstrap, platform, web, or api. A new stack is a reviewed decision, not a typo."
+    condition     = contains(["bootstrap", "platform", "web", "api", "engine-jobs"], var.stack)
+    error_message = "stack must be one of bootstrap, platform, web, api, or engine-jobs. A new stack is a reviewed decision, not a typo."
   }
 }
 
