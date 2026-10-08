@@ -141,6 +141,13 @@ run "a_secret_with_no_consumer_is_refused_rather_than_silently_unreadable" {
 run "the_deployer_can_plan_the_container_and_read_no_value" {
   command = plan
 
+  # The file-level bootstrap mock publishes the two service identities only; the
+  # restore gate is off here for the same reason as in the first run, and the
+  # gated run below carries its own mock with the restore identity.
+  variables {
+    engine_restore_secrets_enabled = false
+  }
+
   # Metadata read for every declared container, for the identity that plans this
   # stack. Without it the refresh is refused and there is no plan at all (#224).
   assert {
