@@ -30,6 +30,10 @@ export interface SyntheticOptions {
   unmappedFile?: boolean;
   /** Leave `provider-budgets.json` out of the tree. */
   withoutProviderBudgets?: boolean;
+  /** Add an earlier sealed generation the current index does not name. */
+  staleForecastGeneration?: boolean;
+  /** Add a file inside a write lease, so the manifest carries a lease entry. */
+  leaseFile?: boolean;
   prefix?: string;
 }
 
@@ -265,6 +269,17 @@ export function syntheticDataTree(options: SyntheticOptions = {}): DataTree {
     'maker-lifecycle-sentinels.journal.jsonl',
     text(`${JSON.stringify({ sentinel: 's-1', at: '2026-01-01T00:00:00.000Z' })}\n`),
   );
+  if (options.staleForecastGeneration) {
+    // An earlier generation: a sealed shard and an open set the current index
+    // does not name. The open set is staged as a candidate and then found stale.
+    const staleRows = `${JSON.stringify([{ id: 'f-0', status: 'resolved' }])}\n`;
+    const staleOpen = `${JSON.stringify([{ id: 'f-9', status: 'pending' }])}\n`;
+    tree.set(`forecast-history-shards/2025-12-31.${sha(staleRows)}.json`, text(staleRows));
+    tree.set(`forecast-history-shards/open.${sha(staleOpen)}.json`, text(staleOpen));
+  }
+  if (options.leaseFile) {
+    tree.set('forecast-history.write.lock/holder.json', json({ holder: 'synthetic' }));
+  }
   // Derived, rebuildable and quarantine entries the v1 archive also captured.
   tree.set('regime-gate.json', json({ candidates: [] }));
   tree.set('cycle-paths.json', json({ paths: [] }));

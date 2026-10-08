@@ -3,9 +3,11 @@
 
 import type { ForecastVerification } from './forecast-v3.js';
 import type { LedgerVerification } from './ledger-v9.js';
+import type { LoadScope } from './load-scope.js';
 import { countByReason, type ManifestClassification } from './manifest-classification.js';
 import type { BankrollRecomputation } from './paper-bankroll.js';
 import type { BlobVerification } from './restore-tree.js';
+import type { RetainedObject } from './stage-list.js';
 import type { VerifyFirstFinding } from './verify-first.js';
 
 export interface ReconciliationRow {
@@ -43,6 +45,12 @@ export interface EvidenceInput {
   classification?: ManifestClassification;
   /** Whether `--allow-unmapped` was passed; recorded whenever a load was attempted. */
   allowUnmapped?: boolean;
+  /** Which v1 stores this run loads (maintainer decision 2026-10-08). */
+  scope?: LoadScope;
+  /** Manifest entries left in the archive: hash and size from the manifest, never fetched. */
+  retained?: RetainedObject[];
+  /** Objects the job staged and fetched, manifest excluded. */
+  stagedObjects?: number;
 }
 
 const yes = (ok: boolean) => (ok ? 'yes' : '**no**');
@@ -76,10 +84,15 @@ export function renderEvidence(template: string, input: EvidenceInput): string {
   const loadedRows = (classification?.loaded ?? []).map(
     (entry) => `| \`${entry.path}\` | ${entry.tables.map((t) => `\`${t}\``).join(', ')} |`,
   );
-  const notLoadedRows = (classification?.notLoaded ?? []).map(
-    (entry) => `| \`${entry.path}\` | ${entry.reason} | ${entry.note} |`,
+  const manifestFacts = new Map(
+    (input.retained ?? []).map((entry) => [entry.path, entry] as const),
   );
+  const notLoadedRows = (classification?.notLoaded ?? []).map((entry) => {
+    const fact = manifestFacts.get(entry.path);
+    return `| \`${entry.path}\` | ${entry.reason} | \`${fact?.sha256.slice(0, 16) ?? '—'}\` | ${fact?.sourceBytes ?? '—'} | ${entry.note} |`;
+  });
   const unmappedRows = (classification?.unmapped ?? []).map((path) => `| \`${path}\` |`);
+  const retained = input.retained ?? [];
   const values: Record<string, string> = {
     COLLECTED_AT: input.collectedAt,
     RUN_ID: input.runId,
@@ -97,6 +110,13 @@ export function renderEvidence(template: string, input: EvidenceInput): string {
     DIFFERING: String(input.verifyFirst.differing),
     MISSING_IN_WORKSTATION: String(input.verifyFirst.missingInWorkstation),
     MISSING_IN_MANIFEST: String(input.verifyFirst.missingInManifest),
+    COMPARED_FILES: String(input.verifyFirst.comparedFiles),
+    RETAINED_MANIFEST_FILES: String(input.verifyFirst.retainedManifestFiles),
+    RETAINED_WORKSTATION_ONLY: String(input.verifyFirst.retainedWorkstationOnly),
+    LOAD_SCOPE: input.scope ?? 'not recorded',
+    STAGED_OBJECTS: String(input.stagedObjects ?? 0),
+    RETAINED_TOTAL: String(retained.length),
+    RETAINED_BYTES: String(retained.reduce((total, entry) => total + entry.sourceBytes, 0)),
     FILE_ROWS: fileRows.length ? fileRows.join('\n') : '| _every file equal_ | | | |',
     BLOBS_VERIFIED: String((input.blobs ?? []).filter((b) => b.state === 'verified').length),
     BLOBS_TOTAL: String(input.blobs?.length ?? 0),
@@ -105,12 +125,12 @@ export function renderEvidence(template: string, input: EvidenceInput): string {
       ? 'not run'
       : 'error' in ledger
         ? `**failed**: ${ledger.error}`
-        : `passed (version ${ledger.version}; ${ledger.orders} orders, ${ledger.paperOrders} paper, ${ledger.liveOrders} live, ${ledger.compactOrders} with evidence references across ${ledger.evidenceBatches} batches)`,
+        : `passed (version ${ledger.version}; ${ledger.orders} orders, ${ledger.paperOrders} paper, ${ledger.liveOrders} live, ${ledger.compactOrders} with evidence references across ${ledger.evidenceBatches} batches). Evidence batch bodies ${ledger.evidenceBodiesVerified ? 'read and each referenced row resolved' : '**not read**: retained in the archive under this load scope, so the references were checked and the rows inside them were not'}`,
     FORECAST_RESULT: !forecast
       ? 'not run'
       : 'error' in forecast
         ? `**failed**: ${forecast.error}`
-        : `${forecast.ok ? 'passed' : '**failed**'} (${forecast.version}; ${forecast.shards} shards, ${forecast.sealedRows} sealed rows, ${forecast.currentOpenRows} open rows after ${forecast.journalEvents} journal events)${forecast.errors.length ? `\n\n${forecast.errors.map((e) => `- ${e}`).join('\n')}` : ''}`,
+        : `${forecast.ok ? 'passed' : '**failed**'} (${forecast.version}; ${forecast.shards} shards indexing ${forecast.indexedTerminalRows} terminal rows, ${forecast.sealedRows} sealed rows read, ${forecast.currentOpenRows} open rows after ${forecast.journalEvents} journal events)${forecast.sealedRowsVerified ? '' : '. Sealed shard artifacts **not read**: retained in the archive under this load scope'}${forecast.errors.length ? `\n\n${forecast.errors.map((e) => `- ${e}`).join('\n')}` : ''}`,
     FORECAST_NOT_VERIFIED:
       forecast && !('error' in forecast) && forecast.notVerified.length
         ? forecast.notVerified.map((item) => `- ${item}`).join('\n')
@@ -155,7 +175,7 @@ export function renderEvidence(template: string, input: EvidenceInput): string {
       : '| not classified | |',
     ALLOW_UNMAPPED: input.allowUnmapped === true ? '**yes** (`--allow-unmapped` was passed)' : 'no',
     LOADED_FILE_ROWS: loadedRows.length ? loadedRows.join('\n') : '| _none_ | |',
-    NOT_LOADED_FILE_ROWS: notLoadedRows.length ? notLoadedRows.join('\n') : '| _none_ | | |',
+    NOT_LOADED_FILE_ROWS: notLoadedRows.length ? notLoadedRows.join('\n') : '| _none_ | | | | |',
     UNMAPPED_FILE_ROWS: unmappedRows.length ? unmappedRows.join('\n') : '| _none_ |',
     RECONCILIATION_ROWS: reconciliationRows.length
       ? reconciliationRows.join('\n')

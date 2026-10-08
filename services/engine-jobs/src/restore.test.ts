@@ -5,12 +5,29 @@ import { runRestoreJob, type RestoreJobInput } from './application/restore.js';
 import { isArchiveCandidate, parseArchiveManifest } from './domain/archive-manifest.js';
 import { verifyForecastStorage } from './domain/forecast-v3.js';
 import { readLedger, verifyLedgerV9 } from './domain/ledger-v9.js';
+import {
+  classifyPath,
+  DEFAULT_LOAD_SCOPE,
+  isLoadScope,
+  LOAD_SCOPE_NAMES,
+  rulesFor,
+  type LoadScopeRules,
+} from './domain/load-scope.js';
 import { classifyManifest, countByReason } from './domain/manifest-classification.js';
 import { recomputePaperBankroll } from './domain/paper-bankroll.js';
 import { buildRestorePlan, paperSeam } from './domain/restore-plan.js';
 import { restoreTreeFromArchive } from './domain/restore-tree.js';
 import { sha256Hex } from './domain/sha256.js';
+import { planStaging, stageListLines, stageListSummary, stagedPaths } from './domain/stage-list.js';
 import { compareManifestWithWorkstation } from './domain/verify-first.js';
+
+/** The authoritative scope's rules, and the widened set no scope selects yet. */
+const AUTHORITATIVE: LoadScopeRules = rulesFor('authoritative');
+const EVERYTHING: LoadScopeRules = {
+  evidenceBodies: true,
+  researchStores: true,
+  sealedForecastShards: true,
+};
 import { syntheticArchive, syntheticDataTree } from './test-support/synthetic-archive.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -200,9 +217,16 @@ describe('the transform at the paper seam', () => {
     // Inert: no loaded row anywhere carries the live half of the pair.
     const everyRow = plan.rowSets.flatMap((s) => s.rows.map((r) => JSON.stringify(r)));
     expect(everyRow.some((r) => r.includes('"l-1"') || r.includes('"l-2"'))).toBe(false);
-    // Live evidence rows and live-side state are not loaded.
-    const evidence = plan.rowSets.find((s) => s.table === 'engine.evidence_row')!.rows;
-    expect(evidence.map((r) => r.order_id).sort()).toEqual(['p-1', 'p-2']);
+    // Evidence batch bodies are not loaded at all under the authoritative scope;
+    // the index of each is on the paper order that references it.
+    expect(plan.rowSets.find((s) => s.table === 'engine.evidence_row')!.rows).toEqual([]);
+    expect(
+      orders
+        .filter((row) => row.evidence_sha256 !== null)
+        .map((row) => row.order_id)
+        .sort(),
+    ).toEqual(['p-1', 'p-2']);
+    expect(orders.every((row) => row.evidence_row_key !== undefined)).toBe(true);
     expect(everyRow.some((r) => r.includes('live-skips') || r.includes('liveCorrections'))).toBe(
       false,
     );
@@ -214,10 +238,36 @@ describe('the transform at the paper seam', () => {
     );
     const providers = plan.rowSets.find((s) => s.table === 'engine.provider_registry')!.rows;
     expect(providers[0]!.record).toEqual({ researchEnabled: true, paperEnabled: true });
+    // The current open set only: two rows after the journal replay. The sealed
+    // terminal rows stay in the archive and the shard index names them.
+    expect(plan.rowSets.find((s) => s.table === 'engine.forecast_row')!.rows).toHaveLength(2);
+    expect(plan.rowSets.find((s) => s.table === 'engine.forecast_shard')!.rows).toEqual([
+      expect.objectContaining({ row_count: 2, rollup: null, shard_id: '2026-01-01' }),
+    ]);
+    expect(
+      plan.rowSets.find((s) => s.table === 'engine.research_journal_event')!.rows,
+    ).toHaveLength(0);
+  });
+
+  it('loads the sealed shards, bodies and research stores when a scope admits them', () => {
+    // No scope selects this today. The transform keeps the capability, so
+    // widening the restore later is a table entry rather than a rewrite, and the
+    // branch is held to working by this test rather than by hope.
+    const plan = buildRestorePlan(syntheticDataTree({ liveOrders: 2 }), EVERYTHING);
+    expect(
+      plan.rowSets.find((s) => s.table === 'engine.evidence_row')!.rows.map((r) => r.order_id),
+    ).toEqual(['p-1', 'p-2']);
     expect(plan.rowSets.find((s) => s.table === 'engine.forecast_row')!.rows).toHaveLength(4);
     expect(
       plan.rowSets.find((s) => s.table === 'engine.research_journal_event')!.rows,
     ).toHaveLength(3);
+    expect(
+      plan.rowSets.find((s) => s.table === 'engine.research_snapshot')!.rows.map((r) => r.store),
+    ).toContain('exit-policy-sentinels-v3');
+    expect(plan.rowSets.find((s) => s.table === 'engine.forecast_shard')!.rows[0]!.rollup).toEqual({
+      issued: 2,
+      shardId: '2026-01-01',
+    });
   });
 
   it('loads provider budgets as paper ceilings and the frozen sentinel snapshots as rows', () => {
@@ -235,13 +285,15 @@ describe('the transform at the paper seam', () => {
     ]);
     expect(JSON.stringify(budgets)).not.toContain('liveLimitCents');
     expect(plan.notLoaded).toContain('provider-budgets.json: liveLimitCents per provider');
-    const snapshots = plan.rowSets.find((s) => s.table === 'engine.research_snapshot')!.rows;
-    expect(snapshots.map((r) => r.store).sort()).toEqual([
-      'exit-policy-sentinels-v2',
-      'exit-policy-sentinels-v3',
-      'maker-lifecycle-sentinels',
-      'paper-execution-timing-shadows',
-    ]);
+    // The frozen sentinel snapshots are history for analysis: not loaded, and the
+    // seam list says so rather than leaving a reader to notice the empty table.
+    expect(plan.rowSets.find((s) => s.table === 'engine.research_snapshot')!.rows).toEqual([]);
+    expect(plan.notLoaded.join('\n')).toContain('the research stores');
+    expect(
+      buildRestorePlan(syntheticDataTree(), EVERYTHING).rowSets.find(
+        (s) => s.table === 'engine.research_snapshot',
+      )!.rows.length,
+    ).toBe(4);
     const absent = buildRestorePlan(syntheticDataTree({ withoutProviderBudgets: true }));
     expect(absent.rowSets.find((s) => s.table === 'engine.provider_budget')!.rows).toEqual([]);
   });
@@ -250,7 +302,7 @@ describe('the transform at the paper seam', () => {
     const tree = syntheticDataTree({ liveOrders: 2, unmappedFile: true });
     const { manifest } = syntheticArchive(tree);
     const plan = buildRestorePlan(tree);
-    const classification = classifyManifest(manifest, plan.consumption);
+    const classification = classifyManifest(manifest, plan.consumption, AUTHORITATIVE);
     expect(classification.manifestFiles).toBe(manifest.files.length);
     expect(classification.classified).toBe(manifest.files.length);
     expect(
@@ -269,23 +321,32 @@ describe('the transform at the paper seam', () => {
       'lease/lock/archive-state': 0,
       superseded: 5,
       'evidence-frozen': 0,
+      // One evidence batch body, three sealed forecast artifacts, six research files.
+      'historical-archive-retained': 10,
     });
     const loaded = new Map(classification.loaded.map((e) => [e.path, e.tables]));
     expect(loaded.get('paper-orders.json')).toEqual(['engine.ledger_order', 'engine.ledger_state']);
     expect(loaded.get('provider-budgets.json')).toEqual(['engine.provider_budget']);
     expect(loaded.get('forecast-history-shards/index.json')).toEqual(['engine.forecast_shard']);
+    // No evidence batch body is loaded, and no sealed shard artifact: only the
+    // shard index and the open set the journal replays onto.
+    expect([...loaded.keys()].filter((p) => p.startsWith('execution-order-evidence/'))).toEqual([]);
     expect(
-      [...loaded.keys()].filter((p) => p.startsWith('execution-order-evidence/')),
-    ).toHaveLength(1);
-    // Every file the current forecast index names is loaded; the fixture has no stale generation.
-    expect(
-      manifest.files
-        .filter((f) => f.path.startsWith('forecast-history-shards/'))
-        .every((f) => loaded.has(f.path)),
-    ).toBe(true);
+      [...loaded.keys()].filter((p) => p.startsWith('forecast-history-shards/')).sort(),
+    ).toEqual(
+      [
+        'forecast-history-shards/index.json',
+        ...manifest.files
+          .filter((f) => /forecast-history-shards\/open\./.test(f.path))
+          .map((f) => f.path),
+      ].sort(),
+    );
+    expect(byPath.get([...manifest.files].find((f) => /\/batch\./.test(f.path))!.path)).toBe(
+      'historical-archive-retained',
+    );
   });
 
-  it('classifies a batch referenced only by live orders as live-side and an orphan as frozen', () => {
+  it('classifies every evidence batch as retained, whoever referenced it', () => {
     const tree = syntheticDataTree({ liveOrders: 1 });
     const batch = (suffix: string) =>
       Buffer.from(
@@ -304,13 +365,19 @@ describe('the transform at the paper seam', () => {
     };
     tree.set('paper-orders.json', Buffer.from(`${JSON.stringify(ledger)}\n`));
     const { manifest } = syntheticArchive(tree);
-    const classification = classifyManifest(manifest, buildRestorePlan(tree).consumption);
+    const classification = classifyManifest(
+      manifest,
+      buildRestorePlan(tree).consumption,
+      AUTHORITATIVE,
+    );
     const byPath = new Map(classification.notLoaded.map((e) => [e.path, e.reason]));
+    // Who referenced a body stopped mattering on 2026-10-08: no body is loaded,
+    // so every one of them is archive-retained and none is ever fetched.
     expect(byPath.get(`execution-order-evidence/batch.${sha256Hex(liveOnly)}.json`)).toBe(
-      'live-side',
+      'historical-archive-retained',
     );
     expect(byPath.get(`execution-order-evidence/batch.${sha256Hex(orphan)}.json`)).toBe(
-      'evidence-frozen',
+      'historical-archive-retained',
     );
     expect(classification.unmapped).toEqual([]);
   });
@@ -356,7 +423,9 @@ describe('the restore job end to end over a fake store', () => {
     expect(result.manifestDigest).toMatch(/^[a-f0-9]{64}$/);
     const inspection = await store.inspect();
     expect(inspection.counts['engine.ledger_order']).toBe(4);
-    expect(inspection.counts['engine.forecast_row']).toBe(4);
+    expect(inspection.counts['engine.forecast_row']).toBe(2);
+    expect(inspection.counts['engine.evidence_row']).toBe(0);
+    expect(inspection.counts['engine.research_journal_event']).toBe(0);
     expect(inspection.counts['engine.provider_budget']).toBe(1);
     expect(inspection.priorRuns).toHaveLength(1);
     // The evidence carries the manifest-to-load reconciliation with counts that add up.
@@ -450,5 +519,362 @@ describe('the restore job end to end over a fake store', () => {
 
   it('hashes row sets stably whatever key order a reader produced', () => {
     expect(sha256Hex('a')).toMatch(/^[a-f0-9]{64}$/);
+  });
+});
+
+describe('the load scope table', () => {
+  const classify = (path: string, rules = AUTHORITATIVE) => classifyPath(path, rules);
+
+  it('names one scope, and that scope is the default', () => {
+    expect(LOAD_SCOPE_NAMES).toEqual(['authoritative']);
+    expect(DEFAULT_LOAD_SCOPE).toBe('authoritative');
+    expect(isLoadScope('authoritative')).toBe(true);
+    expect(isLoadScope('everything')).toBe(false);
+    // Not a prototype lookup: `toString` is not a scope.
+    expect(isLoadScope('toString')).toBe(false);
+  });
+
+  it('loads the authoritative stores the engine resumes from, and says which table each reaches', () => {
+    expect(classify('paper-orders.json')).toMatchObject({
+      kind: 'loaded',
+      tables: ['engine.ledger_order', 'engine.ledger_state'],
+    });
+    for (const [path, table] of [
+      ['trading-control.json', 'engine.trading_control'],
+      ['trading-providers.json', 'engine.provider_registry'],
+      ['provider-budgets.json', 'engine.provider_budget'],
+      ['contract-provenance.json', 'engine.contract_provenance'],
+      ['model-promotions.json', 'engine.model_promotion'],
+      ['forecast-history.journal.jsonl', 'engine.forecast_journal_event'],
+      ['forecast-history-shards/index.json', 'engine.forecast_shard'],
+      [`forecast-history-shards/open.${'a'.repeat(64)}.json`, 'engine.forecast_row'],
+    ] as const) {
+      expect(classify(path), path).toMatchObject({ kind: 'loaded', tables: [table] });
+    }
+  });
+
+  it('retains the histories those stores index, with the reason the decision gave', () => {
+    for (const path of [
+      `execution-order-evidence/batch.${'b'.repeat(64)}.json`,
+      `forecast-history-shards/2026-01-01.${'c'.repeat(64)}.json`,
+      `forecast-history-shards/2026-01-01.rollup.${'c'.repeat(64)}.json`,
+      `forecast-history-shards/2026-01-01.ids.${'c'.repeat(64)}.json`,
+      'hourly-threshold-observations.journal.jsonl',
+      'portfolio-choice-sets.journal.jsonl',
+      'paper-execution-timing-shadows.journal.jsonl',
+      'calendar-evaluation.journal.jsonl',
+      'exit-policy-sentinels-v3.json',
+      'model-evaluations.json',
+    ]) {
+      expect(classify(path), path).toMatchObject({
+        kind: 'not-loaded',
+        reason: 'historical-archive-retained',
+      });
+    }
+  });
+
+  it('keeps the reason codes the earlier decisions set', () => {
+    expect(classify('live-skips.json')).toMatchObject({ kind: 'not-loaded', reason: 'live-side' });
+    expect(classify('live-skips.journal.jsonl')).toMatchObject({ reason: 'live-side' });
+    expect(classify('kalshi-reconciliation-checkpoint.json')).toMatchObject({
+      reason: 'live-side',
+    });
+    expect(classify('archive-state.json')).toMatchObject({
+      reason: 'lease/lock/archive-state',
+    });
+    expect(classify('forecast-history.write.lock/holder.json')).toMatchObject({
+      reason: 'lease/lock/archive-state',
+    });
+    for (const path of [
+      'forecast-history.json',
+      'regime-gate.json',
+      'cycle-paths.json',
+      'paper-fill-calibration.json',
+      'execution-ledger-legacy/paper-orders.v8.json',
+      'trading-control.json.superseded-2026-01-01T00-00-00',
+      'history.jsonl.corrupt-1',
+      'sentinels.journal-copy',
+    ]) {
+      expect(classify(path), path).toMatchObject({ kind: 'not-loaded', reason: 'superseded' });
+    }
+  });
+
+  it('calls a store nobody has classified UNMAPPED rather than sweeping it into a reason', () => {
+    expect(classify('mystery-store.json')).toEqual({ kind: 'unmapped' });
+  });
+
+  it('loads the retained families when a scope admits them', () => {
+    expect(
+      classify(`execution-order-evidence/batch.${'b'.repeat(64)}.json`, EVERYTHING),
+    ).toMatchObject({ kind: 'loaded', tables: ['engine.evidence_row'] });
+    expect(
+      classify(`forecast-history-shards/2026-01-01.${'c'.repeat(64)}.json`, EVERYTHING),
+    ).toMatchObject({ kind: 'loaded' });
+    expect(classify('portfolio-choice-sets.journal.jsonl', EVERYTHING)).toMatchObject({
+      kind: 'loaded',
+    });
+    // A live-side store is live-side under every scope: the seam is not a scope.
+    expect(classify('live-skips.json', EVERYTHING)).toMatchObject({ reason: 'live-side' });
+  });
+});
+
+describe('stage-list: what the operator uploads', () => {
+  const plan = (options = {}) =>
+    planStaging(syntheticArchive(syntheticDataTree(options)).manifest, 'authoritative');
+
+  it('prints the manifest and exactly the object keys the job will fetch', () => {
+    const tree = syntheticDataTree({ liveOrders: 2 });
+    const archive = syntheticArchive(tree);
+    const staging = planStaging(archive.manifest, 'authoritative');
+    const lines = stageListLines(staging, archive.manifestKey);
+
+    expect(lines[0]).toBe(archive.manifestKey);
+    expect(lines).toHaveLength(staging.staged.length + staging.unmapped.length + 1);
+    // Content-addressed archive keys, which is what a copy loop needs.
+    for (const line of lines.slice(1)) {
+      expect(line).toMatch(/blobs\/sha256\/[a-f0-9]{2}\/[a-f0-9]{64}\.gz$/u);
+    }
+    expect(new Set(lines).size).toBe(lines.length);
+
+    // The nine authoritative stores of this fixture, and nothing else.
+    expect(staging.staged.map((object) => object.path).sort()).toEqual([
+      'contract-provenance.json',
+      'forecast-history-shards/index.json',
+      expect.stringMatching(/^forecast-history-shards\/open\./u),
+      'forecast-history.journal.jsonl',
+      'model-promotions.json',
+      'paper-orders.json',
+      'provider-budgets.json',
+      'trading-control.json',
+      'trading-providers.json',
+    ]);
+    expect(staging.unmapped).toEqual([]);
+  });
+
+  it('leaves the histories out and still accounts for every manifest entry', () => {
+    const archive = syntheticArchive(syntheticDataTree({ liveOrders: 2, unmappedFile: true }));
+    const staging = planStaging(archive.manifest, 'authoritative');
+    expect(staging.staged.length + staging.retained.length + staging.unmapped.length).toBe(
+      archive.manifest.files.length,
+    );
+    // Every retained entry carries the manifest's own hash and size, and is not fetched.
+    for (const entry of staging.retained) {
+      expect(entry.sha256).toMatch(/^[a-f0-9]{64}$/u);
+      expect(entry.sourceBytes).toBeGreaterThan(0);
+      expect(entry.note.length).toBeGreaterThan(0);
+    }
+    expect(staging.retainedSourceBytes).toBe(
+      staging.retained.reduce((total, entry) => total + entry.sourceBytes, 0),
+    );
+    // An unmapped store is staged, because the refusal has to be able to name it.
+    expect(staging.unmapped.map((object) => object.path)).toEqual(['mystery-store.json']);
+    expect(stagedPaths(staging).has('mystery-store.json')).toBe(true);
+    expect(stagedPaths(staging).has('hourly-threshold-observations.journal.jsonl')).toBe(false);
+  });
+
+  it('summarises in one line, counting what is staged and what stays behind', () => {
+    const summary = stageListSummary(plan({ liveOrders: 2 }));
+    expect(summary).toContain('load scope authoritative');
+    expect(summary).toMatch(/^\d+ files to stage \(1 manifest \+ \d+ blobs\)/u);
+    expect(summary).toContain('entries left in the archive');
+    expect(stageListSummary(plan({ unmappedFile: true }))).toContain('1 unmapped');
+  });
+
+  it('stages less than the archive holds, which is the point of the decision', () => {
+    const staging = plan({ liveOrders: 2 });
+    expect(staging.staged.length).toBeLessThan(staging.retained.length);
+  });
+});
+
+describe('verification is of the manifest and of every blob the job loads', () => {
+  const inScope = (path: string) => classifyPath(path, AUTHORITATIVE).kind !== 'not-loaded';
+
+  it('fetches and verifies the loaded set only', async () => {
+    const tree = syntheticDataTree({ liveOrders: 2 });
+    const archive = syntheticArchive(tree);
+    const load = stagedPaths(planStaging(archive.manifest, 'authoritative'));
+    const restored = await restoreTreeFromArchive(archive.source, archive.manifest, load);
+    expect(restored.ok).toBe(true);
+    expect(restored.tree.size).toBe(load.size);
+    expect(restored.verifications).toHaveLength(load.size);
+    expect(restored.verifications.every((v) => v.state === 'verified')).toBe(true);
+  });
+
+  it('does not fail on a blob that is absent for a retained entry, and still fails on a loaded one', async () => {
+    const tree = syntheticDataTree({ liveOrders: 2 });
+    const archive = syntheticArchive(tree);
+    const load = stagedPaths(planStaging(archive.manifest, 'authoritative'));
+    const retainedFile = archive.manifest.files.find((f) => !load.has(f.path))!;
+    archive.objects.delete(retainedFile.objectKey);
+    expect((await restoreTreeFromArchive(archive.source, archive.manifest, load)).ok).toBe(true);
+
+    const loadedFile = archive.manifest.files.find((f) => f.path === 'paper-orders.json')!;
+    archive.objects.delete(loadedFile.objectKey);
+    const failed = await restoreTreeFromArchive(archive.source, archive.manifest, load);
+    expect(failed.ok).toBe(false);
+    expect(failed.verifications.find((v) => v.path === 'paper-orders.json')?.state).toBe('missing');
+  });
+
+  it('compares the load scope with the workstation copy and counts the rest', () => {
+    const tree = syntheticDataTree({ liveOrders: 2 });
+    const { manifest } = syntheticArchive(tree);
+    const finding = compareManifestWithWorkstation(manifest, tree, inScope);
+    expect(finding.finding).toBe('complete');
+    expect(finding.comparedFiles).toBeLessThan(finding.manifestFiles);
+    expect(finding.comparedFiles + finding.retainedManifestFiles).toBe(finding.manifestFiles);
+    expect(finding.equal).toBe(finding.comparedFiles);
+    expect(finding.reason).toContain('counted, not compared');
+  });
+
+  it('still refuses when a store inside the scope was written after the last archive run', () => {
+    const tree = syntheticDataTree();
+    const { manifest } = syntheticArchive(tree);
+    const later = new Map(tree);
+    later.set('new-authoritative-store.json', Buffer.from('{"x":1}\n'));
+    const finding = compareManifestWithWorkstation(manifest, later, inScope);
+    expect(finding.finding).toBe('incomplete');
+    expect(finding.missingInManifest).toBe(1);
+    expect(finding.loadPermitted).toBe(false);
+  });
+
+  it('counts, rather than refuses on, a retained store written after the last archive run', () => {
+    // A research journal the archive never captured cannot change a loaded row:
+    // it is not loaded. The count is in the evidence; the load is not refused.
+    const tree = syntheticDataTree();
+    const { manifest } = syntheticArchive(tree);
+    const later = new Map(tree);
+    later.set('portfolio-choice-sets.journal.jsonl', Buffer.from('{"x":1}\n'));
+    const finding = compareManifestWithWorkstation(manifest, later, inScope);
+    expect(finding.finding).toBe('complete');
+    expect(finding.retainedWorkstationOnly).toBe(1);
+    expect(finding.loadPermitted).toBe(true);
+  });
+
+  it('reports the loaded set when there is no workstation copy at all', () => {
+    const { manifest } = syntheticArchive(syntheticDataTree());
+    const finding = compareManifestWithWorkstation(manifest, undefined, inScope);
+    expect(finding.finding).toBe('workstation-absent');
+    expect(finding.missingInWorkstation).toBe(finding.comparedFiles);
+    expect(finding.retainedWorkstationOnly).toBe(0);
+  });
+
+  it('checks the evidence references without reading the bodies, and says which it did', () => {
+    const tree = syntheticDataTree({ liveOrders: 1 });
+    const withoutBodies = new Map(tree);
+    for (const path of tree.keys()) {
+      if (path.startsWith('execution-order-evidence/')) withoutBodies.delete(path);
+    }
+    const scoped = verifyLedgerV9(withoutBodies, { evidenceBodies: false });
+    expect(scoped).toMatchObject({ evidenceBatches: 1, evidenceBodiesVerified: false });
+    // The references are still checked: a filename that disagrees with its hash
+    // is refused whether or not the body is there.
+    const broken = readLedger(withoutBodies);
+    broken.orders[0]!.archivedEvidence = {
+      ...broken.orders[0]!.archivedEvidence!,
+      file: 'batch.not-the-hash.json',
+    };
+    withoutBodies.set('paper-orders.json', Buffer.from(`${JSON.stringify(broken)}\n`));
+    expect(() => verifyLedgerV9(withoutBodies, { evidenceBodies: false })).toThrow(/disagree/);
+    // And with the bodies gone, the full verifier says so rather than passing.
+    expect(() => verifyLedgerV9(new Map(tree), { evidenceBodies: true })).not.toThrow();
+    expect(verifyLedgerV9(new Map(tree)).evidenceBodiesVerified).toBe(true);
+  });
+
+  it('verifies the forecast index, open set and journal without the sealed shards', () => {
+    const tree = syntheticDataTree();
+    const withoutShards = new Map(tree);
+    for (const path of tree.keys()) {
+      if (/^forecast-history-shards\/(?!index\.json|open\.)/u.test(path)) {
+        withoutShards.delete(path);
+      }
+    }
+    const scoped = verifyForecastStorage(withoutShards, { sealedShards: false });
+    expect(scoped.ok, scoped.errors.join('; ')).toBe(true);
+    expect(scoped).toMatchObject({
+      indexedTerminalRows: 2,
+      openRowsAtLastSeal: 1,
+      sealedRows: 0,
+      sealedRowsVerified: false,
+      shards: 1,
+    });
+    expect(scoped.notVerified.join('\n')).toContain('retained in the archive');
+
+    // The index is still checked against itself and against the open set.
+    const index = JSON.parse(
+      Buffer.from(withoutShards.get('forecast-history-shards/index.json')!).toString('utf8'),
+    ) as Record<string, unknown>;
+    const tampered = new Map(withoutShards);
+    tampered.set(
+      'forecast-history-shards/index.json',
+      Buffer.from(`${JSON.stringify({ ...index, terminalRows: 99, totalRows: 100 })}\n`),
+    );
+    const failed = verifyForecastStorage(tampered, { sealedShards: false });
+    expect(failed.ok).toBe(false);
+    expect(failed.errors.join('\n')).toMatch(/shard entries sum to 2/u);
+
+    // Without the open artifact it refuses: that one is loaded, so it must be there.
+    const noOpen = new Map(withoutShards);
+    for (const path of withoutShards.keys()) {
+      if (/^forecast-history-shards\/open\./u.test(path)) noOpen.delete(path);
+    }
+    expect(verifyForecastStorage(noOpen, { sealedShards: false }).ok).toBe(false);
+  });
+});
+
+describe('the restore job over the authoritative load scope', () => {
+  it('records the scope, the staged count and every retained entry with its manifest hash', async () => {
+    const { input } = job();
+    const result = await runRestoreJob(input);
+    expect(result.outcome, result.reason).toBe('loaded');
+    expect(result.evidence).toContain('**Load scope:** `authoritative`');
+    expect(result.evidence).toContain('| historical-archive-retained | 10 |');
+    // Retained entries carry the manifest's hash and size and were never fetched.
+    expect(result.evidence).toMatch(
+      /\| `hourly-threshold-observations\.journal\.jsonl` \| historical-archive-retained \| `[a-f0-9]{16}` \| \d+ \|/u,
+    );
+    expect(result.evidence).toContain('Evidence batch bodies **not read**');
+    expect(result.evidence).toContain('Sealed shard artifacts **not read**');
+    expect(result.evidence).toContain('| UNMAPPED | 0 |');
+    expect(result.evidence).toContain('| Sum equals the manifest total | yes |');
+    // The reconciliation table states the empty tables rather than hiding them.
+    expect(result.evidence).toMatch(
+      /\| `engine\.evidence_row` \| not loaded: evidence batch bodies stay in the archive[^|]*\| 0 \| 0 \|/u,
+    );
+  });
+
+  it('reclassifies a staged open set the active index does not name', async () => {
+    const tree = syntheticDataTree({ liveOrders: 1, staleForecastGeneration: true });
+    const archive = syntheticArchive(tree);
+    const staging = planStaging(archive.manifest, 'authoritative');
+    // Both open sets are staged, because only the index knows which is current.
+    expect(
+      staging.staged.filter((object) => /forecast-history-shards\/open\./u.test(object.path)),
+    ).toHaveLength(2);
+
+    const classification = classifyManifest(
+      archive.manifest,
+      buildRestorePlan(tree).consumption,
+      AUTHORITATIVE,
+    );
+    const stale = classification.notLoaded.filter((entry) =>
+      /forecast-history-shards\/open\./u.test(entry.path),
+    );
+    expect(stale).toHaveLength(1);
+    expect(stale[0]!.reason).toBe('superseded');
+    expect(stale[0]!.note).toContain('the active index does not name');
+    expect(classification.unmapped).toEqual([]);
+    expect(classification.classified).toBe(archive.manifest.files.length);
+  });
+
+  it('classifies a lease entry as a lease, wherever the manifest puts it', () => {
+    const tree = syntheticDataTree({ leaseFile: true });
+    const archive = syntheticArchive(tree);
+    const classification = classifyManifest(
+      archive.manifest,
+      buildRestorePlan(tree).consumption,
+      AUTHORITATIVE,
+    );
+    expect(countByReason(classification.notLoaded)['lease/lock/archive-state']).toBe(1);
+    expect(classification.unmapped).toEqual([]);
   });
 });
