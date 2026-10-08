@@ -42,6 +42,14 @@ variables {
 run "every_declared_secret_is_readable_by_the_api_runtime_identity_alone" {
   command = plan
 
+  # The restore gate is on by default since the maintainer completed #241's
+  # platform prerequisites (2026-10-07); it is switched off here so this run keeps
+  # describing the API's own set alone. The gated run below covers the restore
+  # container.
+  variables {
+    engine_restore_secrets_enabled = false
+  }
+
   # The exact set of containers this stack declares. Asserted by name rather than
   # by count, because the question worth failing on is *which* secrets exist, not
   # how many: a container appearing here is a credential path, and it should be
@@ -132,6 +140,13 @@ run "a_secret_with_no_consumer_is_refused_rather_than_silently_unreadable" {
 
 run "the_deployer_can_plan_the_container_and_read_no_value" {
   command = plan
+
+  # The file-level bootstrap mock publishes the two service identities only; the
+  # restore gate is off here for the same reason as in the first run, and the
+  # gated run below carries its own mock with the restore identity.
+  variables {
+    engine_restore_secrets_enabled = false
+  }
 
   # Metadata read for every declared container, for the identity that plans this
   # stack. Without it the refresh is refused and there is no plan at all (#224).
