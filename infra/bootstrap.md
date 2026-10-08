@@ -188,6 +188,14 @@ Re-apply before the first `engine-jobs` apply. That stack resolves
 a job plan against a bootstrap state without this entry fails on a missing map key
 rather than deploying a job as some other unit's identity.
 
+The same re-apply also creates the stack's **state bucket**, `<prefix>-engine-jobs`,
+through the state-bucket module exactly like the four existing ones (bucket,
+versioning, retention, the deployer's state access). The first dispatched
+`engine-jobs` apply on 2026-10-07 failed at backend initialisation with "bucket
+doesn't exist" because this entry was missing; with it, the delta grows by the
+state-bucket module's resources for one more bucket, still with no changes and no
+destroys.
+
 ## Step 3 — migrate bootstrap's own state into the bucket it created
 
 This is what stops the bootstrap from being a special case that lives on a

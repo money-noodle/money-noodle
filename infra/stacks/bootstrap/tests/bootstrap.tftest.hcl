@@ -364,6 +364,7 @@ run "the_staging_bucket_grants_are_bound_here_and_stay_narrow" {
       "${var.state_bucket_prefix}-platform",
       "${var.state_bucket_prefix}-api",
       "${var.state_bucket_prefix}-web",
+      "${var.state_bucket_prefix}-engine-jobs",
     ], google_storage_bucket_iam_member.engine_restore_stage_plan_reader[0].bucket)
     error_message = "The staging bucket is not a state bucket; a grant that landed on one would widen state access."
   }

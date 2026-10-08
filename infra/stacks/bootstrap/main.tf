@@ -30,6 +30,9 @@ locals {
     platform  = "${var.state_bucket_prefix}-platform"
     web       = "${var.state_bucket_prefix}-web"
     api       = "${var.state_bucket_prefix}-api"
+    # The engine-jobs stack (#255, ADR-0013 §1) keeps its state here like every
+    # other stack; the first dispatched apply failed at backend init without it.
+    engine-jobs = "${var.state_bucket_prefix}-engine-jobs"
   }
 
   # Only the services bootstrap itself needs. Everything else is enabled by the
