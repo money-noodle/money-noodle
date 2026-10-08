@@ -165,17 +165,20 @@ variables plans exactly this delta:
 | --- | --- | --- |
 | add | `google_service_account.runtime["engine-restore"]` | The restore job's runtime identity, keyed by the job name `infra/stacks/engine-jobs` pins |
 | add | `google_project_iam_member.runtime_telemetry["engine-restore:roles/cloudtrace.agent"]` and its four siblings | The job's telemetry write grants, the same five every runtime identity holds |
+| add | `google_storage_bucket_iam_member.engine_restore_stage_object_user[0]` and `google_storage_bucket_iam_member.engine_restore_stage_plan_reader[0]` | The two bucket-level grants on the staging bucket `infra/stacks/platform` declares: object read and create for the job's identity, and `storage.buckets.get` for the deployer so the pipeline's plan of that stack is no longer refused on a bucket it cannot read. Both need the bucket to exist, so apply the platform stack first |
 
-**Six adds, no changes and no destroys.** Nothing about the existing identities
+**Eight adds, no changes and no destroys.** Nothing about the existing identities
 moves: the conditional that makes the new account's description say "Cloud Run
 job" renders the two service descriptions exactly as before, so neither is
 updated in place. The deployer needs no new grant either — it already holds
 `roles/iam.serviceAccountUser` at project level, so it can act as any runtime
 identity this stack creates.
 
-Read the plan before applying it, and confirm it adds exactly one service account
-and five project IAM members, destroys nothing, and contains no state-bucket,
-federation, billing or deployer-role change. Apply it with your own credentials,
+Read the plan before applying it, and confirm it adds exactly one service account,
+five project IAM members and two bucket IAM members on the staging bucket alone,
+destroys nothing, and contains no state-bucket, federation, billing or
+deployer-role change. Neither bucket member may name a state bucket: both are
+bound to `<state_bucket_prefix>-engine-restore-stage` and nothing else. Apply it with your own credentials,
 exactly as for the platform stack: a pipeline identity cannot create an identity
 or set project IAM, which is the whole reason this lives here (ADR-0005,
 2026-09-19 amendment).

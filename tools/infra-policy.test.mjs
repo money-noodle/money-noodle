@@ -1326,17 +1326,12 @@ test('the restore job mounts the staging bucket it is told to read from', () => 
     'the mount is writable, because the job writes its evidence document back under --evidence-dir',
   );
 
-  // The bucket and its grant live where they can actually be applied: the
-  // deployer that runs a dispatched apply holds no Cloud Storage role at all.
+  // The bucket lives where it can actually be applied: the deployer that runs a
+  // dispatched apply holds no Cloud Storage role at all.
   const platform = readStack(join(infraRoot, 'stacks', 'platform'));
   assert.match(platform, /resource "google_storage_bucket" "engine_restore_stage"/u);
-  assert.match(
-    platform,
-    /resource "google_storage_bucket_iam_member" "engine_restore_stage_object_user"/u,
-  );
   assert.match(platform, /uniform_bucket_level_access = true/u);
   assert.match(platform, /public_access_prevention {4}= "enforced"/u);
-  assert.match(platform, /roles\/storage\.objectUser/u);
   assert.ok(
     !/resource "google_storage_bucket"/u.test(readStack(join(infraRoot, 'stacks', 'engine-jobs'))),
     'the engine-jobs stack must declare no bucket: its apply holds no Cloud Storage authority',
@@ -1350,4 +1345,81 @@ test('the restore job mounts the staging bucket it is told to read from', () => 
     !/roles\/storage\./u.test(deployerRoles),
     'the deployer must hold no Cloud Storage role; if that changes, the staging bucket could move to the release path and this reasoning needs revisiting',
   );
+});
+
+test('a bucket the pipeline plans carries no IAM resource the pipeline must refresh', () => {
+  // The gap this closed: a plan refreshes every resource its state holds, and
+  // refreshing a `google_storage_bucket_iam_member` needs
+  // `storage.buckets.getIamPolicy`. No Cloud Storage predefined role carries
+  // that without also carrying `storage.buckets.setIamPolicy`, so leaving a
+  // bucket grant in a planned stack can only be answered by letting the pipeline
+  // grant itself access. Main's `plan platform` was refused on exactly this
+  // (#241 follow-up). Bucket IAM therefore belongs to the one stack the pipeline
+  // never plans.
+  const planned = ['platform', 'api', 'web', 'engine-jobs'];
+  for (const stack of planned) {
+    assert.ok(
+      !/resource "google_storage_bucket_iam_member"/u.test(
+        readStack(join(infraRoot, 'stacks', stack)),
+      ),
+      `the ${stack} stack is planned by the pipeline on every push, so it must declare no bucket IAM: the deployer cannot refresh one without storage.buckets.getIamPolicy, and no narrow predefined role carries it`,
+    );
+  }
+
+  // Both grants on the staging bucket, in the stack a human applies.
+  const bootstrap = readStack(join(infraRoot, 'stacks', 'bootstrap'));
+  const grant = (name) =>
+    bootstrap.match(
+      new RegExp(
+        `resource "google_storage_bucket_iam_member" "${name}" \\{([\\s\\S]*?)\\n\\}`,
+        'u',
+      ),
+    )?.[1];
+
+  const objectUser = grant('engine_restore_stage_object_user');
+  assert.ok(objectUser, 'the restore identity’s object grant must stay declared in bootstrap');
+  assert.match(objectUser, /roles\/storage\.objectUser/u);
+  assert.match(
+    objectUser,
+    /google_service_account\.runtime\["engine-restore"\]\.email/u,
+    'the staged inputs are readable by the restore job’s own identity and no other',
+  );
+
+  const planReader = grant('engine_restore_stage_plan_reader');
+  assert.ok(planReader, 'the deployer must be able to refresh the bucket the platform stack owns');
+  assert.match(
+    planReader,
+    /google_service_account\.deployer\.email/u,
+    'the plan reader is the deployer; a grant to anything else would not fix the refusal',
+  );
+  // `bucketViewer` is `storage.buckets.get` and `storage.buckets.list`: no
+  // `storage.objects.*` of any kind, and no IAM permission.
+  assert.match(planReader, /roles\/storage\.bucketViewer/u);
+  for (const refused of [
+    'roles/storage.objectUser',
+    'roles/storage.objectViewer',
+    'roles/storage.objectCreator',
+    'roles/storage.objectAdmin',
+    'roles/storage.legacyBucketOwner',
+    'roles/storage.legacyObjectReader',
+    'roles/storage.admin',
+  ]) {
+    assert.ok(
+      !planReader.includes(refused),
+      `the deployer must not hold ${refused} on the staging bucket: it may see that the bucket exists, never read what is staged in it or change who can`,
+    );
+  }
+
+  // Neither grant may land on state. The staging bucket is derived from the same
+  // prefix, so a copied binding is a one-word mistake away from state access.
+  for (const [name, body] of [
+    ['object_user', objectUser],
+    ['plan_reader', planReader],
+  ]) {
+    assert.match(
+      body,
+      /bucket {1,3}= local\.engine_restore_stage_bucket/u,
+      `the ${name} grant must bind the staging bucket alone`,
+    );
+  }
 });

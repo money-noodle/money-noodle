@@ -176,3 +176,78 @@ resource "google_billing_account_iam_member" "deployer_budget_manager" {
   role               = "roles/billing.costsManager"
   member             = "serviceAccount:${google_service_account.deployer.email}"
 }
+
+# ---------------------------------------------------------------------------
+# Bucket-level IAM on the restore job's staging area (#241 follow-up).
+#
+# The bucket itself is declared by `infra/stacks/platform`, which owns it. Its
+# two grants are declared here for the same reason the state buckets' deployer
+# grants are: setting bucket IAM needs `storage.buckets.setIamPolicy`, which the
+# deployer does not hold and must never hold, so a grant on a bucket is the
+# bootstrap principal's to make and never the pipeline's.
+#
+# The second reason is the one that brought this here rather than leaving it in
+# the platform stack. The deployer plans that stack on every push, and a plan
+# refreshes every resource its state holds. Refreshing a
+# `google_storage_bucket_iam_member` needs `storage.buckets.getIamPolicy`, and no
+# Cloud Storage predefined role carries that permission without also carrying
+# `storage.buckets.setIamPolicy`: `roles/storage.bucketViewer` has
+# `storage.buckets.get` and `storage.buckets.list` and no IAM permission at all,
+# `roles/storage.legacyBucketReader` adds `storage.objects.list` but still no
+# `getIamPolicy`, and `roles/storage.legacyBucketOwner` has `getIamPolicy` only
+# together with `setIamPolicy`, `storage.objects.create` and
+# `storage.objects.delete`. Granting the deployer that last one to make a plan
+# work would let the pipeline grant itself read on a copy of the platform's own
+# records, which is precisely the self-grant ADR-0005 exists to withhold. Keeping
+# every bucket IAM resource out of the stacks the pipeline plans removes the need
+# for the permission instead of widening the identity that lacked it.
+#
+# This stack is never planned or applied by the pipeline — `.github/workflows/
+# delivery.yml` offers `platform`, `api`, `web` and `engine-jobs` and nothing
+# else — so nothing here is refreshed by the deployer and no grant is needed to
+# make these two resources plannable.
+locals {
+  # The same convention the state buckets use, derived in the one place the
+  # prefix already lives rather than passed in again. A bucket name is account
+  # data, so only the suffix is written down (SECURITY.md).
+  engine_restore_stage_bucket = "${var.state_bucket_prefix}-engine-restore-stage"
+
+  engine_restore_stage_grants = var.engine_restore_stage_grants_enabled ? 1 : 0
+}
+
+# Read and create objects on this bucket alone, for the restore job's own
+# identity. `objectUser` covers the read the execution does and the evidence
+# document it writes back; it carries no `storage.objects.delete`, so an
+# execution cannot remove a staged input or a previous evidence document, and it
+# is bound to this bucket rather than at project level.
+#
+# The maintainer is granted nothing here: they upload with their own account.
+resource "google_storage_bucket_iam_member" "engine_restore_stage_object_user" {
+  count = local.engine_restore_stage_grants
+
+  bucket = local.engine_restore_stage_bucket
+  role   = "roles/storage.objectUser"
+  member = "serviceAccount:${google_service_account.runtime["engine-restore"].email}"
+}
+
+# Enough for the deployer to refresh the bucket the platform stack declares, and
+# nothing else. `roles/storage.bucketViewer` carries `storage.buckets.get` and
+# `storage.buckets.list`; bound to one bucket, only the first means anything, and
+# the role carries no `storage.objects.*` at all — not `get`, not `list` — and no
+# IAM permission. So the pipeline can see that the bucket exists and still cannot
+# learn what is staged in it, cannot change it, and cannot change who may read
+# it.
+#
+# `bucketViewer` is published as a beta role. If it is ever withdrawn, the
+# narrowest replacement that still carries `storage.buckets.get` is
+# `roles/storage.legacyBucketReader`, which the deployer already holds on each
+# state bucket; it additionally carries `storage.objects.list`, so the staged
+# object names would become visible to the pipeline. Prefer the beta role while
+# it exists.
+resource "google_storage_bucket_iam_member" "engine_restore_stage_plan_reader" {
+  count = local.engine_restore_stage_grants
+
+  bucket = local.engine_restore_stage_bucket
+  role   = "roles/storage.bucketViewer"
+  member = "serviceAccount:${google_service_account.deployer.email}"
+}
