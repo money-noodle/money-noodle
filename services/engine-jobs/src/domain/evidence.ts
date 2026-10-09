@@ -145,14 +145,18 @@ export function renderEvidence(template: string, input: EvidenceInput): string {
     BANKROLL_ROWS: bankroll
       ? [
           `| funding scope | \`${bankroll.fundingId}\` |`,
-          `| settled paper orders in scope | ${bankroll.settledOrders} |`,
+          `| contributing paper orders in scope | ${bankroll.contributingOrders} |`,
+          `| excluded exit records | ${bankroll.excludedExitRecords} |`,
+          `| excluded other-strategy orders | ${bankroll.excludedOtherStrategyOrders} |`,
           `| order-derived realized P&L (cents) | ${bankroll.orderPnlCents} |`,
           `| maker-fee corrections added back (cents) | ${bankroll.makerFeeCorrectionCents} |`,
-          `| strategy-leak corrections, not added (cents) | ${bankroll.strategyLeakCorrectionCents} |`,
+          `| strategy-leak corrections added back (cents) | ${bankroll.strategyLeakCorrectionCents} |`,
           `| reconciliation corrections, not added (cents) | ${bankroll.reconciliationCorrectionCents} |`,
           `| recomputed realized P&L (cents) | ${bankroll.recomputedRealizedPnlCents} |`,
           `| restored realized P&L (cents) | ${bankroll.restoredRealizedPnlCents} |`,
           `| discrepancy (cents) | **${bankroll.discrepancyCents}** |`,
+          `| open stake held by edge positions (cents) | ${bankroll.openStakeCents} |`,
+          `| available-balance residual (cents) | **${bankroll.availableResidualCents}** |`,
         ].join('\n')
       : '| not computed | |',
     FORECAST_ROWS_PLANNED: String(input.forecastRowsPlanned ?? 0),

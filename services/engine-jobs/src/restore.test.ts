@@ -157,8 +157,8 @@ describe('the semantic verifiers', () => {
     const result = verifyLedgerV9(tree);
     expect(result).toMatchObject({
       version: 9,
-      orders: 5,
-      paperOrders: 4,
+      orders: 10,
+      paperOrders: 9,
       liveOrders: 1,
       compactOrders: 3,
       evidenceBatches: 1,
@@ -211,7 +211,9 @@ describe('the transform at the paper seam', () => {
 
     const plan = buildRestorePlan(tree);
     const orders = plan.rowSets.find((s) => s.table === 'engine.ledger_order')!.rows;
-    expect(orders).toHaveLength(4);
+    // Every paper record, whatever its strategy or status: the seam drops live
+    // rows, and the bankroll rule decides which of these moved the counter.
+    expect(orders).toHaveLength(9);
     const carried = orders.filter((row) => row.mirror_pair_id !== null);
     expect(carried.map((row) => row.mirror_pair_id)).toEqual(['pair-1']);
     // Inert: no loaded row anywhere carries the live half of the pair.
@@ -225,7 +227,7 @@ describe('the transform at the paper seam', () => {
         .filter((row) => row.evidence_sha256 !== null)
         .map((row) => row.order_id)
         .sort(),
-    ).toEqual(['p-1', 'p-2']);
+    ).toEqual(['e-lost', 'e-won']);
     expect(orders.every((row) => row.evidence_row_key !== undefined)).toBe(true);
     expect(everyRow.some((r) => r.includes('live-skips') || r.includes('liveCorrections'))).toBe(
       false,
@@ -255,8 +257,11 @@ describe('the transform at the paper seam', () => {
     // branch is held to working by this test rather than by hope.
     const plan = buildRestorePlan(syntheticDataTree({ liveOrders: 2 }), EVERYTHING);
     expect(
-      plan.rowSets.find((s) => s.table === 'engine.evidence_row')!.rows.map((r) => r.order_id),
-    ).toEqual(['p-1', 'p-2']);
+      plan.rowSets
+        .find((s) => s.table === 'engine.evidence_row')!
+        .rows.map((r) => r.order_id)
+        .sort(),
+    ).toEqual(['e-lost', 'e-won']);
     expect(plan.rowSets.find((s) => s.table === 'engine.forecast_row')!.rows).toHaveLength(4);
     expect(
       plan.rowSets.find((s) => s.table === 'engine.research_journal_event')!.rows,
@@ -383,21 +388,85 @@ describe('the transform at the paper seam', () => {
     expect(classification.unmapped).toEqual([]);
   });
 
-  it('recomputes the paper bankroll from its orders and three correction classes', () => {
+  it('recomputes the paper bankroll from the records that moved its counter', () => {
     const tree = syntheticDataTree();
     const ledger = readLedger(tree);
     const result = recomputePaperBankroll(ledger.orders, ledger.paperBudget!);
+    // 80 - 100 + 0 + 30 from the four edge settled statuses, plus 25 from the
+    // other strategy's standalone-exit sale; the maker fee is added back and the
+    // leak correction that removed that same sale is added back too, so they net.
     expect(result).toMatchObject({
-      orderPnlCents: 10,
+      fundingId: 'paper-original',
+      contributingOrders: 5,
+      excludedExitRecords: 1,
+      excludedOtherStrategyOrders: 2,
+      orderPnlCents: 35,
       makerFeeCorrectionCents: 5,
-      strategyLeakCorrectionCents: -7,
+      strategyLeakCorrectionCents: -25,
       reconciliationCorrectionCents: 3,
       recomputedRealizedPnlCents: 15,
+      restoredRealizedPnlCents: 15,
       discrepancyCents: 0,
+      openStakeCents: 60,
+      availableResidualCents: 0,
     });
+  });
+
+  it('counts neither an exit leg nor another strategy’s own settled win', () => {
+    const ledger = readLedger(syntheticDataTree());
+    const baseline = recomputePaperBankroll(ledger.orders, ledger.paperBudget!);
+
+    // The exit record carries a P&L an order-level sum would happily add.
+    const withoutExit = ledger.orders.filter((order) => !order.id.includes(':exit:'));
+    expect(ledger.orders.length - withoutExit.length).toBe(1);
+    expect(recomputePaperBankroll(withoutExit, ledger.paperBudget!).orderPnlCents).toBe(
+      baseline.orderPnlCents,
+    );
+
+    // So does the other strategy's own win, which never reached this bankroll.
+    const withoutLongShotWin = ledger.orders.filter((order) => order.id !== 'ls-won');
+    expect(recomputePaperBankroll(withoutLongShotWin, ledger.paperBudget!).orderPnlCents).toBe(
+      baseline.orderPnlCents,
+    );
+
+    // The standalone-exit sale, by contrast, is exactly what the leak correction
+    // removed from the counter, so dropping it breaks the figure.
+    const withoutStandaloneSale = ledger.orders.filter((order) => order.id !== 'ls-sold');
+    expect(
+      recomputePaperBankroll(withoutStandaloneSale, ledger.paperBudget!).discrepancyCents,
+    ).toBe(-25);
+    // And it only contributes because it carries a standalone exit policy.
+    const withoutPolicy = ledger.orders.map((order) => {
+      if (order.id !== 'ls-sold') return order;
+      const { standaloneExitPolicy: _policy, ...rest } = order;
+      void _policy;
+      return rest;
+    });
+    expect(recomputePaperBankroll(withoutPolicy, ledger.paperBudget!).discrepancyCents).toBe(-25);
+  });
+
+  it('holds open stake for open edge records alone, and checks the second counter', () => {
+    const ledger = readLedger(syntheticDataTree());
+    expect(recomputePaperBankroll(ledger.orders, ledger.paperBudget!)).toMatchObject({
+      // The open edge record's stake, never the other strategy's open record.
+      openStakeCents: 60,
+      availableResidualCents: 0,
+    });
+    const drifted = readLedger(syntheticDataTree({ availableDriftCents: 7 }));
+    const counters = recomputePaperBankroll(drifted.orders, drifted.paperBudget!);
+    expect(counters.discrepancyCents).toBe(0);
+    expect(counters.availableResidualCents).toBe(7);
+  });
+
+  it('scopes the order-derived figure to the budget’s own funding', () => {
+    const ledger = readLedger(syntheticDataTree());
     const drifted = readLedger(syntheticDataTree({ bankrollDriftCents: 4 }));
     expect(recomputePaperBankroll(drifted.orders, drifted.paperBudget!).discrepancyCents).toBe(-4);
-    // A reset scopes the figure to the current funding and to corrections since it started.
+
+    // After a reset, orders belonging to the retired funding are out of scope.
+    // The corrections are the current record's own and are summed whole: there is
+    // no `since` filter, because the drift correction that made this counter
+    // reconcile applied every entry.
     const reset = recomputePaperBankroll(ledger.orders, {
       ...ledger.paperBudget!,
       fundingId: 'paper-2',
@@ -405,9 +474,11 @@ describe('the transform at the paper seam', () => {
       realizedPnlCents: 0,
     });
     expect(reset).toMatchObject({
-      settledOrders: 0,
-      makerFeeCorrectionCents: 0,
-      recomputedRealizedPnlCents: 0,
+      contributingOrders: 0,
+      orderPnlCents: 0,
+      makerFeeCorrectionCents: 5,
+      strategyLeakCorrectionCents: -25,
+      recomputedRealizedPnlCents: -20,
     });
   });
 });
@@ -421,9 +492,19 @@ describe('the restore job end to end over a fake store', () => {
     expect(writes[0]).toContain('load not yet attempted');
     expect(result.evidence).toContain('**loaded**');
     expect(result.evidence).toContain('| discrepancy (cents) | **0** |');
+    // The bankroll section names what moved the counter and what was excluded.
+    expect(result.evidence).toContain('| contributing paper orders in scope | 5 |');
+    expect(result.evidence).toContain('| excluded exit records | 1 |');
+    expect(result.evidence).toContain('| excluded other-strategy orders | 2 |');
+    expect(result.evidence).toContain('| order-derived realized P&L (cents) | 35 |');
+    expect(result.evidence).toContain('| maker-fee corrections added back (cents) | 5 |');
+    expect(result.evidence).toContain('| strategy-leak corrections added back (cents) | -25 |');
+    expect(result.evidence).toContain('| reconciliation corrections, not added (cents) | 3 |');
+    expect(result.evidence).toContain('| open stake held by edge positions (cents) | 60 |');
+    expect(result.evidence).toContain('| available-balance residual (cents) | **0** |');
     expect(result.manifestDigest).toMatch(/^[a-f0-9]{64}$/);
     const inspection = await store.inspect();
-    expect(inspection.counts['engine.ledger_order']).toBe(4);
+    expect(inspection.counts['engine.ledger_order']).toBe(9);
     expect(inspection.counts['engine.forecast_row']).toBe(2);
     expect(inspection.counts['engine.evidence_row']).toBe(0);
     expect(inspection.counts['engine.research_journal_event']).toBe(0);
@@ -487,8 +568,25 @@ describe('the restore job end to end over a fake store', () => {
     const drifted = job({ tree: syntheticDataTree({ bankrollDriftCents: 1 }) });
     const bankroll = await runRestoreJob(drifted.input);
     expect(bankroll.outcome).toBe('refused');
-    expect(bankroll.reason).toMatch(/bankroll/);
+    expect(bankroll.reason).toMatch(
+      /recomputed from its orders and corrections differs from the restored value/u,
+    );
     expect((await drifted.store.inspect()).priorRuns).toHaveLength(0);
+  });
+
+  it('refuses when the bankroll’s two counters disagree with each other', async () => {
+    // The realized figure reconciles; the available balance does not. That is a
+    // ledger whose own counters disagree, and the engine must not resume from it.
+    const counters = job({ tree: syntheticDataTree({ availableDriftCents: 9 }) });
+    const result = await runRestoreJob(counters.input);
+    expect(result.outcome).toBe('refused');
+    expect(result.reason).toBe(
+      'The paper bankroll counters disagree with each other (available vs starting + realized - open stake); nothing was loaded.',
+    );
+    // The figure reconciles and the balance does not, and the evidence says both.
+    expect(result.evidence).toContain('| discrepancy (cents) | **0** |');
+    expect(result.evidence).toContain('| available-balance residual (cents) | **9** |');
+    expect((await counters.store.inspect()).priorRuns).toHaveLength(0);
   });
 
   it('refuses to run against a non-empty engine schema and a repeated manifest digest', async () => {
