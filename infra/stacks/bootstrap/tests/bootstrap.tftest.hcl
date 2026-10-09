@@ -200,7 +200,10 @@ run "a_declared_job_name_must_name_an_identity_this_stack_creates" {
   command = plan
 
   variables {
-    runtime_job_names = ["engine-cycle"]
+    # A later child's job (#245), which this stack does not create an identity
+    # for. It used to be `engine-cycle`; #243 made that one real, which is
+    # exactly the drift this run exists to catch.
+    runtime_job_names = ["engine-observer"]
   }
 
   expect_failures = [var.runtime_job_names]
