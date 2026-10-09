@@ -217,6 +217,7 @@ run "the_restore_job_container_appears_only_behind_the_gate_and_only_for_its_ide
           "platform-api"   = "platform-api-runtime@example-project.iam.gserviceaccount.com"
           "web"            = "web-runtime@example-project.iam.gserviceaccount.com"
           "engine-restore" = "engine-restore-runtime@example-project.iam.gserviceaccount.com"
+          "engine-cycle"   = "engine-cycle-runtime@example-project.iam.gserviceaccount.com"
         }
       }
     }
@@ -232,13 +233,22 @@ run "the_restore_job_container_appears_only_behind_the_gate_and_only_for_its_ide
       "platform-api-identity-issuer",
       "platform-api-identity-account-id",
       "engine-restore-writer-database-url",
+      "engine-cycle-writer-database-url",
     ])
-    error_message = "With the gate on, exactly the restore writer container joins the accepted set; found: ${join(", ", keys(module.secret_store.accessor_register))}"
+    error_message = "With the gate on, exactly the two engine-job writer containers join the accepted set; found: ${join(", ", keys(module.secret_store.accessor_register))}"
   }
 
   assert {
     condition     = toset(module.secret_store.accessor_register["engine-restore-writer-database-url"]) == toset(["serviceAccount:engine-restore-runtime@example-project.iam.gserviceaccount.com"])
     error_message = "The restore job's container is readable by the restore identity alone (ADR-0013 §1–2)."
+  }
+
+  # One container, one reader. The cycle job's connection string is a separate
+  # container from the restore's, so retiring the one-time job retires its
+  # credential without touching the cadence's (#243).
+  assert {
+    condition     = toset(module.secret_store.accessor_register["engine-cycle-writer-database-url"]) == toset(["serviceAccount:engine-cycle-runtime@example-project.iam.gserviceaccount.com"])
+    error_message = "The cycle job's container is readable by the cycle identity alone; the restore's identity is deliberately absent."
   }
 
   assert {

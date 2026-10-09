@@ -332,6 +332,20 @@ variable "engine_restore_secrets" {
       revocation_procedure   = "Drop or alter the engine_writer role at the provider, then add a new secret version. The job is one-time and manual; with no working value an execution fails its first read and loads nothing."
       recovery_path          = "Recreate the engine_writer role with the grants of migrations 0001 and 0002 and add a new secret version. Nothing in this repository holds or can reconstruct the value."
     }
+    # The scheduled cycle job's own connection string (#243), a separate container
+    # from the one-time restore's. Separate so retiring the restore retires its
+    # credential without touching the cadence's, and so a rotation of one is not a
+    # rotation of both. Declared by default, like the restore's, because the
+    # pipeline plans this stack with its defaults on every push: a container
+    # declared only behind a flag the pipeline does not set is a container the next
+    # plan wants to destroy (#262).
+    "engine-cycle-writer-database-url" = {
+      owner                  = "maintainer"
+      consuming_principal    = "engine-cycle runtime service account"
+      rotation_interval_days = 90
+      revocation_procedure   = "Drop or alter the engine_writer role at the provider, then add a new secret version. Pause the schedule first: with no working value every execution refuses at its first read, which is safe but fills the log."
+      recovery_path          = "Recreate the engine_writer role with the grants of migrations 0001 and 0004 and add a new secret version. Nothing in this repository holds or can reconstruct the value."
+    }
   }
 }
 
@@ -345,6 +359,9 @@ variable "engine_restore_secret_consumer_services" {
   type        = map(list(string))
   default = {
     "engine-restore-writer-database-url" = ["engine-restore"]
+    # The cycle job's identity alone (ADR-0013 §1: `engine-cycle-runtime`). The
+    # restore's identity is deliberately absent: one container, one reader.
+    "engine-cycle-writer-database-url" = ["engine-cycle"]
   }
 }
 

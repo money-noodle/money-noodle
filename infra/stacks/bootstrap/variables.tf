@@ -115,6 +115,11 @@ variable "runtime_service_accounts" {
     # the API's, because the restore writes the engine store as `engine_writer`
     # and the API may not.
     "engine-restore" = "engine-restore-runtime"
+    # The scheduled cycle job (ADR-0013 §1, #243). The identity the execution
+    # *runs as*; the identity that *triggers* it is a different thing and lives in
+    # `trigger_service_accounts` below, because a runtime identity here holds no
+    # `run.invoker` anywhere and that stays true.
+    "engine-cycle" = "engine-cycle-runtime"
   }
 
   validation {
@@ -145,7 +150,7 @@ variable "runtime_job_names" {
     visible decision. Every entry must also be a declared identity.
   EOT
   type        = list(string)
-  default     = ["engine-restore"]
+  default     = ["engine-restore", "engine-cycle"]
 
   validation {
     condition = alltrue([
@@ -153,6 +158,62 @@ variable "runtime_job_names" {
       contains(keys(var.runtime_service_accounts), name)
     ])
     error_message = "A job name here must also be a key in runtime_service_accounts, or it names an identity this stack never creates."
+  }
+}
+
+variable "trigger_service_accounts" {
+  description = <<-EOT
+    Trigger identity account id per scheduled job, keyed by the Cloud Run Job
+    name the engine-jobs stack pins.
+
+    **A trigger identity is not a runtime identity, and the distinction is the
+    point.** A runtime identity above is what an execution *runs as*: it holds the
+    telemetry write roles and nothing else, and in particular it holds
+    `roles/run.invoker` nowhere, so a workload cannot start another workload. A
+    trigger identity starts an execution and does nothing else: it is the OAuth
+    identity Cloud Scheduler presents to the Cloud Run Jobs `:run` endpoint, it
+    holds **no project role at all**, and its only grant anywhere is
+    `roles/run.invoker` **on the one job it triggers**, bound beside that job in
+    the engine-jobs stack (ADR-0013 §1, supervisor decision 2026-10-09).
+
+    Keeping the two maps apart is what lets the policy suite pin each rule
+    separately: "no runtime identity holds an invoker binding" stays exactly as
+    strong as it was, and "a trigger identity holds nothing but one job-level
+    invoker binding" is a second rule rather than a hole in the first.
+
+    Created here for the same reason the runtime identities are: creating a
+    service account needs `iam.serviceAccounts.create`, which the deployer role
+    validation above refuses (ADR-0005, 2026-09-19 amendment).
+  EOT
+  type        = map(string)
+  default = {
+    # The scheduled cycle job's trigger (#243). Paused at creation; the schedule
+    # is un-paused by a later reviewed tfvars change.
+    "engine-cycle" = "engine-cycle-scheduler"
+  }
+
+  validation {
+    condition = alltrue([
+      for account_id in values(var.trigger_service_accounts) :
+      can(regex("^[a-z]([-a-z0-9]{4,28}[a-z0-9])$", account_id))
+    ])
+    error_message = "Each trigger account id must be 6 to 30 characters, lowercase, starting with a letter."
+  }
+
+  validation {
+    condition = alltrue([
+      for name in keys(var.trigger_service_accounts) :
+      contains(var.runtime_job_names, name)
+    ])
+    error_message = "A trigger identity must name a declared job; a trigger for something this stack does not know about is an identity nobody asked for."
+  }
+
+  validation {
+    condition = length(setintersection(
+      toset(values(var.trigger_service_accounts)),
+      toset(values(var.runtime_service_accounts)),
+    )) == 0
+    error_message = "A trigger identity must not be a runtime identity. The one that starts an execution and the one it runs as are separate principals (ADR-0013 §1)."
   }
 }
 

@@ -45,6 +45,13 @@ crash.*.log
 # dispatch exposes only the digest, the source commit and the confirmation (#241).
 # Its content and location are pinned by `tools/infra-policy.test.mjs`.
 !infra/stacks/engine-jobs/restore.tfvars
+# The third reviewed exception, on the same terms. `cycle.tfvars` carries the
+# cycle job's lane, its tick budget, whether its trigger is paused and whether it
+# binds its secret: two flags, two numbers and two booleans, no identifier of any
+# kind. It exists because the dispatched apply exposes only the digest, the source
+# commit and the confirmation, so there is otherwise no reviewed way to say which
+# lane a cadence runs or to un-pause its trigger (#243).
+!infra/stacks/engine-jobs/cycle.tfvars
 *.tfbackend
 !*.tfbackend.example
 

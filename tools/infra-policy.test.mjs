@@ -364,7 +364,7 @@ test('runtime identities are distinct per deployable unit and hold no registry a
   );
   assert.deepEqual(
     Object.keys(accounts).sort(),
-    ['engine-restore', 'platform-api', 'web'],
+    ['engine-cycle', 'engine-restore', 'platform-api', 'web'],
     'bootstrap must declare a runtime identity for each deployable service and each declared job, keyed by the name that unit stack pins',
   );
   assert.equal(
@@ -378,6 +378,11 @@ test('runtime identities are distinct per deployable unit and hold no registry a
     'engine-restore-runtime',
     'the restore job identity must be the account id ADR-0013 §1 names',
   );
+  assert.equal(
+    accounts['engine-cycle'],
+    'engine-cycle-runtime',
+    'the cycle job identity must be the account id ADR-0013 §1 names',
+  );
 
   // Every job key must also be declared as a job, so the identity's own
   // description says which kind of unit it runs rather than calling a job a
@@ -388,7 +393,7 @@ test('runtime identities are distinct per deployable unit and hold no registry a
   assert.ok(jobNames, 'bootstrap must declare which runtime identities belong to jobs');
   assert.deepEqual(
     [...jobNames.matchAll(/"([a-z][-a-z0-9]*)"/g)].map(([, name]) => name).sort(),
-    ['engine-restore'],
+    ['engine-cycle', 'engine-restore'],
     'the declared job identities must be exactly the jobs that exist',
   );
 
@@ -398,6 +403,7 @@ test('runtime identities are distinct per deployable unit and hold no registry a
     ['platform-api', 'api', 'service_name'],
     ['web', 'web', 'service_name'],
     ['engine-restore', 'engine-jobs', 'job_name'],
+    ['engine-cycle', 'engine-jobs', 'cycle_job_name'],
   ]) {
     const source = readStack(join(infraRoot, 'stacks', stack));
     assert.ok(
@@ -1179,10 +1185,17 @@ const RESTORE_FILE = 'restore.tfvars';
 const RESTORE_STACKS = ['engine-jobs'];
 const RESTORE_MOUNT = '/mnt/stage';
 
+// The scheduled cycle job's reviewed inputs, on the same terms (#243): which lane
+// the cadence runs, its tick budget, whether its trigger is paused and whether it
+// binds its secret. Two flags, two numbers and two booleans; no identifier.
+const CYCLE_FILE = 'cycle.tfvars';
+const CYCLE_STACKS = ['engine-jobs'];
+
 /** Every committed tfvars this repository admits, as `<stack>/<file>`. */
 const COMMITTED_TFVARS = [
   ...EXPOSURE_STACKS.map((stack) => `infra/stacks/${stack}/${EXPOSURE_FILE}`),
   ...RESTORE_STACKS.map((stack) => `infra/stacks/${stack}/${RESTORE_FILE}`),
+  ...CYCLE_STACKS.map((stack) => `infra/stacks/${stack}/${CYCLE_FILE}`),
 ];
 
 test('no automatically loaded tfvars exists anywhere under infra', () => {
@@ -1306,6 +1319,142 @@ test('the restore inputs file may say only what the one-time execution is asked 
         `${relative(path)} must pass ${flag}; the entrypoint parses that exact name`,
       );
     }
+  }
+});
+
+test('a trigger identity starts one job and holds nothing else', () => {
+  // #243: a scheduled job needs a principal to start it, and the easy wrong
+  // answer is to give the identity the execution runs as `roles/run.invoker`, or
+  // to grant the invoker at project level. Either one makes a workload able to
+  // start a workload. So the trigger is a separate principal with no project role
+  // and exactly one job-level binding, and the two rules are pinned separately:
+  // "no runtime identity holds an invoker binding" stays as strong as it was.
+  const bootstrapVariables = read(join(infraRoot, 'stacks', 'bootstrap', 'variables.tf'));
+  const bootstrapMain = read(join(infraRoot, 'stacks', 'bootstrap', 'main.tf'));
+
+  const triggers = bootstrapVariables.match(
+    /variable "trigger_service_accounts"[\s\S]*?default = \{([\s\S]*?)\n {2}\}/u,
+  )?.[1];
+  assert.ok(triggers, 'bootstrap must declare the trigger identity of each scheduled job');
+  const triggerAccounts = Object.fromEntries(
+    [...triggers.matchAll(/"([a-z][-a-z0-9]*)"\s*=\s*"([a-z][-a-z0-9]*)"/gu)].map(
+      ([, job, accountId]) => [job, accountId],
+    ),
+  );
+  assert.deepEqual(
+    Object.keys(triggerAccounts).sort(),
+    ['engine-cycle'],
+    'the declared trigger identities must be exactly the scheduled jobs that exist',
+  );
+  assert.equal(triggerAccounts['engine-cycle'], 'engine-cycle-scheduler');
+
+  // A trigger is not a runtime identity, and the stack says so mechanically.
+  const runtimeAccounts =
+    bootstrapVariables.match(
+      /variable "runtime_service_accounts"[\s\S]*?default = \{([\s\S]*?)\n {2}\}/u,
+    )?.[1] ?? '';
+  for (const accountId of Object.values(triggerAccounts)) {
+    assert.ok(
+      !runtimeAccounts.includes(`"${accountId}"`),
+      `${accountId} is a trigger identity and must not also be a runtime identity`,
+    );
+  }
+  assert.match(
+    bootstrapVariables,
+    /setintersection\(/u,
+    'bootstrap must refuse an account id that is both a trigger and a runtime identity',
+  );
+  // Its own resource, so it is absent from the telemetry grants the runtime
+  // identities receive: a trigger writes no telemetry and holds no project role.
+  assert.match(bootstrapMain, /resource "google_service_account" "trigger"/u);
+  const telemetry = bootstrapMain.match(
+    /resource "google_project_iam_member" "runtime_telemetry"[\s\S]*?\n\}/u,
+  )?.[0];
+  assert.ok(telemetry, 'bootstrap must keep the runtime telemetry grants');
+  assert.ok(
+    !/google_service_account\.trigger/u.test(telemetry),
+    'a trigger identity must receive no project role, including a telemetry one',
+  );
+  assert.ok(
+    // An assignment, not a mention: the variable's own description explains why
+    // the role is granted beside the job, and the prose is the point.
+    !/role\s*=\s*"roles\/run\.invoker"/u.test(bootstrapMain),
+    'no invoker binding belongs in bootstrap: it is bound beside the job it starts',
+  );
+
+  // The one grant, at job level, to the trigger identity and nobody else.
+  const jobsStack = readStack(join(infraRoot, 'stacks', 'engine-jobs'));
+  const invoker = jobsStack.match(
+    /resource "google_cloud_run_v2_job_iam_member" "cycle_invoker" \{([\s\S]*?)\n\}/u,
+  )?.[1];
+  assert.ok(invoker, 'the cycle job must bind its trigger an invoker role at job level');
+  assert.match(invoker, /role\s*=\s*"roles\/run\.invoker"/u);
+  assert.match(invoker, /local\.cycle_trigger_service_account_email/u);
+  assert.ok(
+    !/local\.cycle_runtime_service_account_email/u.test(invoker),
+    'the identity the execution runs as must not be the identity that starts it',
+  );
+  assert.ok(
+    !/resource "google_project_iam_member"/u.test(jobsStack),
+    'a project-level grant would let the trigger start anything; the binding is on one job',
+  );
+  assert.ok(
+    jobsStack.includes('contract_trigger_service_account_emails'),
+    'the trigger identity must be read from the bootstrap contract, never written down here',
+  );
+  assert.match(
+    read(join(infraRoot, 'stacks', 'engine-jobs', 'variables.tf')),
+    /condition\s*=\s*var\.cycle_job_name == "engine-cycle"/u,
+    "the cycle job's name is the key of both its identities and stays pinned",
+  );
+});
+
+test('a cadence is declared, paused at creation, and un-paused only by a reviewed file', () => {
+  const jobsStack = readStack(join(infraRoot, 'stacks', 'engine-jobs'));
+  const schedule = jobsStack.match(
+    /resource "google_cloud_scheduler_job" "cycle" \{([\s\S]*?)\n\}\n/u,
+  )?.[1];
+  assert.ok(schedule, 'the cycle job must declare its trigger as infrastructure');
+  // Created paused, from a variable whose default is true, so the first apply
+  // installs a cadence that fires nothing (#243).
+  assert.match(schedule, /paused\s*=\s*var\.cycle_schedule_paused/u);
+  assert.match(
+    read(join(infraRoot, 'stacks', 'engine-jobs', 'variables.tf')),
+    /variable "cycle_schedule_paused"[\s\S]*?default\s*=\s*true/u,
+    'the schedule must default to paused: a cadence that starts itself on first apply is not reviewed',
+  );
+  // UTC, so "every minute" means the same thing wherever it is read.
+  assert.match(schedule, /time_zone\s*=\s*"Etc\/UTC"/u);
+  // The trigger presents an OAuth token for its own identity. No key exists.
+  assert.match(schedule, /oauth_token \{[\s\S]*?local\.cycle_trigger_service_account_email/u);
+  for (const forbidden of [/oidc_token/u, /"Authorization"/u, /headers/u]) {
+    assert.ok(!forbidden.test(schedule), `the trigger must carry no ${String(forbidden)}`);
+  }
+  // A retry would only start a second execution the job already refuses.
+  assert.match(schedule, /retry_count\s*=\s*0/u);
+
+  // The committed file may say only which lane runs, how long, and whether the
+  // trigger and the secret binding are on.
+  const cyclePath = join(infraRoot, 'stacks', 'engine-jobs', CYCLE_FILE);
+  const cycle = read(cyclePath);
+  // Comments carry the reasoning; the assignments carry the values.
+  const cycleValues = cycle.replace(/#.*$/gmu, '');
+  const assignments = [...cycle.matchAll(/^\s*([a-z_]+)\s*=/gmu)].map(([, name]) => name).sort();
+  assert.deepEqual(
+    assignments,
+    ['cycle_arguments', 'cycle_schedule_paused', 'cycle_secret_binding_enabled'],
+    `${relative(cyclePath)} may set only the lane, the pause and the secret binding`,
+  );
+  // There is no live lane, in the file or in the variable that validates it.
+  assert.ok(
+    !/\blive\b/u.test(cycleValues),
+    'a cycle inputs file must name no live lane (ADR-0013 §5)',
+  );
+  for (const value of [...cycleValues.matchAll(/"([^"]*)"/gu)].map(([, value]) => value)) {
+    assert.ok(
+      /^(--[a-z-]{3,20}|[a-z]{3,10}|[0-9]{1,2})$/u.test(value),
+      `${relative(cyclePath)} carries ${JSON.stringify(value)}, which is neither a flag, a lane name nor a small number. A cycle inputs file must hold no identifier.`,
+    );
   }
 });
 
