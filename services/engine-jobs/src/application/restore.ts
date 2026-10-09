@@ -23,7 +23,15 @@ import { sha256Hex } from '../domain/sha256.js';
 import { planStaging, stagedPaths } from '../domain/stage-list.js';
 import { compareManifestWithWorkstation, type VerifyFirstFinding } from '../domain/verify-first.js';
 
-export const ENGINE_RESTORE_SCHEMA_VERSION = '0002-engine-restore-tables';
+/**
+ * The schema the rows are loaded into, recorded on `engine.restore_run` and in
+ * the evidence document. It names the last migration the restore target depends
+ * on: 0003 re-keyed `engine.ledger_order` on `(order_id, ledger_position)`, so a
+ * load against 0002 alone is not the same target and must not be reported as it.
+ * The idempotency refusal matches on (manifest digest, schema version), and the
+ * "schema is not empty" refusal stands behind it either way.
+ */
+export const ENGINE_RESTORE_SCHEMA_VERSION = '0003-ledger-order-position';
 
 export interface RestoreJobInput {
   archive: ArchiveSource;
@@ -159,6 +167,9 @@ export async function runRestoreJob(input: RestoreJobInput): Promise<RestoreJobR
     mirrorPairIdsCarried: plan.mirrorPairIdsCarried,
     droppedTradingControlKeys: plan.droppedTradingControlKeys,
     notLoaded: plan.notLoaded,
+    ledgerOrderRecords: plan.paperRecords.length,
+    duplicateOrderIds: plan.duplicateOrderIds,
+    duplicateOrderRecords: plan.duplicateOrderRecords,
   };
   evidence.forecastRowsPlanned =
     plan.rowSets.find((s) => s.table === 'engine.forecast_row')?.rows.length ?? 0;

@@ -37,6 +37,10 @@ export interface EvidenceInput {
     mirrorPairIdsCarried: number;
     droppedTradingControlKeys: string[];
     notLoaded: string[];
+    /** Ledger order records planned, which is every paper record including duplicates. */
+    ledgerOrderRecords: number;
+    duplicateOrderIds: number;
+    duplicateOrderRecords: number;
   };
   bankroll?: BankrollRecomputation;
   reconciliation?: ReconciliationRow[];
@@ -138,6 +142,9 @@ export function renderEvidence(template: string, input: EvidenceInput): string {
     PAPER_ORDERS: String(input.seam?.paperOrders ?? 0),
     DROPPED_LIVE_ORDERS: String(input.seam?.droppedLiveOrders ?? 0),
     MIRROR_PAIR_IDS: String(input.seam?.mirrorPairIdsCarried ?? 0),
+    LEDGER_ORDER_RECORDS: String(input.seam?.ledgerOrderRecords ?? 0),
+    DUPLICATE_ORDER_IDS: String(input.seam?.duplicateOrderIds ?? 0),
+    DUPLICATE_ORDER_RECORDS: String(input.seam?.duplicateOrderRecords ?? 0),
     DROPPED_CONTROL_KEYS: input.seam?.droppedTradingControlKeys.length
       ? input.seam.droppedTradingControlKeys.map((key) => `\`${key}\``).join(', ')
       : 'none',

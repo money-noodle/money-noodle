@@ -61,6 +61,11 @@ Not verified by the ported forecast verifier (named so nobody reads a pass as mo
 | Live orders dropped | {{DROPPED_LIVE_ORDERS}} |
 | Mirror-pair identifiers carried as inert metadata | {{MIRROR_PAIR_IDS}} |
 | Trading-control keys dropped as live-side | {{DROPPED_CONTROL_KEYS}} |
+| Ledger order records loaded | {{LEDGER_ORDER_RECORDS}} |
+| Duplicate logical order ids | {{DUPLICATE_ORDER_IDS}} |
+| Duplicate records beyond the first for their id | {{DUPLICATE_ORDER_RECORDS}} |
+
+Array position is part of the legacy record identity: v1's own ledger compaction states that its historical pre-episode paper records hold a small, known set of duplicate logical ids and that compaction preserves position exactly rather than silently deduplicating evidence. Duplicates are therefore loaded as distinct rows keyed `(order_id, ledger_position)`, where the position is the record's 0-based index in the ledger's stored `orders` array (migration `0003-ledger-order-position.sql`). Nothing is merged, deduplicated or dropped: a record count above the distinct-id count is the ledger as written, not a defect.
 
 Not loaded, by decision (maintainer, 2026-10-06 and 2026-10-08; ADR-0013 §1–2):
 

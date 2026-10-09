@@ -67,6 +67,18 @@ export function syntheticDataTree(options: SyntheticOptions = {}): DataTree {
       strategyId: EDGE_STRATEGY_ID,
       executionMirrorPair: { version: 'entry-execution-mirror-pair-v1', id: 'pair-1' },
     },
+    // A small, known set of historical paper records share a logical id (one dated
+    // v1 incident). Both are kept: array position is part of the legacy record
+    // identity, and they sit at non-adjacent positions on purpose, so a test that
+    // passes cannot be passing on "the duplicate is the next row".
+    {
+      id: 'e-dup',
+      executionMode: 'paper',
+      status: 'won',
+      stakeCents: 20,
+      pnlCents: 12,
+      strategyId: EDGE_STRATEGY_ID,
+    },
     {
       id: 'e-lost',
       executionMode: 'paper',
@@ -121,6 +133,15 @@ export function syntheticDataTree(options: SyntheticOptions = {}): DataTree {
       strategyId: LONG_SHOT_STRATEGY_ID,
       standaloneExitPolicy: 'exit-policy-v3',
     },
+    // The second record under that same logical id.
+    {
+      id: 'e-dup',
+      executionMode: 'paper',
+      status: 'sold',
+      stakeCents: 20,
+      pnlCents: 8,
+      strategyId: EDGE_STRATEGY_ID,
+    },
     // Open stake: the edge record's is reserved against the available balance,
     // the other strategy's is not.
     {
@@ -151,7 +172,8 @@ export function syntheticDataTree(options: SyntheticOptions = {}): DataTree {
       id: `pair-${index + 1}`,
     },
   }));
-  const withEvidence = [paper[0]!, paper[1]!, ...live];
+  const paperById = (id: string) => paper.find((order) => order.id === id)!;
+  const withEvidence = [paperById('e-won'), paperById('e-lost'), ...live];
   for (const order of withEvidence) {
     evidence.orders[rowKey(order.id)] = {
       orderId: order.id,
@@ -169,12 +191,14 @@ export function syntheticDataTree(options: SyntheticOptions = {}): DataTree {
     };
   }
   tree.set(`execution-order-evidence/batch.${batchSha}.json`, batchRaw);
-  // Order-derived: 80 - 100 + 0 + 30 (edge settled) + 25 (the standalone-exit
-  // sale) = 35. Corrections applied to the counter: +5 maker fee, -25 strategy
-  // leak (which removed that same sale) = -20. Expected realized = 15. The
-  // reconciliation correction is reported and not added: it is the adjustment
-  // this check verifies. Available = starting + realized - open edge stake.
-  const realizedPnlCents = 15 + (options.bankrollDriftCents ?? 0);
+  // Order-derived: 80 - 100 + 0 + 30 (edge settled) + 12 + 8 (the two records
+  // sharing one logical id, both of which count: v1 sums over the array) + 25
+  // (the standalone-exit sale) = 55. Corrections applied to the counter: +5 maker
+  // fee, -25 strategy leak (which removed that same sale) = -20. Expected
+  // realized = 35. The reconciliation correction is reported and not added: it is
+  // the adjustment this check verifies. Available = starting + realized - open
+  // edge stake.
+  const realizedPnlCents = 35 + (options.bankrollDriftCents ?? 0);
   const openEdgeStakeCents = 60;
   const ledger: StoredLedger = {
     version: 9,
@@ -211,7 +235,10 @@ export function syntheticDataTree(options: SyntheticOptions = {}): DataTree {
         },
       ],
     },
-    orders: [...paper, ...live],
+    // Live records sit *between* paper ones, not after them. That is what makes
+    // `ledger_position` testable: it is the index in the array as stored, so
+    // dropping the live rows at the seam must not renumber the paper ones.
+    orders: [...paper.slice(0, 2), ...live, ...paper.slice(2)],
     signalPersistence: { 'asset-a': { streak: 2 } },
     portfolioDecisions: {},
     switchPersistence: {},

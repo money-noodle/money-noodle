@@ -41,12 +41,32 @@ export interface RowSet {
   digest: string;
 }
 
+/** A paper record and the position it holds in the ledger's `orders` array. */
+export interface SeamRecord {
+  /**
+   * 0-based index in `ledger.orders` **as stored**, before the paper filter. v1's
+   * ledger compaction treats array position as part of the legacy record
+   * identity — its historical paper records carry a small, known set of duplicate
+   * logical ids — and preserves it exactly rather than deduplicating evidence.
+   * `engine.ledger_order` is keyed `(order_id, ledger_position)` for that reason
+   * (migration 0003).
+   */
+  readonly position: number;
+  readonly order: LedgerOrder;
+}
+
 export interface RestorePlan {
   rowSets: RowSet[];
   paperBudget: PaperBudget | undefined;
   paperOrders: LedgerOrder[];
+  /** The same records, each with its position in the stored array. */
+  paperRecords: SeamRecord[];
   droppedLiveOrders: number;
   mirrorPairIdsCarried: number;
+  /** Distinct logical ids held by more than one paper record. */
+  duplicateOrderIds: number;
+  /** Paper records beyond the first for their logical id. */
+  duplicateOrderRecords: number;
   droppedTradingControlKeys: string[];
   notLoaded: string[];
   /** Which files the plan consumed, for manifest-to-load reconciliation. */
@@ -109,14 +129,30 @@ function parseJsonl(raw: string): unknown[] {
 
 export function paperSeam(ledger: StoredLedger): {
   paperOrders: LedgerOrder[];
+  paperRecords: SeamRecord[];
   droppedLiveOrders: number;
   mirrorPairIdsCarried: number;
+  duplicateOrderIds: number;
+  duplicateOrderRecords: number;
 } {
-  const paperOrders = ledger.orders.filter((order) => order.executionMode === 'paper');
+  // The position is taken before the filter, so it is the index in the array as
+  // v1 stored it. Dropping the live rows must not renumber the paper ones.
+  const paperRecords: SeamRecord[] = ledger.orders
+    .map((order, position) => ({ order, position }))
+    .filter(({ order }) => order.executionMode === 'paper');
+  const paperOrders = paperRecords.map(({ order }) => order);
+
+  const byId = new Map<string, number>();
+  for (const order of paperOrders) byId.set(order.id, (byId.get(order.id) ?? 0) + 1);
+  const repeated = [...byId.values()].filter((count) => count > 1);
+
   return {
     paperOrders,
+    paperRecords,
     droppedLiveOrders: ledger.orders.length - paperOrders.length,
     mirrorPairIdsCarried: paperOrders.filter((order) => order.executionMirrorPair?.id).length,
+    duplicateOrderIds: repeated.length,
+    duplicateOrderRecords: repeated.reduce((total, count) => total + count - 1, 0),
   };
 }
 
@@ -144,8 +180,13 @@ export function buildRestorePlan(
     rowSet(
       'engine.ledger_order',
       'paper-orders.json (executionMode = paper)',
-      seam.paperOrders.map((order) => ({
+      seam.paperRecords.map(({ order, position }) => ({
         order_id: order.id,
+        // Part of the key, not a counter: the position this record holds in the
+        // ledger's stored array. A small, known set of historical paper records
+        // share a logical id, and v1's compaction preserves position rather than
+        // deduplicating evidence (migration 0003).
+        ledger_position: position,
         execution_mode: 'paper',
         status: order.status,
         strategy_id: order.strategyId ?? null,
@@ -439,8 +480,11 @@ export function buildRestorePlan(
     rowSets,
     paperBudget: ledger.paperBudget,
     paperOrders: seam.paperOrders,
+    paperRecords: seam.paperRecords,
     droppedLiveOrders: seam.droppedLiveOrders,
     mirrorPairIdsCarried: seam.mirrorPairIdsCarried,
+    duplicateOrderIds: seam.duplicateOrderIds,
+    duplicateOrderRecords: seam.duplicateOrderRecords,
     droppedTradingControlKeys,
     notLoaded,
     consumption,

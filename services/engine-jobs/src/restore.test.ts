@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { FakeEngineStore } from './adapters/engine-store/fake-engine-store.js';
+import {
+  FakeEngineStore,
+  UniqueViolationError,
+} from './adapters/engine-store/fake-engine-store.js';
 import { runRestoreJob, type RestoreJobInput } from './application/restore.js';
 import { isArchiveCandidate, parseArchiveManifest } from './domain/archive-manifest.js';
 import { verifyForecastStorage } from './domain/forecast-v3.js';
@@ -157,8 +160,8 @@ describe('the semantic verifiers', () => {
     const result = verifyLedgerV9(tree);
     expect(result).toMatchObject({
       version: 9,
-      orders: 10,
-      paperOrders: 9,
+      orders: 12,
+      paperOrders: 11,
       liveOrders: 1,
       compactOrders: 3,
       evidenceBatches: 1,
@@ -212,8 +215,9 @@ describe('the transform at the paper seam', () => {
     const plan = buildRestorePlan(tree);
     const orders = plan.rowSets.find((s) => s.table === 'engine.ledger_order')!.rows;
     // Every paper record, whatever its strategy or status: the seam drops live
-    // rows, and the bankroll rule decides which of these moved the counter.
-    expect(orders).toHaveLength(9);
+    // rows, and the bankroll rule decides which of these moved the counter. Two
+    // of them share a logical id, so the count is of records, not of ids.
+    expect(orders).toHaveLength(11);
     const carried = orders.filter((row) => row.mirror_pair_id !== null);
     expect(carried.map((row) => row.mirror_pair_id)).toEqual(['pair-1']);
     // Inert: no loaded row anywhere carries the live half of the pair.
@@ -272,6 +276,63 @@ describe('the transform at the paper seam', () => {
     expect(plan.rowSets.find((s) => s.table === 'engine.forecast_shard')!.rows[0]!.rollup).toEqual({
       issued: 2,
       shardId: '2026-01-01',
+    });
+  });
+
+  it('keys the ledger by order id and ledger position, keeping records that share an id', () => {
+    // v1's own ledger compaction: historical paper records hold a small, known
+    // set of duplicate logical ids, and array position is part of the legacy
+    // record identity. Nothing is merged, deduplicated or dropped.
+    const tree = syntheticDataTree({ liveOrders: 2 });
+    const plan = buildRestorePlan(tree);
+    expect(plan.duplicateOrderIds).toBe(1);
+    expect(plan.duplicateOrderRecords).toBe(1);
+
+    const rows = plan.rowSets.find((s) => s.table === 'engine.ledger_order')!.rows;
+    const duplicates = rows.filter((row) => row.order_id === 'e-dup');
+    expect(duplicates).toHaveLength(2);
+    // Two records, one logical id, two distinct positions, both P&L values kept.
+    expect(duplicates.map((row) => row.ledger_position)).toEqual([1, 10]);
+    expect(duplicates.map((row) => row.pnl_cents)).toEqual([12, 8]);
+    expect(
+      new Set(rows.map((row) => `${String(row.order_id)}/${String(row.ledger_position)}`)).size,
+    ).toBe(rows.length);
+
+    // The position is the index in the array **as stored**: the live records sit
+    // between the paper ones, and dropping them did not renumber anything.
+    const byId = new Map(rows.map((row) => [row.order_id, row.ledger_position]));
+    expect(byId.get('e-won')).toBe(0);
+    expect(byId.get('e-lost')).toBe(4);
+    expect(
+      buildRestorePlan(syntheticDataTree())
+        .rowSets.find((s) => s.table === 'engine.ledger_order')!
+        .rows.filter((row) => row.order_id === 'e-dup')
+        .map((row) => row.ledger_position),
+    ).toEqual([1, 8]);
+  });
+
+  it('counts both records of a shared id in the bankroll, as v1 summed the array', () => {
+    // The rule iterates records, not ids. Dropping either one breaks the figure,
+    // which is what proves both contributed.
+    const ledger = readLedger(syntheticDataTree());
+    const baseline = recomputePaperBankroll(ledger.orders, ledger.paperBudget!);
+    expect(baseline.discrepancyCents).toBe(0);
+    expect(ledger.orders.filter((order) => order.id === 'e-dup')).toHaveLength(2);
+
+    const first = ledger.orders.findIndex((order) => order.id === 'e-dup');
+    const withoutFirst = ledger.orders.filter((_, index) => index !== first);
+    expect(recomputePaperBankroll(withoutFirst, ledger.paperBudget!)).toMatchObject({
+      contributingOrders: baseline.contributingOrders - 1,
+      orderPnlCents: baseline.orderPnlCents - 12,
+      discrepancyCents: -12,
+    });
+
+    const last = ledger.orders.map((order) => order.id).lastIndexOf('e-dup');
+    const withoutLast = ledger.orders.filter((_, index) => index !== last);
+    expect(recomputePaperBankroll(withoutLast, ledger.paperBudget!)).toMatchObject({
+      contributingOrders: baseline.contributingOrders - 1,
+      orderPnlCents: baseline.orderPnlCents - 8,
+      discrepancyCents: -8,
     });
   });
 
@@ -397,15 +458,15 @@ describe('the transform at the paper seam', () => {
     // leak correction that removed that same sale is added back too, so they net.
     expect(result).toMatchObject({
       fundingId: 'paper-original',
-      contributingOrders: 5,
+      contributingOrders: 7,
       excludedExitRecords: 1,
       excludedOtherStrategyOrders: 2,
-      orderPnlCents: 35,
+      orderPnlCents: 55,
       makerFeeCorrectionCents: 5,
       strategyLeakCorrectionCents: -25,
       reconciliationCorrectionCents: 3,
-      recomputedRealizedPnlCents: 15,
-      restoredRealizedPnlCents: 15,
+      recomputedRealizedPnlCents: 35,
+      restoredRealizedPnlCents: 35,
       discrepancyCents: 0,
       openStakeCents: 60,
       availableResidualCents: 0,
@@ -493,10 +554,10 @@ describe('the restore job end to end over a fake store', () => {
     expect(result.evidence).toContain('**loaded**');
     expect(result.evidence).toContain('| discrepancy (cents) | **0** |');
     // The bankroll section names what moved the counter and what was excluded.
-    expect(result.evidence).toContain('| contributing paper orders in scope | 5 |');
+    expect(result.evidence).toContain('| contributing paper orders in scope | 7 |');
     expect(result.evidence).toContain('| excluded exit records | 1 |');
     expect(result.evidence).toContain('| excluded other-strategy orders | 2 |');
-    expect(result.evidence).toContain('| order-derived realized P&L (cents) | 35 |');
+    expect(result.evidence).toContain('| order-derived realized P&L (cents) | 55 |');
     expect(result.evidence).toContain('| maker-fee corrections added back (cents) | 5 |');
     expect(result.evidence).toContain('| strategy-leak corrections added back (cents) | -25 |');
     expect(result.evidence).toContain('| reconciliation corrections, not added (cents) | 3 |');
@@ -504,7 +565,7 @@ describe('the restore job end to end over a fake store', () => {
     expect(result.evidence).toContain('| available-balance residual (cents) | **0** |');
     expect(result.manifestDigest).toMatch(/^[a-f0-9]{64}$/);
     const inspection = await store.inspect();
-    expect(inspection.counts['engine.ledger_order']).toBe(9);
+    expect(inspection.counts['engine.ledger_order']).toBe(11);
     expect(inspection.counts['engine.forecast_row']).toBe(2);
     expect(inspection.counts['engine.evidence_row']).toBe(0);
     expect(inspection.counts['engine.research_journal_event']).toBe(0);
@@ -572,6 +633,61 @@ describe('the restore job end to end over a fake store', () => {
       /recomputed from its orders and corrections differs from the restored value/u,
     );
     expect((await drifted.store.inspect()).priorRuns).toHaveLength(0);
+  });
+
+  it('loads both records that share a logical id, and reports them in the evidence', async () => {
+    const { input, store } = job();
+    const result = await runRestoreJob(input);
+    expect(result.outcome, result.reason).toBe('loaded');
+
+    // The load the first real execution could not make: both records are rows.
+    const rows = store.tables.get('engine.ledger_order')!;
+    expect(rows.filter((row) => row.order_id === 'e-dup')).toHaveLength(2);
+    expect(rows).toHaveLength(11);
+
+    expect(result.evidence).toContain('| Ledger order records loaded | 11 |');
+    expect(result.evidence).toContain('| Duplicate logical order ids | 1 |');
+    expect(result.evidence).toContain('| Duplicate records beyond the first for their id | 1 |');
+    expect(result.evidence).toContain('keyed `(order_id, ledger_position)`');
+  });
+
+  it('is a store that would still refuse a genuine duplicate key', async () => {
+    // The double enforces the migrations' keys, because the first real load
+    // passed every in-process check and then rolled back on `ledger_order_pkey`.
+    // A fake that accepted any row would let that through again.
+    const store = new FakeEngineStore();
+    const twice = [
+      { order_id: 'x', ledger_position: 0, status: 'won' },
+      { order_id: 'x', ledger_position: 0, status: 'won' },
+    ];
+    await expect(
+      store.load(
+        { manifestDigest: 'd', manifestKey: 'k', runId: 'r', schemaVersion: 'v' },
+        [{ digest: 'd', rows: twice, source: 's', table: 'engine.ledger_order' }],
+        () => undefined,
+      ),
+    ).rejects.toThrow(UniqueViolationError);
+    // Rolled back: nothing of a failed load survives.
+    expect(store.tables.get('engine.ledger_order')).toEqual([]);
+    expect((await store.inspect()).priorRuns).toEqual([]);
+
+    // The same two records at different positions are two rows, not a conflict.
+    await store.load(
+      { manifestDigest: 'd', manifestKey: 'k', runId: 'r', schemaVersion: 'v' },
+      [
+        {
+          digest: 'd',
+          rows: [
+            { order_id: 'x', ledger_position: 0, status: 'won' },
+            { order_id: 'x', ledger_position: 7, status: 'sold' },
+          ],
+          source: 's',
+          table: 'engine.ledger_order',
+        },
+      ],
+      () => undefined,
+    );
+    expect(store.tables.get('engine.ledger_order')).toHaveLength(2);
   });
 
   it('refuses when the bankroll’s two counters disagree with each other', async () => {
