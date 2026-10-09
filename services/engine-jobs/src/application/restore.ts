@@ -195,6 +195,16 @@ export async function runRestoreJob(input: RestoreJobInput): Promise<RestoreJobR
       `The paper bankroll recomputed from its orders and corrections differs from the restored value; nothing was loaded.`,
     );
   }
+  // The second counter has to agree with the first: the available balance is the
+  // starting balance plus the realized figure less the stake still reserved by
+  // open positions. A figure that reconciles while the balance does not means the
+  // ledger's own two counters disagree, which the engine must not resume from.
+  if (bankroll.availableResidualCents !== 0) {
+    return finish(
+      'refused',
+      'The paper bankroll counters disagree with each other (available vs starting + realized - open stake); nothing was loaded.',
+    );
+  }
   if (ledger.paperOrders !== plan.paperOrders.length) {
     return finish(
       'refused',

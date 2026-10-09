@@ -52,6 +52,12 @@ export interface LedgerOrder {
   strategyId?: string;
   paperBankrollId?: string;
   budgetEpochId?: string;
+  /**
+   * Set on a non-edge position sold under its own exit policy. It is the one way
+   * another strategy's payout reached the paper bankroll, so it decides whether
+   * such a record contributes to the realized figure (`paper-bankroll.ts`).
+   */
+  standaloneExitPolicy?: string;
   archivedEvidence?: EvidenceReference;
   executionMirrorPair?: { version: 'entry-execution-mirror-pair-v1'; id: string };
   [key: string]: unknown;

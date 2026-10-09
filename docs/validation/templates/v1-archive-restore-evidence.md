@@ -104,7 +104,9 @@ UNMAPPED entries:
 | --- |
 {{UNMAPPED_FILE_ROWS}}
 
-## 4. Paper bankroll recomputed from its orders and three correction classes
+## 4. Paper bankroll recomputed from the records that moved its counter
+
+Only the edge strategy's settled records moved this counter, plus another strategy's `sold` records carrying a standalone exit policy; exit legs (`:exit:` in the id) and every other strategy's own settled record are excluded. Maker-fee and strategy-leak corrections are added back — the fee is still inside the orders' P&L, and the leaked sales the leak corrections removed are in the contributing set, so they cancel. Reconciliation corrections are reported and not added: they are the adjustment this check verifies. Both the discrepancy and the available-balance residual must be zero; either one non-zero refuses the load (`docs/operations/restoring-the-v1-archive.md`).
 
 | Measure | Value |
 | --- | --- |
