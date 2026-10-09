@@ -24,6 +24,10 @@ override_data {
         "platform-api"   = "platform-api-runtime@example-project.iam.gserviceaccount.com"
         "web"            = "web-runtime@example-project.iam.gserviceaccount.com"
         "engine-restore" = "engine-restore-runtime@example-project.iam.gserviceaccount.com"
+        "engine-cycle"   = "engine-cycle-runtime@example-project.iam.gserviceaccount.com"
+      }
+      contract_trigger_service_account_emails = {
+        "engine-cycle" = "engine-cycle-scheduler@example-project.iam.gserviceaccount.com"
       }
     }
   }

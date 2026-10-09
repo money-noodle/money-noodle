@@ -36,6 +36,17 @@ output "contract_runtime_service_account_emails" {
   value       = { for service, account in google_service_account.runtime : service => account.email }
 }
 
+output "contract_trigger_service_account_emails" {
+  description = <<-EOT
+    Trigger identity email per scheduled Cloud Run Job name. The `engine-jobs`
+    stack reads this to bind `roles/run.invoker` on the one job each identity
+    triggers, so a scheduled job's trigger is a separate principal from the
+    identity the execution runs as (ADR-0013 §1, #243). An address, not a
+    credential: holding it grants nothing.
+  EOT
+  value       = { for job, account in google_service_account.trigger : job => account.email }
+}
+
 output "contract_project_id" {
   description = "Project id, republished so downstream stacks take it from one place."
   value       = var.project_id

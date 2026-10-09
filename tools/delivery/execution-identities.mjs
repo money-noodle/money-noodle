@@ -263,10 +263,30 @@ export const RESOURCE_OPERATIONS = Object.freeze({
   ),
 
   // --- The engine jobs family (ADR-0013 §1). ---
+  'stacks/bootstrap:google_service_account.trigger': own(
+    'bootstrap-principal',
+    'bootstrap.initialize',
+    'The identity Cloud Scheduler presents to start a scheduled job. Created by the bootstrap principal for the same reason every other identity is \u2014 creating one needs iam.serviceAccounts.create, which the deployer is validated not to hold \u2014 and kept separate from the runtime identities because the principal that starts an execution is not the one it runs as (ADR-0013 \u00a71).',
+  ),
   'stacks/engine-jobs:google_cloud_run_v2_job.restore': own(
     'stack-executor',
     'infrastructure.apply',
     'The one-time restore job is declared infrastructure with a manual trigger: the apply creates the job definition at one digest under its own identity, and no release vector or pipeline path executes it (#241).',
+  ),
+  'stacks/engine-jobs:google_cloud_run_v2_job.cycle': own(
+    'stack-executor',
+    'infrastructure.apply',
+    'The scheduled cycle job is declared infrastructure: the apply creates the job definition at one digest under its own runtime identity, and nothing in a release vector executes it. Its trigger is created paused, so the apply installs a cadence that fires nothing until a reviewed tfvars change un-pauses it (#243).',
+  ),
+  'stacks/engine-jobs:google_cloud_run_v2_job_iam_member.cycle_invoker': own(
+    'iam-executor',
+    'workload.access.change',
+    'roles/run.invoker for the trigger identity on the one job it starts. An access binding with its own approval, like every other: bound at job level rather than at project level, so the identity that starts the cycle can start nothing else \u2014 not the restore job, not a service.',
+  ),
+  'stacks/engine-jobs:google_cloud_scheduler_job.cycle': own(
+    'stack-executor',
+    'infrastructure.apply',
+    'The cadence itself, as declared infrastructure rather than a console setting: one minute, UTC, created paused, retry count zero. Whether the engine is cycling is then a reviewed diff in a committed tfvars file rather than a click nobody can see (ADR-0013 \u00a71, \u00a75).',
   ),
 });
 

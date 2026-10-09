@@ -157,6 +157,7 @@ run "bootstrap_creates_one_runtime_identity_per_deployable_unit" {
   # changed with it.
   assert {
     condition = toset(keys(google_service_account.runtime)) == toset([
+      "engine-cycle",
       "engine-restore",
       "platform-api",
       "web",
@@ -168,7 +169,8 @@ run "bootstrap_creates_one_runtime_identity_per_deployable_unit" {
     condition = (
       google_service_account.runtime["platform-api"].account_id == "platform-api-runtime" &&
       google_service_account.runtime["web"].account_id == "web-runtime" &&
-      google_service_account.runtime["engine-restore"].account_id == "engine-restore-runtime"
+      google_service_account.runtime["engine-restore"].account_id == "engine-restore-runtime" &&
+      google_service_account.runtime["engine-cycle"].account_id == "engine-cycle-runtime"
     )
     error_message = "The runtime account ids must stay the ones the stacks already use, so bootstrap adopts rather than renames them. ADR-0013 §1 names engine-restore-runtime."
   }
@@ -430,4 +432,70 @@ run "the_staging_bucket_grants_come_back_out_with_the_job" {
     )
     error_message = "With the gate off this stack must declare no grant on the staging bucket."
   }
+}
+
+run "a_trigger_identity_starts_one_job_and_runs_nothing" {
+  command = plan
+
+  # The identity Cloud Scheduler presents to start a scheduled job. A different
+  # principal from the one the execution runs as: a runtime identity holds
+  # `run.invoker` nowhere, which is what stops a workload from starting a
+  # workload, and that stays true because this is not one (ADR-0013 §1, #243).
+  assert {
+    condition     = toset(keys(google_service_account.trigger)) == toset(["engine-cycle"])
+    error_message = "Bootstrap must create a trigger identity for each scheduled job and no others."
+  }
+
+  assert {
+    condition     = google_service_account.trigger["engine-cycle"].account_id == "engine-cycle-scheduler"
+    error_message = "The cycle job's trigger identity is engine-cycle-scheduler."
+  }
+
+  # Distinct from every runtime identity, mechanically, not by convention.
+  assert {
+    condition = length(setintersection(
+      toset([for account in google_service_account.trigger : account.account_id]),
+      toset([for account in google_service_account.runtime : account.account_id]),
+    )) == 0
+    error_message = "A trigger identity must not also be a runtime identity."
+  }
+
+  # It receives no project role at all: the telemetry grants are keyed by runtime
+  # identity, and a trigger writes no telemetry.
+  assert {
+    condition = alltrue([
+      for grant in google_project_iam_member.runtime_telemetry :
+      !strcontains(grant.member, "engine-cycle-scheduler")
+    ])
+    error_message = "A trigger identity must hold no project role, including a telemetry one."
+  }
+
+  assert {
+    condition     = strcontains(google_service_account.trigger["engine-cycle"].description, "no project role")
+    error_message = "The identity's own description must say what it does not hold."
+  }
+}
+
+run "a_trigger_for_a_job_this_stack_does_not_create_is_refused" {
+  command = plan
+
+  variables {
+    trigger_service_accounts = {
+      "engine-observer" = "engine-observer-scheduler"
+    }
+  }
+
+  expect_failures = [var.trigger_service_accounts]
+}
+
+run "a_trigger_identity_cannot_be_a_runtime_identity" {
+  command = plan
+
+  variables {
+    trigger_service_accounts = {
+      "engine-cycle" = "engine-cycle-runtime"
+    }
+  }
+
+  expect_failures = [var.trigger_service_accounts]
 }

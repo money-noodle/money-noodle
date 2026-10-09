@@ -94,6 +94,10 @@ locals {
     "logging.googleapis.com",
     "cloudtrace.googleapis.com",
     "telemetry.googleapis.com",
+    # The cycle job's trigger (#243). Enabled here rather than in bootstrap,
+    # which enables only the services bootstrap itself needs; a schedule is
+    # ordinary platform infrastructure.
+    "cloudscheduler.googleapis.com",
   ]
 }
 

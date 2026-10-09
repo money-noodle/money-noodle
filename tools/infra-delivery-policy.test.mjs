@@ -2806,6 +2806,20 @@ test('every stack plan passes the reviewed exposure file when it exists', () => 
     'every plan must also pass the reviewed restore inputs when the stack has them',
   );
 
+  // And the cycle job's, on the same terms again (#243): which lane the cadence
+  // runs, its tick budget, whether its trigger is paused and whether it binds its
+  // secret. Un-pausing a cadence is then a reviewed diff rather than a click.
+  const cycleBlocks = [
+    ...delivery.matchAll(
+      /if \[\[ -f cycle\.tfvars \]\]; then\n {12}exposure_args\+=\(-var-file=cycle\.tfvars\)\n {10}fi\n/g,
+    ),
+  ];
+  assert.equal(
+    cycleBlocks.length,
+    plans.length,
+    'every plan must also pass the reviewed cycle inputs when the stack has them',
+  );
+
   // Drift reports; it still never applies.
   const drift = deliveryJobs().find(({ name }) => name === 'drift');
   assert.ok(!/tofu apply/.test(drift.body), 'drift must still never apply');

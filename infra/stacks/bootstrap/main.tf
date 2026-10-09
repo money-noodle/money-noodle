@@ -149,6 +149,27 @@ resource "google_service_account" "runtime" {
   depends_on = [google_project_service.bootstrap]
 }
 
+# The identity Cloud Scheduler presents when it starts a scheduled job, and
+# nothing else (#243, supervisor decision 2026-10-09).
+#
+# It is deliberately not in `google_service_account.runtime`: a runtime identity
+# is what an execution runs as and holds `roles/run.invoker` nowhere, so a
+# workload cannot start another workload. This one exists only to start one job.
+# It receives **no project role here** — it is absent from
+# `google_project_iam_member.runtime_telemetry` below, because a trigger writes no
+# telemetry — and its only grant anywhere is `roles/run.invoker` on the single
+# Cloud Run Job it triggers, bound beside that job in the engine-jobs stack.
+resource "google_service_account" "trigger" {
+  for_each = var.trigger_service_accounts
+
+  project      = var.project_id
+  account_id   = each.value
+  display_name = "${each.key} trigger"
+  description  = "Trigger identity for the ${each.key} Cloud Run job. It holds no project role at all; its only grant is run.invoker on that one job, declared beside it."
+
+  depends_on = [google_project_service.bootstrap]
+}
+
 # Telemetry export is the only project-level authority a runtime identity holds
 # in the first slice. Writing telemetry is not reading anything and not deploying
 # anything, and `var.runtime_telemetry_roles` is validated to keep it that way.

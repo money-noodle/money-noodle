@@ -1100,6 +1100,14 @@ jobs:
           if [[ -f restore.tfvars ]]; then
             exposure_args+=(-var-file=restore.tfvars)
           fi
+          # The reviewed cycle inputs live in `cycle.tfvars` on the same terms
+          # (#243): which lane the cadence runs, its tick budget, whether its
+          # trigger is paused and whether it binds its secret. Only the
+          # engine-jobs stack has such a file, and passing it only when it exists
+          # leaves every other stack untouched.
+          if [[ -f cycle.tfvars ]]; then
+            exposure_args+=(-var-file=cycle.tfvars)
+          fi
           # Plan and apply the same plan file, so what was planned is what runs.
           tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -out=stack.tfplan
           # Between plan and apply, because the saved plan is what actually runs.
@@ -1238,6 +1246,14 @@ jobs:
           if [[ -f restore.tfvars ]]; then
             exposure_args+=(-var-file=restore.tfvars)
           fi
+          # The reviewed cycle inputs live in `cycle.tfvars` on the same terms
+          # (#243): which lane the cadence runs, its tick budget, whether its
+          # trigger is paused and whether it binds its secret. Only the
+          # engine-jobs stack has such a file, and passing it only when it exists
+          # leaves every other stack untouched.
+          if [[ -f cycle.tfvars ]]; then
+            exposure_args+=(-var-file=cycle.tfvars)
+          fi
           tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -out=rollback.tfplan \
             -var="rollback_revision=${revision}"
           # Between plan and apply, because the saved plan is what actually runs.
@@ -1315,6 +1331,14 @@ jobs:
           # stack untouched.
           if [[ -f restore.tfvars ]]; then
             exposure_args+=(-var-file=restore.tfvars)
+          fi
+          # The reviewed cycle inputs live in `cycle.tfvars` on the same terms
+          # (#243): which lane the cadence runs, its tick budget, whether its
+          # trigger is paused and whether it binds its secret. Only the
+          # engine-jobs stack has such a file, and passing it only when it exists
+          # leaves every other stack untouched.
+          if [[ -f cycle.tfvars ]]; then
+            exposure_args+=(-var-file=cycle.tfvars)
           fi
           tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -out=stack.tfplan
           # Between plan and apply, because the saved plan is what actually runs.
@@ -1445,6 +1469,14 @@ jobs:
           # stack untouched.
           if [[ -f restore.tfvars ]]; then
             exposure_args+=(-var-file=restore.tfvars)
+          fi
+          # The reviewed cycle inputs live in `cycle.tfvars` on the same terms
+          # (#243): which lane the cadence runs, its tick budget, whether its
+          # trigger is paused and whether it binds its secret. Only the
+          # engine-jobs stack has such a file, and passing it only when it exists
+          # leaves every other stack untouched.
+          if [[ -f cycle.tfvars ]]; then
+            exposure_args+=(-var-file=cycle.tfvars)
           fi
           tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -out=rollback.tfplan \
             -var="rollback_revision=${revision}"
@@ -1696,6 +1728,14 @@ jobs:
           if [[ -f restore.tfvars ]]; then
             exposure_args+=(-var-file=restore.tfvars)
           fi
+          # The reviewed cycle inputs live in `cycle.tfvars` on the same terms
+          # (#243): which lane the cadence runs, its tick budget, whether its
+          # trigger is paused and whether it binds its secret. Only the
+          # engine-jobs stack has such a file, and passing it only when it exists
+          # leaves every other stack untouched.
+          if [[ -f cycle.tfvars ]]; then
+            exposure_args+=(-var-file=cycle.tfvars)
+          fi
           # `-lock-timeout` waits for a concurrent operation rather than failing
           # immediately or, worse, proceeding without the lock.
           tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -out=stack.tfplan
@@ -1878,6 +1918,14 @@ jobs:
           # stack untouched.
           if [[ -f restore.tfvars ]]; then
             exposure_args+=(-var-file=restore.tfvars)
+          fi
+          # The reviewed cycle inputs live in `cycle.tfvars` on the same terms
+          # (#243): which lane the cadence runs, its tick budget, whether its
+          # trigger is paused and whether it binds its secret. Only the
+          # engine-jobs stack has such a file, and passing it only when it exists
+          # leaves every other stack untouched.
+          if [[ -f cycle.tfvars ]]; then
+            exposure_args+=(-var-file=cycle.tfvars)
           fi
           # `-refresh-only` compares reviewed desired state with observed reality
           # and proposes no changes. `-detailed-exitcode` returns 2 on difference.
@@ -2106,6 +2154,14 @@ jobs:
           if [[ -f restore.tfvars ]]; then
             exposure_args+=(-var-file=restore.tfvars)
           fi
+          # The reviewed cycle inputs live in `cycle.tfvars` on the same terms
+          # (#243): which lane the cadence runs, its tick budget, whether its
+          # trigger is paused and whether it binds its secret. Only the
+          # engine-jobs stack has such a file, and passing it only when it exists
+          # leaves every other stack untouched.
+          if [[ -f cycle.tfvars ]]; then
+            exposure_args+=(-var-file=cycle.tfvars)
+          fi
           # Plan and apply the same plan file, so what was reviewed is what runs.
           tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -out=stack.tfplan
           # Between plan and apply, because the saved plan is what actually runs.
@@ -2196,6 +2252,14 @@ jobs:
           # stack untouched.
           if [[ -f restore.tfvars ]]; then
             exposure_args+=(-var-file=restore.tfvars)
+          fi
+          # The reviewed cycle inputs live in `cycle.tfvars` on the same terms
+          # (#243): which lane the cadence runs, its tick budget, whether its
+          # trigger is paused and whether it binds its secret. Only the
+          # engine-jobs stack has such a file, and passing it only when it exists
+          # leaves every other stack untouched.
+          if [[ -f cycle.tfvars ]]; then
+            exposure_args+=(-var-file=cycle.tfvars)
           fi
           tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -out=stack.tfplan
           # Between plan and apply, because the saved plan is what actually runs.
@@ -2469,6 +2533,14 @@ jobs:
           # stack untouched.
           if [[ -f restore.tfvars ]]; then
             exposure_args+=(-var-file=restore.tfvars)
+          fi
+          # The reviewed cycle inputs live in `cycle.tfvars` on the same terms
+          # (#243): which lane the cadence runs, its tick budget, whether its
+          # trigger is paused and whether it binds its secret. Only the
+          # engine-jobs stack has such a file, and passing it only when it exists
+          # leaves every other stack untouched.
+          if [[ -f cycle.tfvars ]]; then
+            exposure_args+=(-var-file=cycle.tfvars)
           fi
           tofu plan -input=false -lock-timeout=5m "${exposure_args[@]}" -out=rollback.tfplan \
             -var="rollback_revision=${ROLLBACK_REVISION}"

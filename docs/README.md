@@ -19,6 +19,8 @@
 | Delivery and operations | [`operations/delivery.md`](operations/delivery.md) |
 | Agent-operated production control plane and versioned operation catalog (decided, not implemented) | [`operations/production-control-plane.md`](operations/production-control-plane.md) |
 | Accepted first remote deployment composition and dated comparison evidence | [`operations/deployment-composition.md`](operations/deployment-composition.md) |
+| Bringing up and reading the scheduled engine cycle | [`operations/engine-cycle.md`](operations/engine-cycle.md) |
+| Restoring the v1 archive into the engine store | [`operations/restoring-the-v1-archive.md`](operations/restoring-the-v1-archive.md) |
 | Version control and cutover | [`development/version-control.md`](development/version-control.md) |
 | Session roles, parallel planning, work claims, stale detection, and handoff | [`development/parallel-work.md`](development/parallel-work.md) |
 | Bounded child briefs, returns, capability ceilings, and native lifecycle | [`Delegation contract`](development/parallel-work.md#delegation-contract) |
