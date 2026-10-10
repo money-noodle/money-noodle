@@ -1,3 +1,7 @@
+import {
+  forecastStoreConformance,
+  eventFailureConformance,
+} from './test-support/forecast-store-conformance.js';
 import { createHash } from 'node:crypto';
 import { boundReference } from './domain/contract-binding.js';
 import {
@@ -82,6 +86,7 @@ function harness() {
     now,
   );
   const store = new FakeForecastStore(cycle, now);
+  store.restoreRuns.add('synthetic-restore');
   const feeds: ForecastFeeds = {
     calculate: vi.fn(async () => [input({ calculatedAt: now().toISOString() })]),
     resolve: vi.fn(async (c: Contract) => ({
@@ -864,7 +869,7 @@ describe('F2 issuance boundary rejection', () => {
 });
 
 describe('review F6/F7 rollback and effect-phase expiry', () => {
-  it.each(['after-cycle', 'after-sample'] as const)(
+  it.each(['after-cycle', 'after-sample', 'after-event'] as const)(
     'publishes no fake transaction effects on %s failure',
     async (stage) => {
       const h = harness();
@@ -1161,14 +1166,14 @@ describe('F4 historical issuance DTO and independent raw replay', () => {
         contract: { ...input().quotes[0]!.contract, venue },
       }));
       const row = forecast(input({ quotes }), NOW, venues)!;
-      if (!venues.includes('polymarket')) {
+      if (!venues.some((venue) => venue === 'polymarket')) {
         expect(row).toBeNull();
         return;
       }
       expect(row.candidateEvaluation.registryVersion).toBe(
         'forecast-candidate-registry-observation-v2',
       );
-      if (!venues.includes('polymarket')) {
+      if (!venues.some((venue) => venue === 'polymarket')) {
         expect(row).toBeNull();
         return;
       }
@@ -1414,4 +1419,85 @@ describe('F3 canonical immutable full/slim binding', () => {
       ),
     ).toBeNull();
   });
+});
+
+describe('F6 shared store conformance', () => {
+  it('matches normalized instants, duplicate constraints, FK attribution and revision/event/terminal semantics', async () => {
+    const h = harness();
+    const held = await h.cycle.acquireLease({
+      capability: 'budget:paper',
+      owner: 'conformance',
+      now: h.now(),
+      expiresAt: new Date(h.now().getTime() + 60000),
+    });
+    if (!held.acquired) throw Error('lease');
+    await h.cycle.openRunRecord(held.grant, {
+      runId: 'conformance',
+      capability: 'budget:paper',
+      mode: 'forecast',
+      startedAt: h.now(),
+    });
+    const row = forecast(input(), NOW, enabled)!;
+    await forecastStoreConformance(h.store, held.grant, row, input(), async () => {
+      const meta = h.store.rowMetadata.get(row.id);
+      return {
+        cycles: h.store.cycles.size,
+        samples: [...h.store.samples.values()].reduce((n, s) => n + s.length, 0),
+        rows: h.store.rows.size,
+        events: h.store.events.length,
+        revision: meta?.revision ?? null,
+        originRunId: meta?.originRunId ?? null,
+        originRestoreRunId: meta?.originRestoreRunId ?? null,
+        lastRunId: meta?.lastRunId ?? null,
+        eventRevisions: h.store.events.filter((e) => e.id === row.id).map((e) => e.revision),
+      };
+    });
+  });
+  it('rejects missing run FK without publishing staged state', async () => {
+    const h = harness();
+    const held = await h.cycle.acquireLease({
+      capability: 'budget:paper',
+      owner: 'missing-run',
+      now: h.now(),
+      expiresAt: new Date(h.now().getTime() + 60000),
+    });
+    if (!held.acquired) throw Error('lease');
+    await expect(
+      h.store.recordObservation(held.grant, forecast(input(), NOW, enabled)!, input()),
+    ).rejects.toThrow('Missing cycle provenance.');
+    expect(h.store.cycles.size).toBe(0);
+    expect(h.store.samples.size).toBe(0);
+    expect(h.store.rows.size).toBe(0);
+    expect(h.store.events).toHaveLength(0);
+  });
+});
+
+it('F6 shared event-stage rollback conformance on fake', async () => {
+  const h = harness();
+  const held = await h.cycle.acquireLease({
+    capability: 'budget:paper',
+    owner: 'event-fake',
+    now: h.now(),
+    expiresAt: new Date(h.now().getTime() + 60000),
+  });
+  if (!held.acquired) throw Error('lease');
+  await h.cycle.openRunRecord(held.grant, {
+    runId: 'event-fake',
+    capability: 'budget:paper',
+    mode: 'forecast',
+    startedAt: h.now(),
+  });
+  h.store.failureAt = 'after-event';
+  const row = forecast(input(), NOW, enabled)!;
+  await eventFailureConformance(h.store, held.grant, row, input(), async () => ({
+    cycles: h.store.cycles.size,
+    samples: [...h.store.samples.values()].reduce((n, s) => n + s.length, 0),
+    rows: h.store.rows.size,
+    events: h.store.events.length,
+    revision: null,
+    originRunId: null,
+    originRestoreRunId: null,
+    lastRunId: null,
+    eventRevisions: [],
+  }));
 });

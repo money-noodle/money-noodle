@@ -1,3 +1,7 @@
+import {
+  forecastStoreConformance,
+  eventFailureConformance,
+} from '../dist/test-support/forecast-store-conformance.js';
 import { createHash } from 'node:crypto';
 // Remote CI only. Disposable synthetic PostgreSQL: never accepts a database URL.
 import assert from 'node:assert/strict';
@@ -382,6 +386,82 @@ try {
     assert.equal(rights.writer_delete, false);
   }
   await assert.rejects(writer.unsafe("update engine.forecast_cycle_event set event='{}'::jsonb"));
+  const conformRow = {
+    ...row,
+    id: 'shared-conformance',
+    symbol: 'CONFORMANCE',
+    closesAt: new Date(now.getTime() + 300000).toISOString(),
+  };
+  const conformSnapshot = async () => {
+    const [counts] = await admin.unsafe(
+      'select (select count(*) from engine.forecast_cycle)::int cycles,(select count(*) from engine.forecast_oracle_sample)::int samples,(select count(*) from engine.forecast_cycle_row)::int rows,(select count(*) from engine.forecast_cycle_event)::int events',
+    );
+    const [meta] = await admin.unsafe(
+      'select revision::int,origin_run_id,origin_restore_run_id,last_run_id from engine.forecast_cycle_row where forecast_id=$1',
+      [conformRow.id],
+    );
+    const events = await admin.unsafe(
+      'select revision::int from engine.forecast_cycle_event where forecast_id=$1 order by revision',
+      [conformRow.id],
+    );
+    return {
+      ...counts,
+      revision: meta?.revision ?? null,
+      originRunId: meta?.origin_run_id ?? null,
+      originRestoreRunId: meta?.origin_restore_run_id ?? null,
+      lastRunId: meta?.last_run_id ?? null,
+      eventRevisions: events.map((e) => e.revision),
+    };
+  };
+  await forecastStoreConformance(
+    store,
+    grant,
+    conformRow,
+    { ...input, asset: 'CONFORMANCE' },
+    conformSnapshot,
+  );
+  const eventFailure = createPostgresForecastStore(writerUrl, {
+    beforeEvent: () => {
+      throw Error('Synthetic event-stage failure');
+    },
+  });
+  await eventFailureConformance(
+    eventFailure,
+    grant,
+    {
+      ...row,
+      id: 'event-stage',
+      symbol: 'EVENT-ROLLBACK',
+      closesAt: new Date(now.getTime() + 600000).toISOString(),
+    },
+    { ...input, asset: 'EVENT-ROLLBACK' },
+    conformSnapshot,
+  );
+  await eventFailure.close();
+  console.log(
+    'Shared real/fake timestamp, duplicate, FK, revision, event-key and terminal conformance plus event-stage rollback verified.',
+  );
+  const missingRunBefore = await conformSnapshot();
+  await admin.unsafe(
+    "update engine.job_lease set owner='missing-run-fk' where capability='budget:paper'",
+  );
+  await assert.rejects(
+    store.recordObservation(
+      { ...grant, owner: 'missing-run-fk' },
+      {
+        ...row,
+        id: 'missing-run-observation',
+        symbol: 'MISSING-RUN',
+        closesAt: new Date(now.getTime() + 700000).toISOString(),
+      },
+      { ...input, asset: 'MISSING-RUN' },
+    ),
+    /foreign key/,
+  );
+  assert.deepEqual(await conformSnapshot(), missingRunBefore);
+  await admin.unsafe("update engine.job_lease set owner=$1 where capability='budget:paper'", [
+    grant.owner,
+  ]);
   // A constraint failure after inserting the cycle must roll back every earlier mutation.
   const invalid = {
     ...row,

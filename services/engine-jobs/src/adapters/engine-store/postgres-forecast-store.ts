@@ -12,6 +12,7 @@ import type {
 /** Fixed SQL and bound parameters only; runtime never performs DDL or touches public. */
 export function createPostgresForecastStore(
   connectionString: string,
+  testEffects?: { beforeEvent?: () => void },
 ): ForecastStore & { close(): Promise<void> } {
   const sql = postgres(connectionString, {
     max: 1,
@@ -39,6 +40,7 @@ export function createPostgresForecastStore(
     );
   }
   async function event(tx: Transaction, grant: LeaseGrant, row: ForecastRow): Promise<void> {
+    testEffects?.beforeEvent?.();
     await guard(tx, grant);
     await tx.unsafe(
       'insert into engine.forecast_cycle_event(forecast_id,revision,run_id,recorded_at,fencing_token,event) select forecast_id,revision,$2,clock_timestamp(),$3,row from engine.forecast_cycle_row where forecast_id=$1 on conflict do nothing',
@@ -144,7 +146,7 @@ export function createPostgresForecastStore(
       return rows.map((r) => {
         const contracts = Object.fromEntries(
           Object.entries(r.row.venueContracts ?? {}).map(([venue, ref]) => {
-            const raw = ref as unknown as Record<string, unknown>;
+            const raw = recordObject(ref) ?? {};
             if (venue !== 'polymarket' && venue !== 'kalshi')
               return [venue, { integrityFailure: 'unknown-venue' }];
             const fallback = r.row.marketUrl.split('/').filter(Boolean).at(-1) ?? '';
@@ -169,7 +171,7 @@ export function createPostgresForecastStore(
         original.id !== row.id ||
         original.row.id !== row.id ||
         original.row.symbol !== row.symbol ||
-        original.row.closesAt !== row.closesAt
+        Date.parse(original.row.closesAt) !== Date.parse(row.closesAt)
       )
         throw Error('Forecast identity mismatch.');
       await sql.begin(async (tx) => {
