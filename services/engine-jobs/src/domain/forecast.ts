@@ -8,6 +8,15 @@ export interface Contract {
   contractId: string;
   closesAt: string;
   slug: string;
+  asset?: string;
+  capturedAt?: string;
+  rulesSource?: string;
+  rulesFingerprint?: string;
+  rulesText?: string;
+  referenceSource?: string;
+  referenceValue?: number;
+  settlementPriceMethod?: 'unknown' | 'point-in-time' | 'simple-average' | 'time-weighted-average';
+  settlementWindowSeconds?: number;
 }
 export interface Quote {
   contract: Contract;
@@ -39,6 +48,8 @@ export interface ForecastInput {
   newsScores: readonly number[];
   relevantNewsCount: number;
   quotes: readonly Quote[];
+  sourceObservedAt?: string;
+  referenceSource?: string;
 }
 export interface Entry {
   venue: Venue;
@@ -203,6 +214,11 @@ export function forecast(
     close <= now.getTime()
   )
     return null;
+  if (input.sourceObservedAt !== undefined) {
+    const source = Date.parse(input.sourceObservedAt);
+    if (!Number.isFinite(source) || source > now.getTime() + 5000 || now.getTime() - source > 90000)
+      return null;
+  }
   const oracle = input.oracleHistory.filter((v) => Number.isFinite(v.price) && v.price > 0);
   const spacing =
     oracle.length > 1 ? (oracle.at(-1)!.time - oracle[0]!.time) / (oracle.length - 1) / 1000 : 0;
@@ -245,7 +261,12 @@ export function forecast(
   const settlement = vol === null ? null : settlementProbability(input, at, vol.perSecond);
   // Venue availability affects input quality only, never the production probability.
   const quotes = input.quotes.filter(
-    (q) => Date.parse(q.contract.closesAt) === close && enabled.includes(q.contract.venue),
+    (q) =>
+      Number.isFinite(Date.parse(q.contract.closesAt)) &&
+      Math.abs(Date.parse(q.contract.closesAt) - close) <= 5000 &&
+      Date.parse(q.contract.closesAt) > now.getTime() &&
+      (q.contract.asset === undefined || q.contract.asset === input.asset) &&
+      enabled.includes(q.contract.venue),
   );
   const range = input.coinPrice ? ((input.high24h - input.low24h) / input.coinPrice) * 100 : 0;
   const confidence = bound(
@@ -280,6 +301,8 @@ export function forecast(
       (primary.contract.venue === 'polymarket' ? 'polymarket.com/event/' : 'kalshi.com/markets/') +
       primary.contract.slug,
     venueContracts: Object.fromEntries(quotes.map((q) => [q.contract.venue, q.contract])),
+    sourceObservedAt: input.sourceObservedAt,
+    referenceSource: input.referenceSource,
     basisProbabilityUp: basis,
     slowTiltLogOdds: slow,
     modelVersion: 'Blend 0.4',
@@ -439,7 +462,11 @@ export function settlementProbability(
   )
     return null;
   const remaining = Math.max(0, (Date.parse(input.closesAt) - at) / 1000),
-    window = 60;
+    window =
+      input.quotes.find((q) => q.contract.venue === 'polymarket')?.contract
+        .settlementWindowSeconds ??
+      input.quotes[0]?.contract.settlementWindowSeconds ??
+      60;
   let mean = Math.log(input.currentPrice),
     variance = remaining - (2 * window) / 3;
   if (remaining < window) {

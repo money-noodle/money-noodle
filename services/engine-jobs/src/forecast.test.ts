@@ -17,7 +17,11 @@ import {
 import { runCycleJob } from './application/cycle.js';
 import { FakeCycleStore } from './adapters/engine-store/fake-cycle-store.js';
 import { FakeForecastStore } from './adapters/engine-store/fake-forecast-store.js';
-import { createPublicForecastFeeds } from './adapters/feeds/forecast-feeds.js';
+import {
+  krakenPair,
+  settlementMetadata,
+  createPublicForecastFeeds,
+} from './adapters/feeds/forecast-feeds.js';
 const NOW = new Date('2026-10-10T12:01:00Z');
 const closes = Array.from({ length: 121 }, (_, i) => 100 * Math.exp(0.001 * Math.sin(i)));
 function input(overrides: Partial<ForecastInput> = {}): ForecastInput {
@@ -465,6 +469,13 @@ describe('synthetic public calculation response matrix', () => {
       nonBinary?: boolean;
       kalshi?: boolean;
       weekly?: boolean;
+      wrongAsset?: boolean;
+      swapped?: boolean;
+      invalidDate?: boolean;
+      missingDate?: boolean;
+      wrongPair?: boolean;
+      stale?: boolean;
+      actualClose?: string;
     } = {},
   ): typeof fetch {
     return async (url) => {
@@ -510,8 +521,8 @@ describe('synthetic public calculation response matrix', () => {
         value = {
           result: {
             last: 1,
-            XBTUSD: Array.from({ length: 121 }, (_, i) => [
-              slot - (121 - i) * 60,
+            [options.wrongPair ? 'ETHUSD' : 'XBTUSD']: Array.from({ length: 121 }, (_, i) => [
+              slot - (options.stale ? 121 : 119 - i) * 60,
               0,
               0,
               0,
@@ -522,13 +533,18 @@ describe('synthetic public calculation response matrix', () => {
       else if (u.includes('gamma-api'))
         value = [
           {
-            slug: 'btc-updown-15m-' + slot,
-            endDate: '2026-10-10T12:15:00Z',
+            slug: (options.wrongAsset ? 'eth' : 'btc') + '-updown-15m-' + slot,
+            endDate: options.missingDate
+              ? undefined
+              : options.invalidDate
+                ? 'invalid-date'
+                : (options.actualClose ?? '2026-10-10T12:15:00Z'),
             markets: [
               {
                 conditionId: 'synthetic-btc',
                 acceptingOrders: true,
-                clobTokenIds: '["up","down"]',
+                outcomes: options.swapped ? '["Down","Up"]' : '["Up","Down"]',
+                clobTokenIds: options.swapped ? '["down","up"]' : '["up","down"]',
                 outcomePrices: '["0.6","0.4"]',
               },
             ],
@@ -546,9 +562,9 @@ describe('synthetic public calculation response matrix', () => {
           markets: options.kalshi
             ? [
                 {
-                  ticker: 'KXBTC-test',
+                  ticker: 'KXBTC15M-test',
                   status: 'active',
-                  close_time: '2026-10-10T12:15:00Z',
+                  close_time: options.actualClose ?? '2026-10-10T12:15:00Z',
                   yes_bid_dollars: '0.49',
                   yes_ask_dollars: '0.5',
                   no_ask_dollars: '0.52',
@@ -585,6 +601,41 @@ describe('synthetic public calculation response matrix', () => {
     );
     expect(result[0]?.quotes[0]?.askUp).toBeNull();
     expect(result[0]?.quotes[0]?.askDown).toBeNull();
+  });
+  it.each([{ wrongPair: true }, { stale: true }])(
+    'rejects wrong-pair or stale public series %j',
+    async (options) => {
+      expect(
+        await createPublicForecastFeeds(request(options)).calculate(NOW, enabled, harness().store),
+      ).toEqual([]);
+    },
+  );
+  it('maps binary labels to token IDs instead of positional UP assumptions', async () => {
+    const result = await createPublicForecastFeeds(request({ swapped: true })).calculate(
+      NOW,
+      ['polymarket'],
+      harness().store,
+    );
+    expect(result[0]?.quotes[0]?.askUp).toBe(0.5);
+    expect(result[0]?.quotes[0]?.askDown).toBe(0.51);
+  });
+  it.each([{ wrongAsset: true }, { invalidDate: true }, { missingDate: true }])(
+    'rejects wrong or unproven venue targets %j',
+    async (options) => {
+      const result = await createPublicForecastFeeds(request(options)).calculate(
+        NOW,
+        ['polymarket'],
+        harness().store,
+      );
+      expect(result[0]?.quotes).toEqual([]);
+    },
+  );
+  it('retains an aligned Kalshi actual close four seconds before requested close', async () => {
+    const result = await createPublicForecastFeeds(
+      request({ kalshi: true, actualClose: '2026-10-10T12:14:56Z' }),
+    ).calculate(NOW, ['kalshi'], harness().store);
+    expect(result[0]?.closesAt).toBe('2026-10-10T12:14:56Z');
+    expect(result[0]?.quotes[0]?.contract.closesAt).toBe('2026-10-10T12:14:56Z');
   });
   it('retains unavailable-provider failures and non-binary outcomes without substitution', async () => {
     const error: typeof fetch = async () => new Response('', { status: 503 });
@@ -765,5 +816,32 @@ describe('review F6/F7 rollback and effect-phase expiry', () => {
     await expect(
       h.cycle.heartbeat(held.grant, h.now(), new Date(h.now().getTime() + 1000)),
     ).rejects.toThrow('lease');
+  });
+});
+
+describe('F2 source pair and metadata boundaries', () => {
+  it('ignores wrong first pair, rejects missing expected pair and error payload', () => {
+    expect(krakenPair({ result: { ETHUSD: ['wrong'], XXBTZUSD: ['correct'] } }, 'XBTUSD')).toEqual([
+      'correct',
+    ]);
+    expect(krakenPair({ result: { ETHUSD: ['wrong'] } }, 'XBTUSD')).toBeUndefined();
+    expect(krakenPair({ error: ['bad'], result: { XBTUSD: [] } }, 'XBTUSD')).toBeUndefined();
+  });
+  it('keeps unknown oracle/window unknown and parses explicitly stated settlement metadata', () => {
+    const unknown = settlementMetadata('Unspecified rules', 'https://example.invalid/rules');
+    expect(unknown.settlementPriceMethod).toBe('unknown');
+    expect(unknown.settlementWindowSeconds).toBeUndefined();
+    expect(unknown.rulesFingerprint).toHaveLength(64);
+    expect(
+      settlementMetadata('Simple average of the final minute', 'https://example.invalid/rules'),
+    ).toMatchObject({ settlementPriceMethod: 'simple-average', settlementWindowSeconds: 60 });
+  });
+  it('rejects stale, invalid and future source timestamps', () => {
+    for (const sourceObservedAt of [
+      'bad',
+      new Date(NOW.getTime() - 90001).toISOString(),
+      new Date(NOW.getTime() + 5001).toISOString(),
+    ])
+      expect(forecast(input({ sourceObservedAt }), NOW, enabled)).toBeNull();
   });
 });

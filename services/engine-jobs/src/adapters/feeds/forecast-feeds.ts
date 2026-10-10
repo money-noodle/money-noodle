@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type {
   Contract,
   ForecastFeeds,
@@ -50,7 +51,13 @@ export function createPublicForecastFeeds(request: PublicFetch = fetch): Forecas
     if (raw.length > 8_000_000) throw new Error('Public provider response too large.');
     return JSON.parse(raw) as unknown;
   }
-  async function poly(prefix: string, slot: number, closesAt: string): Promise<Quote | null> {
+  async function poly(
+    asset: string,
+    prefix: string,
+    slot: number,
+    closesAt: string,
+    capturedAt: string,
+  ): Promise<Quote | null> {
     const slug = prefix + '-updown-15m-' + slot;
     const event = object(
       array(
@@ -58,12 +65,21 @@ export function createPublicForecastFeeds(request: PublicFetch = fetch): Forecas
       )[0],
     );
     const market = object(array(event.markets)[0]);
+    const actualClose = text(market.endDate) || text(event.endDate);
+    const outcomes = jsonArray(market.outcomes).map((v) => text(v).toUpperCase());
     if (
+      text(event.slug) !== slug ||
       market.acceptingOrders !== true ||
-      Math.abs(Date.parse(text(event.endDate) || closesAt) - Date.parse(closesAt)) > 5000
+      !Number.isFinite(Date.parse(actualClose)) ||
+      Math.abs(Date.parse(actualClose) - Date.parse(closesAt)) > 5000 ||
+      outcomes.length !== 2 ||
+      !outcomes.includes('UP') ||
+      !outcomes.includes('DOWN')
     )
       return null;
     const tokens = jsonArray(market.clobTokenIds).filter((v): v is string => typeof v === 'string');
+    if (tokens.length !== 2 || tokens[0] === tokens[1] || tokens.some((t) => !t || t.length > 256))
+      return null;
     const books = await body('https://clob.polymarket.com/books', 4000, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -81,13 +97,29 @@ export function createPublicForecastFeeds(request: PublicFetch = fetch): Forecas
     const contractId = text(market.conditionId) || text(market.id);
     if (!contractId) return null;
     return {
-      contract: { venue: 'polymarket', contractId, closesAt, slug: text(event.slug) || slug },
-      probabilityUp: jsonArray(market.outcomePrices).map(number)[0] ?? 0.5,
-      askUp: ask(tokens[0]),
-      askDown: ask(tokens[1]),
+      contract: {
+        venue: 'polymarket',
+        contractId,
+        closesAt: actualClose,
+        slug,
+        asset,
+        capturedAt,
+        ...settlementMetadata(
+          market.description,
+          'https://gamma-api.polymarket.com/events?slug=' + encodeURIComponent(slug),
+        ),
+      },
+      probabilityUp: jsonArray(market.outcomePrices).map(number)[outcomes.indexOf('UP')] ?? 0.5,
+      askUp: ask(tokens[outcomes.indexOf('UP')]),
+      askDown: ask(tokens[outcomes.indexOf('DOWN')]),
     };
   }
-  async function kalshi(series: string, closesAt: string): Promise<Quote | null> {
+  async function kalshi(
+    asset: string,
+    series: string,
+    closesAt: string,
+    capturedAt: string,
+  ): Promise<Quote | null> {
     const result = object(
       await body(
         'https://api.elections.kalshi.com/trade-api/v2/markets?limit=10&status=open&series_ticker=' +
@@ -99,6 +131,8 @@ export function createPublicForecastFeeds(request: PublicFetch = fetch): Forecas
       .find(
         (m) =>
           m.status === 'active' &&
+          text(m.ticker).startsWith(series + '-') &&
+          Number.isFinite(Date.parse(text(m.close_time))) &&
           Math.abs(Date.parse(text(m.close_time)) - Date.parse(closesAt)) <= 5000,
       );
     if (market === undefined || !text(market.ticker)) return null;
@@ -108,8 +142,15 @@ export function createPublicForecastFeeds(request: PublicFetch = fetch): Forecas
       contract: {
         venue: 'kalshi',
         contractId: text(market.ticker),
-        closesAt,
+        closesAt: text(market.close_time),
         slug: series.toLowerCase(),
+        asset,
+        capturedAt,
+        ...settlementMetadata(
+          [text(market.rules_primary), text(market.rules_secondary)].join(' '),
+          'https://api.elections.kalshi.com/trade-api/v2/markets/' +
+            encodeURIComponent(text(market.ticker)),
+        ),
       },
       probabilityUp:
         bid !== null && ask !== null ? (bid + ask) / 2 : number(market.last_price_dollars) || 0.5,
@@ -209,30 +250,36 @@ export function createPublicForecastFeeds(request: PublicFetch = fetch): Forecas
           body('https://api.kraken.com/0/public/Ticker?pair=' + pair).catch(() => null),
           body('https://api.kraken.com/0/public/OHLC?interval=10080&pair=' + pair),
           Promise.all([
-            enabled.includes('polymarket') ? poly(prefix, slot, closesAt).catch(() => null) : null,
-            enabled.includes('kalshi') ? kalshi(series, closesAt).catch(() => null) : null,
+            enabled.includes('polymarket')
+              ? poly(asset, prefix, slot, closesAt, now.toISOString()).catch(() => null)
+              : null,
+            enabled.includes('kalshi')
+              ? kalshi(asset, series, closesAt, now.toISOString()).catch(() => null)
+              : null,
           ]),
           store.readOracleHistory(asset, new Date(now.getTime() - 30 * 60_000)),
         ]);
-        const rows = array(
-          Object.entries(object(object(ohlc).result)).find(
-            ([k, v]) => k !== 'last' && Array.isArray(v),
-          )?.[1],
-        ).map(array);
-        const reference = rows.find((r) => number(r[0]) === slot - 60);
-        const referencePrice = number(reference?.[4]);
+        const rows = array(krakenPair(ohlc, pair)).map(array);
+        const reference = rows.find((r) => number(r[0]) === slot - 60),
+          referencePrice = number(reference?.[4]);
+        const latest = rows.at(-1),
+          sourceTime = number(latest?.[0]) * 1000;
+        // Current ticker has no source timestamp; use its matching series only after
+        // a fresh current candle proves that this pair's public series is current.
+        if (
+          !Number.isFinite(sourceTime) ||
+          sourceTime > now.getTime() + 5000 ||
+          now.getTime() - sourceTime > 90000
+        )
+          return null;
         const minuteCloses = rows
           .slice(-121)
           .map((r) => number(r[4]))
-          .filter((p) => p > 0);
-        const tickerRow = object(Object.values(object(object(ticker).result))[0]);
+          .filter((v) => v > 0);
+        const tickerRow = object(krakenPair(ticker, pair));
         const currentPrice = number(array(tickerRow.c)[0]) || minuteCloses.at(-1) || 0;
         if (!(referencePrice > 0) || !(currentPrice > 0) || minuteCloses.length < 12) return null;
-        const weeklyRows = array(
-          Object.entries(object(object(weekly).result)).find(
-            ([k, v]) => k !== 'last' && Array.isArray(v),
-          )?.[1],
-        ).map(array);
+        const weeklyRows = array(krakenPair(weekly, pair)).map(array);
         const years = new Map<number, number[]>();
         for (const r of weeklyRows) {
           const d = new Date(number(r[0]) * 1000),
@@ -252,7 +299,13 @@ export function createPublicForecastFeeds(request: PublicFetch = fetch): Forecas
         return {
           asset,
           calculatedAt: now.toISOString(),
-          closesAt,
+          closesAt:
+            quotes.find((q) => q?.contract.venue === 'polymarket')?.contract.closesAt ??
+            quotes.find((q) => q !== null)?.contract.closesAt ??
+            closesAt,
+          sourceObservedAt: new Date(sourceTime).toISOString(),
+          referenceSource:
+            'Kraken 1m series at cycle open (same-series approximation, not venue oracle equality)',
           referencePrice,
           currentPrice,
           coinPrice: number(coin.current_price),
@@ -335,4 +388,62 @@ export function createPublicForecastFeeds(request: PublicFetch = fetch): Forecas
         : null;
     },
   };
+}
+
+/** Preserve unknown rules as unknown rather than inventing an oracle or window. */
+export function settlementMetadata(
+  value: unknown,
+  rulesSource: string,
+): Pick<
+  Contract,
+  | 'rulesSource'
+  | 'rulesFingerprint'
+  | 'rulesText'
+  | 'settlementPriceMethod'
+  | 'settlementWindowSeconds'
+> {
+  const rulesText = text(value).slice(0, 16000).replace(/\s+/g, ' ').trim();
+  const settlementPriceMethod = /time[- ]weighted|\btwap\b/i.test(rulesText)
+    ? 'time-weighted-average'
+    : /simple average|average of/i.test(rulesText)
+      ? 'simple-average'
+      : /closing price|last price|price at (?:the )?(?:end|beginning)/i.test(rulesText)
+        ? 'point-in-time'
+        : 'unknown';
+  const seconds = rulesText.match(/(?:average|twap)[\s\S]{0,100}?(\d+)\s*seconds?/i);
+  const window = seconds
+    ? Number(seconds[1])
+    : /final minute|last minute/i.test(rulesText)
+      ? 60
+      : undefined;
+  return {
+    rulesSource,
+    rulesText,
+    rulesFingerprint: createHash('sha256').update(rulesText).digest('hex'),
+    settlementPriceMethod,
+    ...(settlementPriceMethod !== 'unknown' &&
+    settlementPriceMethod !== 'point-in-time' &&
+    window !== undefined &&
+    window > 0 &&
+    window <= 900
+      ? { settlementWindowSeconds: window }
+      : {}),
+  };
+}
+
+const KRAKEN_ALIASES: Record<string, readonly string[]> = {
+  XBTUSD: ['XBTUSD', 'XXBTZUSD'],
+  ETHUSD: ['ETHUSD', 'XETHZUSD'],
+  SOLUSD: ['SOLUSD'],
+  XRPUSD: ['XRPUSD', 'XXRPZUSD'],
+  DOGEUSD: ['DOGEUSD', 'XDGUSD', 'XXDGZUSD'],
+  BNBUSD: ['BNBUSD'],
+  HYPEUSD: ['HYPEUSD'],
+};
+export function krakenPair(payload: unknown, pair: string): unknown {
+  const root = object(payload);
+  if (array(root.error).length) return undefined;
+  const result = object(root.result);
+  for (const key of KRAKEN_ALIASES[pair] ?? []) if (Object.hasOwn(result, key)) return result[key];
+  return undefined;
 }

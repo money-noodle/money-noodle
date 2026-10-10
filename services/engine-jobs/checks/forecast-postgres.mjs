@@ -145,6 +145,8 @@ try {
     "insert into engine.contract_provenance(registry_id,record,restore_run_id) values('synthetic-ref',$1::jsonb,'synthetic-restore')",
     [
       admin.json({
+        version: 'contract-provenance-v1',
+        registryId: 'synthetic-ref',
         venue: 'polymarket',
         contractId: 'exact-contract',
         closesAt: row.closesAt,
@@ -207,6 +209,59 @@ try {
   await admin.unsafe(
     "insert into engine.forecast_row(forecast_id,status,row,restore_run_id) values('missing-seed','pending',$1::jsonb,'synthetic-restore')",
     [admin.json(missingSeed)],
+  );
+  const badCases = [
+    [
+      'wrong-venue',
+      {
+        version: 'contract-provenance-v1',
+        registryId: 'wrong-venue',
+        venue: 'kalshi',
+        contractId: 'wrong',
+        closesAt: row.closesAt,
+      },
+    ],
+    [
+      'wrong-id',
+      {
+        version: 'contract-provenance-v1',
+        registryId: 'different-canonical-id',
+        venue: 'polymarket',
+        contractId: 'wrong',
+        closesAt: row.closesAt,
+      },
+    ],
+    [
+      'bad-date',
+      {
+        version: 'contract-provenance-v1',
+        registryId: 'bad-date',
+        venue: 'polymarket',
+        contractId: 'wrong',
+        closesAt: 'invalid-date',
+      },
+    ],
+  ];
+  for (const [key, record] of badCases) {
+    await admin.unsafe(
+      "insert into engine.contract_provenance(registry_id,record,restore_run_id) values($1,$2::jsonb,'synthetic-restore')",
+      [key, admin.json(record)],
+    );
+    await admin.unsafe(
+      "insert into engine.forecast_row(forecast_id,status,row,restore_run_id) values($1,'pending',$2::jsonb,'synthetic-restore')",
+      [
+        'bad-' + key,
+        admin.json({
+          ...row,
+          id: 'bad-' + key,
+          venueContracts: { polymarket: { registryId: key } },
+        }),
+      ],
+    );
+  }
+  // Isolate malformed targets from the earlier unrelated synthetic legacy rows.
+  await admin.unsafe(
+    "update engine.forecast_cycle_row set status='resolved',row=jsonb_set(row,'{status}','\"resolved\"'::jsonb) where forecast_id like 'synthetic-observation%'",
   );
   const requested = [];
   await runForecastTick(
