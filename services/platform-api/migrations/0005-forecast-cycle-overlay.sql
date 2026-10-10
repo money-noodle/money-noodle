@@ -1,4 +1,5 @@
 -- #243 stage 2: additive cycle provenance. Schema-owner application only.
+-- Stage-2 applied run reason: forecast-run (the run record reason is unconstrained text).
 -- Existing restore tables and migrations 0001-0004 are intentionally untouched.
 -- A contract cycle owns many observation identities, NOT just one forecast.
 begin;

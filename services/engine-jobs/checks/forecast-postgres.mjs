@@ -1,5 +1,7 @@
 // Remote CI only. Disposable synthetic PostgreSQL: never accepts a database URL.
 import assert from 'node:assert/strict';
+import process from 'node:process';
+import console from 'node:console';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';

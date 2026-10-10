@@ -64,7 +64,11 @@ function harness() {
   const store = new FakeForecastStore(cycle, now);
   const feeds: ForecastFeeds = {
     calculate: vi.fn(async () => [input({ calculatedAt: now().toISOString() })]),
-    resolve: vi.fn(async (c) => ({ venue: c.venue, contractId: c.contractId, outcome: 'UP' })),
+    resolve: vi.fn(async (c: Contract) => ({
+      venue: c.venue,
+      contractId: c.contractId,
+      outcome: 'UP' as const,
+    })),
   };
   return {
     cycle,
@@ -172,7 +176,10 @@ describe('synthetic historical equation differential', () => {
             combinedProbability(expected.basis, expected.slow, 0.65, 0.5),
             13,
           );
-          expect(row.candidateEvaluation[2]?.probabilityUp).not.toBeNull();
+          // The final-minute distribution requires actual observed prices.
+          // These synthetic matrix inputs deliberately have no such observations.
+          if (seconds < 60) expect(row.candidateEvaluation[2]?.probabilityUp).toBeNull();
+          else expect(row.candidateEvaluation[2]?.probabilityUp).not.toBeNull();
           expect(row.candidateEvaluation[3]?.probabilityUp).toBeCloseTo(
             combinedProbability(expected.basis, 0),
             13,

@@ -272,7 +272,7 @@ export function createPublicForecastFeeds(request: PublicFetch = fetch): Forecas
         } satisfies ForecastInput;
       }),
     );
-    return results.filter((r): r is ForecastInput => r !== null);
+    return results.filter((r) => r !== null);
   }
   return {
     calculate,
