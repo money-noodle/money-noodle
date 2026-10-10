@@ -30,7 +30,9 @@ try {
   let ready = false;
   for (let i = 0; i < 60; i++) {
     try {
-      docker('exec', name, 'pg_isready', '-U', 'postgres');
+      // The image init server listens on a Unix socket before it restarts.
+      // Require TCP readiness so a successful probe cannot race that restart.
+      docker('exec', name, 'pg_isready', '-h', '127.0.0.1', '-U', 'postgres');
       ready = true;
       break;
     } catch {
@@ -58,6 +60,7 @@ try {
   await admin.unsafe(
     readFileSync('services/platform-api/migrations/0005-forecast-cycle-overlay.sql', 'utf8'),
   );
+  console.log('Synthetic schema migration and reapply completed.');
   const writerUrl = 'postgres://engine_writer@127.0.0.1:' + port + '/postgres';
   writer = postgres(writerUrl, { max: 1, prepare: false });
   store = createPostgresForecastStore(writerUrl);
