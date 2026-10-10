@@ -59,9 +59,10 @@ const enabled = ['polymarket', 'kalshi'] as const;
 function harness() {
   let time = new Date(NOW);
   const now = () => time;
-  const cycle = new FakeCycleStore([
-    { id: 'intent', action: 'resume', epoch: 1, capability: 'budget:paper', recordedAt: NOW },
-  ]);
+  const cycle = new FakeCycleStore(
+    [{ id: 'intent', action: 'resume', epoch: 1, capability: 'budget:paper', recordedAt: NOW }],
+    now,
+  );
   const store = new FakeForecastStore(cycle, now);
   const feeds: ForecastFeeds = {
     calculate: vi.fn(async () => [input({ calculatedAt: now().toISOString() })]),
@@ -715,5 +716,54 @@ describe('F2 issuance boundary rejection', () => {
       quotes: input().quotes.map((q) => ({ ...q, contract: { ...q.contract, closesAt: close } })),
     });
     expect(forecast(i, NOW, enabled)).toBeNull();
+  });
+});
+
+describe('review F6/F7 rollback and effect-phase expiry', () => {
+  it.each(['after-cycle', 'after-sample'] as const)(
+    'publishes no fake transaction effects on %s failure',
+    async (stage) => {
+      const h = harness();
+      h.store.failureAt = stage;
+      await expect(h.job()).rejects.toThrow('Synthetic transaction failure');
+      expect(h.store.cycles.size).toBe(0);
+      expect(h.store.samples.size).toBe(0);
+      expect(h.store.rows.size).toBe(0);
+      expect(h.store.events).toHaveLength(0);
+    },
+  );
+  it('rejects invalid sample before publishing any transaction state', async () => {
+    const h = harness();
+    h.feeds.calculate = async () => [input({ currentPrice: Infinity })];
+    await expect(h.job()).rejects.toThrow('Oracle sample constraint');
+    expect(h.store.cycles.size).toBe(0);
+    expect(h.store.samples.size).toBe(0);
+  });
+  it('does not resolve after stalled empty calculation expires its owner', async () => {
+    const h = harness(),
+      row = forecast(input(), NOW, enabled)!;
+    h.store.seed.set(row.id, { id: row.id, row, restoreRunId: 'synthetic-restore' });
+    h.feeds.calculate = async () => {
+      h.advance(120000);
+      return [];
+    };
+    await expect(h.job()).rejects.toThrow('fence');
+    expect(h.feeds.resolve).not.toHaveBeenCalled();
+    expect(h.store.events).toHaveLength(0);
+  });
+  it('cannot revive an expired fake lease with heartbeat', async () => {
+    const h = harness();
+    const held = await h.cycle.acquireLease({
+      capability: 'budget:paper',
+      owner: 'expiry',
+      now: h.now(),
+      expiresAt: new Date(h.now().getTime() + 1000),
+    });
+    expect(held.acquired).toBe(true);
+    if (!held.acquired) throw Error('acquisition failed');
+    h.advance(1001);
+    await expect(
+      h.cycle.heartbeat(held.grant, h.now(), new Date(h.now().getTime() + 1000)),
+    ).rejects.toThrow('lease');
   });
 });

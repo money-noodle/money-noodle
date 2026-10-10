@@ -14,7 +14,7 @@ if (process.env.GITHUB_ACTIONS !== 'true')
 const name = 'mn-forecast-test-' + process.pid;
 const docker = (...args) =>
   execFileSync('docker', args, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
-let admin, writer, store, cycle;
+let admin, writer, store, cycle, blocker;
 try {
   docker(
     'run',
@@ -256,6 +256,92 @@ try {
     assert.equal(rights.writer_delete, false);
   }
   await assert.rejects(writer.unsafe("update engine.forecast_cycle_event set event='{}'::jsonb"));
+  // A constraint failure after inserting the cycle must roll back every earlier mutation.
+  const invalid = {
+    ...row,
+    id: 'invalid-price',
+    symbol: 'ROLLBACK',
+    closesAt: new Date(now.getTime() + 60000).toISOString(),
+  };
+  await assert.rejects(
+    store.recordObservation(grant, invalid, { ...input, asset: 'ROLLBACK', currentPrice: -1 }),
+  );
+  assert.equal(
+    Number(
+      (await admin.unsafe("select count(*) n from engine.forecast_cycle where asset='ROLLBACK'"))[0]
+        .n,
+    ),
+    0,
+  );
+  assert.equal(
+    Number(
+      (
+        await admin.unsafe(
+          "select count(*) n from engine.forecast_cycle_row where forecast_id='invalid-price'",
+        )
+      )[0].n,
+    ),
+    0,
+  );
+  await assert.rejects(
+    store.patchForecast(grant, restored, { ...restored.row, id: 'wrong-identity' }),
+    /identity mismatch/,
+  );
+  // Hold a conflicting unique cycle key after the writer's initial lease check.
+  // Expiry must reject the resumed mutation and roll back the complete transaction.
+  blocker = postgres(url, { max: 1, prepare: false });
+  let unlock, announce;
+  const locked = new Promise((resolve) => {
+    announce = resolve;
+  });
+  const release = new Promise((resolve) => {
+    unlock = resolve;
+  });
+  const expiresClose = new Date(now.getTime() + 120000).toISOString();
+  await admin.unsafe(
+    "update engine.job_lease set expires_at=clock_timestamp()+interval '300 milliseconds' where capability='budget:paper'",
+  );
+  const blocking = blocker.begin(async (tx) => {
+    await tx.unsafe(
+      "insert into engine.forecast_cycle(asset,closes_at,first_run_id) values('EXPIRY',$1,'synthetic-run')",
+      [expiresClose],
+    );
+    announce();
+    await release;
+  });
+  await locked;
+  const late = store.recordObservation(
+    grant,
+    { ...row, id: 'late-write', symbol: 'EXPIRY', closesAt: expiresClose },
+    { ...input, asset: 'EXPIRY' },
+  );
+  // Observe rejection immediately to avoid an unhandled promise while the blocker is held.
+  const rejected = assert.rejects(late, /live lease/);
+  await delay(600);
+  unlock();
+  await blocking;
+  await rejected;
+  assert.equal(
+    Number(
+      (
+        await admin.unsafe(
+          "select count(*) n from engine.forecast_cycle_row where forecast_id='late-write'",
+        )
+      )[0].n,
+    ),
+    0,
+  );
+  assert.equal(
+    Number(
+      (
+        await admin.unsafe(
+          "select count(*) n from engine.forecast_oracle_sample where asset='EXPIRY'",
+        )
+      )[0].n,
+    ),
+    0,
+  );
+  console.log('Synthetic constraint rollback and expiry-after-lock rollback verified.');
   await admin.unsafe(
     "update engine.job_lease set expires_at=acquired_at where capability='budget:paper'",
   );
@@ -269,6 +355,7 @@ try {
     'Synthetic PostgreSQL migration/reapply/lease-expiry/provenance/overlay/uniqueness/role contract passed.',
   );
 } finally {
+  if (blocker) await blocker.end({ timeout: 5 });
   if (store) await store.close();
   if (cycle) await cycle.close();
   if (writer) await writer.end({ timeout: 5 });

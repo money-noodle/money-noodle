@@ -16,11 +16,14 @@ export async function runForecastTick(
   grant: LeaseGrant,
   now: () => Date,
 ): Promise<void> {
+  await store.assertLease(grant);
   const enabled = await store.readEnabledVenues();
+  await store.assertLease(grant);
   for (const input of await feeds.calculate(now(), enabled, store)) {
     const row = forecast(input, now(), enabled);
     if (row !== null) await store.recordObservation(grant, row, input);
   }
+  await store.assertLease(grant);
   const cycles = new Set<string>(),
     requests = new Map<string, Contract>();
   const due = (await store.readDueForecasts(now(), 2000)).filter((original) => {
@@ -45,6 +48,7 @@ export async function runForecastTick(
     const c = target(original.row);
     if (c !== undefined) requests.set(c.venue + ':' + c.contractId, c);
   }
+  await store.assertLease(grant);
   const outcomes = new Map<string, Outcome | null>();
   await Promise.all(
     [...requests].slice(0, 40).map(async ([key, c]) => {

@@ -87,6 +87,7 @@ export interface Outcome {
   invalidReason?: string;
 }
 export interface ForecastStore {
+  assertLease(grant: LeaseGrant): Promise<void>;
   readEnabledVenues(): Promise<readonly Venue[]>;
   readOracleHistory(asset: string, since: Date): Promise<readonly PricePoint[]>;
   recordObservation(grant: LeaseGrant, row: ForecastRow, input: ForecastInput): Promise<boolean>;
