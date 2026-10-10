@@ -1,7 +1,7 @@
 import {
   forecastStoreConformance,
   eventFailureConformance,
-} from '../dist/test-support/forecast-store-conformance.js';
+} from '../dist/conformance/forecast-store-conformance.js';
 import { createHash } from 'node:crypto';
 // Remote CI only. Disposable synthetic PostgreSQL: never accepts a database URL.
 import assert from 'node:assert/strict';

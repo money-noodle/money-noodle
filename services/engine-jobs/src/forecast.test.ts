@@ -1,7 +1,7 @@
 import {
   forecastStoreConformance,
   eventFailureConformance,
-} from './test-support/forecast-store-conformance.js';
+} from './conformance/forecast-store-conformance.js';
 import { createHash } from 'node:crypto';
 import { boundReference } from './domain/contract-binding.js';
 import {
