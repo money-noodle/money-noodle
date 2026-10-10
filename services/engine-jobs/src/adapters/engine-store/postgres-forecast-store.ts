@@ -136,7 +136,7 @@ export function createPostgresForecastStore(
       ];
       const refs = registryIds.length
         ? await sql.unsafe<{ registry_id: string; record: Record<string, unknown> }[]>(
-            'select registry_id,record from engine.contract_provenance where registry_id in(select jsonb_array_elements_text($1::jsonb)) limit 4000',
+            'select registry_id,record from engine.contract_provenance where registry_id in(select jsonb_array_elements_text($1::text::jsonb)) limit 4000',
             [JSON.stringify(registryIds)],
           )
         : [];

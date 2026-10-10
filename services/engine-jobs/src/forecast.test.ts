@@ -1,3 +1,9 @@
+import {
+  candidateEvidence,
+  replayProbability,
+  replayConfidence,
+  reconstructedSnapshot,
+} from './domain/forecast-evidence.js';
 import { describe, expect, it, vi } from 'vitest';
 import {
   forecast,
@@ -181,16 +187,20 @@ describe('synthetic historical equation differential', () => {
           expect(row.slowTiltLogOdds).toBeCloseTo(expected.slow, 13);
           expect(row.probabilityUp).toBeCloseTo(expected.p, 13);
           expect(row.confidence).toBeCloseTo(expected.confidence, 13);
-          expect(row.candidateEvaluation[0]?.probabilityUp).toBe(row.probabilityUp);
-          expect(row.candidateEvaluation[1]?.probabilityUp).toBeCloseTo(
+          expect(row.candidateEvaluation.decisions[0]?.probabilityUp).toBe(row.probabilityUp);
+          expect(row.candidateEvaluation.decisions[1]?.probabilityUp).toBeCloseTo(
             combinedProbability(expected.basis, expected.slow, 0.65, 0.5),
             13,
           );
           // The final-minute distribution requires actual observed prices.
           // These synthetic matrix inputs deliberately have no such observations.
-          if (seconds < 60) expect(row.candidateEvaluation[2]?.probabilityUp).toBeNull();
-          else expect(row.candidateEvaluation[2]?.probabilityUp).not.toBeNull();
-          expect(row.candidateEvaluation[3]?.probabilityUp).toBeCloseTo(
+          if (seconds < 60) {
+            expect(row.candidateEvaluation.decisions[2]?.status).toBe('unavailable');
+            expect(row.candidateEvaluation.decisions[2]?.unavailableReason).toBe(
+              'Settlement-average estimate unavailable at issuance.',
+            );
+          } else expect(row.candidateEvaluation.decisions[2]?.status).toBe('available');
+          expect(row.candidateEvaluation.decisions[3]?.probabilityUp).toBeCloseTo(
             combinedProbability(expected.basis, 0),
             13,
           );
@@ -209,7 +219,7 @@ describe('synthetic historical equation differential', () => {
         enabled,
       )!;
     expect(a.probabilityUp).toBe(b.probabilityUp);
-    a.candidateEvaluation[0]!.probabilityUp = 0.01;
+    a.candidateEvaluation.decisions[0]!.probabilityUp = 0.01;
     expect(forecast(i, NOW, enabled)!.probabilityUp).toBe(a.probabilityUp);
   });
   it('bounds probabilities and fails closed for unavailable volatility, stale and misaligned sources', () => {
@@ -588,7 +598,7 @@ describe('synthetic public calculation response matrix', () => {
     expect(result[0]?.quotes).toHaveLength(2);
     expect(result[0]?.seasonalReturns).toHaveLength(2);
     expect(result[0]?.newsScores).toEqual([1, -0.5]);
-    expect(forecast(result[0]!, NOW, enabled)?.candidateEvaluation).toHaveLength(6);
+    expect(forecast(result[0]!, NOW, enabled)?.candidateEvaluation.decisions).toHaveLength(6);
   });
   it('does not manufacture reference or asks when provider evidence is missing', async () => {
     expect(
@@ -958,4 +968,105 @@ describe('F9 eligible fair bounded selection', () => {
     for (const r of first) r.row.lastResolutionCheckAt = now.toISOString();
     expect(selectDueForecasts(rows, now, 2000).map((r) => r.id)).toEqual(['20']);
   });
+});
+
+describe('F4 historical issuance DTO and independent raw replay', () => {
+  it('preserves full v1 calibration fields from historical buildPrediction semantics through JSON reload', () => {
+    const i = input(),
+      expected = historical(i),
+      row = forecast(i, NOW, enabled)!,
+      snapshot = row.calibrationReplay;
+    // Independent buildPrediction oracle above uses its own CDF, volatility, tilt and quality equations.
+    expect(snapshot).toMatchObject({
+      version: 'calibration-replay-v1',
+      source: 'issuance-exact',
+      confidenceSource: 'issuance-exact',
+      basisInput: {
+        referencePrice: 100,
+        currentPrice: 101,
+        secondsRemaining: 840,
+        volatilitySamples: 120,
+      },
+
+      basisLogOddsWeight: 0.55,
+
+      probabilityFloor: 0.03,
+      probabilityCeiling: 0.97,
+
+      confidenceInput: {
+        basisPresent: true,
+        venueProbabilityCount: 1,
+        volatilitySamples: 120,
+        secondsRemaining: 840,
+        rangePercent: 10,
+      },
+    });
+    expect(snapshot.baselineBasisProbability).toBeCloseTo(expected.basis, 13);
+    expect(snapshot.slowTiltLogOdds).toBeCloseTo(expected.slow, 13);
+    expect(snapshot.productionProbabilityUp).toBeCloseTo(expected.p, 13);
+    expect(snapshot.productionConfidence).toBeCloseTo(expected.confidence, 13);
+    expect(snapshot.baselineReplayError).toBeLessThanOrEqual(1e-12);
+    expect(snapshot.confidenceReplayError).toBeLessThanOrEqual(1e-12);
+    expect(snapshot.slowTerms.map((t) => t.id)).toEqual([
+      'intraday',
+      'monthly',
+      'yearly',
+      'seasonal',
+      'news',
+    ]);
+    const restored = JSON.parse(JSON.stringify(row)) as typeof row;
+    expect(restored.calibrationReplay).toEqual(snapshot);
+    expect(restored.candidateEvaluation).toEqual(row.candidateEvaluation);
+    expect(
+      replayProbability({ ...snapshot, basisInput: { ...snapshot.basisInput!, currentPrice: 99 } }),
+    ).not.toBe(row.probabilityUp);
+    expect(replayConfidence({ ...snapshot.confidenceInput!, rangePercent: 0 })).not.toBe(
+      row.confidence,
+    );
+  });
+  it('keeps missing basis exact with no manufactured raw inputs and unavailable settlement', () => {
+    const row = forecast(input({ minuteCloses: [], oracleHistory: [] }), NOW, enabled)!;
+    expect(row.calibrationReplay.basisInput).toBeUndefined();
+    expect(row.calibrationReplay.baselineBasisProbability).toBeUndefined();
+    expect(row.calibrationReplay.confidenceInput?.basisPresent).toBe(false);
+    expect(row.candidateEvaluation.decisions[2]?.status).toBe('unavailable');
+  });
+  it('rejects reconstructed and erroneous probability or confidence replay for non-control candidates', () => {
+    const row = forecast(input(), NOW, enabled)!;
+    for (const snapshot of [
+      reconstructedSnapshot(row.probabilityUp, row.basisProbabilityUp ?? undefined),
+      { ...row.calibrationReplay, baselineReplayError: 0.001 },
+      { ...row.calibrationReplay, confidenceReplayError: 0.001 },
+    ]) {
+      const decisions = candidateEvidence(snapshot, input().quotes, null, row.confidence).decisions;
+      expect(decisions[0]?.status).toBe('available');
+      expect(decisions.slice(1).every((d) => d.status === 'unavailable')).toBe(true);
+    }
+    const reconstructed = reconstructedSnapshot(row.probabilityUp);
+    expect(reconstructed.confidenceSource).toBe('absent');
+    expect(reconstructed.confidenceInput).toBeUndefined();
+  });
+  it.each([['polymarket'], ['kalshi'], ['polymarket', 'kalshi']] as const)(
+    'versions research venue adaptation and all model identities %j',
+    (...venues) => {
+      const quotes = venues.map((venue) => ({
+        ...input().quotes[0]!,
+        contract: { ...input().quotes[0]!.contract, venue },
+      }));
+      const row = forecast(input({ quotes }), NOW, venues)!;
+      expect(row.candidateEvaluation.registryVersion).toBe(
+        'forecast-candidate-registry-observation-v2',
+      );
+      expect(row.candidateEvaluation.enabledResearchVenues).toEqual(venues);
+      expect(row.candidateEvaluation.entrySemantics).toBe('public-quote-observation-only-v2');
+      expect(row.candidateEvaluation.decisions.map((d) => d.candidateModelVersion)).toEqual([
+        'Blend 0.4',
+        'basis065-slow050-v1',
+        'settlement-average-diffusion-v1',
+        'basis-only-v1',
+        'basis-intraday-production-cap-v1',
+        'production-basis-slow050-v1',
+      ]);
+    },
+  );
 });

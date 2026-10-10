@@ -1,3 +1,9 @@
+import {
+  issuanceSnapshot,
+  candidateEvidence,
+  type CalibrationSnapshot,
+  type CandidateEvaluation,
+} from './forecast-evidence.js';
 // Ported from the v1 basis, forecast model, observation window and resolver, sanitized.
 // Probability arithmetic is independent of venue prices and observation-only candidates.
 import type { LeaseGrant } from './cycle-store.js';
@@ -75,12 +81,8 @@ export interface ForecastRow {
   entrySide?: Side;
   entryAsk?: number;
   entryFeeRate?: number;
-  candidateEvaluation: readonly {
-    id: string;
-    probabilityUp: number | null;
-    selectedEntry?: Entry;
-    qualified?: boolean;
-  }[];
+  candidateEvaluation: CandidateEvaluation;
+  calibrationReplay: CalibrationSnapshot;
   basisProbabilityUp: number | null;
   slowTiltLogOdds: number;
   modelVersion: string;
@@ -306,17 +308,38 @@ export function forecast(
     basisProbabilityUp: basis,
     slowTiltLogOdds: slow,
     modelVersion: 'Blend 0.4',
-    candidateEvaluation: [
-      { id: 'production-control-v1', probabilityUp },
-      { id: 'basis065-slow050-v1', probabilityUp: combinedProbability(basis, slow, 0.65, 0.5) },
-      {
-        id: 'settlement-average-v1',
-        probabilityUp: settlement === null ? null : combinedProbability(settlement, slow),
-      },
-      { id: 'basis-only-v1', probabilityUp: combinedProbability(basis, 0) },
-      { id: 'basis-intraday-v1', probabilityUp: combinedProbability(basis, rawTerms[0]! * scale) },
-      { id: 'slow-half-v1', probabilityUp: combinedProbability(basis, slow, 0.55, 0.5) },
-    ],
+    candidateEvaluation: candidateEvidence(
+      issuanceSnapshot({
+        basisInput:
+          basis !== null && vol
+            ? {
+                referencePrice: input.referencePrice,
+                currentPrice: input.currentPrice,
+                secondsRemaining: seconds,
+                volatilityPerSecond: vol.perSecond,
+                volatilitySamples: vol.samples,
+              }
+            : undefined,
+        basisProbability: basis,
+        slowTiltLogOdds: slow,
+        slowTerms: rawTerms.map((logOdds, index) => ({
+          id: ['intraday', 'monthly', 'yearly', 'seasonal', 'news'][index]!,
+          logOdds: logOdds * scale,
+        })),
+        probability: probabilityUp,
+        confidence,
+        confidenceInput: {
+          basisPresent: basis !== null,
+          venueProbabilityCount: quotes.length,
+          volatilitySamples: basis === null ? 0 : (vol?.samples ?? 0),
+          secondsRemaining: seconds,
+          rangePercent: range,
+        },
+      }),
+      quotes,
+      settlement,
+      confidence,
+    ),
     cycleId,
     trackingPolicyVersion: 'all-qualified-15s-snapshots-v2',
     policyVersion:
@@ -332,37 +355,34 @@ export function forecast(
         .filter((pair) => pair[1] !== null)
         .map((pair) => ({ venue: q.contract.venue, side: pair[0], price: pair[1] })),
     ),
-    calibrationReplay: {
-      source: 'issuance-exact',
-      baselineReplayError: Math.abs(combinedProbability(basis, slow) - probabilityUp),
-      basisProbabilityUp: basis,
+    calibrationReplay: issuanceSnapshot({
+      basisInput:
+        basis !== null && vol
+          ? {
+              referencePrice: input.referencePrice,
+              currentPrice: input.currentPrice,
+              secondsRemaining: seconds,
+              volatilityPerSecond: vol.perSecond,
+              volatilitySamples: vol.samples,
+            }
+          : undefined,
+      basisProbability: basis,
       slowTiltLogOdds: slow,
-      confidence: {
-        productionConfidence: confidence,
-        input: {
-          basisPresent: basis !== null,
-          venueProbabilityCount: quotes.length,
-          volatilitySamples: vol?.samples ?? 0,
-          secondsRemaining: seconds,
-          rangePercent: range,
-        },
-      },
       slowTerms: rawTerms.map((logOdds, index) => ({
-        id: ['intraday', 'monthly', 'yearly', 'seasonal', 'news'][index],
+        id: ['intraday', 'monthly', 'yearly', 'seasonal', 'news'][index]!,
         logOdds: logOdds * scale,
       })),
-      productionProbabilityUp: probabilityUp,
-    },
+      probability: probabilityUp,
+      confidence,
+      confidenceInput: {
+        basisPresent: basis !== null,
+        venueProbabilityCount: quotes.length,
+        volatilitySamples: basis === null ? 0 : (vol?.samples ?? 0),
+        secondsRemaining: seconds,
+        rangePercent: range,
+      },
+    }),
   };
-  row.candidateEvaluation = row.candidateEvaluation.map((candidate) => {
-    if (candidate.probabilityUp === null) return candidate;
-    const selectedEntry = bestEntry(candidate.probabilityUp, quotes);
-    return {
-      ...candidate,
-      ...(selectedEntry === undefined ? {} : { selectedEntry }),
-      qualified: confidence >= 0.5 && selectedEntry !== undefined && selectedEntry.netEdge >= 0.05,
-    };
-  });
   if (entry !== undefined)
     Object.assign(row, {
       entryVenue: entry.venue,
