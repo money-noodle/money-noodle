@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 // Remote CI only. Disposable synthetic PostgreSQL: never accepts a database URL.
 import assert from 'node:assert/strict';
 import process from 'node:process';
@@ -136,23 +137,34 @@ try {
     Number((await admin.unsafe('select count(*) n from engine.forecast_cycle_row'))[0].n),
     4,
   );
+  const fields = {
+    venue: 'polymarket',
+    contractId: 'exact-contract',
+    marketUrl: 'https://polymarket.com/event/test',
+    closesAt: new Date(row.closesAt).toISOString(),
+    rulesSource: 'https://gamma-api.polymarket.com/events?slug=test',
+    rulesText: 'Simple average of the final minute',
+    settlementPriceMethod: 'simple-average',
+    referenceWindowSeconds: 60,
+    settlementWindowSeconds: 60,
+    comparability: 'approximate',
+  };
+  const hash = createHash('sha256').update(JSON.stringify(fields)).digest('hex');
+  const canonicalSeed = {
+    version: 'contract-provenance-v1',
+    registryId: 'polymarket:exact-contract:' + hash,
+    ...fields,
+    rulesFingerprint: hash,
+    slug: 'test',
+  };
   const seed = {
     ...row,
     id: 'seed',
-    venueContracts: { polymarket: { registryId: 'synthetic-ref' } },
+    venueContracts: { polymarket: { registryId: canonicalSeed.registryId } },
   };
   await admin.unsafe(
-    "insert into engine.contract_provenance(registry_id,record,restore_run_id) values('synthetic-ref',$1::jsonb,'synthetic-restore')",
-    [
-      admin.json({
-        version: 'contract-provenance-v1',
-        registryId: 'synthetic-ref',
-        venue: 'polymarket',
-        contractId: 'exact-contract',
-        closesAt: row.closesAt,
-        slug: 'test',
-      }),
-    ],
+    "insert into engine.contract_provenance(registry_id,record,restore_run_id) values($1,$2::jsonb,'synthetic-restore')",
+    [canonicalSeed.registryId, admin.json(canonicalSeed)],
   );
   await admin.unsafe(
     "insert into engine.forecast_row(forecast_id,status,row,restore_run_id) values('seed','pending',$1::jsonb,'synthetic-restore')",
@@ -263,6 +275,14 @@ try {
   await admin.unsafe(
     "update engine.forecast_cycle_row set status='resolved',row=jsonb_set(row,'{status}','\"resolved\"'::jsonb) where forecast_id like 'synthetic-observation%'",
   );
+  for (const [id, reference] of [
+    ['null-ref', null],
+    ['full-mismatch', { ...canonicalSeed, contractId: 'wrong-contract-B' }],
+  ])
+    await admin.unsafe(
+      "insert into engine.forecast_row(forecast_id,status,row,restore_run_id) values($1,'pending',$2::jsonb,'synthetic-restore')",
+      [id, admin.json({ ...row, id, venueContracts: { polymarket: reference } })],
+    );
   const requested = [];
   await runForecastTick(
     store,
@@ -284,6 +304,14 @@ try {
   const [missingOverlay] = await admin.unsafe(
     "select row,origin_restore_run_id from engine.forecast_cycle_row where forecast_id='missing-seed'",
   );
+  for (const id of ['null-ref', 'full-mismatch']) {
+    const [bad] = await admin.unsafe(
+      'select row,origin_restore_run_id from engine.forecast_cycle_row where forecast_id=$1',
+      [id],
+    );
+    assert.equal(bad.row.targetIntegrity, 'missing-provenance');
+    assert.equal(bad.origin_restore_run_id, 'synthetic-restore');
+  }
   assert.equal(missingOverlay.row.status, 'invalid');
   assert.equal(missingOverlay.row.targetIntegrity, 'missing-provenance');
   assert.equal(missingOverlay.row.invalidReason, 'missing-provenance');

@@ -1,7 +1,9 @@
+export const CANDIDATE_OBSERVATIONAL_COMPATIBILITY: readonly string[] = Object.freeze(['kalshi']);
 import {
   basisProbability,
   combinedProbability,
   bestEntry,
+  entryOptions,
   type Quote,
   type Entry,
 } from './forecast.js';
@@ -124,6 +126,7 @@ export interface CandidateDecision {
   probabilityUp?: number;
   replayError?: number;
   selectedEntry?: Entry;
+  bestOption?: Entry;
   qualified?: boolean;
 }
 export interface CandidateEvaluation {
@@ -140,7 +143,7 @@ export interface CandidateEvaluation {
   decisions: readonly CandidateDecision[];
 }
 const FAMILY = [
-  ['production-control-v1', 'Blend 0.4'],
+  ['production-control-v1', 'blend-0.4-forecast-model-v1'],
   ['basis065-slow050-observation-v2', 'basis065-slow050-v1'],
   ['settlement-average-observation-v2', 'settlement-average-diffusion-v1'],
   ['basis-only-observation-v2', 'basis-only-v1'],
@@ -153,6 +156,10 @@ export function candidateEvidence(
   settlement: number | null,
   confidence: number,
 ): CandidateEvaluation {
+  // Pure compatibility subset, not a funded capability or execution flag.
+  const researchQuotes = quotes.filter((q) =>
+    CANDIDATE_OBSERVATIONAL_COMPATIBILITY.includes(q.contract.venue),
+  );
   const exact =
     snapshot.source === 'issuance-exact' &&
     Number.isFinite(snapshot.baselineReplayError) &&
@@ -195,13 +202,15 @@ export function candidateEvidence(
         status: 'unavailable',
         unavailableReason: 'Invalid candidate probability.',
       };
-    const selectedEntry = bestEntry(probabilityUp, quotes);
+    const bestOption = entryOptions(probabilityUp, researchQuotes)[0];
+    const selectedEntry = bestEntry(probabilityUp, researchQuotes);
     return {
       candidateId,
       candidateModelVersion,
       status: 'available',
       probabilityUp,
       ...(index === 0 ? { replayError: snapshot.baselineReplayError } : {}),
+      ...(bestOption === undefined ? {} : { bestOption }),
       ...(selectedEntry === undefined ? {} : { selectedEntry }),
       qualified: confidence >= 0.5 && selectedEntry !== undefined && selectedEntry.netEdge >= 0.05,
     };
@@ -209,13 +218,13 @@ export function candidateEvidence(
   return {
     registryVersion: 'forecast-candidate-registry-observation-v2',
     providerRegistryVersion: 'restored-paper-provider-registry-observation-v2',
-    productionModelVersion: 'Blend 0.4',
+    productionModelVersion: 'blend-0.4-forecast-model-v1',
     policyVersion: 'binary-public-quote-research-net5-quality50-v2',
     maximumNetEdge: 1,
     downEntryEnabled: true,
     confidence,
     controlSource: 'restored-paper-registry',
-    enabledResearchVenues: quotes.map((q) => q.contract.venue),
+    enabledResearchVenues: researchQuotes.map((q) => q.contract.venue),
     entrySemantics: 'public-quote-observation-only-v2',
     decisions,
   };

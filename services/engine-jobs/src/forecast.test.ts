@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { boundReference } from './domain/contract-binding.js';
 import {
   candidateEvidence,
   replayProbability,
@@ -160,7 +162,7 @@ function historical(i: ForecastInput) {
         0.04 +
         Math.min(1, returns.length / 60) * 0.22 -
         Math.min(0.12, (seconds / 900) * 0.12) -
-        Math.min(0.04, (((i.high24h - i.low24h) / i.coinPrice) * 100) / 60),
+        Math.min(0.04, (i.coinPrice ? ((i.high24h - i.low24h) / i.coinPrice) * 100 : 0) / 60),
       0.25,
       0.86,
     ),
@@ -1159,13 +1161,23 @@ describe('F4 historical issuance DTO and independent raw replay', () => {
         contract: { ...input().quotes[0]!.contract, venue },
       }));
       const row = forecast(input({ quotes }), NOW, venues)!;
+      if (!venues.includes('polymarket')) {
+        expect(row).toBeNull();
+        return;
+      }
       expect(row.candidateEvaluation.registryVersion).toBe(
         'forecast-candidate-registry-observation-v2',
       );
-      expect(row.candidateEvaluation.enabledResearchVenues).toEqual(venues);
+      if (!venues.includes('polymarket')) {
+        expect(row).toBeNull();
+        return;
+      }
+      expect(row.candidateEvaluation.enabledResearchVenues).toEqual(
+        venues.filter((v) => v === 'kalshi'),
+      );
       expect(row.candidateEvaluation.entrySemantics).toBe('public-quote-observation-only-v2');
       expect(row.candidateEvaluation.decisions.map((d) => d.candidateModelVersion)).toEqual([
-        'Blend 0.4',
+        'blend-0.4-forecast-model-v1',
         'basis065-slow050-v1',
         'settlement-average-diffusion-v1',
         'basis-only-v1',
@@ -1188,7 +1200,7 @@ describe('F2 issuance-completion independent boundaries and settlement metadata'
     expect(row.secondsRemaining).toBe((Date.parse(i.closesAt) - at.getTime()) / 1000);
     expect(row.probabilityUp).toBeCloseTo(expected.p, 13);
     expect(row.confidence).toBeCloseTo(expected.confidence, 13);
-    expect(row.issuedAt).toBe(completed);
+    expect(row.issuedAt).toBe(at.toISOString());
     expect(row.id).toContain(
       String(
         Math.floor(at.getTime() / (row.qualified ? 15000 : 60000)) *
@@ -1269,5 +1281,137 @@ describe('F2 issuance-completion independent boundaries and settlement metadata'
     expect(settlementProbability(i, at.getTime(), sigma)).not.toBe(
       settlementProbability({ ...i, quotes: input().quotes }, at.getTime(), sigma),
     );
+  });
+});
+
+describe('S1 historical recording and observational candidate subset', () => {
+  const quotes = () => [
+    input().quotes[0]!,
+    {
+      ...input().quotes[0]!,
+      contract: {
+        ...input().quotes[0]!.contract,
+        venue: 'kalshi' as const,
+        contractId: 'kalshi-test',
+      },
+      askUp: 0.6,
+      askDown: 0.4,
+    },
+  ];
+  it('does not record Kalshi-only inputs but still resolves restored Kalshi rows', async () => {
+    expect(forecast(input({ quotes: quotes().slice(1) }), NOW, enabled)).toBeNull();
+    const h = harness(),
+      row = forecast(input(), NOW, enabled)!;
+    row.venueContracts = { kalshi: quotes()[1]!.contract };
+    row.entryVenue = 'kalshi';
+    h.store.seed.set(row.id, { id: row.id, row, restoreRunId: 'synthetic-restore' });
+    h.advance(900000);
+    h.feeds.calculate = async () => [];
+    await h.job();
+    expect(h.feeds.resolve).toHaveBeenCalledWith(
+      expect.objectContaining({ venue: 'kalshi', contractId: 'kalshi-test' }),
+    );
+    expect(h.store.rows.get(row.id)?.row.status).toBe('resolved');
+  });
+  it('retains Poly-only probabilities and production qualification without candidate entries', () => {
+    const row = forecast(input(), NOW, enabled)!;
+    expect(row.qualified).toBe(true);
+    for (const decision of row.candidateEvaluation.decisions) {
+      if (decision.status === 'available') {
+        expect(decision.probabilityUp).toBeTypeOf('number');
+        expect(decision.selectedEntry).toBeUndefined();
+        expect(decision.bestOption).toBeUndefined();
+        expect(decision.qualified).toBe(false);
+      }
+    }
+  });
+  it('cannot select attractive Poly candidate entry or disabled Kalshi and distinguishes best option from admissible entry', () => {
+    const all = quotes();
+    all[0] = { ...all[0]!, askUp: 0.1 };
+    all[1] = { ...all[1]!, askUp: 0.01, askDown: 0.99 };
+    const row = forecast(input({ quotes: all }), NOW, enabled)!;
+    const decision = row.candidateEvaluation.decisions[0]!;
+    expect(row.entryVenue).toBe('polymarket');
+    expect(decision.bestOption).toMatchObject({ venue: 'kalshi', price: 0.01 });
+    expect(decision.selectedEntry).toBeUndefined();
+    expect(decision.qualified).toBe(false);
+    expect(
+      forecast(input({ quotes: all }), NOW, ['polymarket'])?.candidateEvaluation.decisions[0]
+        ?.bestOption,
+    ).toBeUndefined();
+    const available = forecast(input({ quotes: quotes() }), NOW, enabled)!;
+    expect(available.candidateEvaluation.decisions[0]?.selectedEntry?.venue).toBe('kalshi');
+    expect(available.candidateEvaluation.productionModelVersion).toBe(
+      'blend-0.4-forecast-model-v1',
+    );
+    expect(JSON.parse(JSON.stringify(available)).candidateEvaluation).toEqual(
+      available.candidateEvaluation,
+    );
+  });
+  it('keeps four qualified identities anchored to the Poly slug', () => {
+    const ids = Array.from({ length: 4 }, (_, i) => {
+      const now = new Date(NOW.getTime() + i * 15000);
+      const row = forecast(
+        input({ calculatedAt: now.toISOString(), quotes: quotes() }),
+        now,
+        enabled,
+      )!;
+      expect(row.id.startsWith(input().quotes[0]!.contract.slug + ':')).toBe(true);
+      expect(row.qualified).toBe(true);
+      return row.id;
+    });
+    expect(new Set(ids).size).toBe(4);
+  });
+});
+
+describe('F3 canonical immutable full/slim binding', () => {
+  const close = '2026-10-10T12:15:00.000Z';
+  const fields = {
+    venue: 'polymarket',
+    contractId: 'contract-A',
+    marketUrl: 'https://polymarket.com/event/btc-updown-15m-1791633600',
+    closesAt: close,
+    rulesSource: 'https://gamma-api.polymarket.com/events?slug=test',
+    rulesText: 'Simple average of the final minute',
+    settlementPriceMethod: 'simple-average',
+    referenceWindowSeconds: 60,
+    settlementWindowSeconds: 60,
+    comparability: 'approximate',
+  };
+  const hash = createHash('sha256').update(JSON.stringify(fields)).digest('hex');
+  const registryId = 'polymarket:contract-A:' + hash;
+  const record = {
+    version: 'contract-provenance-v1',
+    registryId,
+    ...fields,
+    rulesFingerprint: hash,
+  };
+  const registry = new Map([[registryId, record]]);
+  it('hydrates genuine canonical slim/full records equivalently', () => {
+    expect(boundReference({ registryId }, registry, 'polymarket', close, 'test')).toEqual(
+      boundReference(record, registry, 'polymarket', close, 'test'),
+    );
+    expect(boundReference(record, registry, 'polymarket', close, 'test')?.contractId).toBe(
+      'contract-A',
+    );
+  });
+  it.each([
+    null,
+    { registryId, contractId: 'contract-B' },
+    { registryId, rulesFingerprint: 'wrong' },
+    { registryId, settlementWindowSeconds: 15 },
+  ])('rejects null or contradictory duplicated immutable fields %j', (ref) => {
+    expect(boundReference(ref, registry, 'polymarket', close, 'test')).toBeNull();
+  });
+  it('rejects contradictory registry body despite claimed canonical ID/fingerprint', () => {
+    expect(
+      boundReference(
+        { registryId },
+        new Map([[registryId, { ...record, contractId: 'contract-B' }]]),
+        'polymarket',
+        close,
+        'test',
+      ),
+    ).toBeNull();
   });
 });

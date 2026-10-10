@@ -1,6 +1,6 @@
 import postgres from 'postgres';
 import { FencingTokenRejectedError, type LeaseGrant } from '../../domain/cycle-store.js';
-import { validatedContract } from '../../domain/forecast.js';
+import { boundReference, recordObject } from '../../domain/contract-binding.js';
 import type {
   DueForecast,
   ForecastRow,
@@ -125,8 +125,8 @@ export function createPostgresForecastStore(
               .filter(([venue]) => venue === 'polymarket' || venue === 'kalshi')
               .map(([, ref]) => ref)
               .map((ref) => {
-                const raw = ref as unknown as Record<string, unknown>;
-                return typeof raw.registryId === 'string' && raw.registryId.length <= 256
+                const raw = recordObject(ref) ?? {};
+                return typeof raw.registryId === 'string' && raw.registryId.length <= 400
                   ? raw.registryId
                   : null;
               })
@@ -145,28 +145,10 @@ export function createPostgresForecastStore(
         const contracts = Object.fromEntries(
           Object.entries(r.row.venueContracts ?? {}).map(([venue, ref]) => {
             const raw = ref as unknown as Record<string, unknown>;
-            const restored =
-              typeof raw.registryId === 'string' ? registry.get(raw.registryId) : undefined;
             if (venue !== 'polymarket' && venue !== 'kalshi')
               return [venue, { integrityFailure: 'unknown-venue' }];
-            const needsHydration = typeof raw.contractId !== 'string';
-            const canonical =
-              typeof raw.registryId === 'string' &&
-              restored !== undefined &&
-              restored.registryId === raw.registryId &&
-              restored.version === 'contract-provenance-v1';
-            if (typeof raw.registryId === 'string' && !canonical)
-              return [
-                venue,
-                { registryId: raw.registryId, integrityFailure: 'missing-provenance' },
-              ];
-            const candidate = needsHydration
-              ? canonical
-                ? { ...restored, capturedAt: raw.capturedAt ?? restored?.capturedAt }
-                : null
-              : raw;
             const fallback = r.row.marketUrl.split('/').filter(Boolean).at(-1) ?? '';
-            const valid = validatedContract(candidate, venue, r.row.closesAt, fallback);
+            const valid = boundReference(ref, registry, venue, r.row.closesAt, fallback);
             if (valid === null || (valid.asset !== undefined && valid.asset !== r.row.symbol))
               return [
                 venue,

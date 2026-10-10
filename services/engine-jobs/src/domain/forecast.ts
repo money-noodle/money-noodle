@@ -176,7 +176,7 @@ export function combinedProbability(
 ): number {
   return bound(logistic((basis === null ? 0 : odds(basis) * weight) + slow * scale), 0.03, 0.97);
 }
-export function bestEntry(probabilityUp: number, quotes: readonly Quote[]): Entry | undefined {
+export function entryOptions(probabilityUp: number, quotes: readonly Quote[]): Entry[] {
   const entries: Entry[] = [];
   for (const quote of quotes) {
     for (const side of ['UP', 'DOWN'] as const) {
@@ -195,9 +195,14 @@ export function bestEntry(probabilityUp: number, quotes: readonly Quote[]): Entr
       });
     }
   }
-  return entries
-    .sort((a, b) => b.netEdge - a.netEdge || a.price - b.price || a.side.localeCompare(b.side))
-    .find((e) => e.price >= 0.1 && e.price <= 0.75 && e.probability >= 0.55 && e.netEdge < 1);
+  return entries.sort(
+    (a, b) => b.netEdge - a.netEdge || a.price - b.price || a.side.localeCompare(b.side),
+  );
+}
+export function bestEntry(probabilityUp: number, quotes: readonly Quote[]): Entry | undefined {
+  return entryOptions(probabilityUp, quotes).find(
+    (e) => e.price >= 0.1 && e.price <= 0.75 && e.probability >= 0.55 && e.netEdge < 1,
+  );
 }
 export function observationIdentity(cycleId: string, at: number, qualified: boolean): string {
   const interval = qualified ? 15_000 : 60_000;
@@ -289,8 +294,16 @@ export function forecast(
   );
   const entry = bestEntry(probabilityUp, quotes);
   const qualified = confidence >= 0.5 && entry !== undefined && entry.netEdge >= 0.05;
-  const primary = quotes.find((q) => q.contract.venue === 'polymarket') ?? quotes[0];
-  if (primary === undefined) return null;
+  // Historical recording requires the current Polymarket target; Kalshi-only
+  // restored rows are still handled by the resolution path, never new recording.
+  const primary = quotes.find((q) => q.contract.venue === 'polymarket');
+  if (
+    primary === undefined ||
+    validatedContract(primary.contract, 'polymarket', input.closesAt, primary.contract.slug) ===
+      null ||
+    !primary.contract.slug.includes('-updown-15m-')
+  )
+    return null;
   const cycleId = primary.contract.slug + ':' + input.closesAt;
   const scale = rawSlow === 0 ? 1 : slow / rawSlow;
   const row: ForecastRow = {
