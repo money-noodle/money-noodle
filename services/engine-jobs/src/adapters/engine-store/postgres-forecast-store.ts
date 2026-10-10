@@ -105,12 +105,41 @@ export function createPostgresForecastStore(
       const rows = await sql.unsafe<
         { forecast_id: string; row: ForecastRow; restore_run_id: string | null }[]
       >(
-        "select forecast_id,row,origin_restore_run_id as restore_run_id from engine.forecast_cycle_row where status='pending' and closes_at < $1 union all select f.forecast_id,f.row,f.restore_run_id from engine.forecast_row f where f.status='pending' and (f.row->>'closesAt')::timestamptz < $1 and not exists(select 1 from engine.forecast_cycle_row c where c.forecast_id=f.forecast_id) order by forecast_id limit $2",
+        `with pending as (
+ select forecast_id,row,origin_restore_run_id as restore_run_id,asset,closes_at from engine.forecast_cycle_row where status='pending' and closes_at < $1
+ union all select f.forecast_id,f.row,f.restore_run_id,f.row->>'symbol',(f.row->>'closesAt')::timestamptz from engine.forecast_row f where f.status='pending' and (f.row->>'closesAt')::timestamptz < $1 and not exists(select 1 from engine.forecast_cycle_row c where c.forecast_id=f.forecast_id)
+), eligible as (
+ select *,coalesce((row->>'lastResolutionCheckAt')::timestamptz,'-infinity'::timestamptz) as checked from pending
+ where coalesce((row->>'lastResolutionCheckAt')::timestamptz,'-infinity'::timestamptz) + make_interval(secs=>least(1800,60*power(2,least(5,greatest(0,coalesce((row->>'resolutionAttempts')::numeric,0)-1))))) <= $1
+), cycles as (
+ select asset,closes_at,min(checked) as oldest from eligible group by asset,closes_at order by oldest,closes_at,asset limit 20
+), ranked as (
+ select e.*,c.oldest,row_number() over(partition by e.asset,e.closes_at order by e.checked,e.forecast_id) as ordinal from eligible e join cycles c using(asset,closes_at)
+) select forecast_id,row,restore_run_id from ranked order by ordinal,oldest,closes_at,asset,forecast_id limit $2`,
         [now.toISOString(), Math.max(1, Math.min(Math.trunc(limit), 2000))],
       );
-      const refs = await sql.unsafe<{ registry_id: string; record: Record<string, unknown> }[]>(
-        'select registry_id,record from engine.contract_provenance',
-      );
+      const registryIds = [
+        ...new Set(
+          rows.flatMap((r) =>
+            Object.entries(r.row.venueContracts ?? {})
+              .filter(([venue]) => venue === 'polymarket' || venue === 'kalshi')
+              .map(([, ref]) => ref)
+              .map((ref) => {
+                const raw = ref as unknown as Record<string, unknown>;
+                return typeof raw.registryId === 'string' && raw.registryId.length <= 256
+                  ? raw.registryId
+                  : null;
+              })
+              .filter((id): id is string => id !== null),
+          ),
+        ),
+      ];
+      const refs = registryIds.length
+        ? await sql.unsafe<{ registry_id: string; record: Record<string, unknown> }[]>(
+            'select registry_id,record from engine.contract_provenance where registry_id in(select jsonb_array_elements_text($1::jsonb)) limit 4000',
+            [JSON.stringify(registryIds)],
+          )
+        : [];
       const registry = new Map(refs.map((r) => [r.registry_id, r.record]));
       return rows.map((r) => {
         const contracts = Object.fromEntries(

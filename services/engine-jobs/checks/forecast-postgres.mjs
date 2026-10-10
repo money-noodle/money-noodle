@@ -296,6 +296,49 @@ try {
   console.log(
     'Synthetic real-store missing-provenance disposition and seed immutability verified.',
   );
+  // Eligibility precedes the cap; restored and runtime overlays share fairness.
+  const fairNow = new Date(now.getTime() + 3600000);
+  const backed = {
+    ...row,
+    status: 'pending',
+    lastResolutionCheckAt: fairNow.toISOString(),
+    resolutionAttempts: 5,
+  };
+  await admin.unsafe(
+    "insert into engine.forecast_row(forecast_id,status,row,restore_run_id) select 'a-backoff-'||i,'pending',jsonb_set($1::jsonb,'{id}',to_jsonb('a-backoff-'||i)),'synthetic-restore' from generate_series(1,2000) i",
+    [admin.json(backed)],
+  );
+  for (let i = 0; i < 21; i++) {
+    const id = 'z-fair-' + String(i).padStart(2, '0');
+    await admin.unsafe(
+      "insert into engine.forecast_row(forecast_id,status,row,restore_run_id) values($1,'pending',$2::jsonb,'synthetic-restore')",
+      [
+        id,
+        admin.json({
+          ...row,
+          id,
+          symbol: 'FAIR' + String(i).padStart(2, '0'),
+          status: 'pending',
+          venueContracts: {},
+          lastResolutionCheckAt: undefined,
+        }),
+      ],
+    );
+  }
+  const fairFirst = (await store.readDueForecasts(fairNow, 2000)).filter((r) =>
+    r.id.startsWith('z-fair-'),
+  );
+  assert.equal(fairFirst.length, 20);
+  assert(!fairFirst.some((r) => r.id === 'z-fair-20'));
+  assert(!(await store.readDueForecasts(fairNow, 2000)).some((r) => r.id.startsWith('a-backoff-')));
+  for (const selected of fairFirst)
+    await store.patchForecast(grant, selected, {
+      ...selected.row,
+      lastResolutionCheckAt: fairNow.toISOString(),
+      resolutionAttempts: 1,
+    });
+  assert((await store.readDueForecasts(fairNow, 2000)).some((r) => r.id === 'z-fair-20'));
+  console.log('Synthetic real-store 2000 backoff rows and 21-cycle fairness verified.');
   for (const table of [
     'forecast_cycle',
     'forecast_cycle_row',

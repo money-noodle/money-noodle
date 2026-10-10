@@ -22,8 +22,16 @@ const object = (v: unknown): Record<string, unknown> =>
   v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 const array = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 const number = (v: unknown): number => {
+  if (v === undefined || v === null || v === '') return 0;
+  if (
+    (typeof v !== 'number' && typeof v !== 'string') ||
+    (typeof v === 'string' && (v.length > 64 || !/^[-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?$/i.test(v)))
+  )
+    throw new PublicFeedLimitError('Invalid provider numeric representation.');
   const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
+  if (!Number.isFinite(n) || Math.abs(n) > 1e15)
+    throw new PublicFeedLimitError('Invalid provider numeric range.');
+  return n;
 };
 const price = (v: unknown): number | null => {
   const n = number(v);
@@ -32,25 +40,66 @@ const price = (v: unknown): number | null => {
 const text = (v: unknown): string => (typeof v === 'string' ? v : '');
 const jsonArray = (v: unknown): unknown[] => {
   try {
-    return array(JSON.parse(text(v)));
-  } catch {
+    const parsed: unknown = JSON.parse(text(v));
+    validatePublicSchema(parsed);
+    return array(parsed);
+  } catch (error) {
+    if (error instanceof PublicFeedLimitError) throw error;
     return [];
   }
 };
 /** Public data only. Fixed origins, deadlines, no credential/order/account API. */
 export function createPublicForecastFeeds(request: PublicFetch = fetch): ForecastFeeds {
-  async function body(url: string, ms = 4000, options: RequestInit = {}): Promise<unknown> {
-    const response = await request(url, {
-      ...options,
-      redirect: 'error',
-      signal: AbortSignal.timeout(ms),
-      headers: { Accept: 'application/json', ...options.headers },
-    });
-    if (!response.ok) throw new Error('Public forecast provider unavailable.');
-    const raw = await response.text();
-    if (raw.length > 8_000_000) throw new Error('Public provider response too large.');
-    return JSON.parse(raw) as unknown;
+  let active = 0;
+  const queue: Array<() => void> = [];
+  async function admitted<T>(work: () => Promise<T>): Promise<T> {
+    if (active >= 4) {
+      if (queue.length >= 64) throw new PublicFeedLimitError('Public work queue exhausted.');
+      await new Promise<void>((resolve) => queue.push(resolve));
+    } else active++;
+    try {
+      return await work();
+    } finally {
+      const next = queue.shift();
+      if (next) next();
+      else active--;
+    }
   }
+  async function raw(
+    url: string,
+    cap: number,
+    ms: number,
+    options: RequestInit = {},
+  ): Promise<string> {
+    return admitted(async () => {
+      const controller = new AbortController(),
+        timer = setTimeout(() => controller.abort(), ms);
+      try {
+        const response = await request(url, {
+          ...options,
+          redirect: 'error',
+          signal: controller.signal,
+          headers: { Accept: 'application/json', ...options.headers },
+        });
+        if (!response.ok) {
+          await response.body?.cancel();
+          throw Error('Public forecast provider unavailable.');
+        }
+        return await boundedPublicText(response, cap, controller);
+      } finally {
+        clearTimeout(timer);
+      }
+    });
+  }
+  async function body(url: string, ms = 4000, options: RequestInit = {}): Promise<unknown> {
+    const value: unknown = JSON.parse(await raw(url, 1_000_000, ms, options));
+    validatePublicSchema(value);
+    return value;
+  }
+  const optional = (error: unknown): null => {
+    if (error instanceof PublicFeedLimitError) throw error;
+    return null;
+  };
   async function poly(
     asset: string,
     prefix: string,
@@ -84,7 +133,13 @@ export function createPublicForecastFeeds(request: PublicFetch = fetch): Forecas
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(tokens.map((token_id) => ({ token_id }))),
-    }).catch(() => []);
+    }).catch(optional);
+    if (
+      array(books).some((b) => !tokens.includes(text(object(b).asset_id))) ||
+      array(books).length > 2 ||
+      new Set(array(books).map((b) => text(object(b).asset_id))).size !== array(books).length
+    )
+      throw new PublicFeedLimitError('Invalid book cardinality.');
     const ask = (token: string | undefined): number | null => {
       const book = array(books)
         .map(object)
@@ -92,7 +147,7 @@ export function createPublicForecastFeeds(request: PublicFetch = fetch): Forecas
       const prices = array(book?.asks)
         .map((a) => price(object(a).price))
         .filter((p): p is number => p !== null);
-      return prices.length ? Math.min(...prices) : null;
+      return prices.length ? prices.reduce((a, b) => Math.min(a, b)) : null;
     };
     const contractId = text(market.conditionId) || text(market.id);
     if (!contractId) return null;
@@ -159,13 +214,7 @@ export function createPublicForecastFeeds(request: PublicFetch = fetch): Forecas
     };
   }
   async function news(): Promise<readonly { title: string; score: number }[]> {
-    const response = await request('https://www.coindesk.com/arc/outboundfeeds/rss', {
-      redirect: 'error',
-      signal: AbortSignal.timeout(4000),
-    });
-    if (!response.ok) throw new Error('News unavailable.');
-    const raw = await response.text();
-    if (raw.length > 2_000_000) throw new Error('News response too large.');
+    const rss = await raw('https://www.coindesk.com/arc/outboundfeeds/rss', 256_000, 4000);
     const positive = [
       'surge',
       'rally',
@@ -194,7 +243,14 @@ export function createPublicForecastFeeds(request: PublicFetch = fetch): Forecas
       'crash',
       'risk',
     ];
-    return [...raw.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 12).map((m) => {
+    const items: RegExpExecArray[] = [];
+    const pattern = /<item>([\s\S]*?)<\/item>/g;
+    for (let i = 0; i < 12; i++) {
+      const match = pattern.exec(rss);
+      if (match === null) break;
+      items.push(match);
+    }
+    return items.map((m) => {
       const title = (m[1]?.match(/<title[^>]*>([\s\S]*?)<\/title>/)?.[1] ?? '')
         .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
         .replace(/&amp;/g, '&')
@@ -247,7 +303,7 @@ export function createPublicForecastFeeds(request: PublicFetch = fetch): Forecas
         if (coin === undefined) return null;
         const [ohlc, ticker, weekly, quotes, oracleHistory] = await Promise.all([
           body('https://api.kraken.com/0/public/OHLC?interval=1&pair=' + pair),
-          body('https://api.kraken.com/0/public/Ticker?pair=' + pair).catch(() => null),
+          body('https://api.kraken.com/0/public/Ticker?pair=' + pair).catch(optional),
           body('https://api.kraken.com/0/public/OHLC?interval=10080&pair=' + pair),
           Promise.all([
             enabled.includes('polymarket')
@@ -331,6 +387,13 @@ export function createPublicForecastFeeds(request: PublicFetch = fetch): Forecas
   return {
     calculate,
     async resolve(contract: Contract): Promise<Outcome | null> {
+      if (
+        !contract.contractId ||
+        contract.contractId.length > 256 ||
+        !contract.slug ||
+        contract.slug.length > 256
+      )
+        return null;
       if (contract.venue === 'kalshi') {
         const m = object(
           object(
@@ -446,4 +509,67 @@ export function krakenPair(payload: unknown, pair: string): unknown {
   const result = object(root.result);
   for (const key of KRAKEN_ALIASES[pair] ?? []) if (Object.hasOwn(result, key)) return result[key];
   return undefined;
+}
+
+export class PublicFeedLimitError extends Error {}
+/** Read decoded transport bytes, before text/JSON allocation. Overshoot is at most
+ * one transport chunk; cancel and abort immediately, never drain the remainder. */
+export async function boundedPublicText(
+  response: Response,
+  cap: number,
+  controller: AbortController,
+): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return '';
+  const parts: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > cap) {
+        await reader.cancel();
+        controller.abort();
+        throw new PublicFeedLimitError('Public response byte budget exceeded.');
+      }
+      parts.push(value);
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const part of parts) {
+      bytes.set(part, offset);
+      offset += part.byteLength;
+    }
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch (error) {
+    controller.abort();
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+export function validatePublicSchema(value: unknown): void {
+  let nodes = 0;
+  const visit = (v: unknown, depth: number): void => {
+    if (++nodes > 20000 || depth > 12)
+      throw new PublicFeedLimitError('Public schema work budget exceeded.');
+    if (typeof v === 'number' && (!Number.isFinite(v) || Math.abs(v) > 1e15))
+      throw new PublicFeedLimitError('Invalid provider numeric value.');
+    if (typeof v === 'string' && v.length > 16000)
+      throw new PublicFeedLimitError('Provider string too long.');
+    if (Array.isArray(v)) {
+      if (v.length > 1000) throw new PublicFeedLimitError('Provider list too large.');
+      for (const item of v) visit(item, depth + 1);
+    } else if (v !== null && typeof v === 'object') {
+      const entries = Object.entries(v);
+      if (entries.length > 128) throw new PublicFeedLimitError('Provider object too large.');
+      for (const [key, item] of entries) {
+        if (key.length > 256) throw new PublicFeedLimitError('Provider key too long.');
+        visit(item, depth + 1);
+      }
+    }
+  };
+  visit(value, 0);
 }

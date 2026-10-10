@@ -526,3 +526,47 @@ export function validatedContract(
   if (!slug || slug.length > 256) return null;
   return { ...raw, venue, contractId: raw.contractId, closesAt: raw.closesAt, slug };
 }
+
+/** Oldest unchecked eligible cycles first; interleave rows so one cycle cannot
+ * consume the entire bounded pass. Attempts move checked cycles behind untouched ones. */
+export function selectDueForecasts(
+  rows: readonly DueForecast[],
+  now: Date,
+  limit: number,
+): readonly DueForecast[] {
+  const groups = new Map<string, DueForecast[]>();
+  const checked = (r: DueForecast) =>
+    typeof r.row.lastResolutionCheckAt === 'string'
+      ? Date.parse(r.row.lastResolutionCheckAt)
+      : Number.NEGATIVE_INFINITY;
+  for (const row of rows) {
+    if (!resolutionDue(row.row, now)) continue;
+    const key = row.row.symbol + ':' + row.row.closesAt;
+    const group = groups.get(key) ?? [];
+    group.push(row);
+    groups.set(key, group);
+  }
+  const ordered = [...groups.values()]
+    .map((g) => g.sort((a, b) => checked(a) - checked(b) || a.id.localeCompare(b.id)))
+    .sort(
+      (a, b) =>
+        checked(a[0]!) - checked(b[0]!) ||
+        Date.parse(a[0]!.row.closesAt) - Date.parse(b[0]!.row.closesAt) ||
+        a[0]!.row.symbol.localeCompare(b[0]!.row.symbol),
+    )
+    .slice(0, 20);
+  const out: DueForecast[] = [];
+  const cap = Math.max(1, Math.min(Math.trunc(limit), 2000));
+  for (let index = 0; out.length < cap; index++) {
+    let added = false;
+    for (const group of ordered) {
+      const row = group[index];
+      if (row && out.length < cap) {
+        out.push(row);
+        added = true;
+      }
+    }
+    if (!added) break;
+  }
+  return out;
+}

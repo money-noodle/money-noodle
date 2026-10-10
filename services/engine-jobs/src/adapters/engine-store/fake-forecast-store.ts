@@ -1,6 +1,6 @@
 import { FencingTokenRejectedError, type LeaseGrant } from '../../domain/cycle-store.js';
 import {
-  resolutionDue,
+  selectDueForecasts,
   type DueForecast,
   type ForecastInput,
   type ForecastRow,
@@ -88,10 +88,11 @@ export class FakeForecastStore implements ForecastStore {
   }
 
   async readDueForecasts(now: Date, limit: number): Promise<readonly DueForecast[]> {
-    return [...this.rows.values(), ...[...this.seed.values()].filter((r) => !this.rows.has(r.id))]
-      .filter((r) => resolutionDue(r.row, now))
-      .slice(0, limit)
-      .map((r) => structuredClone(r));
+    return selectDueForecasts(
+      [...this.rows.values(), ...[...this.seed.values()].filter((r) => !this.rows.has(r.id))],
+      now,
+      limit,
+    ).map((r) => structuredClone(r));
   }
   async patchForecast(grant: LeaseGrant, original: DueForecast, row: ForecastRow): Promise<void> {
     this.fence(grant);

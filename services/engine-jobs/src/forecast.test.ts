@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   forecast,
+  selectDueForecasts,
   basisProbability,
   volatility,
   combinedProbability,
@@ -18,6 +19,9 @@ import { runCycleJob } from './application/cycle.js';
 import { FakeCycleStore } from './adapters/engine-store/fake-cycle-store.js';
 import { FakeForecastStore } from './adapters/engine-store/fake-forecast-store.js';
 import {
+  boundedPublicText,
+  validatePublicSchema,
+  PublicFeedLimitError,
   krakenPair,
   settlementMetadata,
   createPublicForecastFeeds,
@@ -843,5 +847,115 @@ describe('F2 source pair and metadata boundaries', () => {
       new Date(NOW.getTime() + 5001).toISOString(),
     ])
       expect(forecast(input({ sourceObservedAt }), NOW, enabled)).toBeNull();
+  });
+});
+
+describe('F8 bounded response work', () => {
+  it.each([{}, { 'content-encoding': 'gzip', 'transfer-encoding': 'chunked' }])(
+    'cancels before draining without a length header %j',
+    async (headers) => {
+      let bytes = 0,
+        cancelled = false;
+      const controller = new AbortController();
+      const response = new Response(
+        new ReadableStream<Uint8Array>(
+          {
+            pull(stream) {
+              bytes += 32;
+              stream.enqueue(new Uint8Array(32));
+              if (bytes === 3200) stream.close();
+            },
+            cancel() {
+              cancelled = true;
+            },
+          },
+          { highWaterMark: 0 },
+        ),
+        { headers },
+      );
+      await expect(boundedPublicText(response, 64, controller)).rejects.toBeInstanceOf(
+        PublicFeedLimitError,
+      );
+      expect(bytes).toBe(96);
+      expect(cancelled).toBe(true);
+      expect(controller.signal.aborted).toBe(true);
+    },
+  );
+  it('limits schema lists, strings, depth, and numeric values', () => {
+    for (const payload of [
+      Array(1001).fill(0),
+      'x'.repeat(16001),
+      { value: Infinity },
+      { value: 1e30 },
+    ])
+      expect(() => validatePublicSchema(payload)).toThrow(PublicFeedLimitError);
+  });
+  it('does not neutralize oversized quote bodies and caps in-flight bodies at four', async () => {
+    let active = 0,
+      peak = 0,
+      cancelled = 0;
+    const request: typeof fetch = async () => {
+      active++;
+      peak = Math.max(peak, active);
+      let sent = false;
+      return new Response(
+        new ReadableStream<Uint8Array>(
+          {
+            async pull(stream) {
+              await Promise.resolve();
+              if (!sent) {
+                sent = true;
+                stream.enqueue(new Uint8Array(1_000_001));
+              } else stream.close();
+            },
+            cancel() {
+              active--;
+              cancelled++;
+            },
+          },
+          { highWaterMark: 0 },
+        ),
+      );
+    };
+    const feeds = createPublicForecastFeeds(request);
+    await expect(
+      Promise.all(
+        Array.from({ length: 8 }, () =>
+          feeds.resolve({
+            venue: 'kalshi',
+            contractId: 'test',
+            slug: 'test',
+            closesAt: NOW.toISOString(),
+          }),
+        ),
+      ),
+    ).rejects.toBeInstanceOf(PublicFeedLimitError);
+    expect(peak).toBeLessThanOrEqual(4);
+    expect(cancelled).toBeGreaterThan(0);
+  });
+});
+describe('F9 eligible fair bounded selection', () => {
+  const now = new Date('2026-10-10T13:00:00Z');
+  const row = forecast(input(), NOW, enabled)!;
+  const due = (id: string, symbol: string, checked?: string) => ({
+    id,
+    row: { ...row, id, symbol, lastResolutionCheckAt: checked, resolutionAttempts: 5 },
+    restoreRunId: null,
+  });
+  it('filters 2000 earlier backoff rows before limit', () => {
+    const backlog = Array.from({ length: 2000 }, (_, i) => due('a' + i, 'BTC', now.toISOString()));
+    const eligible = due('z-eligible', 'ETH');
+    expect(selectDueForecasts([...backlog, eligible], now, 2000).map((r) => r.id)).toEqual([
+      'z-eligible',
+    ]);
+  });
+  it('selects 20 cycles and advances to untouched 21st after checked work', () => {
+    const rows = Array.from({ length: 21 }, (_, i) =>
+      due(String(i).padStart(2, '0'), 'ASSET' + String(i).padStart(2, '0')),
+    );
+    const first = selectDueForecasts(rows, now, 2000);
+    expect(first).toHaveLength(20);
+    for (const r of first) r.row.lastResolutionCheckAt = now.toISOString();
+    expect(selectDueForecasts(rows, now, 2000).map((r) => r.id)).toEqual(['20']);
   });
 });
