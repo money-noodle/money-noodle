@@ -35,3 +35,11 @@ Required before review-ready: exact-head CI green, independent arithmetic/proven
 ## Outstanding independent review
 
 Provider-control materialization and Kalshi-only/candidate research adaptations are not established copied parity. The current implementation reads the restored paper registry and applies no archived promotion authority. Broader live/current-control changes are not authorized here. Full calibration/candidate DTO fidelity, streaming resource limits, fair due-work selection and remaining independent requalification must finish before readiness.
+
+## Follow-up qualification boundaries
+
+The F2/F8 follow-up separates request start, source candle time, venue response capture and calculation completion. Issuance uses the actual issuance clock consistently for remaining horizon, probability, confidence, replay inputs, issuedAt and observation bucket. Synthetic clocks cover an acquisition crossing a fifteen-second bucket and crossing into the final minute. Provider descriptions/source/question/outcomes are bounded before parsing known numeric/spelled/TWAP windows; published venue reference values remain descriptive, never a replacement production Kraken basis.
+
+Resource-limit errors must propagate through outer quote acquisition boundaries, not only inner body readers. Added calculation/job vectors exercise both venues and event/book boundaries with a valid other venue, requiring zero observation transaction effects. Header-only gzip fixtures remain decoded-body simulations, not compression integration tests.
+
+Fresh whole-path review of 67738d4 requires additional same-writer corrections: historical Polymarket-anchored recording, Kalshi-only prospective candidate entry subset (without funded flags), exact model-spec/decision evidence, canonical full-reference binding and fake/SQL revision/instant/FK conformance. These are remaining corrections, not optional new-authority requests or approved findings. The reviewed head has since passed full hosted CI including its real PostgreSQL contract; a later correction head still needs its own hosted checks and fresh review.
