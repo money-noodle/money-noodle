@@ -38,6 +38,8 @@ import {
   type LeaseGrant,
 } from '../domain/cycle-store.js';
 import { evaluateIntent, type IntentRow } from '../domain/intent.js';
+import { runForecastTick } from './forecast-cycle.js';
+import type { ForecastFeeds, ForecastStore } from '../domain/forecast.js';
 
 /** How many intent rows to read. The decision needs the latest; this is head-room. */
 export const INTENT_READ_LIMIT = 50;
@@ -61,6 +63,7 @@ export interface CycleJobInput {
   readonly now: () => Date;
   /** Injected so a test does not wait 15 seconds a tick. */
   readonly sleep: (ms: number) => Promise<void>;
+  readonly forecast?: { readonly store: ForecastStore; readonly feeds: ForecastFeeds };
   readonly capability?: string;
   readonly jobRunCapability?: string;
 }
@@ -188,7 +191,7 @@ export async function runCycleJob(input: CycleJobInput): Promise<CycleJobResult>
 
   // 5. The lanes stage 1 does not implement. Accepted by the parser so the
   //    argument shape is settled, refused here so a tfvars change cannot run one.
-  if (input.mode !== 'dry') {
+  if (input.mode === 'paper' || (input.mode === 'forecast' && input.forecast === undefined)) {
     return finish('refused', 'mode-not-implemented', {
       intent: decision.intent,
       ticksCompleted: 0,
@@ -199,12 +202,24 @@ export async function runCycleJob(input: CycleJobInput): Promise<CycleJobResult>
   //    spacing, then exit, so one scheduled minute is one run. Stage 1's tick
   //    body is the heartbeat and nothing else.
   let ticksCompleted = 0;
+  const firstTickAt = input.now().getTime();
   for (let tick = 1; tick <= ticks; tick += 1) {
     const at = input.now();
     await input.store.heartbeat(grant, at, leaseExpiry(at, ticks - tick + 1));
+    if (input.mode === 'forecast' && input.forecast !== undefined) {
+      await runForecastTick(input.forecast.store, input.forecast.feeds, grant, input.now);
+    }
     ticksCompleted += 1;
-    if (tick < ticks) await input.sleep(TICK_INTERVAL_MS);
+    if (tick < ticks)
+      await input.sleep(
+        input.mode === 'forecast'
+          ? Math.max(0, firstTickAt + tick * TICK_INTERVAL_MS - input.now().getTime())
+          : TICK_INTERVAL_MS,
+      );
   }
 
-  return finish('applied', 'dry-run', { intent: decision.intent, ticksCompleted });
+  return finish('applied', input.mode === 'forecast' ? 'forecast-run' : 'dry-run', {
+    intent: decision.intent,
+    ticksCompleted,
+  });
 }

@@ -12,6 +12,8 @@ export default defineConfig({
         // rather than execute lives in `src/domain`, which is covered.
         'services/engine-jobs/src/adapters/engine-store/postgres-engine-store.ts',
         'services/engine-jobs/src/adapters/engine-store/postgres-cycle-store.ts',
+        // Exercised by the remote-only disposable PostgreSQL contract target.
+        'services/engine-jobs/src/adapters/engine-store/postgres-forecast-store.ts',
         'services/engine-jobs/src/test-support/**',
       ],
       include: ['services/engine-jobs/src/**/*.ts'],

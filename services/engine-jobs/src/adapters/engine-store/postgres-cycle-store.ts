@@ -106,7 +106,8 @@ export function createPostgresCycleStore(connectionString: string): CycleStore {
            set heartbeat_at = ${at}, expires_at = ${expiresAt}
          where capability = ${grant.capability}
            and owner = ${grant.owner}
-           and fencing_token = ${grant.fencingToken}`;
+           and fencing_token = ${grant.fencingToken}
+              and expires_at > clock_timestamp()`;
       fenced(updated.count, 'a heartbeat');
     },
 
@@ -118,7 +119,8 @@ export function createPostgresCycleStore(connectionString: string): CycleStore {
            set expires_at = ${at}, heartbeat_at = ${at}
          where capability = ${grant.capability}
            and owner = ${grant.owner}
-           and fencing_token = ${grant.fencingToken}`;
+           and fencing_token = ${grant.fencingToken}
+              and expires_at > clock_timestamp()`;
       fenced(updated.count, 'a lease release');
     },
 
@@ -149,7 +151,8 @@ export function createPostgresCycleStore(connectionString: string): CycleStore {
            select 1 from engine.job_lease
             where capability = ${grant.capability}
               and owner = ${grant.owner}
-              and fencing_token = ${grant.fencingToken})`;
+              and fencing_token = ${grant.fencingToken}
+              and expires_at > clock_timestamp())`;
       fenced(inserted.count, 'opening a run record');
     },
 
@@ -165,7 +168,8 @@ export function createPostgresCycleStore(connectionString: string): CycleStore {
              select 1 from engine.job_lease
               where capability = ${grant.capability}
                 and owner = ${grant.owner}
-                and fencing_token = ${grant.fencingToken})`;
+                and fencing_token = ${grant.fencingToken}
+              and expires_at > clock_timestamp())`;
       fenced(updated.count, 'closing a run record');
     },
 
@@ -201,7 +205,8 @@ export function createPostgresCycleStore(connectionString: string): CycleStore {
            select 1 from engine.job_lease
             where capability = ${grant.capability}
               and owner = ${grant.owner}
-              and fencing_token = ${grant.fencingToken})`;
+              and fencing_token = ${grant.fencingToken}
+              and expires_at > clock_timestamp())`;
       fenced(inserted.count, 'appending an outcome row');
     },
 
@@ -213,7 +218,8 @@ export function createPostgresCycleStore(connectionString: string): CycleStore {
            select 1 from engine.job_lease
             where capability = ${grant.capability}
               and owner = ${grant.owner}
-              and fencing_token = ${grant.fencingToken})
+              and fencing_token = ${grant.fencingToken}
+              and expires_at > clock_timestamp())
         on conflict (capability) do update
           set last_run_id  = excluded.last_run_id,
               last_run_at  = excluded.last_run_at,
