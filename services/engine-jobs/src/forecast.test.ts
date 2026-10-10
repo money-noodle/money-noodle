@@ -799,10 +799,38 @@ describe('review F6/F7 rollback and effect-phase expiry', () => {
   );
   it('rejects invalid sample before publishing any transaction state', async () => {
     const h = harness();
-    h.feeds.calculate = async () => [input({ currentPrice: Infinity })];
-    await expect(h.job()).rejects.toThrow('Oracle sample constraint');
+    const held = await h.cycle.acquireLease({
+      capability: 'budget:paper',
+      owner: 'invalid-sample',
+      now: h.now(),
+      expiresAt: new Date(h.now().getTime() + 60000),
+    });
+    if (!held.acquired) throw Error('acquisition failed');
+    await h.cycle.openRunRecord(held.grant, {
+      runId: 'invalid-sample',
+      capability: 'budget:paper',
+      mode: 'forecast',
+      startedAt: h.now(),
+    });
+    const row = forecast(input(), NOW, enabled)!;
+    await expect(
+      h.store.recordObservation(held.grant, row, input({ currentPrice: Infinity })),
+    ).rejects.toThrow('Oracle sample constraint');
     expect(h.store.cycles.size).toBe(0);
     expect(h.store.samples.size).toBe(0);
+    expect(h.store.rows.size).toBe(0);
+    expect(h.store.events).toHaveLength(0);
+    expect(h.store.rows.size).toBe(0);
+    expect(h.store.events).toHaveLength(0);
+  });
+  it('rejects non-finite raw issuance before store writes and cannot manufacture evidence', async () => {
+    const h = harness();
+    h.feeds.calculate = async () => [input({ currentPrice: Infinity })];
+    await expect(h.job()).rejects.toThrow('Non-finite issuance basis evidence.');
+    expect(h.store.cycles.size).toBe(0);
+    expect(h.store.samples.size).toBe(0);
+    expect(h.store.rows.size).toBe(0);
+    expect(h.store.events).toHaveLength(0);
   });
   it('does not resolve after stalled empty calculation expires its owner', async () => {
     const h = harness(),

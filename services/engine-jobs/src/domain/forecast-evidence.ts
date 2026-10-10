@@ -63,7 +63,7 @@ export function replayProbability(
   return combinedProbability(basis, snapshot.slowTiltLogOdds, weight, slowScale);
 }
 export function issuanceSnapshot(input: {
-  basisInput?: BasisInput;
+  basisInput: BasisInput | undefined;
   basisProbability: number | null;
   slowTiltLogOdds: number;
   slowTerms: CalibrationSnapshot['slowTerms'];
@@ -81,9 +81,10 @@ export function issuanceSnapshot(input: {
     confidenceInput: input.confidenceInput,
     productionConfidence: input.confidence,
     confidenceReplayError: Math.abs(replayConfidence(input.confidenceInput) - input.confidence),
-    ...(raw
-      ? { basisInput: { ...raw }, baselineBasisProbability: input.basisProbability ?? undefined }
-      : {}),
+    ...(raw ? { basisInput: { ...raw } } : {}),
+    ...(input.basisProbability === null
+      ? {}
+      : { baselineBasisProbability: input.basisProbability }),
     basisLogOddsWeight: 0.55,
     slowTiltLogOdds: input.slowTiltLogOdds,
     slowTerms: input.slowTerms,
@@ -103,7 +104,7 @@ export function reconstructedSnapshot(probability: number, basis?: number): Cali
     version: 'calibration-replay-v1',
     source: 'historical-reconstruction',
     confidenceSource: 'absent',
-    baselineBasisProbability: basis,
+    ...(basis === undefined ? {} : { baselineBasisProbability: basis }),
     basisLogOddsWeight: 0.55,
     slowTiltLogOdds: logit(probability) - (basis === undefined ? 0 : logit(basis) * 0.55),
     slowTerms: [],
@@ -200,8 +201,8 @@ export function candidateEvidence(
       candidateModelVersion,
       status: 'available',
       probabilityUp,
-      replayError: index === 0 ? snapshot.baselineReplayError : undefined,
-      selectedEntry,
+      ...(index === 0 ? { replayError: snapshot.baselineReplayError } : {}),
+      ...(selectedEntry === undefined ? {} : { selectedEntry }),
       qualified: confidence >= 0.5 && selectedEntry !== undefined && selectedEntry.netEdge >= 0.05,
     };
   });
