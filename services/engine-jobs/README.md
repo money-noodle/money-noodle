@@ -10,6 +10,8 @@ The `services/engine-jobs` deployment family of Working [ADR-0013](../../docs/ar
 | `dist/restore/main.js stage-list` | by hand, before the one execution | none — no database, no network | [`docs/operations/restoring-the-v1-archive.md`](../../docs/operations/restoring-the-v1-archive.md#staging-the-inputs-and-running-the-one-execution) |
 | `dist/cycle/main.js` | Cloud Scheduler, every minute (created paused) | `engine-cycle-runtime`, started by `engine-cycle-scheduler` | [`docs/operations/engine-cycle.md`](../../docs/operations/engine-cycle.md) |
 
+The cycle schedule is created paused; un-pausing it, changing its mode or its tick count is a reviewed change to `infra/stacks/engine-jobs/cycle.tfvars`, never a console edit (the same committed-record mechanism as `restore.tfvars`).
+
 ## Layout
 
 - `src/domain/` — the v1 archive contract, the verify-first comparison, blob verification, the ledger v9 and forecast storage verifiers, the paper bankroll recomputation, the transform at the paper seam, and the evidence renderer. Pure; no I/O beyond the in-memory tree.

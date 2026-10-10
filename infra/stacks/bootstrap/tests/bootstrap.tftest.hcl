@@ -317,6 +317,13 @@ run "the_deployer_needs_cloud_run_administration_and_no_identity_authority" {
     error_message = "The deployer must keep the authority to act as the runtime identities it deploys."
   }
 
+  # The engine-jobs stack declares the cycle job's Cloud Scheduler trigger and the
+  # dispatched apply creates it as the deployer (ADR-0013 §1, #243).
+  assert {
+    condition     = contains(var.deployer_roles, "roles/cloudscheduler.admin")
+    error_message = "The deployer must be able to create the Cloud Scheduler job that triggers the engine-cycle job; without it the first engine-jobs apply fails on cloudscheduler.jobs.create."
+  }
+
   assert {
     condition = alltrue([
       for role in var.deployer_roles : !contains([
