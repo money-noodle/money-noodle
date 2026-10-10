@@ -59,9 +59,11 @@ export function createPostgresForecastStore(
       return sql.begin(async (tx) => {
         await guard(tx, grant);
         await cycle(tx, grant, row);
+        // Bind pre-serialized JSON as text; otherwise inferred jsonb invokes the
+        // driver JSON serializer a second time and stores a JSON string.
         // Retry must not replace an existing observation, including one in the restored open set.
         const inserted = await tx.unsafe(
-          'insert into engine.forecast_cycle_row(forecast_id,asset,closes_at,issued_at,status,row,origin_run_id,last_run_id) select $1,$2,$3,$4,$5,$6::jsonb,$7,$7 where not exists(select 1 from engine.forecast_row where forecast_id=$1) on conflict do nothing returning forecast_id',
+          'insert into engine.forecast_cycle_row(forecast_id,asset,closes_at,issued_at,status,row,origin_run_id,last_run_id) select $1,$2,$3,$4,$5,$6::text::jsonb,$7,$7 where not exists(select 1 from engine.forecast_row where forecast_id=$1) on conflict do nothing returning forecast_id',
           [
             row.id,
             row.symbol,
@@ -118,7 +120,7 @@ export function createPostgresForecastStore(
         await cycle(tx, grant, row);
         // A seed resolution creates an overlay; the restored row and restore FK never change.
         const updated = await tx.unsafe(
-          "insert into engine.forecast_cycle_row(forecast_id,asset,closes_at,issued_at,status,row,origin_run_id,origin_restore_run_id,last_run_id) values($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9) on conflict(forecast_id) do update set status=excluded.status,row=excluded.row,last_run_id=excluded.last_run_id,revision=engine.forecast_cycle_row.revision+1 where engine.forecast_cycle_row.status='pending' returning forecast_id",
+          "insert into engine.forecast_cycle_row(forecast_id,asset,closes_at,issued_at,status,row,origin_run_id,origin_restore_run_id,last_run_id) values($1,$2,$3,$4,$5,$6::text::jsonb,$7,$8,$9) on conflict(forecast_id) do update set status=excluded.status,row=excluded.row,last_run_id=excluded.last_run_id,revision=engine.forecast_cycle_row.revision+1 where engine.forecast_cycle_row.status='pending' returning forecast_id",
           [
             row.id,
             row.symbol,

@@ -27,6 +27,7 @@ function input(overrides: Partial<ForecastInput> = {}): ForecastInput {
     closesAt: '2026-10-10T12:15:00Z',
     referencePrice: 100,
     currentPrice: 101,
+    coinPrice: 100,
     minuteCloses: closes,
     oracleHistory: [],
     change1h: 0.8,
@@ -142,7 +143,7 @@ function historical(i: ForecastInput) {
         0.04 +
         Math.min(1, returns.length / 60) * 0.22 -
         Math.min(0.12, (seconds / 900) * 0.12) -
-        Math.min(0.04, (((i.high24h - i.low24h) / i.currentPrice) * 100) / 60),
+        Math.min(0.04, (((i.high24h - i.low24h) / i.coinPrice) * 100) / 60),
       0.25,
       0.86,
     ),
@@ -621,5 +622,98 @@ describe('synthetic public calculation response matrix', () => {
         closesAt: NOW.toISOString(),
       }),
     ).toMatchObject({ invalidReason: 'non-binary-outcome' });
+  });
+});
+
+describe('independent review regression vectors F1/F5', () => {
+  it('uses the qualified no-slash RSS origin and refuses input failure rather than manufacture data', async () => {
+    const urls: string[] = [];
+    const request: typeof fetch = async (url) => {
+      const u = String(url);
+      urls.push(u);
+      if (u.includes('coindesk')) {
+        expect(u).toBe('https://www.coindesk.com/arc/outboundfeeds/rss');
+        throw Error('Synthetic unavailable news');
+      }
+      return new Response('[]');
+    };
+    await expect(
+      createPublicForecastFeeds(request).calculate(NOW, enabled, harness().store),
+    ).rejects.toThrow('Synthetic unavailable news');
+    expect(urls).toContain('https://www.coindesk.com/arc/outboundfeeds/rss');
+    const h = harness();
+    h.feeds.calculate = async () => {
+      throw Error('Synthetic acquisition failure');
+    };
+    await expect(h.job()).rejects.toThrow('Synthetic acquisition failure');
+    expect(h.store.events).toHaveLength(0);
+    expect(h.cycle.outcomes).toHaveLength(0);
+  });
+  it('uses CoinGecko price for confidence while retaining Kraken current for basis at the identity boundary', () => {
+    const close = new Date(NOW.getTime() + 512000).toISOString();
+    const i = input({
+      coinPrice: 100,
+      currentPrice: 99,
+      high24h: 100.36,
+      low24h: 99.64,
+      minuteCloses: closes.slice(0, 12),
+      closesAt: close,
+      quotes: input().quotes.map((q) => ({
+        ...q,
+        askDown: 0.5,
+        contract: { ...q.contract, closesAt: close },
+      })),
+    });
+    const row = forecast(i, NOW, enabled)!;
+    expect(row.confidence).toBeCloseTo(0.5000666666666667, 12);
+    expect(row.qualified).toBe(true);
+    expect(row.id.startsWith('calc:')).toBe(false);
+    const counterfactual = forecast({ ...i, coinPrice: 99 }, NOW, enabled)!;
+    expect(counterfactual.confidence).toBeCloseTo(0.4999454545454545, 12);
+    expect(counterfactual.qualified).toBe(false);
+    expect(counterfactual.id.startsWith('calc:')).toBe(true);
+    expect(counterfactual.probabilityUp).toBe(row.probabilityUp);
+  });
+});
+
+describe('independent review F3 malformed provenance', () => {
+  it.each([
+    { registryId: 'missing' },
+    { venue: 'kalshi', contractId: 'wrong', closesAt: '2026-10-10T12:15:00Z' },
+    { venue: 'polymarket', contractId: 'bad-date', closesAt: 'not-a-date' },
+  ])(
+    'invalidates local reference without a provider call and preserves restore origin',
+    async (reference) => {
+      const h = harness(),
+        row = forecast(input(), NOW, enabled)!;
+      row.venueContracts = { polymarket: reference as unknown as Contract };
+      h.store.seed.set(row.id, { id: row.id, row, restoreRunId: 'synthetic-restore' });
+      h.advance(15 * 60_000);
+      h.feeds.calculate = async () => [];
+      await h.job();
+      expect(h.feeds.resolve).not.toHaveBeenCalled();
+      expect(h.store.rows.get(row.id)).toMatchObject({
+        restoreRunId: 'synthetic-restore',
+        row: {
+          status: 'invalid',
+          targetIntegrity: 'missing-provenance',
+          invalidReason: 'missing-provenance',
+        },
+      });
+      expect(h.store.seed.get(row.id)?.row.status).toBe('pending');
+    },
+  );
+});
+
+describe('F2 issuance boundary rejection', () => {
+  it('cannot issue after actual now passes close even when calculation start remains 15-second fresh', () => {
+    const start = new Date(NOW.getTime() - 10000),
+      close = new Date(NOW.getTime() - 1000).toISOString();
+    const i = input({
+      calculatedAt: start.toISOString(),
+      closesAt: close,
+      quotes: input().quotes.map((q) => ({ ...q, contract: { ...q.contract, closesAt: close } })),
+    });
+    expect(forecast(i, NOW, enabled)).toBeNull();
   });
 });

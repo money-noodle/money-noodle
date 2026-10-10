@@ -25,6 +25,8 @@ export interface ForecastInput {
   closesAt: string;
   referencePrice: number;
   currentPrice: number;
+  /** CoinGecko snapshot price; distinct from same-series Kraken basis current. */
+  coinPrice: number;
   minuteCloses: readonly number[];
   oracleHistory: readonly PricePoint[];
   change1h: number;
@@ -196,7 +198,8 @@ export function forecast(
     !Number.isFinite(close) ||
     at > now.getTime() ||
     now.getTime() - at > 15_000 ||
-    close <= at
+    close <= at ||
+    close <= now.getTime()
   )
     return null;
   const oracle = input.oracleHistory.filter((v) => Number.isFinite(v.price) && v.price > 0);
@@ -243,9 +246,7 @@ export function forecast(
   const quotes = input.quotes.filter(
     (q) => Date.parse(q.contract.closesAt) === close && enabled.includes(q.contract.venue),
   );
-  const range = input.currentPrice
-    ? ((input.high24h - input.low24h) / input.currentPrice) * 100
-    : 0;
+  const range = input.coinPrice ? ((input.high24h - input.low24h) / input.coinPrice) * 100 : 0;
   const confidence = bound(
     0.3 +
       (basis === null ? 0 : 0.2) +
@@ -364,22 +365,26 @@ export function resolveForecast(
   const row = structuredClone(original);
   const hasContracts = Object.keys(row.venueContracts).length > 0;
   const venue = hasContracts ? (row.entryVenue ?? 'polymarket') : 'polymarket';
-  const reference = row.venueContracts[venue];
+  const reference = validatedContract(
+    row.venueContracts[venue],
+    venue,
+    row.closesAt,
+    row.marketUrl.split('/').filter(Boolean).at(-1) ?? '',
+  );
   const hasProvenance = Object.keys(row.venueContracts).length > 0;
   row.lastResolutionCheckAt = now.toISOString();
   row.evaluationVenue = venue;
   row.targetIntegrity = hasProvenance
-    ? reference
+    ? reference !== null
       ? 'venue-specific'
       : 'missing-provenance'
     : 'legacy-polymarket';
-  if (hasProvenance && reference === undefined) {
+  if (hasProvenance && reference === null) {
     row.status = 'invalid';
     row.invalidReason = 'missing-provenance';
   } else if (
     result !== null &&
-    (result.venue !== venue ||
-      (reference !== undefined && result.contractId !== reference.contractId))
+    (result.venue !== venue || (reference !== null && result.contractId !== reference.contractId))
   ) {
     row.status = 'invalid';
     row.targetIntegrity = 'mismatched-outcome';
@@ -466,4 +471,30 @@ export function settlementProbability(
     : basis >= 0
       ? 0.999
       : 0.001;
+}
+
+/** Untrusted restored JSON references must be valid before issuing any network request. */
+export function validatedContract(
+  value: unknown,
+  venue: Venue,
+  close: string,
+  fallbackSlug: string,
+): Contract | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>,
+    at = Date.parse(close);
+  if (
+    raw.venue !== venue ||
+    typeof raw.contractId !== 'string' ||
+    raw.contractId.length === 0 ||
+    raw.contractId.length > 256 ||
+    typeof raw.closesAt !== 'string' ||
+    !Number.isFinite(at) ||
+    !Number.isFinite(Date.parse(raw.closesAt)) ||
+    Math.abs(Date.parse(raw.closesAt) - at) > 5000
+  )
+    return null;
+  const slug = typeof raw.slug === 'string' && raw.slug.length ? raw.slug : fallbackSlug;
+  if (!slug || slug.length > 256) return null;
+  return { ...raw, venue, contractId: raw.contractId, closesAt: raw.closesAt, slug };
 }

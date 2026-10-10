@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import postgres from 'postgres';
 import { createPostgresForecastStore } from '../dist/adapters/engine-store/postgres-forecast-store.js';
+import { runForecastTick } from '../dist/application/forecast-cycle.js';
 import { createPostgresCycleStore } from '../dist/adapters/engine-store/postgres-cycle-store.js';
 if (process.env.GITHUB_ACTIONS !== 'true')
   throw Error('This synthetic database contract runs only in remote GitHub CI.');
@@ -143,7 +144,7 @@ try {
   await admin.unsafe(
     "insert into engine.contract_provenance(registry_id,record,restore_run_id) values('synthetic-ref',$1::jsonb,'synthetic-restore')",
     [
-      JSON.stringify({
+      admin.json({
         venue: 'polymarket',
         contractId: 'exact-contract',
         closesAt: row.closesAt,
@@ -153,8 +154,25 @@ try {
   );
   await admin.unsafe(
     "insert into engine.forecast_row(forecast_id,status,row,restore_run_id) values('seed','pending',$1::jsonb,'synthetic-restore')",
-    [JSON.stringify(seed)],
+    [admin.json(seed)],
   );
+  // SQL JSON columns must hold objects, not JSON-encoded strings. The driver's
+  // json serializer owns serialization; pre-stringifying would encode twice.
+  const shapes = await admin.unsafe(
+    'select jsonb_typeof(row) as kind from engine.forecast_cycle_row union all select jsonb_typeof(row) from engine.forecast_row',
+  );
+  assert(
+    shapes.every((r) => r.kind === 'object'),
+    'All synthetic forecast JSON payloads are objects.',
+  );
+  const [seedShape] = await admin.unsafe(
+    "select forecast_id,status,row->>'closesAt' as close,jsonb_typeof(row) as kind from engine.forecast_row where forecast_id='seed'",
+  );
+  assert.equal(seedShape.forecast_id, 'seed');
+  assert.equal(seedShape.status, 'pending');
+  assert.equal(seedShape.close, row.closesAt);
+  assert.equal(seedShape.kind, 'object');
+  console.log('Synthetic JSON object binding and restored seed setup verified.');
   const restored = (await store.readDueForecasts(now, 2000)).find((r) => r.id === 'seed');
   assert(restored);
   assert.equal(restored.row.venueContracts.polymarket.contractId, 'exact-contract');
@@ -180,6 +198,48 @@ try {
   assert.deepEqual(
     (await admin.unsafe("select row from engine.forecast_row where forecast_id='seed'"))[0].row,
     seed,
+  );
+  const missingSeed = {
+    ...row,
+    id: 'missing-seed',
+    venueContracts: { polymarket: { registryId: 'absent-registry-record' } },
+  };
+  await admin.unsafe(
+    "insert into engine.forecast_row(forecast_id,status,row,restore_run_id) values('missing-seed','pending',$1::jsonb,'synthetic-restore')",
+    [admin.json(missingSeed)],
+  );
+  const requested = [];
+  await runForecastTick(
+    store,
+    {
+      calculate: async () => [],
+      resolve: async (contract) => {
+        requested.push(contract.contractId);
+        assert.equal(typeof contract.contractId, 'string');
+        return null;
+      },
+    },
+    grant,
+    () => new Date(),
+  );
+  assert(
+    !requested.includes(undefined),
+    'Malformed registry references must never reach a provider.',
+  );
+  const [missingOverlay] = await admin.unsafe(
+    "select row,origin_restore_run_id from engine.forecast_cycle_row where forecast_id='missing-seed'",
+  );
+  assert.equal(missingOverlay.row.status, 'invalid');
+  assert.equal(missingOverlay.row.targetIntegrity, 'missing-provenance');
+  assert.equal(missingOverlay.row.invalidReason, 'missing-provenance');
+  assert.equal(missingOverlay.origin_restore_run_id, 'synthetic-restore');
+  assert.deepEqual(
+    (await admin.unsafe("select row from engine.forecast_row where forecast_id='missing-seed'"))[0]
+      .row,
+    missingSeed,
+  );
+  console.log(
+    'Synthetic real-store missing-provenance disposition and seed immutability verified.',
   );
   for (const table of [
     'forecast_cycle',

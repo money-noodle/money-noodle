@@ -118,7 +118,7 @@ export function createPublicForecastFeeds(request: PublicFetch = fetch): Forecas
     };
   }
   async function news(): Promise<readonly { title: string; score: number }[]> {
-    const response = await request('https://www.coindesk.com/arc/outboundfeeds/rss/', {
+    const response = await request('https://www.coindesk.com/arc/outboundfeeds/rss', {
       redirect: 'error',
       signal: AbortSignal.timeout(4000),
     });
@@ -255,6 +255,7 @@ export function createPublicForecastFeeds(request: PublicFetch = fetch): Forecas
           closesAt,
           referencePrice,
           currentPrice,
+          coinPrice: number(coin.current_price),
           minuteCloses,
           oracleHistory,
           change1h: number(coin.price_change_percentage_1h_in_currency),

@@ -1,5 +1,6 @@
 import {
   forecast,
+  validatedContract,
   resolutionDue,
   resolveForecast,
   type Contract,
@@ -35,7 +36,8 @@ export async function runForecastTick(
         : 'polymarket',
       reference = row.venueContracts[venue],
       slug = row.marketUrl.split('/').filter(Boolean).at(-1) ?? '';
-    if (reference !== undefined) return { ...reference, slug: reference.slug || slug };
+    if (reference !== undefined)
+      return validatedContract(reference, venue, row.closesAt, slug) ?? undefined;
     if (Object.keys(row.venueContracts).length !== 0 || !slug) return undefined;
     return { venue: 'polymarket', contractId: slug, slug, closesAt: row.closesAt };
   };
