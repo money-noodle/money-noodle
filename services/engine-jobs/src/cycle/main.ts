@@ -18,6 +18,8 @@ import { randomUUID } from 'node:crypto';
 
 import { createPostgresCycleStore } from '../adapters/engine-store/postgres-cycle-store.js';
 import { runCycleJob } from '../application/cycle.js';
+import { createPostgresForecastStore } from '../adapters/engine-store/postgres-forecast-store.js';
+import { createPublicForecastFeeds } from '../adapters/feeds/forecast-feeds.js';
 import { CYCLE_MODES, DEFAULT_TICKS, isCycleMode, type CycleMode } from '../domain/cycle-store.js';
 
 const WRITER_URL_ENV = 'ENGINE_CYCLE_WRITER_DATABASE_URL';
@@ -91,8 +93,12 @@ async function main(): Promise<number> {
   }
 
   const store = createPostgresCycleStore(connectionString);
+  const forecastStore = mode === 'forecast' ? createPostgresForecastStore(connectionString) : null;
   try {
     const result = await runCycleJob({
+      ...(forecastStore === null
+        ? {}
+        : { forecast: { store: forecastStore, feeds: createPublicForecastFeeds() } }),
       controlEpoch,
       mode,
       now: () => new Date(),
@@ -119,6 +125,7 @@ async function main(): Promise<number> {
     return 0;
   } finally {
     await store.close();
+    if (forecastStore !== null) await forecastStore.close();
   }
 }
 

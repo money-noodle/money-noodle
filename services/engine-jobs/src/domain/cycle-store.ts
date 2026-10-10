@@ -38,6 +38,7 @@ export type CycleOutcome = 'applied' | 'refused';
 export const CYCLE_REASONS = [
   /** The run executed. Stage 1's only success: bookkeeping ticks and no effect. */
   'dry-run',
+  'forecast-run',
   /** No intent row exists for the capability at all. */
   'intent-missing',
   /** The latest row carries an epoch that is not the store's current one. */

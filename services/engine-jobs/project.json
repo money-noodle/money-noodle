@@ -45,6 +45,14 @@
       "options": {
         "command": "tsc --project services/engine-jobs/tsconfig.json --noEmit"
       }
+    },
+    "contract": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "dependsOn": ["build"],
+      "options": {
+        "command": "node services/engine-jobs/checks/forecast-postgres.mjs"
+      }
     }
   }
 }

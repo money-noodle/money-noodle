@@ -66,7 +66,11 @@ export class FakeCycleStore implements CycleStore {
   readonly heartbeats: Date[] = [];
   closed = false;
 
-  constructor(intents: readonly IntentRow[] = []) {
+  private logicalNow = new Date(0);
+  constructor(
+    intents: readonly IntentRow[] = [],
+    readonly clock: (() => Date) | null = null,
+  ) {
     this.intents.push(...intents);
   }
 
@@ -80,7 +84,8 @@ export class FakeCycleStore implements CycleStore {
     if (
       held === undefined ||
       held.owner !== grant.owner ||
-      held.fencingToken !== grant.fencingToken
+      held.fencingToken !== grant.fencingToken ||
+      held.expiresAt <= (this.clock?.() ?? this.logicalNow)
     ) {
       throw new FencingTokenRejectedError(
         `Refusing ${what}: this run no longer holds the lease it was granted.`,
@@ -95,6 +100,7 @@ export class FakeCycleStore implements CycleStore {
     now: Date;
     expiresAt: Date;
   }): Promise<LeaseAcquisition> {
+    this.logicalNow = request.now;
     const held = this.leases.get(request.capability);
     if (held !== undefined && leaseIsLive(held.expiresAt, request.now)) {
       return {
@@ -130,6 +136,7 @@ export class FakeCycleStore implements CycleStore {
   }
 
   async heartbeat(grant: LeaseGrant, at: Date, expiresAt: Date): Promise<void> {
+    this.logicalNow = at;
     const lease = this.fence(grant, 'a heartbeat');
     lease.heartbeatAt = at;
     lease.expiresAt = expiresAt;
@@ -137,6 +144,7 @@ export class FakeCycleStore implements CycleStore {
   }
 
   async releaseLease(grant: LeaseGrant, at: Date): Promise<void> {
+    this.logicalNow = at;
     const lease = this.fence(grant, 'a lease release');
     lease.expiresAt = at;
     lease.heartbeatAt = at;

@@ -474,6 +474,7 @@ describe('what stage 1 refuses to be', () => {
   it('keeps the reason codes a closed set the migration and the runbook both name', () => {
     expect([...CYCLE_REASONS].sort()).toEqual([
       'dry-run',
+      'forecast-run',
       'intent-future',
       'intent-missing',
       'intent-paused',
@@ -493,8 +494,21 @@ describe('what stage 1 refuses to be', () => {
       ),
       'utf8',
     );
+    const forecastMigration = readFileSync(
+      join(
+        import.meta.dirname,
+        '..',
+        '..',
+        'platform-api',
+        'migrations',
+        '0005-forecast-cycle-overlay.sql',
+      ),
+      'utf8',
+    );
     for (const reason of CYCLE_REASONS) {
-      expect(migration, `0004 must name the reason code ${reason}`).toContain(reason);
+      // Stage 2 adds its applied reason without rewriting the stage-1 migration.
+      const owner = reason === 'forecast-run' ? forecastMigration : migration;
+      expect(owner, `owning migration must name the reason code ${reason}`).toContain(reason);
     }
     // `run-incomplete` is the open-record placeholder, not a run outcome, so it is
     // in the migration and deliberately not in the closed set above.
