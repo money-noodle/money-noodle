@@ -30,9 +30,11 @@ import {
   PublicFeedLimitError,
   krakenPair,
   settlementMetadata,
-  createPublicForecastFeeds,
+  createPublicForecastFeeds as publicFeedFactory,
 } from './adapters/feeds/forecast-feeds.js';
 const NOW = new Date('2026-10-10T12:01:00Z');
+const createPublicForecastFeeds = (request: typeof fetch = fetch, clock: () => Date = () => NOW) =>
+  publicFeedFactory(request, clock);
 const closes = Array.from({ length: 121 }, (_, i) => 100 * Math.exp(0.001 * Math.sin(i)));
 function input(overrides: Partial<ForecastInput> = {}): ForecastInput {
   return {
@@ -490,6 +492,9 @@ describe('synthetic public calculation response matrix', () => {
       wrongPair?: boolean;
       stale?: boolean;
       actualClose?: string;
+      eventRules?: string;
+      resolutionSource?: string;
+      floorStrike?: number;
     } = {},
   ): typeof fetch {
     return async (url) => {
@@ -547,6 +552,9 @@ describe('synthetic public calculation response matrix', () => {
       else if (u.includes('gamma-api'))
         value = [
           {
+            title: 'BTC Up or Down',
+            description: options.eventRules,
+            resolutionSource: options.resolutionSource,
             slug: (options.wrongAsset ? 'eth' : 'btc') + '-updown-15m-' + slot,
             endDate: options.missingDate
               ? undefined
@@ -576,6 +584,7 @@ describe('synthetic public calculation response matrix', () => {
           markets: options.kalshi
             ? [
                 {
+                  floor_strike: options.floorStrike,
                   ticker: 'KXBTC15M-test',
                   status: 'active',
                   close_time: options.actualClose ?? '2026-10-10T12:15:00Z',
@@ -622,6 +631,74 @@ describe('synthetic public calculation response matrix', () => {
       expect(
         await createPublicForecastFeeds(request(options)).calculate(NOW, enabled, harness().store),
       ).toEqual([]);
+    },
+  );
+
+  it('stamps completion acquisition independently of request/source clocks', async () => {
+    const start = new Date('2026-10-10T12:01:14Z'),
+      completed = new Date('2026-10-10T12:01:18Z');
+    const inputs = await createPublicForecastFeeds(request(), () => completed).calculate(
+      start,
+      ['polymarket'],
+      harness().store,
+    );
+    expect(inputs[0]?.requestStartedAt).toBe(start.toISOString());
+    expect(inputs[0]?.calculatedAt).toBe(completed.toISOString());
+    expect(inputs[0]?.sourceObservedAt).not.toBe(completed.toISOString());
+    expect(inputs[0]?.quotes[0]?.contract.capturedAt).toBe(completed.toISOString());
+    const row = forecast(inputs[0]!, completed, enabled)!,
+      expected = historical({ ...inputs[0]!, calculatedAt: completed.toISOString() });
+    expect(row.issuedAt).toBe(completed.toISOString());
+    expect(row.secondsRemaining).toBe(822);
+    expect(row.probabilityUp).toBeCloseTo(expected.p, 13);
+    expect(row.confidence).toBeCloseTo(expected.confidence, 13);
+    expect(row.id).toContain(String(Math.floor(completed.getTime() / 15000) * 15000));
+    expect(row.calibrationReplay.basisInput?.secondsRemaining).toBe(822);
+  });
+  it('preserves event-only rules and descriptive Kalshi strike without replacing Kraken basis', async () => {
+    const inputs = await createPublicForecastFeeds(
+      request({
+        kalshi: true,
+        eventRules: 'Average of fifteen seconds from TWAP-15s streams',
+        resolutionSource: 'Chainlink TWAP-15s-stream',
+        floorStrike: 50000,
+      }),
+    ).calculate(NOW, enabled, harness().store);
+    expect(inputs[0]?.quotes[0]?.contract).toMatchObject({
+      settlementPriceMethod: 'time-weighted-average',
+      settlementWindowSeconds: 15,
+      referenceWindowSeconds: 15,
+      referenceSource: 'Chainlink TWAP-15s-stream',
+    });
+    expect(inputs[0]?.quotes[0]?.contract.rulesText).toContain('BTC Up or Down');
+    expect(inputs[0]?.quotes[0]?.contract.rulesText).toContain('fifteen seconds');
+    expect(inputs[0]?.quotes[1]?.contract.referenceValue).toBe(50000);
+    expect(inputs[0]?.referencePrice).not.toBe(50000);
+  });
+  it.each([
+    { target: 'gamma-api', shape: 'bytes' },
+    { target: 'gamma-api', shape: 'schema' },
+    { target: '/books', shape: 'bytes' },
+    { target: '/books', shape: 'schema' },
+    { target: 'kalshi', shape: 'bytes' },
+    { target: 'kalshi', shape: 'schema' },
+  ])(
+    'propagates resource limits through calculate/job with a valid other venue %j',
+    async ({ target, shape }) => {
+      const base = request({ kalshi: true });
+      const bad: typeof fetch = async (url, options) =>
+        String(url).includes(target)
+          ? new Response(
+              shape === 'bytes' ? new Uint8Array(1000001) : JSON.stringify(Array(1001).fill(0)),
+            )
+          : base(url, options);
+      const h = harness();
+      h.feeds.calculate = createPublicForecastFeeds(bad).calculate;
+      await expect(h.job()).rejects.toBeInstanceOf(PublicFeedLimitError);
+      expect(h.store.cycles.size).toBe(0);
+      expect(h.store.samples.size).toBe(0);
+      expect(h.store.rows.size).toBe(0);
+      expect(h.store.events).toHaveLength(0);
     },
   );
   it('maps binary labels to token IDs instead of positional UP assumptions', async () => {
@@ -1097,4 +1174,100 @@ describe('F4 historical issuance DTO and independent raw replay', () => {
       ]);
     },
   );
+});
+
+describe('F2 issuance-completion independent boundaries and settlement metadata', () => {
+  it.each([
+    ['2026-10-10T12:01:14Z', '2026-10-10T12:01:18Z'],
+    ['2026-10-10T12:13:59Z', '2026-10-10T12:14:03Z'],
+  ])('computes all issuance fields at completion %s -> %s', (start, completed) => {
+    const at = new Date(completed),
+      i = input({ calculatedAt: start, referencePrice: 100, currentPrice: 100.02 });
+    const expected = historical({ ...i, calculatedAt: completed }),
+      row = forecast(i, at, enabled)!;
+    expect(row.secondsRemaining).toBe((Date.parse(i.closesAt) - at.getTime()) / 1000);
+    expect(row.probabilityUp).toBeCloseTo(expected.p, 13);
+    expect(row.confidence).toBeCloseTo(expected.confidence, 13);
+    expect(row.issuedAt).toBe(completed);
+    expect(row.id).toContain(
+      String(
+        Math.floor(at.getTime() / (row.qualified ? 15000 : 60000)) *
+          (row.qualified ? 15000 : 60000),
+      ),
+    );
+    expect(row.calibrationReplay.basisInput?.secondsRemaining).toBe(row.secondsRemaining);
+  });
+  it.each([
+    ['TWAP-15s-streams', 15],
+    ['time-weighted average over fifteen seconds', 15],
+    ['simple average of 30 seconds', 30],
+    ['simple average of the final minute', 60],
+  ])('retains known rule duration %s', (rules, seconds) => {
+    expect(settlementMetadata(rules as string, 'fixed')).toMatchObject({
+      settlementWindowSeconds: seconds,
+      referenceWindowSeconds: seconds,
+    });
+  });
+  it('never assigns a window to point or genuinely unknown rules', () => {
+    expect(
+      settlementMetadata('Closing price at the end', 'fixed').settlementWindowSeconds,
+    ).toBeUndefined();
+    expect(settlementMetadata('unspecified', 'fixed').settlementWindowSeconds).toBeUndefined();
+  });
+  it('uses explicit fifteen-second window in independent settlement-average equations', () => {
+    const at = new Date('2026-10-10T12:14:30Z'),
+      i = input({
+        calculatedAt: at.toISOString(),
+        currentPrice: 100.01,
+        quotes: input().quotes.map((q) => ({
+          ...q,
+          contract: { ...q.contract, settlementWindowSeconds: 15 },
+        })),
+      });
+    const sigma = 0.0002;
+    const z = Math.log(i.currentPrice / i.referencePrice) / (sigma * Math.sqrt(30 - (2 * 15) / 3));
+    const t = 1 / (1 + 0.2316419 * Math.abs(z));
+    const tail =
+      0.3989422804014327 *
+      Math.exp((-z * z) / 2) *
+      t *
+      (0.31938153 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+    expect(settlementProbability(i, at.getTime(), sigma)).toBeCloseTo(z < 0 ? tail : 1 - tail, 13);
+    const returns = i.minuteCloses
+      .slice(1)
+      .map((price, index) => Math.log(price / i.minuteCloses[index]!));
+    const mean = returns.reduce((x, y) => x + y, 0) / returns.length;
+    const actualSigma =
+      Math.sqrt(returns.reduce((sum, r) => sum + (r - mean) ** 2, 0) / (returns.length - 1)) /
+      Math.sqrt(60);
+    const actualZ = Math.log(i.currentPrice / i.referencePrice) / (actualSigma * Math.sqrt(20)),
+      q = 1 / (1 + 0.2316419 * Math.abs(actualZ));
+    const actualTail =
+      0.3989422804014327 *
+      Math.exp((-actualZ * actualZ) / 2) *
+      q *
+      (0.31938153 + q * (-0.356563782 + q * (1.781477937 + q * (-1.821255978 + q * 1.330274429))));
+    const candidateBasis = Math.max(
+      0.001,
+      Math.min(0.999, actualZ < 0 ? actualTail : 1 - actualTail),
+    );
+    const expectedCandidate = Math.max(
+      0.03,
+      Math.min(
+        0.97,
+        1 /
+          (1 +
+            Math.exp(
+              -(0.55 * Math.log(candidateBasis / (1 - candidateBasis)) + historical(i).slow),
+            )),
+      ),
+    );
+    expect(forecast(i, at, enabled)?.candidateEvaluation.decisions[2]?.probabilityUp).toBeCloseTo(
+      expectedCandidate,
+      13,
+    );
+    expect(settlementProbability(i, at.getTime(), sigma)).not.toBe(
+      settlementProbability({ ...i, quotes: input().quotes }, at.getTime(), sigma),
+    );
+  });
 });

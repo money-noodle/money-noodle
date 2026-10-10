@@ -16,6 +16,8 @@ export interface Contract {
   slug: string;
   asset?: string;
   capturedAt?: string;
+  requestStartedAt?: string;
+  referenceWindowSeconds?: number;
   rulesSource?: string;
   rulesFingerprint?: string;
   rulesText?: string;
@@ -37,6 +39,7 @@ export interface PricePoint {
 export interface ForecastInput {
   asset: string;
   calculatedAt: string;
+  requestStartedAt?: string;
   closesAt: string;
   referencePrice: number;
   currentPrice: number;
@@ -205,13 +208,15 @@ export function forecast(
   now: Date,
   enabled: readonly Venue[],
 ): ForecastRow | null {
-  const at = Date.parse(input.calculatedAt);
+  const calculationAt = Date.parse(input.calculatedAt);
+  const at = now.getTime();
   const close = Date.parse(input.closesAt);
   if (
+    !Number.isFinite(calculationAt) ||
     !Number.isFinite(at) ||
     !Number.isFinite(close) ||
-    at > now.getTime() ||
-    now.getTime() - at > 15_000 ||
+    calculationAt > at ||
+    at - calculationAt > 15_000 ||
     close <= at ||
     close <= now.getTime()
   )
@@ -292,7 +297,9 @@ export function forecast(
     id: observationIdentity(cycleId, at, qualified),
     symbol: input.asset,
     closesAt: input.closesAt,
-    issuedAt: input.calculatedAt,
+    issuedAt: new Date(at).toISOString(),
+    calculationCompletedAt: input.calculatedAt,
+    requestStartedAt: input.requestStartedAt,
     probabilityUp,
     confidence,
     qualified,

@@ -49,7 +49,10 @@ const jsonArray = (v: unknown): unknown[] => {
   }
 };
 /** Public data only. Fixed origins, deadlines, no credential/order/account API. */
-export function createPublicForecastFeeds(request: PublicFetch = fetch): ForecastFeeds {
+export function createPublicForecastFeeds(
+  request: PublicFetch = fetch,
+  clock: () => Date = () => new Date(),
+): ForecastFeeds {
   let active = 0;
   const queue: Array<() => void> = [];
   async function admitted<T>(work: () => Promise<T>): Promise<T> {
@@ -158,10 +161,21 @@ export function createPublicForecastFeeds(request: PublicFetch = fetch): Forecas
         closesAt: actualClose,
         slug,
         asset,
-        capturedAt,
+        requestStartedAt: capturedAt,
+        capturedAt: clock().toISOString(),
         ...settlementMetadata(
-          market.description,
+          [
+            event.title,
+            event.description,
+            market.question,
+            market.description,
+            market.outcomes,
+            event.resolutionSource,
+          ]
+            .map((value) => text(value).slice(0, 2000))
+            .join(' \n'),
           'https://gamma-api.polymarket.com/events?slug=' + encodeURIComponent(slug),
+          text(event.resolutionSource).slice(0, 2000),
         ),
       },
       probabilityUp: jsonArray(market.outcomePrices).map(number)[outcomes.indexOf('UP')] ?? 0.5,
@@ -200,12 +214,24 @@ export function createPublicForecastFeeds(request: PublicFetch = fetch): Forecas
         closesAt: text(market.close_time),
         slug: series.toLowerCase(),
         asset,
-        capturedAt,
+        requestStartedAt: capturedAt,
+        capturedAt: clock().toISOString(),
         ...settlementMetadata(
           [text(market.rules_primary), text(market.rules_secondary)].join(' '),
           'https://api.elections.kalshi.com/trade-api/v2/markets/' +
             encodeURIComponent(text(market.ticker)),
+          [
+            market.floor_strike === undefined ? '' : 'Kalshi published floor strike',
+            text(market.subtitle),
+            text(market.rules_primary),
+            text(market.rules_secondary),
+          ]
+            .join(' ')
+            .slice(0, 2000),
         ),
+        ...(market.floor_strike === undefined || market.floor_strike === null
+          ? {}
+          : { referenceValue: number(market.floor_strike) }),
       },
       probabilityUp:
         bid !== null && ask !== null ? (bid + ask) / 2 : number(market.last_price_dollars) || 0.5,
@@ -307,14 +333,15 @@ export function createPublicForecastFeeds(request: PublicFetch = fetch): Forecas
           body('https://api.kraken.com/0/public/OHLC?interval=10080&pair=' + pair),
           Promise.all([
             enabled.includes('polymarket')
-              ? poly(asset, prefix, slot, closesAt, now.toISOString()).catch(() => null)
+              ? poly(asset, prefix, slot, closesAt, now.toISOString()).catch(optional)
               : null,
             enabled.includes('kalshi')
-              ? kalshi(asset, series, closesAt, now.toISOString()).catch(() => null)
+              ? kalshi(asset, series, closesAt, now.toISOString()).catch(optional)
               : null,
           ]),
           store.readOracleHistory(asset, new Date(now.getTime() - 30 * 60_000)),
         ]);
+        const completedAt = clock();
         const rows = array(krakenPair(ohlc, pair)).map(array);
         const reference = rows.find((r) => number(r[0]) === slot - 60),
           referencePrice = number(reference?.[4]);
@@ -324,8 +351,8 @@ export function createPublicForecastFeeds(request: PublicFetch = fetch): Forecas
         // a fresh current candle proves that this pair's public series is current.
         if (
           !Number.isFinite(sourceTime) ||
-          sourceTime > now.getTime() + 5000 ||
-          now.getTime() - sourceTime > 90000
+          sourceTime > completedAt.getTime() + 5000 ||
+          completedAt.getTime() - sourceTime > 90000
         )
           return null;
         const minuteCloses = rows
@@ -354,7 +381,8 @@ export function createPublicForecastFeeds(request: PublicFetch = fetch): Forecas
           selected = relevant.length ? relevant : headlines.slice(0, 5);
         return {
           asset,
-          calculatedAt: now.toISOString(),
+          requestStartedAt: now.toISOString(),
+          calculatedAt: completedAt.toISOString(),
           closesAt:
             quotes.find((q) => q?.contract.venue === 'polymarket')?.contract.closesAt ??
             quotes.find((q) => q !== null)?.contract.closesAt ??
@@ -457,8 +485,11 @@ export function createPublicForecastFeeds(request: PublicFetch = fetch): Forecas
 export function settlementMetadata(
   value: unknown,
   rulesSource: string,
+  referenceSource?: string,
 ): Pick<
   Contract,
+  | 'referenceSource'
+  | 'referenceWindowSeconds'
   | 'rulesSource'
   | 'rulesFingerprint'
   | 'rulesText'
@@ -466,21 +497,38 @@ export function settlementMetadata(
   | 'settlementWindowSeconds'
 > {
   const rulesText = text(value).slice(0, 16000).replace(/\s+/g, ' ').trim();
-  const settlementPriceMethod = /time[- ]weighted|\btwap\b/i.test(rulesText)
+  const parsedText = rulesText + ' ' + (referenceSource ?? '');
+  const settlementPriceMethod = /time[- ]weighted|\btwap\b/i.test(parsedText)
     ? 'time-weighted-average'
-    : /simple average|average of/i.test(rulesText)
+    : /simple average|average of (?:the )?(?:\w+|\d+) (?:seconds|prices)|prices are collected/i.test(
+          parsedText,
+        )
       ? 'simple-average'
-      : /closing price|last price|price at (?:the )?(?:end|beginning)/i.test(rulesText)
+      : /closing price|last price|price at (?:the )?(?:end|beginning)/i.test(parsedText)
         ? 'point-in-time'
         : 'unknown';
-  const seconds = rulesText.match(/(?:average|twap)[\s\S]{0,100}?(\d+)\s*seconds?/i);
-  const window = seconds
-    ? Number(seconds[1])
-    : /final minute|last minute/i.test(rulesText)
-      ? 60
-      : undefined;
+  const words: Record<string, number> = {
+    one: 1,
+    five: 5,
+    ten: 10,
+    fifteen: 15,
+    thirty: 30,
+    sixty: 60,
+  };
+  const stream = parsedText.match(/twap[-_ ](\d+)[-_ ]?s(?:[-_ ]?streams?)?\b/i);
+  const seconds = parsedText.match(
+    /\b(one|five|ten|fifteen|thirty|sixty|\d+)\s*(?:-\s*)?seconds?\b/i,
+  );
+  const window = stream
+    ? Number(stream[1])
+    : seconds
+      ? (words[seconds[1]!.toLowerCase()] ?? Number(seconds[1]))
+      : /final minute|last minute/i.test(parsedText)
+        ? 60
+        : undefined;
   return {
     rulesSource,
+    ...(referenceSource ? { referenceSource } : {}),
     rulesText,
     rulesFingerprint: createHash('sha256').update(rulesText).digest('hex'),
     settlementPriceMethod,
@@ -489,7 +537,7 @@ export function settlementMetadata(
     window !== undefined &&
     window > 0 &&
     window <= 900
-      ? { settlementWindowSeconds: window }
+      ? { settlementWindowSeconds: window, referenceWindowSeconds: window }
       : {}),
   };
 }
