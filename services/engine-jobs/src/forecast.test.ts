@@ -13,6 +13,7 @@ import {
 import { describe, expect, it, vi } from 'vitest';
 import {
   forecast,
+  forecastCycleKey,
   selectDueForecasts,
   basisProbability,
   volatility,
@@ -502,6 +503,7 @@ describe('synthetic public calculation response matrix', () => {
       eventRules?: string;
       resolutionSource?: string;
       floorStrike?: number;
+      kalshiTicker?: string;
     } = {},
   ): typeof fetch {
     return async (url) => {
@@ -592,7 +594,7 @@ describe('synthetic public calculation response matrix', () => {
             ? [
                 {
                   floor_strike: options.floorStrike,
-                  ticker: 'KXBTC15M-test',
+                  ticker: options.kalshiTicker ?? 'KXBTC15M-test',
                   status: 'active',
                   close_time: options.actualClose ?? '2026-10-10T12:15:00Z',
                   yes_bid_dollars: '0.49',
@@ -708,6 +710,26 @@ describe('synthetic public calculation response matrix', () => {
       expect(h.store.events).toHaveLength(0);
     },
   );
+
+  it('rejects oversized Kalshi acquisition identity while retaining valid Poly-only transaction', async () => {
+    const h = harness();
+    const calculate = createPublicForecastFeeds(
+      request({ kalshi: true, kalshiTicker: 'KXBTC15M-' + 'x'.repeat(300) }),
+    ).calculate;
+    const acquired = await calculate(NOW, enabled, h.store);
+    expect(acquired[0]?.quotes.map((q) => q.contract.venue)).toEqual(['polymarket']);
+    h.feeds.calculate = async () => acquired;
+    await h.job();
+    expect(h.store.rows.size).toBeGreaterThan(0);
+    for (const { row } of h.store.rows.values()) {
+      expect(row.venueContracts.kalshi).toBeUndefined();
+      expect(row.entryVenue).not.toBe('kalshi');
+      for (const decision of row.candidateEvaluation.decisions) {
+        expect(decision.selectedEntry).toBeUndefined();
+        expect(decision.bestOption).toBeUndefined();
+      }
+    }
+  });
   it('maps binary labels to token IDs instead of positional UP assumptions', async () => {
     const result = await createPublicForecastFeeds(request({ swapped: true })).calculate(
       NOW,
@@ -1500,4 +1522,80 @@ it('F6 shared event-stage rollback conformance on fake', async () => {
     lastRunId: null,
     eventRevisions: [],
   }));
+});
+
+describe('N1 all-venue issuance identity validation', () => {
+  const quote = (contractId: string) => ({
+    ...input().quotes[0]!,
+    contract: { ...input().quotes[0]!.contract, venue: 'kalshi' as const, contractId },
+    askUp: 0.2,
+  });
+  it.each(['', 'KXBTC15M-' + 'x'.repeat(300)])(
+    'does not select or persist malformed Kalshi %s',
+    (id) => {
+      const row = forecast(input({ quotes: [input().quotes[0]!, quote(id)] }), NOW, enabled)!;
+      expect(row.venueContracts.kalshi).toBeUndefined();
+      expect(row.entryVenue).not.toBe('kalshi');
+      expect(row.probabilityUp).toBe(forecast(input(), NOW, enabled)?.probabilityUp);
+      for (const decision of row.candidateEvaluation.decisions) {
+        if (decision.status === 'available') expect(decision.probabilityUp).toBeTypeOf('number');
+        expect(decision.selectedEntry).toBeUndefined();
+        expect(decision.bestOption).toBeUndefined();
+      }
+    },
+  );
+  it('preserves the 256-character identity boundary and valid entry economics', () => {
+    const id = 'KXBTC15M-' + 'x'.repeat(247),
+      row = forecast(input({ quotes: [input().quotes[0]!, quote(id)] }), NOW, enabled)!;
+    expect(id).toHaveLength(256);
+    expect(row.venueContracts.kalshi?.contractId).toBe(id);
+    expect(row.entryVenue).toBe('kalshi');
+    expect(row.candidateEvaluation.decisions[0]?.selectedEntry?.venue).toBe('kalshi');
+    expect(row.qualified).toBe(true);
+    expect(row.probabilityUp).toBe(forecast(input(), NOW, enabled)?.probabilityUp);
+  });
+});
+describe('N2 normalized due-cycle work bounds', () => {
+  it('rejects invalid grouping dates without mutating source evidence', () => {
+    expect(forecastCycleKey('BTC', 'bad')).toBeNull();
+    expect(forecastCycleKey('', NOW.toISOString())).toBeNull();
+    expect(forecastCycleKey('BTC', '2026-10-10T12:15:00Z')).toBe(
+      forecastCycleKey('BTC', '2026-10-10T12:15:00+00:00'),
+    );
+  });
+  it('selects and processes both alternate A rows plus 19 other actual cycles', async () => {
+    const h = harness(),
+      base = forecast(input(), NOW, enabled)!;
+    const dates = ['2026-10-10T12:15:00Z', '2026-10-10T12:15:00+00:00'];
+    const rows = Array.from({ length: 21 }, (_, i) => {
+      const symbol = i < 2 ? 'A' : 'C' + String(i).padStart(2, '0'),
+        id = 'n2-' + String(i).padStart(2, '0'),
+        close = dates[i === 1 ? 1 : 0]!;
+      return {
+        id,
+        row: {
+          ...base,
+          id,
+          symbol,
+          closesAt: close,
+          venueContracts: {
+            polymarket: { ...base.venueContracts.polymarket!, contractId: id, closesAt: close },
+          },
+        },
+        restoreRunId: 'synthetic-restore',
+      };
+    });
+    for (const row of rows) h.store.seed.set(row.id, row);
+    h.advance(900000);
+    h.feeds.calculate = async () => [];
+    const due = await h.store.readDueForecasts(h.now(), 2000);
+    expect(due).toHaveLength(21);
+    expect(new Set(due.map((r) => forecastCycleKey(r.row.symbol, r.row.closesAt))).size).toBe(20);
+    await h.job();
+    expect(h.feeds.resolve).toHaveBeenCalledTimes(21);
+    expect(h.store.rows.size).toBe(21);
+    expect([...h.store.rows.values()].every((r) => r.row.status === 'resolved')).toBe(true);
+    expect(h.store.seed.get('n2-01')?.row.closesAt).toBe(dates[1]);
+    expect(h.store.rows.get('n2-01')?.row.closesAt).toBe(dates[1]);
+  });
 });

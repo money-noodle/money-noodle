@@ -1,5 +1,6 @@
 import {
   forecast,
+  forecastCycleKey,
   validatedContract,
   resolutionDue,
   resolveForecast,
@@ -28,7 +29,8 @@ export async function runForecastTick(
     requests = new Map<string, Contract>();
   const due = (await store.readDueForecasts(now(), 2000)).filter((original) => {
     if (!resolutionDue(original.row, now())) return false;
-    const key = original.row.symbol + ':' + original.row.closesAt;
+    const key = forecastCycleKey(original.row.symbol, original.row.closesAt);
+    if (key === null) return false;
     if (!cycles.has(key) && cycles.size >= 20) return false;
     cycles.add(key);
     return true;

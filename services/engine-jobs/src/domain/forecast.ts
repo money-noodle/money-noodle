@@ -278,7 +278,8 @@ export function forecast(
       Math.abs(Date.parse(q.contract.closesAt) - close) <= 5000 &&
       Date.parse(q.contract.closesAt) > now.getTime() &&
       (q.contract.asset === undefined || q.contract.asset === input.asset) &&
-      enabled.includes(q.contract.venue),
+      enabled.includes(q.contract.venue) &&
+      validatedContract(q.contract, q.contract.venue, input.closesAt, q.contract.slug) !== null,
   );
   const range = input.coinPrice ? ((input.high24h - input.low24h) / input.coinPrice) * 100 : 0;
   const confidence = bound(
@@ -413,7 +414,12 @@ export function forecast(
   return row;
 }
 export function resolutionDue(row: ForecastRow, now: Date): boolean {
-  if (row.status !== 'pending' || Date.parse(row.closesAt) >= now.getTime()) return false;
+  if (
+    row.status !== 'pending' ||
+    !Number.isFinite(Date.parse(row.closesAt)) ||
+    Date.parse(row.closesAt) >= now.getTime()
+  )
+    return false;
   const checked =
     typeof row.lastResolutionCheckAt === 'string'
       ? Date.parse(row.lastResolutionCheckAt)
@@ -581,7 +587,8 @@ export function selectDueForecasts(
       : Number.NEGATIVE_INFINITY;
   for (const row of rows) {
     if (!resolutionDue(row.row, now)) continue;
-    const key = row.row.symbol + ':' + row.row.closesAt;
+    const key = forecastCycleKey(row.row.symbol, row.row.closesAt);
+    if (key === null) continue;
     const group = groups.get(key) ?? [];
     group.push(row);
     groups.set(key, group);
@@ -609,4 +616,17 @@ export function selectDueForecasts(
     if (!added) break;
   }
   return out;
+}
+
+/** Validated asset/instant grouping only; never rewrites issuance IDs or JSON. */
+export function forecastCycleKey(asset: unknown, close: unknown): string | null {
+  if (
+    typeof asset !== 'string' ||
+    asset.length === 0 ||
+    asset.length > 128 ||
+    typeof close !== 'string'
+  )
+    return null;
+  const instant = Date.parse(close);
+  return Number.isFinite(instant) ? JSON.stringify([asset, new Date(instant).toISOString()]) : null;
 }

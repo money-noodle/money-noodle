@@ -200,6 +200,7 @@ export function createPublicForecastFeeds(
       .find(
         (m) =>
           m.status === 'active' &&
+          text(m.ticker).length <= 256 &&
           text(m.ticker).startsWith(series + '-') &&
           Number.isFinite(Date.parse(text(m.close_time))) &&
           Math.abs(Date.parse(text(m.close_time)) - Date.parse(closesAt)) <= 5000,

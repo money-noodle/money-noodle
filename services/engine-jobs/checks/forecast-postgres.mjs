@@ -371,6 +371,83 @@ try {
     });
   assert((await store.readDueForecasts(fairNow, 2000)).some((r) => r.id === 'z-fair-20'));
   console.log('Synthetic real-store 2000 backoff rows and 21-cycle fairness verified.');
+  // Finish the remaining fair fixture through an overlay, never mutate its seed.
+  const remainingFair = (await store.readDueForecasts(fairNow, 2000)).find(
+    (r) => r.id === 'z-fair-20',
+  );
+  assert(remainingFair);
+  await store.patchForecast(grant, remainingFair, { ...remainingFair.row, status: 'resolved' });
+  const normalizedClose = new Date(row.closesAt).toISOString();
+  const alternateClose = normalizedClose.replace('Z', '+00:00');
+  const normalizedIds = [];
+  for (let i = 0; i < 21; i++) {
+    const id = 'normalized-due-' + String(i).padStart(2, '0'),
+      symbol = i < 2 ? 'N2A' : 'N2C' + String(i).padStart(2, '0'),
+      closesAt = i === 1 ? alternateClose : normalizedClose;
+    normalizedIds.push(id);
+    await admin.unsafe(
+      "insert into engine.forecast_row(forecast_id,status,row,restore_run_id) values($1,'pending',$2::jsonb,'synthetic-restore')",
+      [
+        id,
+        admin.json({
+          ...row,
+          id,
+          symbol,
+          closesAt,
+          venueContracts: {
+            polymarket: { venue: 'polymarket', contractId: id, closesAt, slug: 'test' },
+          },
+        }),
+      ],
+    );
+  }
+  const normalizedDue = await store.readDueForecasts(now, 2000);
+  assert.equal(normalizedDue.filter((r) => normalizedIds.includes(r.id)).length, 21);
+  assert.equal(
+    new Set(
+      normalizedDue
+        .filter((r) => normalizedIds.includes(r.id))
+        .map((r) => JSON.stringify([r.row.symbol, Date.parse(r.row.closesAt)])),
+    ).size,
+    20,
+  );
+  const normalizedRequests = [];
+  await runForecastTick(
+    store,
+    {
+      calculate: async () => [],
+      resolve: async (contract) => {
+        normalizedRequests.push(contract.contractId);
+        return { venue: contract.venue, contractId: contract.contractId, outcome: 'UP' };
+      },
+    },
+    grant,
+    () => now,
+  );
+  assert.equal(normalizedRequests.length, 21);
+  assert(normalizedRequests.length <= 40);
+  for (const id of normalizedIds) {
+    const [overlay] = await admin.unsafe(
+      'select status,origin_restore_run_id,row from engine.forecast_cycle_row where forecast_id=$1',
+      [id],
+    );
+    assert.equal(overlay.status, 'resolved');
+    assert.equal(overlay.origin_restore_run_id, 'synthetic-restore');
+  }
+  const [alternateSeed] = await admin.unsafe(
+    'select row from engine.forecast_row where forecast_id=$1',
+    ['normalized-due-01'],
+  );
+  const [alternateOverlay] = await admin.unsafe(
+    'select row from engine.forecast_cycle_row where forecast_id=$1',
+    ['normalized-due-01'],
+  );
+  assert.equal(alternateSeed.row.closesAt, alternateClose);
+  assert.equal(alternateOverlay.row.closesAt, alternateClose);
+  console.log(
+    'Synthetic 20 actual due cycles / 21 observations / alternate timestamp spelling tick verified.',
+  );
+
   for (const table of [
     'forecast_cycle',
     'forecast_cycle_row',
