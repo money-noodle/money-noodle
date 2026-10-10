@@ -257,7 +257,7 @@ try {
   }
   await assert.rejects(writer.unsafe("update engine.forecast_cycle_event set event='{}'::jsonb"));
   await admin.unsafe(
-    "update engine.job_lease set expires_at=clock_timestamp()-interval '1 second' where capability='budget:paper'",
+    "update engine.job_lease set expires_at=acquired_at where capability='budget:paper'",
   );
   await assert.rejects(store.recordObservation(grant, { ...row, id: 'expired' }, input));
   await assert.rejects(cycle.heartbeat(grant, new Date(), new Date(Date.now() + 10000)));
