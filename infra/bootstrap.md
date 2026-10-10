@@ -196,6 +196,19 @@ doesn't exist" because this entry was missing; with it, the delta grows by the
 state-bucket module's resources for one more bucket, still with no changes and no
 destroys.
 
+### Re-applying bootstrap for the engine-cycle scheduler (#243)
+
+The engine-jobs stack declares the cycle job's trigger as a Cloud Scheduler job,
+and the dispatched apply creates it as the deployer, which held no Scheduler role.
+Re-applying with the same variables plans exactly this delta:
+
+| Change | Address | Why |
+| --- | --- | --- |
+| add | `google_project_iam_member.deployer["roles/cloudscheduler.admin"]` | Scheduler administration, confined to Scheduler, so the pipeline can create, pause and un-pause the trigger |
+
+**One add, no changes and no destroys.** Re-apply before re-dispatching the
+engine-jobs apply whose first attempt failed on `cloudscheduler.jobs.create`.
+
 ## Step 3 — migrate bootstrap's own state into the bucket it created
 
 This is what stops the bootstrap from being a special case that lives on a

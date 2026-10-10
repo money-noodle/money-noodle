@@ -59,6 +59,12 @@ variable "deployer_roles" {
     "roles/logging.admin",     # configure log buckets, sinks, and retention
     "roles/monitoring.editor", # notification channels and dashboards
     "roles/serviceusage.serviceUsageAdmin",
+    # Cloud Scheduler administration, confined to Scheduler: the engine-jobs stack
+    # declares the cycle job's trigger as a Scheduler job (ADR-0013 §1, #243) and
+    # the dispatched apply creates it as the deployer. The role grants no project
+    # IAM and nothing outside Scheduler; the trigger runs as the trigger identity
+    # the deployer may already act as (`roles/iam.serviceAccountUser`).
+    "roles/cloudscheduler.admin",
   ]
 
   validation {
