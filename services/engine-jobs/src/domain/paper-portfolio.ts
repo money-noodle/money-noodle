@@ -68,11 +68,11 @@ export function selectPortfolio(
     !Array.isArray(candidates) ||
     !Array.isArray(existing) ||
     candidates.length > 2_000 ||
+    existing.length > 2_000 ||
     constraints.maximumPositions > 10 ||
     constraints.maximumSameWindow > constraints.maximumPositions ||
     constraints.maximumSameGroupPerWindow > constraints.maximumSameWindow ||
     existing.some((e) => !e || !validSymbol(e.symbol) || !validClose(e.closesAt)) ||
-    existing.length > 2_000 ||
     ![
       constraints.maximumPositions,
       constraints.maximumSameWindow,
@@ -95,8 +95,16 @@ export function selectPortfolio(
     new Set(candidates.map((c) => c.id)).size !== candidates.length
   )
     throw new Error('Invalid paper portfolio inputs.');
+  // Canonical working identity; every subsequent window/group/penalty comparison uses these values.
+  candidates = candidates.map((c) => ({
+    ...c,
+    closesAt: new Date(Date.parse(c.closesAt)).toISOString(),
+  }));
   const remaining = [...candidates];
-  const exposures = [...existing];
+  const exposures = existing.map((e) => ({
+    ...e,
+    closesAt: new Date(Date.parse(e.closesAt)).toISOString(),
+  }));
   const selected = new Map<string, PortfolioSelection>();
   let rank = 1;
   while (remaining.length && exposures.length < constraints.maximumPositions) {

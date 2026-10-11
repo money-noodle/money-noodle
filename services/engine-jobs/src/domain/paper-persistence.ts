@@ -109,7 +109,9 @@ export function advanceSignalPersistence(
   )
     throw new Error('Invalid bounded paper persistence observation.');
   const current: SignalPersistenceState =
-    state?.symbol === input.symbol && state.closesAt === input.closesAt && state.side === input.side
+    state?.symbol === input.symbol &&
+    Date.parse(state.closesAt) === Date.parse(input.closesAt) &&
+    state.side === input.side
       ? state
       : { symbol: input.symbol, side: input.side, closesAt: input.closesAt, observations: [] };
   if (!input.qualifies) return { ...current, observations: [] };

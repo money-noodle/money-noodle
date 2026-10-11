@@ -38,6 +38,9 @@ const observed = (quantity: number, price: number): PaperSaleEvidence => ({
   },
 });
 describe('pure sale rounding/cost planes, no funding replenishment or state mutation', () => {
+  it('refuses a forged observed sale below the immutable authorized minimum', () => {
+    expect(() => planPaperSale({ ...base, evidence: observed(1, 0.499999) })).toThrow();
+  });
   it('partial1of4 at60c conserves cash+reserved and preserves original concrete identity', () => {
     const p = planPaperSale({ ...base, evidence: observed(1, 0.6) });
     if (p.kind !== 'sold') throw new Error('No sale plan');

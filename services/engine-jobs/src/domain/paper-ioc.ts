@@ -53,7 +53,12 @@ function sweep(
   }
   const available = Math.min(requested, displayed);
   // Never add an epsilon: a displayed .0099999999 is NOT .01 executable inventory.
-  let units = Math.floor(available * 100),
+  const canonical = Math.round(available * 100) / 100;
+  // Canonical hundredths such as .29 may multiply just below an integer. No epsilon uplift.
+  let units =
+      canonical <= available && canonical <= requested && canonical <= displayed
+        ? Math.round(available * 100)
+        : Math.floor(available * 100),
     count = units / 100;
   if (count > available) {
     units -= 1;

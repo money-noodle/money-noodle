@@ -72,6 +72,28 @@ export function adaptiveEntryEpisodeDecision(
       attemptNumber: nextAttempt,
       reason: 'A prior execution-policy generation cannot authorize a current fallback.',
     };
+  if (
+    ordered.some(
+      (order, index) =>
+        order.fallbackSequenceEndedAt !== undefined ||
+        order.fallbackSequenceEndReason !== undefined ||
+        (index === 0
+          ? order.liquidityRole !== 'maker' ||
+            order.entryExecutionDecision?.executedStyle !== 'maker' ||
+            order.noFillReason !== 'rested_no_fill'
+          : order.liquidityRole !== 'taker' ||
+            order.entryExecutionDecision?.executedStyle !== 'taker' ||
+            order.noFillReason !== 'ioc_no_fill') ||
+        (index > 0 &&
+          Date.parse(order.createdAt) < Date.parse(ordered[index - 1]!.makerCompletedAt!)),
+    )
+  )
+    return {
+      allowed: false,
+      attemptNumber: nextAttempt,
+      reason:
+        'Fallback requires the complete nonoverlapping managed-maker then IOC zero-fill lineage without terminal markers.',
+    };
   const effectiveMaximum = Math.max(
     1,
     Math.min(MAX_ENTRY_EPISODES_PER_WINDOW, Math.floor(maximumEpisodes)),
