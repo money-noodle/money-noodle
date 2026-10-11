@@ -120,3 +120,13 @@ Snapshot completeness, DB-clock validity, ordering and reset booleans must event
 Production compiled bundle availability defaults to **false**. A test-only explicit audited-bundle fixture lets tests exercise reference logic; this is not an audit result, adoption or runtime admission. The recognized bundle identifier remains unavailable pending full immutable tuple closure. No current values are recorded; synthetic test caps are not principal selections.
 
 The conservative1000000-cent guard is a code ceiling, not budget permission. Its integer percentage product is at most100000000 and exact within safe integer arithmetic. With a1c admitted price it bounds quantity to1000000 contracts, at most100000000 Kalshi hundredth units (27 binary halvings, below54). Subcent inputs still require separate venue-lattice/queue bounds before any composition; this decoder does not qualify arbitrary sizing intermediates or replenish a conserved funding root. Hosted boundary vectors are authored, not yet claimed executed.
+
+## Immutable bundle source audit: INCOMPLETE
+
+The recognized bundle remains unavailable. Further read-only source audit identified environment-selectable entry mode/thresholds, spike gate, all five portfolio constraints, asset exclusion/side/max-edge admission, exit reversal/switch settings and regime evidence settings. Historical fallback values are not immutable invariants or current authority, and this port does not silently select them.
+
+Importantly, historical paper admission obeys the adaptive regime gate as well as classified-window eligibility. Its complete sentinel/evidence scope must be audited and isolated; treating it as irrelevant live-only behavior would weaken paper admission. Remaining dependencies include fresh exact-contract IOC requalification, switch/hysteresis/reentry accounting and restored funding/correction scope. Pure helpers and a hash manifest do not establish composed closure.
+
+Source ordering confirms persistence then due paper settlement before exit/portfolio/entry and durable reservation before awaited maker management. The historical maker waits two seconds before each of six checks, with five amend opportunities and a terminal trade-only check. Source settlement retries unresolved due orders each cycle; no paper exponential-backoff rule was established or implemented. Forecast recording precedes awaited paper, and bounded forecast resolution must follow it in the eventual port rather than importing detached historical collectors.
+
+No additional test or runtime implementation is claimed by this audit documentation; the compiled bundle stays unavailable pending complete source choices, literal vectors and independent review.
