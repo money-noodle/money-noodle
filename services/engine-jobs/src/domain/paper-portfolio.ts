@@ -35,6 +35,12 @@ export function cryptoExposureGroup(symbol: string): CryptoExposureGroup {
   return 'alt-beta';
 }
 
+const validSymbol = (s: string) => typeof s === 'string' && /^[A-Z0-9-]{1,24}$/.test(s);
+const validClose = (s: string) =>
+  typeof s === 'string' &&
+  Number.isSafeInteger(Date.parse(s)) &&
+  new Date(Date.parse(s)).toISOString().replace('.000Z', 'Z') === s.replace('.000Z', 'Z');
+
 function adjusted(
   candidate: PortfolioCandidate,
   exposures: PortfolioExposure[],
@@ -59,7 +65,13 @@ export function selectPortfolio(
   constraints: PortfolioConstraints,
 ): PortfolioSelection[] {
   if (
+    !Array.isArray(candidates) ||
+    !Array.isArray(existing) ||
     candidates.length > 2_000 ||
+    constraints.maximumPositions > 10 ||
+    constraints.maximumSameWindow > constraints.maximumPositions ||
+    constraints.maximumSameGroupPerWindow > constraints.maximumSameWindow ||
+    existing.some((e) => !e || !validSymbol(e.symbol) || !validClose(e.closesAt)) ||
     existing.length > 2_000 ||
     ![
       constraints.maximumPositions,
@@ -67,10 +79,18 @@ export function selectPortfolio(
       constraints.maximumSameGroupPerWindow,
     ].every((n) => Number.isSafeInteger(n) && n > 0) ||
     ![constraints.correlationPenaltyCents, constraints.sameGroupPenaltyCents].every(
-      (n) => Number.isFinite(n) && n >= 0,
+      (n) => Number.isFinite(n) && n >= 0 && n <= 1000000,
     ) ||
     candidates.some(
-      (c) => !Number.isFinite(c.expectedProfitCents) || !Number.isFinite(Date.parse(c.closesAt)),
+      (c) =>
+        !c ||
+        typeof c.id !== 'string' ||
+        !c.id.trim() ||
+        c.id.length > 120 ||
+        !validSymbol(c.symbol) ||
+        !Number.isFinite(c.expectedProfitCents) ||
+        Math.abs(c.expectedProfitCents) > 1000000 ||
+        !validClose(c.closesAt),
     ) ||
     new Set(candidates.map((c) => c.id)).size !== candidates.length
   )

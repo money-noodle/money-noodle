@@ -22,11 +22,40 @@ export interface SignalPersistenceState {
   observations: SignalObservation[];
 }
 
+const canonicalTime = (s: string) =>
+  typeof s === 'string' &&
+  Number.isSafeInteger(Date.parse(s)) &&
+  new Date(Date.parse(s)).toISOString().replace('.000Z', 'Z') === s.replace('.000Z', 'Z');
+const validEdge = (n: number) => Number.isFinite(n) && n >= -1 && n <= 1;
+const validQuality = (n: number) => Number.isFinite(n) && n >= 0 && n <= 1;
+function validState(state: SignalPersistenceState): boolean {
+  return (
+    !!state &&
+    typeof state.symbol === 'string' &&
+    /^[A-Z0-9-]{1,24}$/.test(state.symbol) &&
+    ['UP', 'DOWN'].includes(state.side) &&
+    canonicalTime(state.closesAt) &&
+    Date.parse(state.closesAt) % CYCLE_DURATION_MS === 0 &&
+    Array.isArray(state.observations) &&
+    state.observations.length <= MAX_PERSISTENCE_SNAPSHOTS &&
+    state.observations.every(
+      (o, i) =>
+        !!o &&
+        canonicalTime(o.at) &&
+        validEdge(o.netEdge) &&
+        validQuality(o.quality) &&
+        Date.parse(o.at) >= Date.parse(state.closesAt) - CYCLE_DURATION_MS &&
+        Date.parse(o.at) <= Date.parse(state.closesAt) &&
+        (i === 0 || Date.parse(o.at) > Date.parse(state.observations[i - 1]!.at)),
+    )
+  );
+}
+
 export function signalPersistenceAfter(
   state: SignalPersistenceState | undefined,
   after: string,
 ): SignalPersistenceState | undefined {
-  if (!state || !Number.isFinite(Date.parse(after))) return undefined;
+  if (!state || !validState(state) || !canonicalTime(after)) return undefined;
   return {
     ...state,
     observations: state.observations.filter(
@@ -67,8 +96,20 @@ export function advanceSignalPersistence(
     quality: number;
   },
 ): SignalPersistenceState {
+  if (
+    (state && !validState(state)) ||
+    typeof input.qualifies !== 'boolean' ||
+    !canonicalTime(input.calculationAt) ||
+    !validState({
+      symbol: input.symbol,
+      side: input.side,
+      closesAt: input.closesAt,
+      observations: [{ at: input.calculationAt, netEdge: input.netEdge, quality: input.quality }],
+    })
+  )
+    throw new Error('Invalid bounded paper persistence observation.');
   const current: SignalPersistenceState =
-    state?.closesAt === input.closesAt && state.side === input.side
+    state?.symbol === input.symbol && state.closesAt === input.closesAt && state.side === input.side
       ? state
       : { symbol: input.symbol, side: input.side, closesAt: input.closesAt, observations: [] };
   if (!input.qualifies) return { ...current, observations: [] };
@@ -107,7 +148,13 @@ export function evaluateSignalPersistenceWithRequirements(
       edgeSpike: null,
     };
   if (
-    !Number.isFinite(nowMs) ||
+    !validState(state) ||
+    !Number.isSafeInteger(nowMs) ||
+    !validEdge(minimumNetEdge) ||
+    !validQuality(minimumQuality) ||
+    requirements.maximumEdgeSpike > 2 ||
+    requirements.requiredSpanMs > CYCLE_DURATION_MS ||
+    typeof requirements.spikeGateEnabled !== 'boolean' ||
     ![
       minimumNetEdge,
       minimumQuality,

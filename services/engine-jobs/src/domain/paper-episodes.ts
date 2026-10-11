@@ -27,7 +27,12 @@ export function adaptiveEntryEpisodeDecision(
   maximumEpisodes: number,
 ): MakerRetryDecision {
   if (
+    !Array.isArray(attempts) ||
+    attempts.length > 3 ||
     !currentPolicyVersion ||
+    currentPolicyVersion.length > 120 ||
+    attempts.some((a) => !a || typeof a.id !== 'string' || !a.id.trim() || a.id.length > 120) ||
+    new Set(attempts.map((a) => a.id)).size !== attempts.length ||
     !Number.isSafeInteger(maximumEpisodes) ||
     maximumEpisodes < 1 ||
     maximumEpisodes > 3 ||
@@ -49,7 +54,9 @@ export function adaptiveEntryEpisodeDecision(
         order.status === 'open' ||
         order.status === 'pending_reservation' ||
         order.status === 'uncertain' ||
-        (order.filledCount ?? 0) > 0,
+        order.filledCount === undefined ||
+        !Number.isFinite(order.filledCount) ||
+        order.filledCount !== 0,
     )
   ) {
     return {
@@ -84,7 +91,11 @@ export function adaptiveEntryEpisodeDecision(
         latest.fallbackSequenceEndReason ??
         'The bounded fallback sequence ended without another venue intent.',
     };
-  if (latest.status !== 'unfilled' || !Number.isFinite(Date.parse(latest.makerCompletedAt ?? '')))
+  if (
+    latest.status !== 'unfilled' ||
+    !Number.isFinite(Date.parse(latest.makerCompletedAt ?? '')) ||
+    Date.parse(latest.makerCompletedAt!) < Date.parse(latest.createdAt)
+  )
     return {
       allowed: false,
       attemptNumber: nextAttempt,

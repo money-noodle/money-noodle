@@ -45,6 +45,7 @@ const route = {
 };
 const maker: PaperAttempt = {
   id: 'maker',
+  filledCount: 0,
   createdAt: '2026-10-11T12:02:00Z',
   status: 'unfilled',
   executionPolicyVersion: 'paper-synthetic-v7',
