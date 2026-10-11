@@ -176,7 +176,7 @@ export function evaluateSignalPersistenceWithRequirements(
   const required = observations.slice(-requirements.requiredSnapshots);
   const spanMs =
     observationBucket(Date.parse(required.at(-1)!.at)) -
-    observationBucket(Date.parse(required[0].at));
+    observationBucket(Date.parse(required[0]!.at));
   if (spanMs < requirements.requiredSpanMs)
     return {
       ...base,
