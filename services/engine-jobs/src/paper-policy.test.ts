@@ -157,6 +157,7 @@ describe('paper policy reducers with explicit current inputs (no materializer)',
       ...maker,
       id: 'ioc',
       createdAt: '2026-10-11T12:02:15Z',
+      makerCompletedAt: '2026-10-11T12:02:16Z',
       noFillReason: 'ioc_no_fill',
       liquidityRole: 'taker',
       entryExecutionDecision: { executedStyle: 'taker' },
@@ -164,6 +165,7 @@ describe('paper policy reducers with explicit current inputs (no materializer)',
     expect(adaptiveEntryEpisodeDecision([maker, ioc], 'paper-synthetic-v7', 3).attemptNumber).toBe(
       3,
     );
+    expect(adaptiveEntryEpisodeDecision([maker, ioc], 'paper-synthetic-v7', 3).allowed).toBe(true);
     for (const prior of [
       { ...maker, filledCount: 0.01 },
       { ...maker, status: 'rejected' },
