@@ -1,7 +1,8 @@
 // Hosted disposable schema shape only; NOT atomic release/current-authority proof.
 import assert from 'node:assert/strict';
 import process from 'node:process';
-export async function paperOrderPostgresContract(writer) {
+import { readFileSync } from 'node:fs';
+export async function paperOrderPostgresContract(admin, writer) {
   assert.equal(process.env.GITHUB_ACTIONS, 'true');
   const base = {
     order_key: 'order-entry',
@@ -139,4 +140,127 @@ export async function paperOrderPostgresContract(writer) {
   assert.equal(Number(released.original_cents), 100);
   assert.equal(Number(released.held_cents), 0);
   assert.equal(Number(released.returned_cents), 100);
+  // A second REAL synthetic tuple at the SAME epoch: no missing-root FK mask.
+  await writer.unsafe(
+    "insert into engine.paper_funding_root select 'order-second-funding',epoch,budget_id,actor,birth_config_intent_id,origin_run_id,origin_restore_run_id,restored_source_state_key,materialized_run_id,recorded_at from engine.paper_funding_root where funding_id='root-funding'",
+  );
+  await writer.unsafe(
+    "insert into engine.paper_budget_root select 'order-second-funding',epoch,budget_id,birth_config_intent_id,latest_intent_id,starting_cents,available_cents,reserved_cents,realized_cents,correction_cents,revision,last_run_id,recorded_at from engine.paper_budget_root where funding_id='root-funding'",
+  );
+  const second = { ...base, funding_id: 'order-second-funding', order_key: 'second-entry' };
+  await insert('paper_order', second);
+  const secondChild = {
+    ...child,
+    funding_id: second.funding_id,
+    order_key: 'second-child',
+    parent_order_key: second.order_key,
+  };
+  await insert('paper_order', secondChild); // All root/config/shape facts independently valid.
+  await rejects(
+    insert('paper_order', {
+      ...secondChild,
+      order_key: 'cross-valid-root-child',
+      parent_order_key: base.order_key,
+    }),
+    '23503',
+  );
+  // Positions come from this explicit synthetic ledger array, never invented for a missing source.
+  const legacyRows = [
+    { id: 'synthetic-duplicate', marker: 'first' },
+    { id: 'synthetic-duplicate', marker: 'second' },
+  ];
+  for (const [position, row] of legacyRows.entries())
+    await writer.unsafe(
+      "insert into engine.ledger_order(order_id,ledger_position,execution_mode,status,stake_cents,row,restore_run_id) values($1,$2,'paper','unfilled',100,$3::jsonb,'root-restore')",
+      [row.id, position, JSON.stringify(row)],
+    );
+  const restored = {
+    ...base,
+    order_key: 'restored-first',
+    logical_order_id: legacyRows[0].id,
+    source_kind: 'restored',
+    origin_run_id: null,
+    origin_restore_run_id: 'root-restore',
+    issuance_config_intent_id: null,
+    legacy_order_id: legacyRows[0].id,
+    legacy_ledger_position: 0,
+    entry_episode_key: null,
+    entry_attempt: null,
+  };
+  await insert('paper_order', restored);
+  await insert('paper_order', {
+    ...restored,
+    order_key: 'restored-second',
+    legacy_ledger_position: 1,
+  });
+  await rejects(
+    insert('paper_order', {
+      ...restored,
+      order_key: 'duplicate-pair-other-root',
+      funding_id: second.funding_id,
+    }),
+    '23505',
+  );
+  const legacy = await writer.unsafe(
+    "select logical_order_id,legacy_ledger_position,issuance_config_intent_id from engine.paper_order where source_kind='restored' order by legacy_ledger_position",
+  );
+  assert.deepEqual(
+    legacy.map((row) => [
+      row.logical_order_id,
+      row.legacy_ledger_position,
+      row.issuance_config_intent_id,
+    ]),
+    [
+      ['synthetic-duplicate', 0, null],
+      ['synthetic-duplicate', 1, null],
+    ],
+  );
+  for (const patch of [
+    { origin_restore_run_id: null },
+    { legacy_order_id: null },
+    { legacy_ledger_position: null },
+    { origin_run_id: 'root-paper-run' },
+  ])
+    await rejects(
+      insert('paper_order', { ...restored, order_key: 'partial-origin', ...patch }),
+      '23514',
+    );
+  await insert('paper_order', {
+    ...base,
+    order_key: 'uncertain-entry',
+    entry_episode_key: 'uncertain-episode',
+    status: 'uncertain',
+    completed_at: null,
+  });
+  await insert('paper_reservation', {
+    ...hold,
+    order_key: 'uncertain-entry',
+    status: 'held',
+    held_cents: 100,
+    returned_cents: 0,
+    released_at: null,
+  });
+  const snapshot = (table) =>
+    admin.unsafe(
+      'select * from engine.' +
+        table +
+        ' order by ' +
+        (table === 'paper_order' || table === 'paper_reservation'
+          ? 'order_key'
+          : 'funding_id,epoch,budget_id'),
+    );
+  const tables = ['paper_order', 'paper_reservation', 'paper_funding_root', 'paper_budget_root'];
+  const before = await Promise.all(tables.map(snapshot));
+  await admin.unsafe(
+    readFileSync('services/platform-api/migrations/0006-paper-cycle-overlay.sql', 'utf8'),
+  );
+  assert.deepEqual(await Promise.all(tables.map(snapshot)), before);
+  const [uncertain] = await writer.unsafe(
+    "select o.status,r.held_cents,r.returned_cents,r.released_at from engine.paper_order o join engine.paper_reservation r using(order_key) where order_key='uncertain-entry'",
+  );
+  assert.equal(uncertain.status, 'uncertain');
+  assert.equal(Number(uncertain.held_cents), 100);
+  assert.equal(Number(uncertain.returned_cents), 0);
+  assert.equal(uncertain.released_at, null);
+  // Stored unchanged hold is NOT atomic aggregate conservation or release-once proof.
 }

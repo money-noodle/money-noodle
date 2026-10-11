@@ -208,7 +208,6 @@ export async function paperRootPostgresContract(admin, writer, port) {
     const [reconfigured] = await snapshot();
     assert.equal(reconfigured.birth_config_intent_id, 'root-config');
     assert.equal(reconfigured.latest_intent_id, 'root-other-config');
-    await paperOrderPostgresContract(writer);
     const fundingSnapshot = () =>
       admin.unsafe('select * from engine.paper_funding_root order by funding_id,epoch,budget_id');
     const populatedFunding = await fundingSnapshot(),
@@ -253,6 +252,8 @@ export async function paperRootPostgresContract(admin, writer, port) {
         await rejects(sql.unsafe('truncate engine.' + table), '42501');
       }
     }
+    // Extend fixtures only AFTER unchanged root cardinality/role assertions.
+    await paperOrderPostgresContract(admin, writer);
     console.log(
       'Paper root ONLY: reapply/fixture FK/XOR/binding/bounds/correction-conservation/duplicate and actual low-role privilege assertions passed; NOT paper adapter/transaction/current-authority proof.',
     );
