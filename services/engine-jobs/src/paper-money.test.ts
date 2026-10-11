@@ -90,6 +90,7 @@ describe('historical paper arithmetic, no runtime authority', () => {
     });
   });
   it('does not confuse unavailable evidence with a definitive maker miss', () => {
+    // A no-fill plan must not overwrite the original issuance stake/fee/quantity.
     const zero = {
       reservationCents: 207,
       filledCount: 0,

@@ -91,13 +91,15 @@ export function paperEntryStakeLimit(baseCents: number, netEdge: number): number
   if (!Number.isSafeInteger(baseCents) || baseCents <= 0 || !Number.isFinite(netEdge)) return null;
   return netEdge + 1e-12 >= 0.3 ? baseCents : Math.ceil(baseCents * 0.3 - 1e-9);
 }
-export interface MakerAccounting {
-  status: 'open' | 'unfilled' | 'rejected';
-  stakeCents: number;
-  feeCents: number;
-  releasedCents: number;
-  potentialPayoutCents: number;
-}
+export type MakerAccounting =
+  | { status: 'unfilled' | 'rejected'; releasedCents: number }
+  | {
+      status: 'open';
+      stakeCents: number;
+      feeCents: number;
+      releasedCents: number;
+      potentialPayoutCents: number;
+    };
 /** Pure transition plan only. The store must apply it exactly once with order/budget/event atomically. */
 export function paperMakerAccounting(input: {
   reservationCents: number;
@@ -120,10 +122,9 @@ export function paperMakerAccounting(input: {
     if (input.purchaseCents !== 0) throw new Error('Zero paper fill cannot carry a purchase.');
     return {
       status: input.evidenceComplete ? 'unfilled' : 'rejected',
-      stakeCents: 0,
-      feeCents: 0,
+      // Historical zero-fill rows retain issuance stake/fee/quantity evidence.
+      // Only the full reservation returns; no replacement economics are emitted.
       releasedCents: input.reservationCents,
-      potentialPayoutCents: 0,
     };
   }
   if (
