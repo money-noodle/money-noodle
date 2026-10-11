@@ -1,6 +1,6 @@
 import { boundedTakerLimit, type KalshiPriceRange, type PaperSide } from './paper-pricing.js';
 import { venueFeeCents } from './paper-money.js';
-import type { IocFillResult } from './paper-ioc.js';
+import { paperIocPriceQuanta, type IocFillResult } from './paper-ioc.js';
 /** Audited source structural constants, not current configuration or route authority. */
 export const PAPER_FALLBACK_PRICE_MULTIPLIER = 1.25;
 export const PAPER_FALLBACK_CUSHION_TICKS = 2;
@@ -120,7 +120,9 @@ export function paperIocAccountingPlan(
     | { kind: 'quote-refused' }
     | { kind: 'observed'; fill: IocFillResult },
   requestedCount: number,
+  authorizedMaximumPrice: number,
 ): PaperIocAccountingPlan {
+  const maximumPrice = paperIocPriceQuanta(authorizedMaximumPrice) / 1000000;
   if (
     !Number.isFinite(requestedCount) ||
     requestedCount <= 0 ||
@@ -159,6 +161,8 @@ export function paperIocAccountingPlan(
   if (
     f.averagePrice <= 0 ||
     f.averagePrice >= 1 ||
+    f.averagePrice > maximumPrice + 1e-12 ||
+    f.cashCents > f.filledCount * maximumPrice * 100 + f.filledCount * 1e-10 ||
     Math.abs(f.cashCents - f.filledCount * f.averagePrice * 100) > 1e-6
   )
     throw new Error('Inconsistent IOC cash evidence.');

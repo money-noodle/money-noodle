@@ -21,6 +21,7 @@ const base: PaperSaleTerms = {
   evidence: { kind: 'unavailable' },
   nowMs: now,
   maximumBookAgeMs: 1000,
+  authorizedMinimumPrice: 0.5,
   saleEventId: 'synthetic-sale',
 };
 const observed = (quantity: number, price: number): PaperSaleEvidence => ({
@@ -90,6 +91,7 @@ describe('pure sale rounding/cost planes, no funding replenishment or state muta
     expect(p.sold.integerBudgetCreditCents).toBe(58);
     const tiny = {
       ...base,
+      authorizedMinimumPrice: 0.01,
       position: {
         ...base.position,
         quantity: 0.01,

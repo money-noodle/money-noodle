@@ -1,3 +1,4 @@
+import { paperIocPriceQuanta } from './paper-ioc.js';
 import { venueFeeCents, type PaperVenue } from './paper-money.js';
 import type { PaperSide } from './paper-pricing.js';
 import type { IocFillResult } from './paper-ioc.js';
@@ -33,6 +34,7 @@ export interface PaperSaleTerms {
   evidence: PaperSaleEvidence;
   nowMs: number;
   maximumBookAgeMs: number;
+  authorizedMinimumPrice: number;
   saleEventId: string;
 }
 export interface PaperSoldCost {
@@ -76,6 +78,7 @@ const lattice = (q: number, venue: PaperVenue) =>
     1e-8;
 /** No writes. Parent+sale event identity must acquire genuine store provenance and atomic fencing. */
 export function planPaperSale(input: PaperSaleTerms): PaperSalePlan {
+  const minimumPrice = paperIocPriceQuanta(input.authorizedMinimumPrice) / 1000000;
   const p = input.position,
     i = p.identity;
   if (
@@ -139,6 +142,8 @@ export function planPaperSale(input: PaperSaleTerms): PaperSalePlan {
   if (
     f.averagePrice <= 0 ||
     f.averagePrice >= 1 ||
+    f.averagePrice < minimumPrice - 1e-12 ||
+    f.cashCents < f.filledCount * minimumPrice * 100 - f.filledCount * 1e-10 ||
     Math.abs(f.cashCents - f.filledCount * f.averagePrice * 100) > 1e-6
   )
     throw new Error('Inconsistent gross sale proceeds.');

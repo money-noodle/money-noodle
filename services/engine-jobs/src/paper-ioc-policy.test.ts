@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { requalifyPaperFallback, paperIocAccountingPlan } from './domain/paper-ioc-policy.js';
 const plan = (reservation: number, result: Parameters<typeof paperIocAccountingPlan>[1]) =>
-  paperIocAccountingPlan(reservation, result, 4);
+  paperIocAccountingPlan(reservation, result, 4, 0.5);
 const now = Date.parse('2026-10-11T02:00:00Z');
 const base = {
   contractId: 'synthetic-ticker',
@@ -96,5 +96,5 @@ describe('pure exact quote fallback and IOC plans, no order or budget writes', (
 });
 
 it('refuses positive IOC quantity beyond the explicit issued request', () => {
-  expect(() => paperIocAccountingPlan(207, { kind: 'observed', fill }, 1)).toThrow();
+  expect(() => paperIocAccountingPlan(207, { kind: 'observed', fill }, 1, 0.5)).toThrow();
 });
