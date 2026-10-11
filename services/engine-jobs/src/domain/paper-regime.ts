@@ -144,11 +144,24 @@ export const PAPER_REGIME_EVIDENCE_CONTRACT = 'paper-regime-explicit-evidence-v1
 export const PAPER_REGIME_SAMPLE_BUY_POLICY =
   'buy-binary-edge-net5-nocap-quality50-owned55-price10to75-late30-persist2of15-v22';
 export const PAPER_RESTRICTIVE_REGIME_PROPOSAL = 'paper-regime-restrictive-evidence-proposal-v1';
+export const PAPER_HISTORICAL_REGIME_CONTRACT = 'paper-regime-historical-warm-lineage-v1';
+export const PAPER_WARM_ALLOW_PROFILE_PROPOSAL =
+  'paper-blend04-neutralv7-maker-regime12-warmallow-v1';
+export const PAPER_WARM_ALLOW_PROFILE_SETTINGS: Readonly<RegimeGateSettings> = Object.freeze({
+  enabled: true,
+  minimumPolicyWindows: 12,
+  evidenceHalfLifeWindows: 12,
+  pauseConfidence: 0.99,
+  resumeConfidence: 0.75,
+});
+export type PaperRegimeLineage =
+  | { kind: 'initialized'; initializationRunId: string; priorGenerationState: 'none'; revision: 0 }
+  | { kind: 'persisted'; stateRunId: string; revision: number };
 export interface PaperRegimeIdentity {
   epoch: number;
   configIntentId: string;
   evidenceGenerationId: string;
-  bundleId: typeof PAPER_RESTRICTIVE_REGIME_PROPOSAL;
+  bundleId: typeof PAPER_RESTRICTIVE_REGIME_PROPOSAL | typeof PAPER_HISTORICAL_REGIME_CONTRACT;
   gateFormula: typeof REGIME_GATE_POLICY_VERSION;
   settingsIdentity: string;
 }
@@ -177,13 +190,15 @@ export interface PaperRegimeEvidence {
 /** No store or collector. All snapshot facts are required caller evidence, not proven by this helper.
  * Disabled or insufficient evidence refuses instead of inheriting permissive disabled/warm-up authority.
  */
-export function evaluatePaperRegimeEvidence(
+function evaluatePaperRegimeContract(
   evidence: PaperRegimeEvidence | undefined,
   policyVersion: string,
   settings: RegimeGateSettings,
   nowMs: number,
   maximumEvidenceAgeMs: number,
   expectedIdentity: PaperRegimeIdentity,
+  historical: boolean,
+  lineage: PaperRegimeLineage | undefined,
 ): RegimeGateEvaluation {
   const refuse = (reason: string): RegimeGateEvaluation => ({
     phase: 'closed',
@@ -199,7 +214,7 @@ export function evaluatePaperRegimeEvidence(
   if (
     policyVersion !== PAPER_REGIME_SAMPLE_BUY_POLICY ||
     !settings ||
-    settings.enabled !== true ||
+    (historical ? typeof settings.enabled !== 'boolean' : settings.enabled !== true) ||
     !Number.isSafeInteger(settings.minimumPolicyWindows) ||
     settings.minimumPolicyWindows < 4 ||
     settings.minimumPolicyWindows > 500 ||
@@ -219,7 +234,8 @@ export function evaluatePaperRegimeEvidence(
     expectedIdentity &&
     Number.isSafeInteger(expectedIdentity.epoch) &&
     expectedIdentity.epoch >= 1 &&
-    expectedIdentity.bundleId === PAPER_RESTRICTIVE_REGIME_PROPOSAL &&
+    expectedIdentity.bundleId ===
+      (historical ? PAPER_HISTORICAL_REGIME_CONTRACT : PAPER_RESTRICTIVE_REGIME_PROPOSAL) &&
     expectedIdentity.gateFormula === REGIME_GATE_POLICY_VERSION &&
     expectedIdentity.settingsIdentity === paperRegimeSettingsIdentity(settings) &&
     [expectedIdentity.configIntentId, expectedIdentity.evidenceGenerationId].every(
@@ -248,10 +264,12 @@ export function evaluatePaperRegimeEvidence(
     evidence.complete !== true ||
     evidence.policyVersion !== policyVersion ||
     evidence.previousPhasePolicyVersion !== policyVersion ||
-    !['warming', 'open', 'closed'].includes(evidence.previousPhase) ||
+    !(
+      historical ? ['disabled', 'warming', 'open', 'closed'] : ['warming', 'open', 'closed']
+    ).includes(evidence.previousPhase) ||
     !Number.isSafeInteger(evidence.observedAtMs) ||
     evidence.observedAtMs > nowMs ||
-    nowMs - evidence.observedAtMs > maximumEvidenceAgeMs ||
+    (!historical && nowMs - evidence.observedAtMs > maximumEvidenceAgeMs) ||
     !Array.isArray(evidence.observations) ||
     evidence.observations.length > 5000
   )
@@ -287,7 +305,73 @@ export function evaluatePaperRegimeEvidence(
     ids.add(observation.id);
     windows.add(observation.closesAt);
   }
-  if (evidence.observations.length < settings.minimumPolicyWindows)
+  if (historical) {
+    const boundedId = (s: string) => typeof s === 'string' && s.length > 0 && s.length <= 120;
+    if (!lineage) return refuse('Missing coherent initialization or persisted lineage.');
+    if (lineage.kind === 'initialized') {
+      if (
+        !boundedId(lineage.initializationRunId) ||
+        lineage.priorGenerationState !== 'none' ||
+        lineage.revision !== 0 ||
+        evidence.previousPhase !== 'warming' ||
+        evidence.observations.length !== 0
+      )
+        return refuse('Invalid genuine initial warming lineage.');
+    } else if (lineage.kind === 'persisted') {
+      if (
+        !boundedId(lineage.stateRunId) ||
+        !Number.isSafeInteger(lineage.revision) ||
+        lineage.revision < 1 ||
+        (evidence.previousPhase === 'closed' &&
+          evidence.observations.length < settings.minimumPolicyWindows)
+      )
+        return refuse('Corrupt persisted regime phase/history lineage.');
+    } else return refuse('Unknown regime lineage.');
+  }
+  if (!historical && evidence.observations.length < settings.minimumPolicyWindows)
     return refuse('Current-policy regime evidence is not warmed.');
   return evaluateRegimeGate(evidence.observations, policyVersion, evidence.previousPhase, settings);
+}
+
+/** Restrictive proposal: disabled and insufficient evidence always withhold entry. */
+export function evaluatePaperRegimeEvidence(
+  evidence: PaperRegimeEvidence | undefined,
+  policyVersion: string,
+  settings: RegimeGateSettings,
+  nowMs: number,
+  maximumEvidenceAgeMs: number,
+  expectedIdentity: PaperRegimeIdentity,
+): RegimeGateEvaluation {
+  return evaluatePaperRegimeContract(
+    evidence,
+    policyVersion,
+    settings,
+    nowMs,
+    maximumEvidenceAgeMs,
+    expectedIdentity,
+    false,
+    undefined,
+  );
+}
+/** Historical rank arithmetic/warm admission ONLY with explicit coherent lineage.
+ * DTO validation is NOT persisted provenance proof; runtime/bundle remain unwired/unavailable.
+ * Already resolved sample history never expires by elapsed wallclock time.
+ */
+export function evaluateHistoricalPaperRegime(
+  evidence: PaperRegimeEvidence | undefined,
+  settings: RegimeGateSettings,
+  nowMs: number,
+  expectedIdentity: PaperRegimeIdentity,
+  lineage: PaperRegimeLineage | undefined,
+): RegimeGateEvaluation {
+  return evaluatePaperRegimeContract(
+    evidence,
+    PAPER_REGIME_SAMPLE_BUY_POLICY,
+    settings,
+    nowMs,
+    1,
+    expectedIdentity,
+    true,
+    lineage,
+  );
 }

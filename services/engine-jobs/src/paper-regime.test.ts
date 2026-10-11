@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   evaluatePaperRegimeEvidence,
+  evaluateHistoricalPaperRegime,
+  PAPER_HISTORICAL_REGIME_CONTRACT,
+  type PaperRegimeLineage,
   PAPER_REGIME_SAMPLE_BUY_POLICY,
   PAPER_RESTRICTIVE_REGIME_PROPOSAL,
   REGIME_GATE_POLICY_VERSION,
@@ -129,5 +132,127 @@ it('fractional half-life remains valid source arithmetic input', () => {
       },
       config,
     ).phase,
+  ).toBe('open');
+});
+
+const persisted: PaperRegimeLineage = {
+  kind: 'persisted',
+  stateRunId: 'synthetic-state-run',
+  revision: 1,
+};
+const initialized: PaperRegimeLineage = {
+  kind: 'initialized',
+  initializationRunId: 'synthetic-init-run',
+  priorGenerationState: 'none',
+  revision: 0,
+};
+const historical = (
+  e: PaperRegimeEvidence | undefined,
+  config = settings,
+  lineage: PaperRegimeLineage | undefined = persisted,
+) => {
+  const expected: PaperRegimeIdentity = {
+    ...identity,
+    bundleId: PAPER_HISTORICAL_REGIME_CONTRACT,
+    settingsIdentity: paperRegimeSettingsIdentity(config),
+  };
+  return evaluateHistoricalPaperRegime(
+    e
+      ? {
+          ...e,
+          identity: {
+            ...e.identity,
+            bundleId: PAPER_HISTORICAL_REGIME_CONTRACT,
+            settingsIdentity: paperRegimeSettingsIdentity(config),
+          },
+        }
+      : undefined,
+    config,
+    now,
+    expected,
+    lineage,
+  );
+};
+it('historical empty genuine initialization warms/permits; missing or fake initialization refuses', () => {
+  const empty = { ...evidence(0), previousPhase: 'warming' as const, observations: [] };
+  expect(historical(empty, settings, initialized).phase).toBe('warming');
+  expect(historical(empty, settings, initialized).allowsEntries).toBe(true);
+  expect(historical(undefined, settings, initialized).allowsEntries).toBe(false);
+  expect(
+    evaluateHistoricalPaperRegime(
+      { ...empty, identity: { ...identity, bundleId: PAPER_HISTORICAL_REGIME_CONTRACT } },
+      settings,
+      now,
+      { ...identity, bundleId: PAPER_HISTORICAL_REGIME_CONTRACT },
+      undefined,
+    ).allowsEntries,
+  ).toBe(false);
+  expect(
+    historical({ ...empty, previousPhase: 'closed' }, settings, initialized).allowsEntries,
+  ).toBe(false);
+});
+it('historical3vs4 warms/permits while restrictive3 refuses and closed state cannot reset to warm', () => {
+  const three = {
+    ...evidence(-1),
+    previousPhase: 'warming' as const,
+    observations: evidence(-1).observations.slice(0, 3),
+  };
+  expect(historical(three).phase).toBe('warming');
+  expect(historical(three).allowsEntries).toBe(true);
+  expect(evaluate(three).allowsEntries).toBe(false);
+  expect(historical(evidence(-1)).phase).toBe('closed');
+  expect(historical({ ...three, previousPhase: 'closed' }).allowsEntries).toBe(false);
+});
+it('historical explicitly disabled settings permit only coherent lineage; malformed and incomplete refuse', () => {
+  const disabled = { ...settings, enabled: false };
+  expect(historical(evidence(0), disabled).phase).toBe('disabled');
+  expect(historical(evidence(0), disabled).allowsEntries).toBe(true);
+  expect(historical({ ...evidence(0), complete: false }, disabled).allowsEntries).toBe(false);
+  expect(historical(evidence(0), { ...settings, evidenceHalfLifeWindows: NaN }).allowsEntries).toBe(
+    false,
+  );
+});
+it('historical H2 hysteresis matches independentCDF and genuine new generation warms without synthesized history', () => {
+  const e = evidence(-0.14122320202092406);
+  expect(historical(e).phase).toBe('open');
+  expect(historical({ ...e, previousPhase: 'closed' }).phase).toBe('closed');
+  expect(historical(e).negativeReturnConfidence).toBeCloseTo(0.8413447461, 6);
+  const newId: PaperRegimeIdentity = {
+    ...identity,
+    bundleId: PAPER_HISTORICAL_REGIME_CONTRACT,
+    evidenceGenerationId: 'synthetic-new-generation',
+  };
+  const empty = {
+    ...evidence(0),
+    identity: newId,
+    previousPhase: 'warming' as const,
+    observations: [],
+  };
+  expect(evaluateHistoricalPaperRegime(empty, settings, now, newId, initialized).phase).toBe(
+    'warming',
+  );
+  expect(
+    evaluateHistoricalPaperRegime(
+      { ...empty, identity: { ...newId, evidenceGenerationId: 'old' } },
+      settings,
+      now,
+      newId,
+      initialized,
+    ).allowsEntries,
+  ).toBe(false);
+});
+it('historical resolved samples retain rank weights across elapsed wallclock time and fractional half-life', () => {
+  const config = { ...settings, evidenceHalfLifeWindows: 2.5 };
+  const old: PaperRegimeEvidence = {
+    ...evidence(0),
+    observedAtMs: now - 1000,
+    identity: {
+      ...identity,
+      bundleId: PAPER_HISTORICAL_REGIME_CONTRACT,
+      settingsIdentity: paperRegimeSettingsIdentity(config),
+    },
+  };
+  expect(
+    evaluateHistoricalPaperRegime(old, config, now + 86400000, old.identity, persisted).phase,
   ).toBe('open');
 });
