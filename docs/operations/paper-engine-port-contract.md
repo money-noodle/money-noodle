@@ -24,7 +24,7 @@ The synthetic money oracle specifies literals independently: four half-dollar
 Kalshi taker contracts cost200c plus7c fee, reserving207c. A1.25-contract maker
 partial at58c costs72.5c, rounded73c;134c unused reservation returns. From1000c,
 a125c winning payout leaves1052c cash and52c realized P&L. Invalid returns73c;
-loss pays0c. This proves arithmetic only, not persistent idempotency or authority.
+loss pays0c. These are authored arithmetic expectations, not an executed-case count, persistent idempotency or authority proof.
 
 ## Current control surface and precise unresolved questions
 
@@ -61,7 +61,7 @@ removing the paper refusal, resolve and independently review:
    must not interpret missing/zero control caps as new uncapped authority.
 
 These are explicit design questions, not a silently selected control schema.
-No authority DTO or paper runtime wiring is added in this checkpoint.
+A pure authority/configuration DTO and reducer now exist (described below). Their caller-supplied snapshot facts are not database proof; no paper runtime wiring is implemented.
 
 ## Additive SQL needed — pending narrow scope approval
 
@@ -97,9 +97,7 @@ Pure entry-route, signal-persistence, explicit portfolio constraints, adaptive
 maker-to-IOC episodes, displayed IOC fills, standalone exit and finite-cap
 funding reducers are now present. Live-cohort reporting and environment
 configuration wrappers were removed at their seams. Their full composition,
-exact-contract admission, maker scheduler, IOC quote requalification,
-exit/switch accounting and persisted current authority remain unimplemented
-and independently unqualified. Settlement-backoff
+exact-contract admission and bounded maker scheduler remain unimplemented. IOC quote requalification, sale/exit accounting and switch arithmetic now have pure helpers/plans, but their runtime composition and persisted current authority remain unimplemented and independently unqualified. Settlement-backoff
 claims in the inventory are not yet confirmed by the inspected implementation.
 No full historical closure execution or complete paper-engine parity is claimed.
 
@@ -109,7 +107,7 @@ The queue evidence version `paper-queue-evidence-microseconds-v1` replaces inher
 
 Pricing rejects nonfinite/noninteger/excessive counts, over64 ranges and submicro-dollar/unrepresentable ranges. At most1000 ticks and64 ranges bound each walk to64000 candidate checks; each rounded step must actually progress. These are code work/representation limits, not a venue capability claim or current money authority. Accounting refuses off-lattice filled quantity (whole Polymarket, .01 Kalshi) before payout; fractional displayed public depth remains a proxy, not admissible fractional filled inventory. Book normalization accepts at most1000 total levels, finite nonnegative bounded quantities and finite observation timestamp, failing closed instead of manufacturing missing queue zero.
 
-Four literal hardening regression groups accompany these changes, authored but not locally executed. Typed current authority/config/bundle closure, forecast-record→paper→forecast-resolution split, storage approval and hosted transactional proof remain outstanding. Paper refusal remains intact.
+Four literal hardening regression groups accompany these changes, authored but not locally executed. A typed current authority/config reducer exists; genuine database source proof and immutable bundle closure, forecast-record→paper→forecast-resolution split, storage approval and hosted paper transactional proof remain outstanding. Paper refusal remains intact.
 
 ## Pure configuration design — no current authority
 
@@ -147,7 +145,7 @@ Pure accounting plans distinguish unavailable data (rejected/full release), quot
 
 `paper-switch.ts` isolates future-wealth/probability-gap arithmetic and bounded persistence with explicit maximum gap, cooldown clock/duration and required readiness inputs. Historical readiness constants are three snapshots across thirty seconds of fifteen-second buckets; no environment settings are selected. Four literal groups cover value, reversal gap, persistence and cooldown. IOC entry accounting now additionally requires explicit issued quantity and refuses excess fills.
 
-Actual sale/reentry mutation is not implemented: source missing exit book defers, observed zero disables automatic retry while retaining inventory, partial sale prorates exact cost and ceilings retained reserve, full sale clears entry persistence. Future concrete order identity must retain restored ledger position, funding/epoch and episode attribution; logical string id alone is insufficient. Sale-child exclusions and exact cost/proceeds rounding require separate qualified accounting plans and atomic storage proof, not a fabricated reentry identity. No sale/store/SDK wiring or bundle admission occurs here.
+Actual sale/reentry mutation is not implemented: source missing exit book defers, observed zero disables automatic retry while retaining inventory, partial sale prorates exact cost and ceilings retained reserve, full sale clears entry persistence. Future concrete order identity must retain restored ledger position, funding/epoch and episode attribution; logical string id alone is insufficient. Sale-child exclusions and exact cost/proceeds rounding are represented by the pure standalone-sale plans below; composed accounting qualification and atomic storage proof remain required, not a fabricated reentry identity. No sale/store/SDK wiring or bundle admission occurs here.
 
 ## Independent scope correction and strict-review fixes
 
@@ -155,7 +153,7 @@ Independent accepted-scope review classifies bounded awaited paper-admission can
 
 Restrictive regime evidence now binds the exact buy sample policy, gate formula, explicit settings descriptor, generation/config/epoch and distinct restrictive proposal identity. Its source kind is prospective engine run, not restored gate evidence. Caller completeness/read time/identity remain assertions, not database provenance, outcome truth or coverage proof. Authority requires epoch at least one. Paper diagnostic text is sanitized. Fractional half-life2..500 remains valid, and sample rank weights do not become elapsed-wallclock decay.
 
-The separate profile paper-blend04-neutralv7-maker-regime12-warmallow-v1 is **proposal only**: regime enabled true differs from source unspecified-environment fallback false. Its genuine persisted initialization/warming lineage is distinct from missing/corrupt state. A historical warm-allow reducer and coherent persisted coverage protocol remain unimplemented, not supplied by this restrictive wrapper. Restrictive snapshot-age checks are new proposed semantics, not historical sample-expiry rules. All compiled bundle availability remains false.
+The separate profile paper-blend04-neutralv7-maker-regime12-warmallow-v1 is **proposal only**: regime enabled true differs from source unspecified-environment fallback false. Its genuine persisted initialization/warming lineage is distinct from missing/corrupt state. A separate historical warm-lineage reducer is now implemented below; its lineage DTO is not genuine initialization or persisted coverage proof, and the coherent persisted coverage protocol remains unimplemented. Neither is supplied by this restrictive wrapper. Restrictive snapshot-age checks are new proposed semantics, not historical sample-expiry rules. All compiled bundle availability remains false.
 
 ## Pure standalone sale cost-rounding plans
 
@@ -175,7 +173,7 @@ Finite remaining integration: approved0006 schema/provenance and atomic conserva
 
 ## Independent F1/F7 IOC corrections
 
-`paper-ioc-conservative-microprice-v2` intentionally corrects inherited quantity/price epsilon behavior. Shared bounded book normalization, finite request/side/time validation and conservative hundredth-quantity flooring prevent overflow or rounding .0099999999 displayed units up to .01. Re-sweeping best-to-worst at the reduced quantity trims excess from the worst consumed level. Integer micro-dollar comparison rejects .500001 buys above a .5 cap and .499999 sells below a .5 minimum; only sub-tick representation dust is normalized. Entry and sale accounting require explicit authorized maximum/minimum prices and bind actual average/cash to them. Missing book remains unavailable, not an observed IOC miss. Four literal groups are authored; no unchanged-all-float parity or runtime authority is claimed. Other independent F2–F6 findings and stale accumulated wording remain pending.
+`paper-ioc-conservative-microprice-v2` intentionally corrects inherited quantity/price epsilon behavior. Shared bounded book normalization, finite request/side/time validation and conservative hundredth-quantity flooring prevent overflow or rounding .0099999999 displayed units up to .01. Re-sweeping best-to-worst at the reduced quantity trims excess from the worst consumed level. Integer micro-dollar comparison rejects .500001 buys above a .5 cap and .499999 sells below a .5 minimum; only sub-tick representation dust is normalized. Entry and sale accounting require explicit authorized maximum/minimum prices and bind actual average/cash to them. Missing book remains unavailable, not an observed IOC miss. Four literal groups are authored; no unchanged-all-float parity or runtime authority is claimed. The F2–F6 guards are now implemented in pure code as summarized below, awaiting fresh independent confirmation and current hosted CI qualification.
 
 ## Independent F2/F3/F5 boundary corrections
 
@@ -183,4 +181,14 @@ Exit validation now bounds quantity/cost/fee/uncertainty and requires nonnegativ
 
 Switch persistence deduplicates equal parsed instants (including Z versus .000Z aliases) and rejects prior firstSeen after lastSeen. It intentionally retains the source fifteen-second **bucket** span rather than imposing thirty elapsed seconds; two genuine0/30 observations are not three, while0/15/30 retains minimum-gain semantics.
 
-Managed repricing requires0<currentPrice<1, a supported ladder price and no more than the immutable issuance maximum (representation-only tolerance). A resting price is not required below a moving new ask: ask crossing still does not imply a fill. Normal .41→.42 repricing and terminal .41 retention remain. Four new literal groups are authored; F4/F6 and accumulated stale wording remain next bounded work. No runtime wiring or current configuration is changed.
+Managed repricing requires0<currentPrice<1, a supported ladder price and no more than the immutable issuance maximum (representation-only tolerance). A resting price is not required below a moving new ask: ask crossing still does not imply a fill. Normal .41→.42 repricing and terminal .41 retention remain. Four new literal groups are authored; F4/F6 guards were added subsequently as summarized below. No runtime wiring or current configuration is changed.
+
+## Current accumulated checkpoint — not whole-engine qualification
+
+All seven independent F1–F7 guard fixes have implementations and authored literal regressions; independent confirmation and exact-current-head hosted qualification remain pending. Episode inputs are capped before sorting, require bounded unique IDs and explicit finite zero fills with coherent terminal completion; omitted fills refuse without an authoritative zero decoder. Portfolio work is capped at ten positions with bounded inputs; persistence validates four prior observations before copying, coherent identity/window/time and quality/edge domains, and resets a different symbol. These are pure numerical/work guards, not runtime admission or principal spending selections.
+
+**71 reported authored cases is not 71 executed or passed cases.** On code head0f22cdc, CI38107395722 failed typecheck with TS2375 in the new malformed-fill test fixture (explicit undefined under exactOptionalPropertyTypes); hosted lint/build/test/contract targets reported success, but their individual counts were suppressed. A fixture-only correction preserves the omitted-fill refusal assertion; subsequent exact-head checks must qualify it. No local tests/builds/database runs or paper SQL transaction proofs are claimed.
+
+The restrictive evidence wrapper and historical warm-lineage proposal remain distinct. Historical rank-decay/warming does not prove current coverage, genuine database lineage or complete immutable tuple closure; permissive OPEN/DISABLED truncated-history lineage remains an adapter coherence concern. Queue microsecond ordering and conservative IOC microprice/quantity rules intentionally correct inherited chronology/epsilon seams, not unchanged full historical parity.
+
+Runtime paper refusal and compiled availability **false** remain. Migration0006 author/test scope is unapproved and no0006 is authored; migrations0001–0005/API/grants remain unchanged. Existing forecast PostgreSQL checks are not real paper order/budget/event atomicity, fault, duplicate, concurrency or lease/config-fence proof. Stage3 goal remains OPEN and PR275 DRAFT; documentation completion does not make the whole path review-ready.

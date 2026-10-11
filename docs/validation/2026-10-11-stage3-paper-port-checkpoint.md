@@ -1,4 +1,4 @@
-# Stage 3 paper port: initial implementation checkpoint
+# Stage 3 paper port: accumulated unqualified checkpoint
 
 Refs #243. This is an unqualified implementation checkpoint, not review-ready
 or deployed evidence. Stage 2 was accepted via PR #274, merged at
@@ -6,7 +6,7 @@ or deployed evidence. Stage 2 was accepted via PR #274, merged at
 was not executed: static comparisons, synthetic vectors and hosted PostgreSQL
 checks must not be described as exhaustive historical runtime parity.
 
-## Bounded slice
+## Initial queue slice and subsequent pure additions
 
 The isolated paper queue domain ports historical v7 microsecond event-time
 cutoffs and conservative displayed-queue consumption into public-data DTOs.
@@ -15,8 +15,7 @@ authority. Batches and retained print identities are bounded. Synthetic expected
 vectors exercise UP/DOWN, partial quantity, duplicate evidence, missing queue,
 wrong taker side, inclusive horizon and one-microsecond exclusion.
 
-This does not implement entry policy, managed repricing, reservations, fees,
-settlement, SQL transactions or the application paper lane. The existing
+The initial queue slice alone did not implement the rest of the engine. Subsequent additions now include pure entry/persistence/portfolio/episode reducers, managed repricing, fee/maker/IOC accounting, sale/exit/switch plans and configuration/authority/regime DTOs. None composes or executes durable reservation/settlement, SQL transactions or the application paper lane. The existing
 entrypoint continues refusing paper mode. No intent, epoch, migration, schedule,
 secret binding or production state was changed.
 
@@ -44,3 +43,9 @@ awaited. Live, reconciliation, detached sentinels and projection remain excluded
 Tests in this checkpoint are new synthetic expectations, not executed archive
 fixtures. Full hosted checks and independent exact-head review remain required.
 No local dependency installation, build, suite or database run was performed.
+
+## Current review and execution boundary
+
+F1–F7 guards are implemented pending fresh independent confirmation and current-head hosted qualification. The reported71 authored cases is not a verified executed/passed count. CI38107395722 on0f22cdc failed typecheck (TS2375 in the malformed-fill fixture); hosted lint/build/test/contract target summaries succeeded with case counts suppressed. The fixture correction retains omitted/invalid quantity refusal rather than weakening an assertion.
+
+Pure authority snapshots, expected identities, completeness and historical warming lineage are caller claims, not DB provenance. Restrictive and historical warm-lineage contracts are distinct proposals; no full historical parity is asserted, including explicit queue chronology and IOC source-epsilon corrections. IOC and sale arithmetic now exists as pure plans, not runtime effects. Compiled availability remains false, paper refuses and migration0006 author/test permission remains pending. No real paper SQL transaction/fault/concurrency proof exists; forecast PostgreSQL validation is not that proof. GoalOPEN/PR275DRAFT remains.

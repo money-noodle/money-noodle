@@ -43,10 +43,13 @@ const requirements = {
 };
 describe('F4 F6 bounded dormant reducers', () => {
   it('F4 definitive zero only; bounded ids chronology and maker IOC IOC compatibility', () => {
-    for (const filledCount of [NaN, -1, Infinity, undefined, 0.01])
+    for (const filledCount of [NaN, -1, Infinity, 0.01])
       expect(
         adaptiveEntryEpisodeDecision([{ ...maker, filledCount }], 'synthetic', 3).allowed,
       ).toBe(false);
+    const missingFill = { ...maker };
+    delete missingFill.filledCount;
+    expect(adaptiveEntryEpisodeDecision([missingFill], 'synthetic', 3).allowed).toBe(false);
     expect(
       adaptiveEntryEpisodeDecision(
         [{ ...maker, makerCompletedAt: '2026-10-11T12:01:59Z' }],
