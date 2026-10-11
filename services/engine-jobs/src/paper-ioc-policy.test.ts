@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { requalifyPaperFallback, paperIocAccountingPlan } from './domain/paper-ioc-policy.js';
+const plan = (reservation: number, result: Parameters<typeof paperIocAccountingPlan>[1]) =>
+  paperIocAccountingPlan(reservation, result, 4);
 const now = Date.parse('2026-10-11T02:00:00Z');
 const base = {
   contractId: 'synthetic-ticker',
@@ -55,18 +57,18 @@ describe('pure exact quote fallback and IOC plans, no order or budget writes', (
     expect(requalifyPaperFallback({ ...base, finalMakerLimit: 0.39 }).allowed).toBe(false);
   });
   it('distinguishes unavailable data from observed nofill and preserves full reservation release plans', () => {
-    expect(paperIocAccountingPlan(207, { kind: 'data-unavailable' })).toEqual({
+    expect(plan(207, { kind: 'data-unavailable' })).toEqual({
       status: 'rejected',
       releasedCents: 207,
       noFillReason: 'data_unavailable',
     });
-    expect(paperIocAccountingPlan(207, { kind: 'quote-refused' })).toEqual({
+    expect(plan(207, { kind: 'quote-refused' })).toEqual({
       status: 'unfilled',
       releasedCents: 207,
       noFillReason: 'pre_submit_quote_moved',
     });
     expect(
-      paperIocAccountingPlan(207, {
+      plan(207, {
         kind: 'observed',
         fill: { ...fill, filledCount: 0, cashCents: 0, averagePrice: 0 },
       }),
@@ -74,7 +76,7 @@ describe('pure exact quote fallback and IOC plans, no order or budget writes', (
   });
   it('accounts positive IOC partial at taker fees, never overreservation or offlattice payout', () => {
     // ceil62.5=63 + ceil(100*1.25*.07*.5*.5)=3 =>66;207-66=141; payout125.
-    expect(paperIocAccountingPlan(207, { kind: 'observed', fill })).toEqual({
+    expect(plan(207, { kind: 'observed', fill })).toEqual({
       status: 'open',
       stakeCents: 66,
       feeCents: 3,
@@ -82,15 +84,17 @@ describe('pure exact quote fallback and IOC plans, no order or budget writes', (
       filledCount: 1.25,
       potentialPayoutCents: 125,
     });
-    expect(() => paperIocAccountingPlan(65, { kind: 'observed', fill })).toThrow();
+    expect(() => plan(65, { kind: 'observed', fill })).toThrow();
     expect(() =>
-      paperIocAccountingPlan(207, {
+      plan(207, {
         kind: 'observed',
         fill: { ...fill, filledCount: 0.015, cashCents: 0.75 },
       }),
     ).toThrow();
-    expect(() =>
-      paperIocAccountingPlan(207, { kind: 'observed', fill: { ...fill, cashCents: 63 } }),
-    ).toThrow();
+    expect(() => plan(207, { kind: 'observed', fill: { ...fill, cashCents: 63 } })).toThrow();
   });
+});
+
+it('refuses positive IOC quantity beyond the explicit issued request', () => {
+  expect(() => paperIocAccountingPlan(207, { kind: 'observed', fill }, 1)).toThrow();
 });

@@ -119,8 +119,16 @@ export function paperIocAccountingPlan(
     | { kind: 'data-unavailable' }
     | { kind: 'quote-refused' }
     | { kind: 'observed'; fill: IocFillResult },
+  requestedCount: number,
 ): PaperIocAccountingPlan {
-  if (!Number.isSafeInteger(reservationCents) || reservationCents <= 0)
+  if (
+    !Number.isFinite(requestedCount) ||
+    requestedCount <= 0 ||
+    requestedCount > 1000000 ||
+    Math.abs(requestedCount * 100 - Math.round(requestedCount * 100)) > 1e-8 ||
+    !Number.isSafeInteger(reservationCents) ||
+    reservationCents <= 0
+  )
     throw new Error('Invalid IOC reservation.');
   if (result.kind === 'data-unavailable')
     return {
@@ -139,7 +147,7 @@ export function paperIocAccountingPlan(
     !f ||
     ![f.filledCount, f.averagePrice, f.cashCents].every(Number.isFinite) ||
     f.filledCount < 0 ||
-    f.filledCount > 1000000 ||
+    f.filledCount > requestedCount ||
     f.cashCents < 0 ||
     Math.abs(f.filledCount * 100 - Math.round(f.filledCount * 100)) > 1e-8
   )
