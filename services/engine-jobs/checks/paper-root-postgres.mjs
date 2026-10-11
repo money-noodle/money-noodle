@@ -41,9 +41,10 @@ export async function paperRootPostgresContract(admin, writer, port) {
       source: null,
       last: 'root-paper-run',
     };
+    // Bind text before the server timestamp cast: driver Date serializer cannot encode infinity.
     const funding = (sql, r) =>
       sql.unsafe(
-        'insert into engine.paper_funding_root(funding_id,epoch,budget_id,actor,birth_config_intent_id,origin_run_id,origin_restore_run_id,restored_source_state_key,materialized_run_id,recorded_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::timestamptz)',
+        'insert into engine.paper_funding_root(funding_id,epoch,budget_id,actor,birth_config_intent_id,origin_run_id,origin_restore_run_id,restored_source_state_key,materialized_run_id,recorded_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::text::timestamptz)',
         [
           r.id,
           r.epoch,
@@ -144,7 +145,7 @@ export async function paperRootPostgresContract(admin, writer, port) {
     };
     const budget = (sql, r) =>
       sql.unsafe(
-        'insert into engine.paper_budget_root(funding_id,epoch,budget_id,birth_config_intent_id,latest_intent_id,starting_cents,available_cents,reserved_cents,realized_cents,correction_cents,revision,last_run_id,recorded_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::timestamptz)',
+        'insert into engine.paper_budget_root(funding_id,epoch,budget_id,birth_config_intent_id,latest_intent_id,starting_cents,available_cents,reserved_cents,realized_cents,correction_cents,revision,last_run_id,recorded_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::text::timestamptz)',
         [
           r.id,
           r.epoch,
