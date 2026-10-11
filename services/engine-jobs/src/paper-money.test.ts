@@ -98,11 +98,11 @@ describe('historical paper arithmetic, no runtime authority', () => {
       averagePrice: 0,
       venue: 'kalshi' as const,
     };
-    expect(paperMakerAccounting({ ...zero, evidenceComplete: true })).toMatchObject({
+    expect(paperMakerAccounting({ ...zero, evidenceComplete: true })).toEqual({
       status: 'unfilled',
       releasedCents: 207,
     });
-    expect(paperMakerAccounting({ ...zero, evidenceComplete: false })).toMatchObject({
+    expect(paperMakerAccounting({ ...zero, evidenceComplete: false })).toEqual({
       status: 'rejected',
       releasedCents: 207,
     });
