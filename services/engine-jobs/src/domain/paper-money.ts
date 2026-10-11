@@ -72,7 +72,10 @@ export function estimatePaperFill(
   let low = 1,
     high = maximumUnits;
   let best: PaperFill | null = null;
+  let iterations = 0;
   while (low <= high) {
+    // Safe integer search interval shrinks by at least half: at most54 decisions.
+    if (++iterations > 54) throw new Error('Paper sizing search exceeded numeric bounds.');
     const units = low + Math.floor((high - low) / 2);
     const fill = atUnits(units);
     if (

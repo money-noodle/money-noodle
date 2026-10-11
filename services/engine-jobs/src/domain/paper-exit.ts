@@ -1,0 +1,149 @@
+import type { PaperSide } from './paper-pricing.js';
+type StandaloneExitPolicy = 'strict-value-v1' | 'profit-reversal-75-v1';
+export const PROFIT_REVERSAL_ARM_PERCENT = 0.75;
+export const STRICT_EXIT_MIN_GAIN_CENTS = 1;
+export const POST_EXIT_REENTRY_COOLDOWN_MS = 60_000;
+// Current profit-reversal choice must be explicit, never an environment default.
+export interface ExitObservationState {
+  profitLockArmedAt?: string | undefined;
+  peakNetLiquidationCents?: number | undefined;
+  peakNetProfitPercent?: number | undefined;
+  peakOwnedSideProbability?: number | undefined;
+  peakObservedAt?: string | undefined;
+}
+
+export interface ExitPolicyInput extends ExitObservationState {
+  observedAt: string;
+  side: PaperSide;
+  quantity: number;
+  exactCostCents: number;
+  executableBid: number;
+  exitFeeCents: number;
+  ownedSideProbability: number;
+  uncertainty: number;
+  strictMinimumGainCents?: number | undefined;
+}
+
+export interface ExitPolicyDecision extends ExitObservationState {
+  executableBid: number;
+  exitFeeCents: number;
+  netLiquidationCents: number;
+  netProfitPercent: number;
+  holdValueCents: number;
+  optimisticHoldValueCents: number;
+  action: 'HOLD' | 'SELL';
+  policy?: StandaloneExitPolicy;
+  reason: string;
+}
+
+export function evaluateExitPolicy(
+  input: ExitPolicyInput,
+  profitReversalEnabled: boolean,
+): ExitPolicyDecision | null {
+  const numeric = [
+    input.quantity,
+    input.exactCostCents,
+    input.executableBid,
+    input.exitFeeCents,
+    input.ownedSideProbability,
+    input.uncertainty,
+    input.strictMinimumGainCents ?? STRICT_EXIT_MIN_GAIN_CENTS,
+  ];
+  if (
+    !numeric.every(Number.isFinite) ||
+    input.quantity <= 0 ||
+    input.exactCostCents <= 0 ||
+    input.executableBid <= 0 ||
+    input.executableBid >= 1 ||
+    input.exitFeeCents < 0 ||
+    input.ownedSideProbability < 0 ||
+    input.ownedSideProbability > 1 ||
+    input.uncertainty < 0
+  )
+    return null;
+
+  const netLiquidationCents = input.quantity * 100 * input.executableBid - input.exitFeeCents;
+  const netProfitPercent = (netLiquidationCents - input.exactCostCents) / input.exactCostCents;
+  const holdValueCents = input.quantity * 100 * input.ownedSideProbability;
+  const optimisticHoldValueCents =
+    input.quantity * 100 * Math.min(1, input.ownedSideProbability + input.uncertainty);
+  const minimumGain = input.strictMinimumGainCents ?? STRICT_EXIT_MIN_GAIN_CENTS;
+
+  let state: ExitObservationState = {
+    profitLockArmedAt: input.profitLockArmedAt,
+    peakNetLiquidationCents: input.peakNetLiquidationCents,
+    peakNetProfitPercent: input.peakNetProfitPercent,
+    peakOwnedSideProbability: input.peakOwnedSideProbability,
+    peakObservedAt: input.peakObservedAt,
+  };
+  if (!state.profitLockArmedAt && netProfitPercent >= PROFIT_REVERSAL_ARM_PERCENT) {
+    state = { ...state, profitLockArmedAt: input.observedAt };
+  }
+  if (
+    state.profitLockArmedAt &&
+    (state.peakNetLiquidationCents === undefined ||
+      netLiquidationCents > state.peakNetLiquidationCents + 1e-9)
+  ) {
+    state = {
+      ...state,
+      peakNetLiquidationCents: netLiquidationCents,
+      peakNetProfitPercent: netProfitPercent,
+      peakOwnedSideProbability: input.ownedSideProbability,
+      peakObservedAt: input.observedAt,
+    };
+  }
+
+  if (netLiquidationCents >= optimisticHoldValueCents + minimumGain) {
+    return {
+      ...state,
+      executableBid: input.executableBid,
+      exitFeeCents: input.exitFeeCents,
+      netLiquidationCents,
+      netProfitPercent,
+      holdValueCents,
+      optimisticHoldValueCents,
+      action: 'SELL',
+      policy: 'strict-value-v1',
+      reason: `Executable cash exceeds optimistic hold value by ${(netLiquidationCents - optimisticHoldValueCents).toFixed(2)}c.`,
+    };
+  }
+
+  const reversedFromPeak =
+    state.profitLockArmedAt &&
+    state.peakNetLiquidationCents !== undefined &&
+    state.peakOwnedSideProbability !== undefined &&
+    netLiquidationCents < state.peakNetLiquidationCents - 1e-9 &&
+    input.ownedSideProbability < state.peakOwnedSideProbability - 1e-9 &&
+    state.peakObservedAt !== input.observedAt;
+  if (reversedFromPeak && profitReversalEnabled) {
+    return {
+      ...state,
+      executableBid: input.executableBid,
+      exitFeeCents: input.exitFeeCents,
+      netLiquidationCents,
+      netProfitPercent,
+      holdValueCents,
+      optimisticHoldValueCents,
+      action: 'SELL',
+      policy: 'profit-reversal-75-v1',
+      reason: `Profit lock armed at +${PROFIT_REVERSAL_ARM_PERCENT * 100}%; executable value and owned-side probability both declined from high water.`,
+    };
+  }
+
+  const holdReason = reversedFromPeak
+    ? 'Profit reversal is withheld from execution on its own evidence; the armed downturn was recorded, not sold.'
+    : state.profitLockArmedAt
+      ? 'Profit lock armed; no confirmed joint value/probability downturn.'
+      : 'No strict value exit or armed profit reversal.';
+  return {
+    ...state,
+    executableBid: input.executableBid,
+    exitFeeCents: input.exitFeeCents,
+    netLiquidationCents,
+    netProfitPercent,
+    holdValueCents,
+    optimisticHoldValueCents,
+    action: 'HOLD',
+    reason: holdReason,
+  };
+}
