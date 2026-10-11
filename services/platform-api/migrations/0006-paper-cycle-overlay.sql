@@ -129,7 +129,7 @@ create table if not exists engine.paper_order (
     or (source_kind='restored' and origin_run_id is null and origin_restore_run_id is not null and legacy_order_id is not null and legacy_ledger_position is not null)),
   check ((row_kind='entry' and parent_order_key is null and parent_row_kind is null and issued_reservation_cents>0
       and ((entry_episode_key is not null and entry_attempt is not null) or (source_kind='restored' and entry_episode_key is null and entry_attempt is null)))
-    or (row_kind='sale-child' and parent_order_key is not null and parent_row_kind='entry' and parent_order_key<>order_key and entry_episode_key is null and entry_attempt is null and issued_reservation_cents=0)),
+    or (row_kind='sale-child' and parent_order_key is not null and parent_row_kind is not null and parent_row_kind='entry' and parent_order_key<>order_key and entry_episode_key is null and entry_attempt is null and issued_reservation_cents=0)),
   check (venue='kalshi' and issued_quantity*100=trunc(issued_quantity*100) and filled_quantity*100=trunc(filled_quantity*100) and remaining_quantity*100=trunc(remaining_quantity*100)
     or venue='polymarket' and issued_quantity=trunc(issued_quantity) and filled_quantity=trunc(filled_quantity) and remaining_quantity=trunc(remaining_quantity)),
   check (filled_quantity<>0 or (raw_purchase_cents=0 and raw_fee_cents=0 and raw_remaining_cost_cents=0 and retained_stake_cents=0)),

@@ -4,6 +4,7 @@ import process from 'node:process';
 import console from 'node:console';
 import postgres from 'postgres';
 import { readFileSync } from 'node:fs';
+import { paperOrderPostgresContract } from './paper-order-postgres.mjs';
 export async function paperRootPostgresContract(admin, writer, port) {
   if (process.env.GITHUB_ACTIONS !== 'true' || !/^\d+$/.test(port))
     throw Error('Hosted disposable loopback test only.');
@@ -207,6 +208,7 @@ export async function paperRootPostgresContract(admin, writer, port) {
     const [reconfigured] = await snapshot();
     assert.equal(reconfigured.birth_config_intent_id, 'root-config');
     assert.equal(reconfigured.latest_intent_id, 'root-other-config');
+    await paperOrderPostgresContract(writer);
     const fundingSnapshot = () =>
       admin.unsafe('select * from engine.paper_funding_root order by funding_id,epoch,budget_id');
     const populatedFunding = await fundingSnapshot(),
