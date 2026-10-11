@@ -125,7 +125,7 @@ export function evaluatePaperAuthority(
   if (
     snapshot.complete !== true ||
     !Number.isSafeInteger(snapshot.epoch) ||
-    snapshot.epoch < 0 ||
+    snapshot.epoch < 1 ||
     !latest ||
     snapshot.latestTimeValid !== true ||
     latest.epoch !== snapshot.epoch ||

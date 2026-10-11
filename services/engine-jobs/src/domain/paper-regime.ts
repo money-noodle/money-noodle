@@ -133,7 +133,7 @@ function evaluateRegimeGate(
     standardError,
     negativeReturnConfidence,
     reason: closed
-      ? `New live entries are paused: estimated negative-return probability is ${(negativeReturnConfidence * 100).toFixed(1)}%. Sentinel evidence continues; entries reopen automatically below ${(settings.resumeConfidence * 100).toFixed(0)}%.`
+      ? `New paper entries are paused: estimated negative-return probability is ${(negativeReturnConfidence * 100).toFixed(1)}%. Entry admission reopens below ${(settings.resumeConfidence * 100).toFixed(0)}%.`
       : wasClosed
         ? `Entry permission reopened automatically: estimated negative-return probability fell to ${(negativeReturnConfidence * 100).toFixed(1)}%.`
         : `Entry permission remains open: estimated negative-return probability is ${(negativeReturnConfidence * 100).toFixed(1)}%; pausing requires ${(settings.pauseConfidence * 100).toFixed(1)}%.`,
@@ -141,8 +141,31 @@ function evaluateRegimeGate(
 }
 
 export const PAPER_REGIME_EVIDENCE_CONTRACT = 'paper-regime-explicit-evidence-v1';
+export const PAPER_REGIME_SAMPLE_BUY_POLICY =
+  'buy-binary-edge-net5-nocap-quality50-owned55-price10to75-late30-persist2of15-v22';
+export const PAPER_RESTRICTIVE_REGIME_PROPOSAL = 'paper-regime-restrictive-evidence-proposal-v1';
+export interface PaperRegimeIdentity {
+  epoch: number;
+  configIntentId: string;
+  evidenceGenerationId: string;
+  bundleId: typeof PAPER_RESTRICTIVE_REGIME_PROPOSAL;
+  gateFormula: typeof REGIME_GATE_POLICY_VERSION;
+  settingsIdentity: string;
+}
+export function paperRegimeSettingsIdentity(settings: RegimeGateSettings): string {
+  return [
+    'regime-settings-v1',
+    settings.enabled,
+    settings.minimumPolicyWindows,
+    settings.evidenceHalfLifeWindows,
+    settings.pauseConfidence,
+    settings.resumeConfidence,
+  ].join(':');
+}
+
 export interface PaperRegimeEvidence {
-  sourceKind: 'current-run-restored-engine-evidence';
+  identity: PaperRegimeIdentity;
+  sourceKind: 'prospective-engine-run';
   sourceId: string;
   policyVersion: string;
   complete: boolean;
@@ -160,6 +183,7 @@ export function evaluatePaperRegimeEvidence(
   settings: RegimeGateSettings,
   nowMs: number,
   maximumEvidenceAgeMs: number,
+  expectedIdentity: PaperRegimeIdentity,
 ): RegimeGateEvaluation {
   const refuse = (reason: string): RegimeGateEvaluation => ({
     phase: 'closed',
@@ -173,6 +197,7 @@ export function evaluatePaperRegimeEvidence(
     reason,
   });
   if (
+    policyVersion !== PAPER_REGIME_SAMPLE_BUY_POLICY ||
     !settings ||
     settings.enabled !== true ||
     !Number.isSafeInteger(settings.minimumPolicyWindows) ||
@@ -190,12 +215,33 @@ export function evaluatePaperRegimeEvidence(
     settings.resumeConfidence > settings.pauseConfidence - 0.01
   )
     return refuse('Unsupported explicit paper regime settings.');
+  const identityValid =
+    expectedIdentity &&
+    Number.isSafeInteger(expectedIdentity.epoch) &&
+    expectedIdentity.epoch >= 1 &&
+    expectedIdentity.bundleId === PAPER_RESTRICTIVE_REGIME_PROPOSAL &&
+    expectedIdentity.gateFormula === REGIME_GATE_POLICY_VERSION &&
+    expectedIdentity.settingsIdentity === paperRegimeSettingsIdentity(settings) &&
+    [expectedIdentity.configIntentId, expectedIdentity.evidenceGenerationId].every(
+      (s) => typeof s === 'string' && s.length > 0 && s.length <= 120,
+    );
+  if (
+    !identityValid ||
+    !evidence?.identity ||
+    evidence.identity.epoch !== expectedIdentity.epoch ||
+    evidence.identity.configIntentId !== expectedIdentity.configIntentId ||
+    evidence.identity.evidenceGenerationId !== expectedIdentity.evidenceGenerationId ||
+    evidence.identity.bundleId !== expectedIdentity.bundleId ||
+    evidence.identity.gateFormula !== expectedIdentity.gateFormula ||
+    evidence.identity.settingsIdentity !== expectedIdentity.settingsIdentity
+  )
+    return refuse('Regime identity or generation mismatch.');
   if (
     !Number.isSafeInteger(nowMs) ||
     !Number.isSafeInteger(maximumEvidenceAgeMs) ||
     maximumEvidenceAgeMs <= 0 ||
     !evidence ||
-    evidence.sourceKind !== 'current-run-restored-engine-evidence' ||
+    evidence.sourceKind !== 'prospective-engine-run' ||
     typeof evidence.sourceId !== 'string' ||
     evidence.sourceId.length < 1 ||
     evidence.sourceId.length > 120 ||

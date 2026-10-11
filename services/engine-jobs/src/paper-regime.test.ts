@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   evaluatePaperRegimeEvidence,
+  PAPER_REGIME_SAMPLE_BUY_POLICY,
+  PAPER_RESTRICTIVE_REGIME_PROPOSAL,
+  REGIME_GATE_POLICY_VERSION,
+  paperRegimeSettingsIdentity,
+  type PaperRegimeIdentity,
   type PaperRegimeEvidence,
   type RegimeGateSettings,
 } from './domain/paper-regime.js';
@@ -12,24 +17,36 @@ const settings: RegimeGateSettings = {
   pauseConfidence: 0.99,
   resumeConfidence: 0.75,
 };
+const identity: PaperRegimeIdentity = {
+  epoch: 1,
+  configIntentId: 'synthetic-config',
+  evidenceGenerationId: 'synthetic-generation',
+  bundleId: PAPER_RESTRICTIVE_REGIME_PROPOSAL,
+  gateFormula: REGIME_GATE_POLICY_VERSION,
+  settingsIdentity: paperRegimeSettingsIdentity(settings),
+};
 const evidence = (edge: number): PaperRegimeEvidence => ({
-  sourceKind: 'current-run-restored-engine-evidence',
+  identity,
+  sourceKind: 'prospective-engine-run',
   sourceId: 'synthetic-run',
-  policyVersion: 'synthetic-policy',
+  policyVersion: PAPER_REGIME_SAMPLE_BUY_POLICY,
   complete: true,
   observedAtMs: now,
   previousPhase: 'open',
-  previousPhasePolicyVersion: 'synthetic-policy',
+  previousPhasePolicyVersion: PAPER_REGIME_SAMPLE_BUY_POLICY,
   observations: Array.from({ length: 4 }, (_, i) => ({
     id: 'synthetic-' + i,
-    policyVersion: 'synthetic-policy',
+    policyVersion: PAPER_REGIME_SAMPLE_BUY_POLICY,
     closesAt: new Date(now - (4 - i) * 900000).toISOString(),
     resolvedAt: new Date(now - (4 - i) * 900000 + 1000).toISOString(),
     realizedEdge: edge,
   })),
 });
 const evaluate = (input: PaperRegimeEvidence | undefined, config = settings) =>
-  evaluatePaperRegimeEvidence(input, 'synthetic-policy', config, now, 30000);
+  evaluatePaperRegimeEvidence(input, PAPER_REGIME_SAMPLE_BUY_POLICY, config, now, 30000, {
+    ...identity,
+    settingsIdentity: paperRegimeSettingsIdentity(config),
+  });
 describe('explicit regime evidence without active sentinel collector', () => {
   it('preserves independent zero-edge mean and neutral confidence with bounded decay', () => {
     const result = evaluate(evidence(0));
@@ -79,4 +96,38 @@ describe('explicit regime evidence without active sentinel collector', () => {
         .allowsEntries,
     ).toBe(false);
   });
+});
+
+it('binds generation/settings/epoch rather than trusting sample labels', () => {
+  for (const patch of [
+    { epoch: 0 },
+    { evidenceGenerationId: 'other' },
+    { settingsIdentity: 'other' },
+    { gateFormula: 'other' as typeof REGIME_GATE_POLICY_VERSION },
+  ])
+    expect(evaluate({ ...evidence(0), identity: { ...identity, ...patch } }).allowsEntries).toBe(
+      false,
+    );
+});
+it('independent H2 z=1 hysteresis keeps open open but closed closed', () => {
+  const e = evidence(-0.14122320202092406);
+  const open = evaluate(e);
+  expect(open.phase).toBe('open');
+  expect(open.negativeReturnConfidence).toBeCloseTo(0.8413447461, 6);
+  expect(evaluate({ ...e, previousPhase: 'closed' }).phase).toBe('closed');
+  expect(evaluate({ ...evidence(0.14122320202092406), previousPhase: 'closed' }).phase).toBe(
+    'open',
+  );
+});
+it('fractional half-life remains valid source arithmetic input', () => {
+  const config = { ...settings, evidenceHalfLifeWindows: 2.5 };
+  expect(
+    evaluate(
+      {
+        ...evidence(0),
+        identity: { ...identity, settingsIdentity: paperRegimeSettingsIdentity(config) },
+      },
+      config,
+    ).phase,
+  ).toBe('open');
 });

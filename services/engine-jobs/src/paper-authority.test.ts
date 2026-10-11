@@ -143,3 +143,16 @@ describe('paper configuration design; injected audited fixture is not production
       expect(evaluatePaperAuthority({ ...base(), ...patch }, true).allowed).toBe(false);
   });
 });
+
+it('refuses coherent epoch0 even with audited fixture; epoch1 reference remains valid', () => {
+  const b = base();
+  const withEpoch = (epoch: number) => ({
+    ...b,
+    epoch,
+    latest: { ...resume, epoch },
+    configure: { ...c1, epoch },
+    funding: { ...b.funding!, epoch },
+  });
+  expect(evaluatePaperAuthority(withEpoch(0), true).allowed).toBe(false);
+  expect(evaluatePaperAuthority(withEpoch(1), true).allowed).toBe(true);
+});
