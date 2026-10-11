@@ -51,6 +51,9 @@ export function adaptiveEntryEpisodeDecision(
   if (
     ordered.some(
       (order) =>
+        order.status !== 'unfilled' ||
+        !Number.isFinite(Date.parse(order.makerCompletedAt ?? '')) ||
+        Date.parse(order.makerCompletedAt!) < Date.parse(order.createdAt) ||
         order.status === 'open' ||
         order.status === 'pending_reservation' ||
         order.status === 'uncertain' ||

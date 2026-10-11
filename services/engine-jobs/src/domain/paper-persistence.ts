@@ -113,7 +113,8 @@ export function advanceSignalPersistence(
       ? state
       : { symbol: input.symbol, side: input.side, closesAt: input.closesAt, observations: [] };
   if (!input.qualifies) return { ...current, observations: [] };
-  if (current.observations.some((item) => item.at === input.calculationAt)) return current;
+  if (current.observations.some((item) => Date.parse(item.at) === Date.parse(input.calculationAt)))
+    return current;
   const observations = [
     ...current.observations,
     { at: input.calculationAt, netEdge: input.netEdge, quality: input.quality },
