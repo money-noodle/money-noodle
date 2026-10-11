@@ -94,8 +94,7 @@ create table if not exists engine.paper_order (
   entry_episode_key text check (length(entry_episode_key) between 1 and 120 and entry_episode_key=btrim(entry_episode_key,E' \t\n\r\f\013')),
   entry_attempt integer check (entry_attempt between 1 and 3),
   execution_mode text not null check (execution_mode='paper'),
-  symbol text not null check (symbol ~ '^[A-Z0-9-]{1,24}
-),
+  symbol text not null check (symbol ~ '^[A-Z0-9-]{1,24}$'),
   contract_id text not null check (length(contract_id) between 1 and 120 and contract_id=btrim(contract_id,E' \t\n\r\f\013')),
   venue text not null check (venue in ('kalshi','polymarket')),
   side text not null check (side in ('UP','DOWN')),
