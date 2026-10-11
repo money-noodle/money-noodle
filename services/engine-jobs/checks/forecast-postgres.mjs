@@ -1,3 +1,4 @@
+import { paperRootPostgresContract } from './paper-root-postgres.mjs';
 import {
   forecastStoreConformance,
   eventFailureConformance,
@@ -56,6 +57,7 @@ try {
     '0003-ledger-order-position.sql',
     '0004-engine-cycle-lease-and-runs.sql',
     '0005-forecast-cycle-overlay.sql',
+    '0006-paper-cycle-overlay.sql',
   ]) {
     const sql = readFileSync('services/platform-api/migrations/' + file, 'utf8').replaceAll(
       ":'account_id'",
@@ -66,9 +68,13 @@ try {
   await admin.unsafe(
     readFileSync('services/platform-api/migrations/0005-forecast-cycle-overlay.sql', 'utf8'),
   );
+  await admin.unsafe(
+    readFileSync('services/platform-api/migrations/0006-paper-cycle-overlay.sql', 'utf8'),
+  );
   console.log('Synthetic schema migration and reapply completed.');
   const writerUrl = 'postgres://engine_writer@127.0.0.1:' + port + '/postgres';
   writer = postgres(writerUrl, { max: 1, prepare: false });
+  await paperRootPostgresContract(admin, writer, port);
   store = createPostgresForecastStore(writerUrl);
   cycle = createPostgresCycleStore(writerUrl);
   const now = new Date(),
