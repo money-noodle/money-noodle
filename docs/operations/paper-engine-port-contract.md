@@ -102,3 +102,11 @@ exit/switch accounting and persisted current authority remain unimplemented
 and independently unqualified. Settlement-backoff
 claims in the inventory are not yet confirmed by the inspected implementation.
 No full historical closure execution or complete paper-engine parity is claimed.
+
+## Explicit boundary/evidence corrections (still unwired)
+
+The queue evidence version `paper-queue-evidence-microseconds-v1` replaces inherited v7 millisecond sorting with accepted microsecond timestamps, then locale-independent lexical id ordering for exact ties. This intentionally changes causal fill identity for same-millisecond, different-microsecond prints; it does not change fee or valid quantity economics and is NOT a calibration adoption. Full historical chronology parity is not claimed.
+
+Pricing rejects nonfinite/noninteger/excessive counts, over64 ranges and submicro-dollar/unrepresentable ranges. At most1000 ticks and64 ranges bound each walk to64000 candidate checks; each rounded step must actually progress. These are code work/representation limits, not a venue capability claim or current money authority. Accounting refuses off-lattice filled quantity (whole Polymarket, .01 Kalshi) before payout; fractional displayed public depth remains a proxy, not admissible fractional filled inventory. Book normalization accepts at most1000 total levels, finite nonnegative bounded quantities and finite observation timestamp, failing closed instead of manufacturing missing queue zero.
+
+Four literal hardening regression groups accompany these changes, authored but not locally executed. Typed current authority/config/bundle closure, forecast-record→paper→forecast-resolution split, storage approval and hosted transactional proof remain outstanding. Paper refusal remains intact.

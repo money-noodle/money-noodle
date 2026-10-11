@@ -121,6 +121,13 @@ export function paperMakerAccounting(input: {
     input.purchaseCents < 0
   )
     throw new Error('Invalid paper fill accounting.');
+  const units = input.venue === 'kalshi' ? input.filledCount * 100 : input.filledCount;
+  if (
+    !['kalshi', 'polymarket'].includes(input.venue) ||
+    !Number.isSafeInteger(Math.round(units)) ||
+    Math.abs(units - Math.round(units)) > 1e-8
+  )
+    throw new Error('Paper filled quantity is off the venue lattice.');
   if (input.filledCount === 0) {
     if (input.purchaseCents !== 0) throw new Error('Zero paper fill cannot carry a purchase.');
     return {

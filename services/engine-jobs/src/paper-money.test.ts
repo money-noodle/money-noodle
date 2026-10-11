@@ -183,7 +183,7 @@ describe('exact passive price ladder and displayed depth proxy', () => {
   });
   it('counts quantity at-or-better as a proxy, not private queue rank', () => {
     const book = {
-      observedAt: 'synthetic',
+      observedAt: '2026-10-11T00:00:00Z',
       yesBids: [
         { price: 0.43, quantity: 3 },
         { price: 0.42, quantity: 7 },

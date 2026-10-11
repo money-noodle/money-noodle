@@ -27,6 +27,8 @@ export interface PaperMakerTradeEvidence {
   queueAheadAfter: number | undefined;
   fillAdded: number;
 }
+// Explicit correction of inherited millisecond-sort evidence attribution; not a calibration adoption.
+export const PAPER_EVIDENCE_PRECISION_VERSION = 'paper-queue-evidence-microseconds-v1';
 export const PAPER_MAKER_CHECKS = 6;
 export const PAPER_MAKER_POLL_MS = 2_000;
 export const PAPER_MAKER_HORIZON_MS = 12_000;
@@ -119,7 +121,10 @@ export function applyTradePrintsToPaperQueue(
     consumingTradeQuantity = 0;
   let firstConsumingTradeAt: string | undefined, lastConsumingTradeAt: string | undefined;
   for (const trade of [...trades].sort(
-    (a, b) => Date.parse(a.at) - Date.parse(b.at) || a.id.localeCompare(b.id),
+    (a, b) =>
+      (paperMakerEventTimeMicros(a.at) ?? Number.MAX_SAFE_INTEGER) -
+        (paperMakerEventTimeMicros(b.at) ?? Number.MAX_SAFE_INTEGER) ||
+      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
   )) {
     if (state.observedTradeIds.has(trade.id)) continue;
     const eventAtMicros = paperMakerEventTimeMicros(trade.at);

@@ -25,8 +25,54 @@ export interface ManagedMakerQuote {
 export const MAKER_MANAGEMENT_CHECKS = 6;
 export const MAKER_MANAGEMENT_POLL_MS = 12_000 / MAKER_MANAGEMENT_CHECKS;
 
+export const MAX_PAPER_PRICE_RANGES = 64;
+export const MAX_PAPER_PRICE_TICKS = 1_000;
+function validateTicks(ticks: number): void {
+  if (!Number.isSafeInteger(ticks) || ticks < 0 || ticks > MAX_PAPER_PRICE_TICKS)
+    throw new Error('Invalid bounded paper tick count.');
+}
+function validateRanges(ranges: readonly KalshiPriceRange[] | undefined): void {
+  if (ranges === undefined) return;
+  const representable = (n: number) =>
+    Number.isFinite(n) && Math.abs(n * 1_000_000 - Math.round(n * 1_000_000)) <= 1e-7;
+  if (
+    ranges.length < 1 ||
+    ranges.length > MAX_PAPER_PRICE_RANGES ||
+    ranges.some((r) => {
+      const start = Number(r.start),
+        end = Number(r.end),
+        step = Number(r.step);
+      return (
+        ![start, end, step].every(representable) ||
+        start < 0 ||
+        end > 1 ||
+        end <= start ||
+        step < 0.000001 ||
+        step > end - start
+      );
+    })
+  )
+    throw new Error('Unrepresentable or unbounded paper price ladder.');
+}
+function validateQuote(quote: ManagedMakerQuote, maximum: number): void {
+  if (
+    ![quote.bid, quote.ask, maximum].every(Number.isFinite) ||
+    quote.bid < 0 ||
+    quote.ask <= 0 ||
+    quote.ask > 1 ||
+    quote.bid > quote.ask ||
+    maximum <= 0 ||
+    maximum >= 1
+  )
+    throw new Error('Invalid paper pricing quote.');
+  validateRanges(quote.ranges);
+}
+
 /** Highest valid market price at or below a target across Kalshi's tapered ranges. */
 export function floorToValidKalshiPrice(priceDollars: number, ranges?: KalshiPriceRange[]): number {
+  if (!Number.isFinite(priceDollars) || priceDollars < 0 || priceDollars > 1)
+    throw new Error('Invalid paper price.');
+  validateRanges(ranges);
   let best = 0;
   for (const item of ranges ?? [{ start: '0', end: '1', step: '0.01' }]) {
     const start = Number(item.start),
@@ -48,6 +94,7 @@ export function advanceValidKalshiPrice(
   ticks: number,
   ranges?: KalshiPriceRange[],
 ): number {
+  validateTicks(ticks);
   let result = floorToValidKalshiPrice(priceDollars, ranges);
   const ladder = ranges ?? [{ start: '0', end: '1', step: '0.01' }];
   for (let index = 0; index < ticks; index += 1) {
@@ -63,7 +110,9 @@ export function advanceValidKalshiPrice(
       if (candidate > result + 1e-10 && candidate <= end + 1e-9) next = Math.min(next, candidate);
     }
     if (!Number.isFinite(next)) break;
-    result = next;
+    const rounded = Number(next.toFixed(6));
+    if (!(rounded > result)) throw new Error('Paper price ladder made no progress.');
+    result = rounded;
   }
   return Number(result.toFixed(6));
 }
@@ -98,9 +147,13 @@ export function backOffValidKalshiPrice(
   ticks: number,
   ranges?: KalshiPriceRange[],
 ): number {
+  validateTicks(ticks);
   let result = floorToValidKalshiPrice(priceDollars, ranges);
-  for (let index = 0; index < ticks && result > 0; index += 1)
-    result = floorToValidKalshiPrice(result - 1e-8, ranges);
+  for (let index = 0; index < ticks && result > 0; index += 1) {
+    const next = floorToValidKalshiPrice(Math.max(0, result - 1e-8), ranges);
+    if (!(next < result)) throw new Error('Paper price ladder made no progress.');
+    result = next;
+  }
   return result;
 }
 
@@ -114,11 +167,15 @@ export function initialManagedMakerPrice(input: {
   requestedStart?: number;
   createAttempt?: number;
 }): number {
+  validateQuote(input.quote, input.maximumPrice);
   const passiveCeiling = floorToValidKalshiPrice(
     Math.min(input.maximumPrice, input.quote.ask - 1e-8),
     input.quote.ranges,
   );
   if (!(passiveCeiling > 0)) return 0;
+  validateTicks(input.createAttempt ?? 0);
+  if (input.requestedStart !== undefined && !Number.isFinite(input.requestedStart))
+    throw new Error('Invalid requested paper start.');
   const requestedStart = Number.isFinite(input.requestedStart) ? Number(input.requestedStart) : 0;
   const highestRequestedPassive = floorToValidKalshiPrice(
     Math.min(passiveCeiling, Math.max(input.quote.bid, requestedStart)),
@@ -142,7 +199,18 @@ export function nextManagedMakerPrice(input: {
   managementAttempt: number;
   managementChecks?: number;
 }): number {
+  validateQuote(input.quote, input.maximumPrice);
   const checks = input.managementChecks ?? MAKER_MANAGEMENT_CHECKS;
+  if (
+    !Number.isSafeInteger(checks) ||
+    checks < 1 ||
+    checks > MAKER_MANAGEMENT_CHECKS ||
+    !Number.isSafeInteger(input.managementAttempt) ||
+    input.managementAttempt < 0 ||
+    input.managementAttempt >= checks ||
+    !Number.isFinite(input.currentPrice)
+  )
+    throw new Error('Invalid bounded paper amendment count.');
   if (checks <= 1 || input.managementAttempt < 0 || input.managementAttempt >= checks - 1)
     return input.currentPrice;
   const passiveCeiling = floorToValidKalshiPrice(
@@ -162,6 +230,7 @@ export function selectedKalshiPriceRanges(
   side: PaperSide,
   ranges?: KalshiPriceRange[],
 ): KalshiPriceRange[] | undefined {
+  validateRanges(ranges);
   if (side === 'UP' || !ranges) return ranges;
   return ranges
     .map((range) => ({
@@ -180,6 +249,16 @@ export function selectedManagedMakerQuote(input: {
   ranges?: KalshiPriceRange[] | undefined;
   orderBook?: PaperBook | undefined;
 }): ManagedMakerQuote {
+  if (
+    ![input.yesBid, input.yesAsk].every(Number.isFinite) ||
+    input.yesBid < 0 ||
+    input.yesAsk <= 0 ||
+    input.yesAsk > 1 ||
+    input.yesBid > input.yesAsk ||
+    !['UP', 'DOWN'].includes(input.side)
+  )
+    throw new Error('Invalid selected paper quote.');
+  validateRanges(input.ranges);
   return input.side === 'UP'
     ? {
         bid: input.yesBid,

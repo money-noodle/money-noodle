@@ -1,4 +1,36 @@
 import type { PaperBook, PaperBookLevel, PaperSide } from './paper-pricing.js';
+export const MAX_PAPER_BOOK_LEVELS = 1_000;
+export function normalizePaperBook(input: unknown): PaperBook | undefined {
+  if (input === undefined) return undefined;
+  if (!input || typeof input !== 'object') throw new Error('Invalid paper book.');
+  const book = input as Partial<PaperBook>;
+  if (
+    !Array.isArray(book.yesBids) ||
+    !Array.isArray(book.noBids) ||
+    book.yesBids.length + book.noBids.length > MAX_PAPER_BOOK_LEVELS ||
+    typeof book.observedAt !== 'string' ||
+    !Number.isFinite(Date.parse(book.observedAt)) ||
+    [...book.yesBids, ...book.noBids].some(
+      (l) =>
+        !l ||
+        typeof l !== 'object' ||
+        !Number.isFinite(l.price) ||
+        l.price <= 0 ||
+        l.price >= 1 ||
+        !Number.isFinite(l.quantity) ||
+        l.quantity < 0 ||
+        l.quantity > 1_000_000,
+    )
+  ) {
+    throw new Error('Invalid bounded paper book levels.');
+  }
+  return {
+    observedAt: book.observedAt,
+    yesBids: book.yesBids.map((l) => ({ price: l.price, quantity: l.quantity })),
+    noBids: book.noBids.map((l) => ({ price: l.price, quantity: l.quantity })),
+  };
+}
+
 export interface SelectedDepth {
   bestBidDepth: number | undefined;
   bestAskDepth: number | undefined;
@@ -22,6 +54,7 @@ export function selectedSideDepth(
   selectedAsk: number,
   limitPrice?: number,
 ): SelectedDepth {
+  book = normalizePaperBook(book);
   if (!book)
     return {
       bestBidDepth: undefined,
