@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import process from 'node:process';
 import console from 'node:console';
 import postgres from 'postgres';
+import { readFileSync } from 'node:fs';
 export async function paperRootPostgresContract(admin, writer, port) {
   if (process.env.GITHUB_ACTIONS !== 'true' || !/^\d+$/.test(port))
     throw Error('Hosted disposable loopback test only.');
@@ -42,8 +43,19 @@ export async function paperRootPostgresContract(admin, writer, port) {
     };
     const funding = (sql, r) =>
       sql.unsafe(
-        'insert into engine.paper_funding_root(funding_id,epoch,budget_id,actor,birth_config_intent_id,origin_run_id,origin_restore_run_id,restored_source_state_key,materialized_run_id,recorded_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,now())',
-        [r.id, r.epoch, r.budget, r.actor, r.birthConfig, r.run, r.restore, r.source, r.last],
+        'insert into engine.paper_funding_root(funding_id,epoch,budget_id,actor,birth_config_intent_id,origin_run_id,origin_restore_run_id,restored_source_state_key,materialized_run_id,recorded_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::timestamptz)',
+        [
+          r.id,
+          r.epoch,
+          r.budget,
+          r.actor,
+          r.birthConfig,
+          r.run,
+          r.restore,
+          r.source,
+          r.last,
+          r.recordedAt ?? '2026-10-11T23:00:00Z',
+        ],
       );
     await funding(writer, base);
     await funding(writer, {
@@ -111,6 +123,11 @@ export async function paperRootPostgresContract(admin, writer, port) {
       actor: boundaryActor,
       budget: boundaryActor + ':paper',
     });
+    for (const recordedAt of ['infinity', '-infinity'])
+      await rejects(
+        funding(writer, { ...base, id: 'infinite-funding-' + recordedAt, recordedAt }),
+        '23514',
+      );
     const balance = {
       id: base.id,
       epoch: 1,
@@ -127,7 +144,7 @@ export async function paperRootPostgresContract(admin, writer, port) {
     };
     const budget = (sql, r) =>
       sql.unsafe(
-        'insert into engine.paper_budget_root(funding_id,epoch,budget_id,birth_config_intent_id,latest_intent_id,starting_cents,available_cents,reserved_cents,realized_cents,correction_cents,revision,last_run_id,recorded_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now())',
+        'insert into engine.paper_budget_root(funding_id,epoch,budget_id,birth_config_intent_id,latest_intent_id,starting_cents,available_cents,reserved_cents,realized_cents,correction_cents,revision,last_run_id,recorded_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::timestamptz)',
         [
           r.id,
           r.epoch,
@@ -141,6 +158,7 @@ export async function paperRootPostgresContract(admin, writer, port) {
           r.correction,
           r.revision,
           r.last,
+          r.recordedAt ?? '2026-10-11T23:00:00Z',
         ],
       );
     const snapshot = () =>
@@ -164,6 +182,9 @@ export async function paperRootPostgresContract(admin, writer, port) {
     ])
       await rejects(budget(writer, { ...balance, ...patch }), code);
     assert.deepEqual(await snapshot(), before);
+    // No existing balance PK: finite-time CHECK failure cannot be masked by uniqueness.
+    for (const recordedAt of ['infinity', '-infinity'])
+      await rejects(budget(writer, { ...balance, recordedAt }), '23514');
     await budget(writer, balance);
     const duplicateBefore = await snapshot();
     await rejects(funding(writer, base), '23505');
@@ -185,6 +206,19 @@ export async function paperRootPostgresContract(admin, writer, port) {
     const [reconfigured] = await snapshot();
     assert.equal(reconfigured.birth_config_intent_id, 'root-config');
     assert.equal(reconfigured.latest_intent_id, 'root-other-config');
+    const fundingSnapshot = () =>
+      admin.unsafe('select * from engine.paper_funding_root order by funding_id,epoch,budget_id');
+    const populatedFunding = await fundingSnapshot(),
+      populatedBudget = await snapshot();
+    await admin.unsafe(
+      readFileSync('services/platform-api/migrations/0006-paper-cycle-overlay.sql', 'utf8'),
+    );
+    assert.deepEqual(await fundingSnapshot(), populatedFunding);
+    assert.deepEqual(await snapshot(), populatedBudget);
+    // Real writer UPDATE remains allowed after populated reapply, without changing data.
+    await writer.unsafe('update engine.paper_budget_root set available_cents=available_cents');
+    assert.deepEqual(await snapshot(), populatedBudget);
+    // Subsequent real-role allowed SELECT and forbidden operations run AFTER reapply.
     for (const table of ['paper_funding_root', 'paper_budget_root']) {
       await rejects(writer.unsafe('delete from engine.' + table), '42501');
       await rejects(writer.unsafe('truncate engine.' + table), '42501');
