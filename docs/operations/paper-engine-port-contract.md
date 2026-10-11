@@ -93,7 +93,12 @@ persisted entry reservation, awaited maker work and final accounting. Replace
 historically detached forecast resolution with bounded awaited resolution.
 Never add live/reconciliation/drain, detached sentinels or projection dependencies.
 
-Full entry-execution, signal persistence, portfolio, adaptive retry, taker fallback,
-exit/switch and funding closure remains to be ported/reviewed. Settlement-backoff
+Pure entry-route, signal-persistence, explicit portfolio constraints, adaptive
+maker-to-IOC episodes, displayed IOC fills, standalone exit and finite-cap
+funding reducers are now present. Live-cohort reporting and environment
+configuration wrappers were removed at their seams. Their full composition,
+exact-contract admission, maker scheduler, IOC quote requalification,
+exit/switch accounting and persisted current authority remain unimplemented
+and independently unqualified. Settlement-backoff
 claims in the inventory are not yet confirmed by the inspected implementation.
 No full historical closure execution or complete paper-engine parity is claimed.
