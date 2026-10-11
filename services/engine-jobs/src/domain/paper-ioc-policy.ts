@@ -127,7 +127,7 @@ export function paperIocAccountingPlan(
     !Number.isFinite(requestedCount) ||
     requestedCount <= 0 ||
     requestedCount > 1000000 ||
-    Math.abs(requestedCount * 100 - Math.round(requestedCount * 100)) > 1e-8 ||
+    Math.abs(requestedCount - Math.round(requestedCount * 100) / 100) > 1e-12 ||
     !Number.isSafeInteger(reservationCents) ||
     reservationCents <= 0
   )
@@ -151,7 +151,7 @@ export function paperIocAccountingPlan(
     f.filledCount < 0 ||
     f.filledCount > requestedCount ||
     f.cashCents < 0 ||
-    Math.abs(f.filledCount * 100 - Math.round(f.filledCount * 100)) > 1e-8
+    Math.abs(f.filledCount - Math.round(f.filledCount * 100) / 100) > 1e-12
   )
     throw new Error('Invalid IOC fill evidence.');
   if (f.filledCount === 0) {
