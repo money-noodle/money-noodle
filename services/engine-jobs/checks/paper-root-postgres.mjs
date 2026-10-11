@@ -34,7 +34,7 @@ export async function paperRootPostgresContract(admin, writer, port) {
       epoch: 1,
       budget: 'root-actor:paper',
       actor: 'root-actor',
-      config: 'root-config',
+      birthConfig: 'root-config',
       run: 'root-paper-run',
       restore: null,
       source: null,
@@ -42,8 +42,8 @@ export async function paperRootPostgresContract(admin, writer, port) {
     };
     const funding = (sql, r) =>
       sql.unsafe(
-        'insert into engine.paper_funding_root(funding_id,epoch,budget_id,actor,config_intent_id,origin_run_id,origin_restore_run_id,restored_source_state_key,materialized_run_id,recorded_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,now())',
-        [r.id, r.epoch, r.budget, r.actor, r.config, r.run, r.restore, r.source, r.last],
+        'insert into engine.paper_funding_root(funding_id,epoch,budget_id,actor,birth_config_intent_id,origin_run_id,origin_restore_run_id,restored_source_state_key,materialized_run_id,recorded_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,now())',
+        [r.id, r.epoch, r.budget, r.actor, r.birthConfig, r.run, r.restore, r.source, r.last],
       );
     await funding(writer, base);
     await funding(writer, {
@@ -61,7 +61,7 @@ export async function paperRootPostgresContract(admin, writer, port) {
       [{ source: 'root-source' }, '23514'],
       [{ budget: 'wrong:paper' }, '23514'],
       [{ epoch: 0 }, '23514'],
-      [{ config: 'absent-config' }, '23503'],
+      [{ birthConfig: 'absent-config' }, '23503'],
       [{ run: 'absent-run' }, '23503'],
       [{ last: 'absent-run' }, '23503'],
       [{ run: null, restore: 'absent-restore', source: 'root-source' }, '23503'],
@@ -69,12 +69,54 @@ export async function paperRootPostgresContract(admin, writer, port) {
     ];
     for (const [i, [patch, code]] of invalidFunding.entries())
       await rejects(funding(writer, { ...base, id: 'root-invalid-' + i, ...patch }), code);
+    // Raw identity rejects, no silent trimming. SQL chars != JS UTF16/Unicode decoder domain.
+    for (const value of [
+      ' f',
+      'f ',
+      '\tf',
+      'f\t',
+      '\nf',
+      'f\n',
+      ' ',
+      '\t',
+      '\n',
+      'f'.repeat(121),
+      ' '.repeat(121) + 'f',
+    ])
+      await rejects(funding(writer, { ...base, id: value }), '23514');
+    for (const actor of [' a', 'a ', '\ta', 'a\n', 'a'.repeat(115)])
+      await rejects(
+        funding(writer, {
+          ...base,
+          id: 'bad-actor-' + actor.length,
+          actor,
+          budget: actor + ':paper',
+        }),
+        '23514',
+      );
+    for (const budget of [
+      ' ' + base.budget,
+      base.budget + '\t',
+      '\n' + base.budget,
+      'b'.repeat(121),
+    ])
+      await rejects(
+        funding(writer, { ...base, id: 'bad-budget-' + budget.length, budget }),
+        '23514',
+      );
+    const boundaryActor = 'a'.repeat(114);
+    await funding(writer, {
+      ...base,
+      id: 'boundary-root',
+      actor: boundaryActor,
+      budget: boundaryActor + ':paper',
+    });
     const balance = {
       id: base.id,
       epoch: 1,
       budget: base.budget,
-      config: base.config,
-      latest: base.config,
+      birthConfig: base.birthConfig,
+      latest: base.birthConfig,
       start: 100,
       available: 105,
       reserved: 0,
@@ -85,12 +127,12 @@ export async function paperRootPostgresContract(admin, writer, port) {
     };
     const budget = (sql, r) =>
       sql.unsafe(
-        'insert into engine.paper_budget_root(funding_id,epoch,budget_id,config_intent_id,latest_intent_id,starting_cents,available_cents,reserved_cents,realized_cents,correction_cents,revision,last_run_id,recorded_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now())',
+        'insert into engine.paper_budget_root(funding_id,epoch,budget_id,birth_config_intent_id,latest_intent_id,starting_cents,available_cents,reserved_cents,realized_cents,correction_cents,revision,last_run_id,recorded_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now())',
         [
           r.id,
           r.epoch,
           r.budget,
-          r.config,
+          r.birthConfig,
           r.latest,
           r.start,
           r.available,
@@ -108,7 +150,7 @@ export async function paperRootPostgresContract(admin, writer, port) {
       [{ id: 'absent-funding' }, '23503'],
       [{ epoch: 2 }, '23503'],
       [{ budget: 'other:paper' }, '23503'],
-      [{ config: 'root-other-config' }, '23503'],
+      [{ birthConfig: 'root-other-config' }, '23503'],
       [{ latest: 'absent-intent' }, '23503'],
       [{ last: 'absent-run' }, '23503'],
       [{ available: 104 }, '23514'],
@@ -135,6 +177,14 @@ export async function paperRootPostgresContract(admin, writer, port) {
     assert.equal(Number(updated.available_cents), 100);
     assert.equal(Number(updated.reserved_cents), 5);
     assert.equal(Number(updated.revision), 2);
+    // C2 exists, same funding/epoch: retain birth C1 while advancing latest intent.
+    // Storage shape only, NOT a valid current configure/resume snapshot proof.
+    await writer.unsafe(
+      "update engine.paper_budget_root set latest_intent_id='root-other-config',revision=3 where funding_id='root-funding'",
+    );
+    const [reconfigured] = await snapshot();
+    assert.equal(reconfigured.birth_config_intent_id, 'root-config');
+    assert.equal(reconfigured.latest_intent_id, 'root-other-config');
     for (const table of ['paper_funding_root', 'paper_budget_root']) {
       await rejects(writer.unsafe('delete from engine.' + table), '42501');
       await rejects(writer.unsafe('truncate engine.' + table), '42501');
@@ -150,7 +200,7 @@ export async function paperRootPostgresContract(admin, writer, port) {
       const [identity] = await sql.unsafe('select current_user as role');
       assert.notEqual(identity.role, 'postgres');
       if (sql === reader) {
-        assert.equal((await sql.unsafe('select * from engine.paper_funding_root')).length, 2);
+        assert.equal((await sql.unsafe('select * from engine.paper_funding_root')).length, 3);
         assert.equal((await sql.unsafe('select * from engine.paper_budget_root')).length, 1);
       } else
         for (const table of ['paper_funding_root', 'paper_budget_root'])

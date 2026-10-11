@@ -7,23 +7,27 @@
 begin;
 
 -- Immutable identity of genuinely materialized existing paper funding.
--- A run FK establishes existence, NOT paper mode, lease or authority. Config FK
+-- Identity bounds use SQL characters/explicit ASCII outer whitespace, not JS UTF16/Unicode trim.
+-- Admission decoder must ALSO apply its JS raw-length/trim checks; no identical domain claim.
+-- Birth configuration is immutable provenance, NOT current admission configuration.
+-- Current configure/resume snapshot and later events must bind actual current config.
+-- A run FK establishes existence, NOT paper mode, lease or authority. Birth-config FK
 -- establishes existence, NOT configure action/actor/epoch/current latest intent.
 -- Adapter MUST validate those facts and matched restored source/run association.
 -- Existing schemas provide no UNIQUE(key, restore_run_id); do not invent that FK.
 create table if not exists engine.paper_funding_root (
-  funding_id text not null check (length(btrim(funding_id)) between 1 and 120),
+  funding_id text not null check (length(funding_id) between 1 and 120 and funding_id = btrim(funding_id, E' \t\n\r\f\013')),
   epoch integer not null check (epoch >= 1),
-  budget_id text not null check (length(btrim(budget_id)) between 1 and 120),
-  actor text not null check (length(btrim(actor)) between 1 and 114),
-  config_intent_id text not null references engine.control_intent(id),
+  budget_id text not null check (length(budget_id) between 1 and 120 and budget_id = btrim(budget_id, E' \t\n\r\f\013')),
+  actor text not null check (length(actor) between 1 and 114 and actor = btrim(actor, E' \t\n\r\f\013')),
+  birth_config_intent_id text not null references engine.control_intent(id),
   origin_run_id text references engine.job_run_record(run_id),
   origin_restore_run_id text references engine.restore_run(run_id),
   restored_source_state_key text references engine.ledger_state(key),
   materialized_run_id text not null references engine.job_run_record(run_id),
   recorded_at timestamptz not null check (isfinite(recorded_at)),
   primary key (funding_id, epoch, budget_id),
-  unique (funding_id, epoch, budget_id, config_intent_id),
+  unique (funding_id, epoch, budget_id, birth_config_intent_id),
   check (budget_id = actor || ':paper'),
   check ((origin_run_id is not null) <> (origin_restore_run_id is not null)),
   check ((origin_restore_run_id is not null) = (restored_source_state_key is not null))
@@ -38,7 +42,7 @@ create table if not exists engine.paper_budget_root (
   funding_id text not null,
   epoch integer not null,
   budget_id text not null,
-  config_intent_id text not null,
+  birth_config_intent_id text not null,
   latest_intent_id text not null references engine.control_intent(id),
   starting_cents bigint not null check (starting_cents between 0 and 1000000000000),
   available_cents bigint not null check (available_cents between 0 and 1000000000000),
@@ -49,8 +53,8 @@ create table if not exists engine.paper_budget_root (
   last_run_id text not null references engine.job_run_record(run_id),
   recorded_at timestamptz not null check (isfinite(recorded_at)),
   primary key (funding_id, epoch, budget_id),
-  foreign key (funding_id, epoch, budget_id, config_intent_id)
-    references engine.paper_funding_root(funding_id, epoch, budget_id, config_intent_id),
+  foreign key (funding_id, epoch, budget_id, birth_config_intent_id)
+    references engine.paper_funding_root(funding_id, epoch, budget_id, birth_config_intent_id),
   check (available_cents + reserved_cents = starting_cents + realized_cents + correction_cents)
 );
 
