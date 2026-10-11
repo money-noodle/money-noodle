@@ -176,3 +176,11 @@ Finite remaining integration: approved0006 schema/provenance and atomic conserva
 ## Independent F1/F7 IOC corrections
 
 `paper-ioc-conservative-microprice-v2` intentionally corrects inherited quantity/price epsilon behavior. Shared bounded book normalization, finite request/side/time validation and conservative hundredth-quantity flooring prevent overflow or rounding .0099999999 displayed units up to .01. Re-sweeping best-to-worst at the reduced quantity trims excess from the worst consumed level. Integer micro-dollar comparison rejects .500001 buys above a .5 cap and .499999 sells below a .5 minimum; only sub-tick representation dust is normalized. Entry and sale accounting require explicit authorized maximum/minimum prices and bind actual average/cash to them. Missing book remains unavailable, not an observed IOC miss. Four literal groups are authored; no unchanged-all-float parity or runtime authority is claimed. Other independent F2–F6 findings and stale accumulated wording remain pending.
+
+## Independent F2/F3/F5 boundary corrections
+
+Exit validation now bounds quantity/cost/fee/uncertainty and requires nonnegative finite gain, valid side/time/high-water DTOs and finite derived money before any HOLD/SELL result. Large finite inputs producing infinity refuse; ordinary98c liquidation versus90c optimistic hold remains SELL. These are numerical safety limits, not selected spending authority.
+
+Switch persistence deduplicates equal parsed instants (including Z versus .000Z aliases) and rejects prior firstSeen after lastSeen. It intentionally retains the source fifteen-second **bucket** span rather than imposing thirty elapsed seconds; two genuine0/30 observations are not three, while0/15/30 retains minimum-gain semantics.
+
+Managed repricing requires0<currentPrice<1, a supported ladder price and no more than the immutable issuance maximum (representation-only tolerance). A resting price is not required below a moving new ask: ask crossing still does not imply a fill. Normal .41→.42 repricing and terminal .41 retention remain. Four new literal groups are authored; F4/F6 and accumulated stale wording remain next bounded work. No runtime wiring or current configuration is changed.

@@ -153,7 +153,10 @@ export function advanceSwitchPersistence(
       !Number.isSafeInteger(previous.observations) ||
       previous.observations < 1 ||
       previous.observations >= 1000 ||
-      !Number.isFinite(previous.minimumDeltaCents))
+      !Number.isFinite(previous.minimumDeltaCents) ||
+      Date.parse(previous.firstSeenAt) > Date.parse(previous.lastSeenAt) ||
+      !validIdentity(previous.incumbentId) ||
+      !validIdentity(previous.replacementId))
   )
     throw new Error('Invalid bounded prior switch evidence.');
   const sameCandidate =
@@ -170,7 +173,8 @@ export function advanceSwitchPersistence(
       observations: 1,
       minimumDeltaCents: input.deltaCents,
     };
-  if (previous.lastSeenAt === input.observedAt) return previous;
+  // Timestamp aliases denote one observation, not two causal snapshots.
+  if (gap === 0) return previous;
   return {
     ...previous,
     lastSeenAt: input.observedAt,

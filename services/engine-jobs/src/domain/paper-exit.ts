@@ -40,6 +40,32 @@ export function evaluateExitPolicy(
   input: ExitPolicyInput,
   profitReversalEnabled: boolean,
 ): ExitPolicyDecision | null {
+  if (
+    !input ||
+    typeof profitReversalEnabled !== 'boolean' ||
+    !['UP', 'DOWN'].includes(input.side) ||
+    !Number.isSafeInteger(Date.parse(input.observedAt))
+  )
+    return null;
+  const observedMs = Date.parse(input.observedAt);
+  for (const timestamp of [input.profitLockArmedAt, input.peakObservedAt])
+    if (
+      timestamp !== undefined &&
+      (!Number.isSafeInteger(Date.parse(timestamp)) || Date.parse(timestamp) > observedMs)
+    )
+      return null;
+  for (const peak of [
+    input.peakNetLiquidationCents,
+    input.peakNetProfitPercent,
+    input.peakOwnedSideProbability,
+  ])
+    if (peak !== undefined && (!Number.isFinite(peak) || Math.abs(peak) > Number.MAX_SAFE_INTEGER))
+      return null;
+  if (
+    input.peakOwnedSideProbability !== undefined &&
+    (input.peakOwnedSideProbability < 0 || input.peakOwnedSideProbability > 1)
+  )
+    return null;
   const numeric = [
     input.quantity,
     input.exactCostCents,
@@ -52,13 +78,19 @@ export function evaluateExitPolicy(
   if (
     !numeric.every(Number.isFinite) ||
     input.quantity <= 0 ||
+    input.quantity > 1000000 ||
     input.exactCostCents <= 0 ||
+    input.exactCostCents > 1000000 ||
     input.executableBid <= 0 ||
     input.executableBid >= 1 ||
     input.exitFeeCents < 0 ||
+    input.exitFeeCents > 1000000 ||
     input.ownedSideProbability < 0 ||
     input.ownedSideProbability > 1 ||
-    input.uncertainty < 0
+    input.uncertainty < 0 ||
+    input.uncertainty > 1 ||
+    (input.strictMinimumGainCents ?? STRICT_EXIT_MIN_GAIN_CENTS) < 0 ||
+    (input.strictMinimumGainCents ?? STRICT_EXIT_MIN_GAIN_CENTS) > 1000000
   )
     return null;
 
@@ -68,6 +100,17 @@ export function evaluateExitPolicy(
   const optimisticHoldValueCents =
     input.quantity * 100 * Math.min(1, input.ownedSideProbability + input.uncertainty);
   const minimumGain = input.strictMinimumGainCents ?? STRICT_EXIT_MIN_GAIN_CENTS;
+
+  if (
+    ![
+      netLiquidationCents,
+      netProfitPercent,
+      holdValueCents,
+      optimisticHoldValueCents,
+      minimumGain,
+    ].every(Number.isFinite)
+  )
+    return null;
 
   let state: ExitObservationState = {
     profitLockArmedAt: input.profitLockArmedAt,

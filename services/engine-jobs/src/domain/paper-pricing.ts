@@ -208,9 +208,17 @@ export function nextManagedMakerPrice(input: {
     !Number.isSafeInteger(input.managementAttempt) ||
     input.managementAttempt < 0 ||
     input.managementAttempt >= checks ||
-    !Number.isFinite(input.currentPrice)
+    !Number.isFinite(input.currentPrice) ||
+    input.currentPrice <= 0 ||
+    input.currentPrice >= 1 ||
+    input.currentPrice > input.maximumPrice + 1e-12
   )
     throw new Error('Invalid bounded paper amendment count.');
+  if (
+    Math.abs(floorToValidKalshiPrice(input.currentPrice, input.quote.ranges) - input.currentPrice) >
+    1e-12
+  )
+    throw new Error('Resting paper price is off supported ladder.');
   if (checks <= 1 || input.managementAttempt < 0 || input.managementAttempt >= checks - 1)
     return input.currentPrice;
   const passiveCeiling = floorToValidKalshiPrice(
