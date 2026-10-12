@@ -227,7 +227,7 @@ create table if not exists engine.paper_entry_fill_event (
   evidence_disposition text not null check (evidence_disposition in ('observed','data-unavailable','quote-refused')),
   no_fill_reason text check (no_fill_reason in ('rested_no_fill','ioc_no_fill','data_unavailable','pre_submit_quote_moved')),
   observed_quantity numeric not null check (observed_quantity>=0 and observed_quantity<=1000000),
-  finalized_quantity numeric not null check (finalized_quantity>=0 and finalized_quantity<=1000000),
+  finalized_quantity numeric not null check (finalized_quantity>=0 and finalized_quantity<=1000000 and finalized_quantity<=observed_quantity),
   raw_purchase_cents numeric not null check (raw_purchase_cents>=0 and raw_purchase_cents<=1000000000000),
   fee_cents bigint not null check (fee_cents between 0 and 1000000000000),
   retained_stake_cents bigint not null check (retained_stake_cents between 0 and 1000000000000),
