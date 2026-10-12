@@ -460,4 +460,52 @@ grant select on engine.paper_gate_generation,engine.paper_gate_candidate to engi
 -- Outcome/phase/history/coverage (including OPEN/DISABLED truncation), reciprocal effects,
 -- CAS/lease/control-append fencing and atomic rollback/concurrency remain future proof.
 
+-- Valid RESOLVED gate samples ONLY; no phase/head/projection or coverage association.
+-- Missing/unavailable/pending/invalid evidence appends NO sample, never neutral edge zero.
+-- Invalidation producer/taxonomy is unmapped; any future invalid-attempt ledger is separate.
+create table if not exists engine.paper_gate_outcome (
+  outcome_key text primary key check (length(outcome_key) between 1 and 120 and outcome_key=btrim(outcome_key,E' \t\n\r\f\013')),
+  candidate_key text not null unique,
+  generation_key text not null,
+  funding_id text not null,
+  epoch integer not null,
+  budget_id text not null,
+  generation_config_intent_id text not null,
+  sample_policy text not null,
+  closes_at timestamptz not null,
+  contract_id text not null,
+  side text not null,
+  resolution_run_id text not null references engine.job_run_record(run_id),
+  current_effect_config_intent_id text not null references engine.control_intent(id),
+  source_kind text not null check (source_kind='prospective-engine-run'),
+  evidence_version text not null check (evidence_version='paper-regime-explicit-evidence-v1'),
+  resolution_receipt_id text not null check (length(resolution_receipt_id) between 1 and 120),
+  winner text not null check (winner in ('UP','DOWN')),
+  realized_edge numeric not null check (realized_edge between -1 and 1),
+  resolved_at timestamptz not null check (isfinite(resolved_at)),
+  recorded_at timestamptz not null check (isfinite(recorded_at)),
+  foreign key (candidate_key,generation_key,funding_id,epoch,budget_id,generation_config_intent_id,sample_policy,closes_at,contract_id,side)
+    references engine.paper_gate_candidate(candidate_key,generation_key,funding_id,epoch,budget_id,generation_config_intent_id,sample_policy,closes_at,contract_id,side),
+  check (resolved_at>=closes_at and recorded_at>=resolved_at),
+  check (case when isfinite(resolved_at) then mod(extract(epoch from resolved_at)*1000,1)=0 else false end)
+);
+revoke all on engine.paper_gate_outcome from public,engine_writer,engine_reader,engine_control_recorder;
+grant select,insert on engine.paper_gate_outcome to engine_writer;
+grant select on engine.paper_gate_outcome to engine_reader;
+-- Candidate-wide FK binds immutable exact candidate/generation/root/config/policy/window/
+-- contract/side existence. Current effect config is SEPARATE from generation config;
+-- its FK and resolution run FK do NOT prove latest actor/epoch/lease/reset authority.
+-- Source resolves SAME captured Kalshi ticker yes/no -> UP/DOWN and computes
+-- (winner=side ? 1 : 0) - candidate.ask_price - candidate.estimated_fee_rate.
+-- E.g. historical continuous .07 model at ask .5/fee .0175: win .4825, loss -.5175.
+-- These are representation examples, NOT current venue charges/profile adoption.
+-- Exact source/quote/fee/cause/receipt association and canonical decimal/time codec
+-- require adapter validation; no SQL equality over independently serialized binary64.
+-- Resolution receipt/version are bounded provenance labels, NOT self-attested proof.
+-- No ordinary research forecast, trade PnL, payout/refund or settlement substitutes.
+-- Candidate UNIQUE prevents a second row, NOT same-key/full-payload replay truth.
+-- No valid-only sample row implies complete coverage: unavailable/invalid attempts,
+-- source qualification, generation continuity, newest-malformed-config poison,
+-- reciprocal effects, retained history, CAS/lease/control fences and atomicity remain open.
+
 commit;
