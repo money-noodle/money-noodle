@@ -370,4 +370,94 @@ grant select on engine.paper_sale_event,engine.paper_settlement_event to engine_
 -- Reservation revisions, complete provenance/payload replay and atomic budget effects
 -- remain future fenced adapter proof. No unavailable sale attempt is recorded here.
 
+-- Prospective gate identity/candidate storage ONLY: no phase, outcome, head or initialization rows.
+-- All labels/FKs below record provenance/existence, NOT admitted current authority.
+-- Generation config is NOT funding birth config or future resolution/effect config.
+-- Profile/bundle/settings claims remain proposals; no settings adoption or runtime activation.
+create table if not exists engine.paper_gate_generation (
+  generation_key text primary key check (length(generation_key) between 1 and 120 and generation_key=btrim(generation_key,E' \t\n\r\f\013')),
+  funding_id text not null,
+  epoch integer not null,
+  budget_id text not null,
+  actor text not null check (length(actor) between 1 and 114 and actor=btrim(actor,E' \t\n\r\f\013')),
+  generation_config_intent_id text not null references engine.control_intent(id),
+  initialization_run_id text not null references engine.job_run_record(run_id),
+  source_kind text not null check (source_kind='prospective-engine-run'),
+  sample_policy text not null check (sample_policy='buy-binary-edge-net5-nocap-quality50-owned55-price10to75-late30-persist2of15-v22'),
+  gate_formula text not null check (gate_formula='adaptive-fee-edge-window-v1'),
+  bundle_id text not null check (bundle_id in ('paper-regime-restrictive-evidence-proposal-v1','paper-regime-historical-warm-lineage-v1')),
+  profile_claim text not null check (length(profile_claim) between 1 and 256),
+  settings_descriptor text not null check (length(settings_descriptor) between 1 and 256),
+  enabled boolean not null,
+  minimum_policy_windows integer not null check (minimum_policy_windows between 4 and 500),
+  evidence_half_life_windows numeric not null check (evidence_half_life_windows between 2 and 500),
+  pause_confidence numeric not null check (pause_confidence between 0.9 and 0.9999),
+  resume_confidence numeric not null check (resume_confidence between 0.5 and 0.98 and resume_confidence<=pause_confidence-0.01),
+  reset_origin text not null check (reset_origin in ('none','post-reset')),
+  reset_barrier_intent_id text references engine.control_intent(id),
+  initialized_at timestamptz not null check (isfinite(initialized_at)),
+  unique (generation_key,funding_id,epoch,budget_id,generation_config_intent_id,sample_policy),
+  foreign key (funding_id,epoch,budget_id) references engine.paper_budget_root(funding_id,epoch,budget_id),
+  check (budget_id=actor||':paper'),
+  check ((reset_origin='none' and reset_barrier_intent_id is null)
+    or (reset_origin='post-reset' and reset_barrier_intent_id is not null))
+);
+-- Reset FK does NOT prove reset action/epoch/order or genuine initialization absence.
+-- SQL character bounds differ from JS UTF16/Unicode trim; decoder must check both.
+-- Descriptor must match regime-settings-v1 JS BOOL/Number canonical serialization;
+-- SQL numeric/text casts cannot establish that identity. Half-life 2.5 is valid.
+
+create table if not exists engine.paper_gate_candidate (
+  candidate_key text primary key check (length(candidate_key) between 1 and 120 and candidate_key=btrim(candidate_key,E' \t\n\r\f\013')),
+  candidate_id text not null check (length(candidate_id) between 1 and 256),
+  generation_key text not null,
+  funding_id text not null,
+  epoch integer not null,
+  budget_id text not null,
+  generation_config_intent_id text not null,
+  sample_policy text not null,
+  issuance_run_id text not null references engine.job_run_record(run_id),
+  source_kind text not null check (source_kind='prospective-engine-run'),
+  symbol text not null check (length(symbol) between 1 and 120),
+  venue text not null check (venue='kalshi'),
+  contract_id text not null check (length(contract_id) between 1 and 256),
+  side text not null check (side in ('UP','DOWN')),
+  created_at timestamptz not null check (isfinite(created_at)),
+  closes_at timestamptz not null check (isfinite(closes_at)),
+  selected_side_probability numeric not null check (selected_side_probability between 0 and 1),
+  ask_price numeric not null check (ask_price>0 and ask_price<1),
+  estimated_fee_rate numeric not null check (estimated_fee_rate between 0 and 0.0175),
+  fee_model_version text not null check (fee_model_version='historical-kalshi-continuous-taker-0.07-v1'),
+  predicted_net_edge numeric not null check (predicted_net_edge between -1 and 1),
+  evidence_version text not null check (evidence_version='paper-regime-explicit-evidence-v1'),
+  qualification_receipt_id text not null check (length(qualification_receipt_id) between 1 and 120),
+  unique (generation_key,sample_policy,closes_at),
+  unique (candidate_key,generation_key,funding_id,epoch,budget_id,generation_config_intent_id,sample_policy,closes_at,contract_id,side),
+  foreign key (generation_key,funding_id,epoch,budget_id,generation_config_intent_id,sample_policy)
+    references engine.paper_gate_generation(generation_key,funding_id,epoch,budget_id,generation_config_intent_id,sample_policy),
+  check (ask_price+estimated_fee_rate<1),
+  check (created_at<=closes_at),
+  check (case when isfinite(closes_at) then mod(extract(epoch from closes_at),900)=0 else false end),
+  check (case when isfinite(created_at) then mod(extract(epoch from created_at)*1000,1)=0 else false end)
+);
+revoke all on engine.paper_gate_generation,engine.paper_gate_candidate from public,engine_writer,engine_reader,engine_control_recorder;
+grant select,insert on engine.paper_gate_generation,engine.paper_gate_candidate to engine_writer;
+grant select on engine.paper_gate_generation,engine.paper_gate_candidate to engine_reader;
+-- Timestamp instants/grid/ms are local shape, NOT canonical ISO-ms-Z lexical validation,
+-- fresh quote, first chronological selection or full DB-precision authority clock fencing.
+-- Historical source fee is continuous .07*p*(1-p), max .0175, NOT whole-cent charges.
+-- Its version name above is a storage codec tag, not a source-owned/admitted profile.
+-- Decoder must verify exact source formula, qualification/path/quote/probability,
+-- predicted edge and canonical decimal encoding; independently stringified binary64
+-- identities are NOT forced by SQL equality. No fee-model/current venue adoption here.
+-- Contract/receipt bounds are explicit representation limits: refuse, never truncate/rekey.
+-- No forecast FK is claimed: complete source forecast/model/calibration/replay association
+-- and actual qualification receipt codec remain prerequisites before runtime wiring.
+-- Ordinary research forecasts/trade settlements are NOT qualifying gate candidates.
+-- First-window uniqueness spans assets; it cannot prove the first qualified cause.
+-- Current actor/epoch/funding/config/latest malformed poison/reset continuity and genuine
+-- absence require a coherent fenced adapter. Run/control FKs alone prove existence only.
+-- Outcome/phase/history/coverage (including OPEN/DISABLED truncation), reciprocal effects,
+-- CAS/lease/control-append fencing and atomic rollback/concurrency remain future proof.
+
 commit;
