@@ -620,4 +620,39 @@ grant select on engine.paper_gate_phase_event,engine.paper_gate_phase_input to e
 -- genuine initialization absence, event/input reciprocity, head CAS/lease/control fences
 -- and atomic rollback/concurrency remain future proof. No head, bootstrap rows or runtime.
 
+-- Mutable local projection ONLY; no bootstrap rows, copied facts/clocks or runtime wiring.
+create table if not exists engine.paper_gate_head (
+  generation_key text primary key,
+  funding_id text not null,
+  epoch integer not null,
+  budget_id text not null,
+  generation_config_intent_id text not null,
+  sample_policy text not null,
+  latest_event_key text not null,
+  revision bigint not null check (revision between 0 and 9007199254740991),
+  event_kind text not null check (event_kind in ('genesis','evaluated')),
+  projected_phase text not null check (projected_phase in ('warming','disabled','open','closed')),
+  foreign key (latest_event_key,generation_key,funding_id,epoch,budget_id,generation_config_intent_id,sample_policy,revision,event_kind,projected_phase)
+    references engine.paper_gate_phase_event(event_key,generation_key,funding_id,epoch,budget_id,generation_config_intent_id,sample_policy,revision_after,event_kind,projected_phase),
+  check ((event_kind='genesis' and revision=0 and projected_phase='warming')
+    or (event_kind='evaluated' and revision>=1))
+);
+revoke all on engine.paper_gate_head from public,engine_writer,engine_reader,engine_control_recorder;
+grant select,insert,update on engine.paper_gate_head to engine_writer;
+grant select on engine.paper_gate_head to engine_reader;
+-- Omit redundant generation FK: mandatory long event tuple already binds exact generation.
+-- Join immutable pointed event for result, run/config/latest intent, diagnostics and coverage.
+-- Genesis warming is PREevaluation, not permission; evaluated DISABLED is representable.
+-- Local branches reject genesis nonzero/nonwarming and evaluated zero with 23514;
+-- kind-only flips at unchanged revision are NOT isolated kind-FK 23503 tests.
+-- Branch-valid mismatched event tuples require FK validation, not source/CAS authority.
+-- Matching OLDER pointers are legal storage; latest_event_key does NOT enforce MAXrevision.
+-- Table-level UPDATE may change namespace to another matched tuple if PK permits it.
+-- Future adapter must enforce stable identity, expected pointer/revision/full payload CAS,
+-- complete retained event/input sets, genuine initialization absence, current global latest
+-- malformed-config poison/reset/actor/epoch/funding/lease/full-precision clock fences,
+-- reciprocal all-or-neither commits, replay comparison and concurrent rollback/admission.
+-- Missing head is NOT automatic warming bootstrap; refusal preserves historical projection
+-- but withholds current admission. No profile/config/settings adoption or economic defaults.
+
 commit;
