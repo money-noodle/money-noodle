@@ -508,4 +508,116 @@ grant select on engine.paper_gate_outcome to engine_reader;
 -- source qualification, generation continuity, newest-malformed-config poison,
 -- reciprocal effects, retained history, CAS/lease/control fences and atomicity remain open.
 
+-- Coherent PRE-evaluation genesis / accepted evaluations ONLY; no refusal or head.
+-- Every coherent evaluation is retained, even unchanged phase; never fabricate origin.
+create table if not exists engine.paper_gate_phase_event (
+  event_key text primary key check (length(event_key) between 1 and 120 and event_key=btrim(event_key,E' \t\n\r\f\013')),
+  generation_key text not null,
+  funding_id text not null,
+  epoch integer not null,
+  budget_id text not null,
+  generation_config_intent_id text not null,
+  sample_policy text not null,
+  event_kind text not null check (event_kind in ('genesis','evaluated')),
+  revision_after bigint not null check (revision_after between 0 and 9007199254740991),
+  prior_event_key text,
+  revision_before bigint,
+  previous_phase text check (previous_phase in ('warming','disabled','open','closed')),
+  result_phase text check (result_phase in ('warming','disabled','open','closed')),
+  projected_phase text not null check (projected_phase in ('warming','disabled','open','closed')),
+  current_effect_config_intent_id text not null references engine.control_intent(id),
+  latest_intent_id text not null references engine.control_intent(id),
+  run_id text not null references engine.job_run_record(run_id),
+  source_kind text not null check (source_kind='prospective-engine-run'),
+  evidence_version text not null check (evidence_version='paper-regime-explicit-evidence-v1'),
+  coverage_receipt_id text not null check (length(coverage_receipt_id) between 1 and 120),
+  evidence_observed_at timestamptz not null check (isfinite(evidence_observed_at)),
+  coverage_cutoff_at timestamptz not null check (isfinite(coverage_cutoff_at)),
+  recorded_at timestamptz not null check (isfinite(recorded_at)),
+  captured_candidate_count integer not null check (captured_candidate_count between 0 and 5000),
+  captured_resolved_count integer not null check (captured_resolved_count between 0 and 5000),
+  captured_unresolved_count integer not null check (captured_unresolved_count between 0 and 5000),
+  input_count integer not null check (input_count between 0 and 5000),
+  universe_first_closes_at timestamptz,
+  universe_last_closes_at timestamptz,
+  summary_resolved_windows integer not null check (summary_resolved_windows between 0 and 5000),
+  effective_windows numeric not null check (effective_windows between 0 and 5000),
+  weighted_mean_edge numeric check (weighted_mean_edge between -1 and 1),
+  standard_error numeric check (standard_error between 0 and 2),
+  negative_return_confidence numeric check (negative_return_confidence between 0 and 1),
+  unique (generation_key,revision_after),
+  unique (event_key,generation_key,funding_id,epoch,budget_id,generation_config_intent_id,sample_policy,revision_after,projected_phase),
+  unique (event_key,generation_key,funding_id,epoch,budget_id,generation_config_intent_id,sample_policy,revision_after,event_kind,projected_phase),
+  foreign key (generation_key,funding_id,epoch,budget_id,generation_config_intent_id,sample_policy)
+    references engine.paper_gate_generation(generation_key,funding_id,epoch,budget_id,generation_config_intent_id,sample_policy),
+  foreign key (prior_event_key,generation_key,funding_id,epoch,budget_id,generation_config_intent_id,sample_policy,revision_before,previous_phase)
+    references engine.paper_gate_phase_event(event_key,generation_key,funding_id,epoch,budget_id,generation_config_intent_id,sample_policy,revision_after,projected_phase),
+  check (recorded_at>=evidence_observed_at and recorded_at>=coverage_cutoff_at),
+  check (case when isfinite(evidence_observed_at) then mod(extract(epoch from evidence_observed_at)*1000,1)=0 else false end),
+  check (captured_resolved_count+captured_unresolved_count=captured_candidate_count and input_count=captured_resolved_count),
+  check ((captured_candidate_count=0 and universe_first_closes_at is null and universe_last_closes_at is null)
+    or (captured_candidate_count>0 and universe_first_closes_at is not null and universe_last_closes_at is not null
+      and isfinite(universe_first_closes_at) and isfinite(universe_last_closes_at) and universe_first_closes_at<=universe_last_closes_at)),
+  check ((event_kind='genesis' and revision_after=0 and prior_event_key is null and revision_before is null
+      and previous_phase is null and result_phase is null and projected_phase='warming'
+      and captured_candidate_count=0 and input_count=0 and summary_resolved_windows=0 and effective_windows=0
+      and weighted_mean_edge is null and standard_error is null and negative_return_confidence is null)
+    or (event_kind='evaluated' and prior_event_key is not null and revision_before is not null
+      and revision_before between 0 and 9007199254740990 and revision_after=revision_before+1
+      and previous_phase is not null and result_phase is not null and projected_phase=result_phase
+      and ((result_phase='disabled' and summary_resolved_windows=0 and effective_windows=0
+          and weighted_mean_edge is null and standard_error is null and negative_return_confidence is null)
+        or (result_phase='warming' and input_count=0 and summary_resolved_windows=0 and effective_windows=0
+          and weighted_mean_edge is null and standard_error is null and negative_return_confidence is null)
+        or (result_phase in ('warming','open','closed') and input_count>0 and summary_resolved_windows=input_count and effective_windows>0
+          and weighted_mean_edge is not null and standard_error is not null and negative_return_confidence is not null))))
+);
+
+create table if not exists engine.paper_gate_phase_input (
+  event_key text not null,
+  ordinal integer not null check (ordinal between 0 and 4999),
+  generation_key text not null,
+  funding_id text not null,
+  epoch integer not null,
+  budget_id text not null,
+  generation_config_intent_id text not null,
+  sample_policy text not null,
+  revision_after bigint not null,
+  event_kind text not null check (event_kind='evaluated'),
+  projected_phase text not null,
+  candidate_key text not null references engine.paper_gate_outcome(candidate_key),
+  closes_at timestamptz not null,
+  contract_id text not null,
+  side text not null,
+  primary key (event_key,ordinal),
+  unique (event_key,candidate_key),
+  unique (event_key,closes_at),
+  foreign key (event_key,generation_key,funding_id,epoch,budget_id,generation_config_intent_id,sample_policy,revision_after,event_kind,projected_phase)
+    references engine.paper_gate_phase_event(event_key,generation_key,funding_id,epoch,budget_id,generation_config_intent_id,sample_policy,revision_after,event_kind,projected_phase),
+  foreign key (candidate_key,generation_key,funding_id,epoch,budget_id,generation_config_intent_id,sample_policy,closes_at,contract_id,side)
+    references engine.paper_gate_candidate(candidate_key,generation_key,funding_id,epoch,budget_id,generation_config_intent_id,sample_policy,closes_at,contract_id,side)
+);
+revoke all on engine.paper_gate_phase_event,engine.paper_gate_phase_input from public,engine_writer,engine_reader,engine_control_recorder;
+grant select,insert on engine.paper_gate_phase_event,engine.paper_gate_phase_input to engine_writer;
+grant select on engine.paper_gate_phase_event,engine.paper_gate_phase_input to engine_reader;
+-- TWO exact new UNIQUE targets: shorter predecessor FK, longer kind-bound input/head.
+-- Same canonical candidate key -> outcome UNIQUE plus candidate-wide FK binds a VALID
+-- resolved sample without inventing an outcome composite or independent outcome-key pair.
+-- Join winner/edge/resolved clock by candidate key; no unchecked copied numeric facts.
+-- Genesis is PREevaluation: first historical disabled evaluation may yield DISABLED.
+-- No refusalclosed/null-summary branch: poison/refusal must retain coherent history/head.
+-- SQL does NOT read generation settings/bundle/thresholds or prove source phase agreement.
+-- Count equations/universe bounds are LOCAL claims, NOT actual aggregates/coverage proof.
+-- Unresolved anti-join causes include pending/unavailable/unmapped-invalid, not a taxonomy.
+-- Universe bounds may include future pending windows; no false resolved-input cutoff check.
+-- Observed source MS is distinct from full-precision DB cutoff/record/control clocks.
+-- Lexical ISO-ms-Z/JS-safe dates, outcome clocks versus cutoff, ordinal contiguity/order,
+-- complete selected input set/source receipts and retained OPEN/DISABLED/CLOSED history
+-- require adapters. More than initial 5000-work bound refuses; no silent truncation.
+-- Rank decay is by resolved window, not elapsed clock. Disabled summary0/NULL can retain
+-- nonzero inputs. No phase or receipt label grants current authority/profile adoption.
+-- Current/global newest-malformed configure poison, actor/epoch/funding/reset continuity,
+-- genuine initialization absence, event/input reciprocity, head CAS/lease/control fences
+-- and atomic rollback/concurrency remain future proof. No head, bootstrap rows or runtime.
+
 commit;
