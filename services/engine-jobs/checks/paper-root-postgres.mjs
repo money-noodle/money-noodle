@@ -6,6 +6,7 @@ import postgres from 'postgres';
 import { readFileSync } from 'node:fs';
 import { paperOrderPostgresContract } from './paper-order-postgres.mjs';
 import { paperEntryEventPostgresContract } from './paper-entry-event-postgres.mjs';
+import { paperSaleSettlementPostgresContract } from './paper-sale-settlement-postgres.mjs';
 export async function paperRootPostgresContract(admin, writer, port) {
   if (process.env.GITHUB_ACTIONS !== 'true' || !/^\d+$/.test(port))
     throw Error('Hosted disposable loopback test only.');
@@ -256,6 +257,7 @@ export async function paperRootPostgresContract(admin, writer, port) {
     // Extend fixtures only AFTER unchanged root cardinality/role assertions.
     await paperOrderPostgresContract(admin, writer, { reader, recorder, publicOnly });
     await paperEntryEventPostgresContract(admin, writer, { reader, recorder, publicOnly });
+    await paperSaleSettlementPostgresContract(admin, writer, { reader, recorder, publicOnly });
     console.log(
       'Paper root ONLY: reapply/fixture FK/XOR/binding/bounds/correction-conservation/duplicate and actual low-role privilege assertions passed; NOT paper adapter/transaction/current-authority proof.',
     );
