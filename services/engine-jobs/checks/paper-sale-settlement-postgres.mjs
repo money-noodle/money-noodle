@@ -324,11 +324,181 @@ export async function paperSaleSettlementPostgresContract(
     "select payout_cents from engine.paper_settlement_event where event_key='settle-rounded'",
   );
   assert.equal(Number(refund.payout_cents), 7);
+
+  const tinyPartialParent = await parent('tiny-partial-parent', 1, 1, '0.25', 0);
+  await insert('paper_order', {
+    ...tinyPartialParent,
+    order_key: 'tiny-partial-child',
+    logical_order_id: 'tiny-partial-child',
+    row_kind: 'sale-child',
+    parent_order_key: tinyPartialParent.order_key,
+    parent_row_kind: 'entry',
+    entry_episode_key: null,
+    entry_attempt: null,
+    issued_reservation_cents: 0,
+    issued_quantity: '0.01',
+    filled_quantity: '0.01',
+    remaining_quantity: 0,
+    status: 'sold',
+    completed_at: template.completed_at,
+    raw_purchase_cents: '0.0025',
+    raw_fee_cents: 0,
+    raw_remaining_cost_cents: 0,
+    retained_stake_cents: 0,
+  });
+  await insert('paper_sale_event', {
+    ...sale,
+    event_key: 'tiny-partial',
+    transition_key: 'tiny-partial',
+    parent_order_key: tinyPartialParent.order_key,
+    child_order_key: 'tiny-partial-child',
+    order_revision_before: 600,
+    order_revision_after: 601,
+    budget_revision_before: 600,
+    budget_revision_after: 601,
+    quantity_before: 1,
+    sold_quantity: '0.01',
+    remaining_quantity: '0.99',
+    reserved_before_cents: 1,
+    remaining_reserved_cents: 1,
+    released_stake_cents: 0,
+    raw_cost_before_cents: '0.25',
+    raw_sold_cost_cents: '0.0025',
+    raw_remaining_cost_cents: '0.2475',
+    raw_gross_proceeds_cents: '0.01',
+    exit_fee_cents: 1,
+    raw_net_proceeds_cents: '-0.99',
+    raw_actual_pnl_cents: '-0.9925',
+    integer_credit_cents: 0,
+    integer_realized_delta_cents: 0,
+  });
+  const [tinyPartial] = await writer.unsafe(
+    "select * from engine.paper_sale_event where event_key='tiny-partial'",
+  );
+  assert.equal(Number(tinyPartial.released_stake_cents), 0);
+  assert.equal(Number(tinyPartial.remaining_reserved_cents), 1);
+  assert.equal(Number(tinyPartial.raw_actual_pnl_cents), -0.9925);
+  assert.equal(Number(tinyPartial.integer_realized_delta_cents), 0);
+  // Existing explicit two-record legacy fixture: no new/fabricated historical positions.
+  const legacyParents = await writer.unsafe(
+    "select order_key,logical_order_id,legacy_ledger_position,issuance_config_intent_id from engine.paper_order where order_key in ('restored-first','restored-second') order by legacy_ledger_position",
+  );
+  assert.deepEqual(
+    legacyParents.map((x) => [
+      x.logical_order_id,
+      x.legacy_ledger_position,
+      x.issuance_config_intent_id,
+    ]),
+    [
+      ['synthetic-duplicate', 0, null],
+      ['synthetic-duplicate', 1, null],
+    ],
+  );
+  for (const [i, row] of legacyParents.entries()) {
+    // Only synthetic held-state fixture changes, genuine origin/issued fields untouched.
+    await writer.unsafe(
+      "update engine.paper_order set status='open',completed_at=null,filled_quantity=1,remaining_quantity=1,raw_purchase_cents=50,raw_fee_cents=0,raw_remaining_cost_cents=50,retained_stake_cents=50 where order_key=$1",
+      [row.order_key],
+    );
+    await insert('paper_reservation', {
+      ...holdTemplate,
+      order_key: row.order_key,
+      issuance_config_intent_id: null,
+      original_cents: 100,
+      held_cents: 50,
+      returned_cents: 50,
+      status: 'held',
+      released_at: null,
+    });
+    await insert('paper_settlement_event', {
+      ...settlement,
+      event_key: 'legacy-terminal-' + i,
+      transition_key: 'legacy-terminal-' + i,
+      order_key: row.order_key,
+      outcome: 'INVALID',
+      result_status: 'invalid',
+      released_stake_cents: 50,
+      potential_payout_cents: 100,
+      payout_cents: 50,
+      integer_realized_delta_cents: 0,
+      order_revision_before: 620 + i,
+      order_revision_after: 621 + i,
+      budget_revision_before: 620 + i,
+      budget_revision_after: 621 + i,
+    });
+    await rejects(
+      insert('paper_settlement_event', {
+        ...settlement,
+        event_key: 'legacy-repeat-' + i,
+        transition_key: 'legacy-repeat-' + i,
+        order_key: row.order_key,
+        released_stake_cents: 50,
+        potential_payout_cents: 100,
+        payout_cents: 100,
+        integer_realized_delta_cents: 50,
+        order_revision_before: 650 + i,
+        order_revision_after: 651 + i,
+        budget_revision_before: 650 + i,
+        budget_revision_after: 651 + i,
+      }),
+      '23505',
+    );
+  }
+  const legacySettlements = await writer.unsafe(
+    "select order_key from engine.paper_settlement_event where event_key like 'legacy-terminal-%' order by order_key",
+  );
+  assert.deepEqual(
+    legacySettlements.map((x) => x.order_key),
+    ['restored-first', 'restored-second'],
+  );
+  // Each sale uniqueness case has only ONE occupied revision domain, not event/transition PK.
+  await rejects(
+    insert('paper_sale_event', {
+      ...sale,
+      event_key: 'isolated-sale-order',
+      transition_key: 'isolated-sale-order',
+      order_revision_before: 100,
+      order_revision_after: 101,
+      budget_revision_before: 700,
+      budget_revision_after: 701,
+    }),
+    '23505',
+  );
+  await rejects(
+    insert('paper_sale_event', {
+      ...sale,
+      event_key: 'isolated-sale-budget',
+      transition_key: 'isolated-sale-budget',
+      order_revision_before: 710,
+      order_revision_after: 711,
+      budget_revision_before: 100,
+      budget_revision_after: 101,
+    }),
+    '23505',
+  );
+  // Literal exact decimals only: NOT a proof of the production JavaScript proportional codec.
+  await insert('paper_sale_event', {
+    ...sale,
+    event_key: 'literal-decimal',
+    transition_key: 'literal-decimal',
+    order_revision_before: 800,
+    order_revision_after: 801,
+    budget_revision_before: 800,
+    budget_revision_after: 801,
+    raw_gross_proceeds_cents: '60.1',
+    raw_net_proceeds_cents: '58.1',
+    raw_actual_pnl_cents: '6.35',
+  });
+  const [decimal] = await writer.unsafe(
+    "select raw_gross_proceeds_cents,raw_net_proceeds_cents,raw_actual_pnl_cents from engine.paper_sale_event where event_key='literal-decimal'",
+  );
+  assert.deepEqual(Object.values(decimal).map(Number), [60.1, 58.1, 6.35]);
+
   const tables = ['paper_sale_event', 'paper_settlement_event'];
   const snapshot = (t) => admin.unsafe('select * from engine.' + t + ' order by event_key');
   const before = await Promise.all(tables.map(snapshot));
-  assert.equal(before[0].length, 4);
-  assert.equal(before[1].length, 4);
+  assert.equal(before[0].length, 6);
+  assert.equal(before[1].length, 6);
   await admin.unsafe(
     readFileSync('services/platform-api/migrations/0006-paper-cycle-overlay.sql', 'utf8'),
   );
