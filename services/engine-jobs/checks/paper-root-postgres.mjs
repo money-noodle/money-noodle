@@ -253,7 +253,7 @@ export async function paperRootPostgresContract(admin, writer, port) {
       }
     }
     // Extend fixtures only AFTER unchanged root cardinality/role assertions.
-    await paperOrderPostgresContract(admin, writer);
+    await paperOrderPostgresContract(admin, writer, { reader, recorder, publicOnly });
     console.log(
       'Paper root ONLY: reapply/fixture FK/XOR/binding/bounds/correction-conservation/duplicate and actual low-role privilege assertions passed; NOT paper adapter/transaction/current-authority proof.',
     );

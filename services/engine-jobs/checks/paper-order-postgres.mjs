@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import process from 'node:process';
 import { readFileSync } from 'node:fs';
-export async function paperOrderPostgresContract(admin, writer) {
+export async function paperOrderPostgresContract(admin, writer, { reader, recorder, publicOnly }) {
   assert.equal(process.env.GITHUB_ACTIONS, 'true');
   const base = {
     order_key: 'order-entry',
@@ -49,13 +49,13 @@ export async function paperOrderPostgresContract(admin, writer) {
     last_run_id: 'root-paper-run',
     recorded_at: '2026-10-11T23:00:01Z',
   };
-  const insert = (table, row) => {
+  const insert = (table, row, sql = writer) => {
     const keys = Object.keys(row);
     // Only fixed harness-owned keys; bind time as TEXT then server cast, including negative fixtures.
     const placeholders = keys.map(
       (key, i) => '$' + (i + 1) + (key.endsWith('_at') ? '::text::timestamptz' : ''),
     );
-    return writer.unsafe(
+    return sql.unsafe(
       'insert into engine.' +
         table +
         '(' +
@@ -263,4 +263,99 @@ export async function paperOrderPostgresContract(admin, writer) {
   assert.equal(Number(uncertain.returned_cents), 0);
   assert.equal(uncertain.released_at, null);
   // Stored unchanged hold is NOT atomic aggregate conservation or release-once proof.
+  // Representative exact classes; unique order/episode identities prevent PK masking.
+  const invalidOrders = [
+    [{ recorded_at: 'infinity' }, '23514'],
+    [{ issued_at: '-infinity' }, '23514'],
+    [{ issued_quantity: 'NaN' }, '23514'],
+    [{ issued_limit_price: 'Infinity' }, '23514'],
+    [{ issued_quantity: '1.001' }, '23514'],
+    [{ symbol: 'btc' }, '23514'],
+    [{ status: 'not-a-status' }, '23514'],
+    [{ completed_at: null }, '23514'],
+    [{ closes_at: '2026-10-11T22:59:00Z' }, '23514'],
+    [{ issued_fee_cents: '1.5' }, '22P02'],
+    [{ issued_reservation_cents: 0 }, '23514'],
+    [{ origin_run_id: null }, '23514'],
+  ];
+  for (const [i, [patch, code]] of invalidOrders.entries())
+    await rejects(
+      insert('paper_order', {
+        ...base,
+        order_key: 'bound-order-' + i,
+        entry_episode_key: 'bound-episode-' + i,
+        ...patch,
+      }),
+      code,
+    );
+  const roleEntry = { ...base, order_key: 'role-entry', entry_episode_key: 'role-episode' };
+  await insert('paper_order', roleEntry); // Actual writer INSERT success.
+  const roleHold = { ...hold, order_key: roleEntry.order_key };
+  for (const [patch, code] of [
+    [{ recorded_at: 'infinity' }, '23514'],
+    [{ released_at: '-infinity' }, '23514'],
+    [{ original_cents: '1.5' }, '22P02'],
+    [{ returned_cents: 99 }, '23514'],
+    [{ held_cents: -1 }, '23514'],
+    [{ status: 'held' }, '23514'],
+  ])
+    await rejects(insert('paper_reservation', { ...roleHold, ...patch }), code);
+  await insert('paper_reservation', roleHold);
+  for (const table of ['paper_order', 'paper_reservation']) {
+    const updated = await writer.unsafe(
+      'update engine.' + table + " set revision=2 where order_key='role-entry' returning revision",
+    );
+    assert.equal(updated.length, 1);
+    assert.equal(Number(updated[0].revision), 2);
+  }
+  const roleTables = ['paper_order', 'paper_reservation'];
+  const roleBefore = await Promise.all(roleTables.map(snapshot));
+  assert.equal(roleBefore[0].length, 8);
+  assert.equal(roleBefore[1].length, 3);
+  const denied = (promise) =>
+    assert.rejects(
+      promise,
+      (error) =>
+        error.code === '42501' &&
+        /permission denied for table paper_(order|reservation)/.test(error.message),
+    );
+  for (const [sql, name] of [
+    [writer, 'engine_writer'],
+    [reader, 'engine_reader'],
+    [recorder, 'engine_control_recorder'],
+    [publicOnly, 'synthetic_public_probe'],
+  ]) {
+    const [identity] = await sql.unsafe(
+      "select current_user as role,has_schema_privilege(current_user,'engine','USAGE') as engine_usage",
+    );
+    assert.equal(identity.role, name);
+    assert.equal(identity.engine_usage, true); // Not a schema-USAGE denial mask.
+    for (const [i, table] of roleTables.entries()) {
+      if (sql === writer || sql === reader)
+        assert.deepEqual(
+          await sql.unsafe('select * from engine.' + table + ' order by order_key'),
+          roleBefore[i],
+        );
+      else await denied(sql.unsafe('select * from engine.' + table));
+      if (sql !== writer) {
+        await denied(
+          insert(
+            table,
+            table === 'paper_order'
+              ? {
+                  ...roleEntry,
+                  order_key: 'forbidden-' + name,
+                  entry_episode_key: 'forbidden-' + name,
+                }
+              : { ...roleHold, order_key: 'forbidden-' + name },
+            sql,
+          ),
+        );
+        await denied(sql.unsafe('update engine.' + table + ' set revision=revision'));
+      }
+      await denied(sql.unsafe('delete from engine.' + table));
+      await denied(sql.unsafe('truncate engine.' + table));
+    }
+  }
+  assert.deepEqual(await Promise.all(roleTables.map(snapshot)), roleBefore);
 }
