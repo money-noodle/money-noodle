@@ -1,8 +1,8 @@
--- #243 stage 3: roots/orders/reservations plus first immutable entry-effect storage.
+-- #243 stage 3: roots/order/entry events plus initial sale/settlement append storage.
 -- Rai approved authoring and isolated HOSTED tests on 2026-10-11T22:44:52Z.
 -- NOT production application, bankroll creation, configuration adoption or activation.
 -- Schema owner only; no runtime DDL. No INSERT, seed/default money or principal values.
--- Entry-effect hosted proof, sale/settlement/gate storage and adapters remain unfinished.
+-- Sale/settlement hosted proof, prospective-gate storage and atomic adapters remain unfinished.
 -- Reapplication is idempotent for this definition, not a schema-drift repair protocol.
 begin;
 
@@ -258,5 +258,116 @@ grant select on engine.paper_entry_effect,engine.paper_entry_fill_event to engin
 -- formulas, payout mapping and same-key/full-payload replay comparison require adapter.
 -- A FK cannot require the reciprocal event: transaction must append BOTH or neither.
 -- Sale raw net (including negative), integer credits/realized and settlement/gates NEXT.
+
+
+-- SALE/SETTLEMENT storage only. Missing sale evidence DEFERs without any event.
+-- FK existence is NOT exact-contract evidence/current authority/atomic money truth.
+create table if not exists engine.paper_sale_event (
+  event_key text primary key check (length(event_key) between 1 and 120 and event_key=btrim(event_key,E' \t\n\r\f\013')),
+  transition_key text not null unique check (length(transition_key) between 1 and 120),
+  parent_order_key text not null references engine.paper_reservation(order_key),
+  funding_id text not null,
+  epoch integer not null,
+  budget_id text not null,
+  parent_row_kind text not null check (parent_row_kind='entry'),
+  child_order_key text,
+  child_row_kind text,
+  sale_kind text not null check (sale_kind in ('no-fill','partial','full')),
+  evidence_disposition text not null check (evidence_disposition='observed'),
+  venue text not null check (venue in ('kalshi','polymarket')),
+  run_id text not null references engine.job_run_record(run_id),
+  current_effect_config_intent_id text not null references engine.control_intent(id),
+  recorded_at timestamptz not null check (isfinite(recorded_at)),
+  order_revision_before bigint not null check (order_revision_before between 1 and 9007199254740990),
+  order_revision_after bigint not null check (order_revision_after=order_revision_before+1),
+  budget_revision_before bigint not null check (budget_revision_before between 1 and 9007199254740990),
+  budget_revision_after bigint not null check (budget_revision_after=budget_revision_before+1),
+  quantity_before numeric not null check (quantity_before>0 and quantity_before<=1000000),
+  sold_quantity numeric not null check (sold_quantity>=0 and sold_quantity<=quantity_before),
+  remaining_quantity numeric not null check (remaining_quantity>=0 and remaining_quantity<=quantity_before),
+  reserved_before_cents bigint not null check (reserved_before_cents between 1 and 1000000000000),
+  remaining_reserved_cents bigint not null check (remaining_reserved_cents between 0 and 1000000000000),
+  released_stake_cents bigint not null check (released_stake_cents between 0 and 1000000000000),
+  raw_cost_before_cents numeric not null check (raw_cost_before_cents>0 and raw_cost_before_cents<=1000000000000),
+  raw_sold_cost_cents numeric not null check (raw_sold_cost_cents>=0 and raw_sold_cost_cents<=raw_cost_before_cents),
+  raw_remaining_cost_cents numeric not null check (raw_remaining_cost_cents>=0 and raw_remaining_cost_cents<=raw_cost_before_cents),
+  raw_gross_proceeds_cents numeric not null check (raw_gross_proceeds_cents>=0 and raw_gross_proceeds_cents<=1000000000000),
+  exit_fee_cents bigint not null check (exit_fee_cents between 0 and 1000000000000),
+  raw_net_proceeds_cents numeric not null check (raw_net_proceeds_cents between -1000000000000 and 1000000000000),
+  raw_actual_pnl_cents numeric not null check (raw_actual_pnl_cents between -2000000000000 and 1000000000000),
+  integer_credit_cents bigint not null check (integer_credit_cents between 0 and 1000000000000),
+  integer_realized_delta_cents bigint not null check (integer_realized_delta_cents between -1000000000000 and 1000000000000),
+  disable_automatic_retry boolean not null check (disable_automatic_retry),
+  clear_entry_persistence boolean not null,
+  counts_for_reentry_generation boolean not null,
+  unique (parent_order_key,order_revision_after),
+  unique (funding_id,epoch,budget_id,budget_revision_after),
+  foreign key (parent_order_key,funding_id,epoch,budget_id,parent_row_kind) references engine.paper_order(order_key,funding_id,epoch,budget_id,row_kind),
+  foreign key (child_order_key,funding_id,epoch,budget_id,child_row_kind) references engine.paper_order(order_key,funding_id,epoch,budget_id,row_kind),
+  foreign key (funding_id,epoch,budget_id) references engine.paper_budget_root(funding_id,epoch,budget_id),
+  check (sold_quantity+remaining_quantity=quantity_before),
+  check (remaining_reserved_cents+released_stake_cents=reserved_before_cents),
+  check (raw_net_proceeds_cents=raw_gross_proceeds_cents-exit_fee_cents),
+  check (raw_actual_pnl_cents=raw_net_proceeds_cents-raw_sold_cost_cents),
+  check (integer_realized_delta_cents=integer_credit_cents-released_stake_cents),
+  check (raw_net_proceeds_cents>0 or integer_credit_cents=0),
+  check ((venue='kalshi' and quantity_before*100=trunc(quantity_before*100) and sold_quantity*100=trunc(sold_quantity*100) and remaining_quantity*100=trunc(remaining_quantity*100))
+    or (venue='polymarket' and quantity_before=trunc(quantity_before) and sold_quantity=trunc(sold_quantity) and remaining_quantity=trunc(remaining_quantity))),
+  check ((sale_kind='no-fill' and child_order_key is null and child_row_kind is null and sold_quantity=0
+      and released_stake_cents=0 and raw_sold_cost_cents=0 and raw_remaining_cost_cents=raw_cost_before_cents
+      and raw_gross_proceeds_cents=0 and exit_fee_cents=0 and integer_credit_cents=0
+      and not clear_entry_persistence and not counts_for_reentry_generation)
+    or (sale_kind='partial' and child_order_key is not null and child_row_kind is not null and child_row_kind='sale-child'
+      and child_order_key<>parent_order_key and sold_quantity>0 and remaining_quantity>0 and raw_sold_cost_cents>0
+      and raw_remaining_cost_cents>0 and not clear_entry_persistence and not counts_for_reentry_generation)
+    or (sale_kind='full' and child_order_key is null and child_row_kind is null and sold_quantity>0 and remaining_quantity=0
+      and remaining_reserved_cents=0 and raw_sold_cost_cents=raw_cost_before_cents and raw_remaining_cost_cents=0
+      and clear_entry_persistence and counts_for_reentry_generation))
+);
+
+-- Exactly one terminal settlement per concrete entry order, NOT logical legacy id.
+-- Outcome labels are unsigned evidence shape; exact winner/invalid authority is adapter truth.
+create table if not exists engine.paper_settlement_event (
+  event_key text primary key check (length(event_key) between 1 and 120 and event_key=btrim(event_key,E' \t\n\r\f\013')),
+  transition_key text not null unique check (length(transition_key) between 1 and 120),
+  order_key text not null unique references engine.paper_reservation(order_key),
+  funding_id text not null,
+  epoch integer not null,
+  budget_id text not null,
+  order_row_kind text not null check (order_row_kind='entry'),
+  side text not null check (side in ('UP','DOWN')),
+  outcome text not null check (outcome in ('UP','DOWN','INVALID')),
+  result_status text not null check (result_status in ('won','lost','invalid')),
+  run_id text not null references engine.job_run_record(run_id),
+  current_effect_config_intent_id text not null references engine.control_intent(id),
+  recorded_at timestamptz not null check (isfinite(recorded_at)),
+  order_revision_before bigint not null check (order_revision_before between 1 and 9007199254740990),
+  order_revision_after bigint not null check (order_revision_after=order_revision_before+1),
+  budget_revision_before bigint not null check (budget_revision_before between 1 and 9007199254740990),
+  budget_revision_after bigint not null check (budget_revision_after=budget_revision_before+1),
+  released_stake_cents bigint not null check (released_stake_cents between 0 and 1000000000000),
+  potential_payout_cents bigint not null check (potential_payout_cents between 0 and 1000000000000),
+  payout_cents bigint not null check (payout_cents between 0 and 1000000000000),
+  integer_realized_delta_cents bigint not null check (integer_realized_delta_cents between -1000000000000 and 1000000000000),
+  unique (funding_id,epoch,budget_id,budget_revision_after),
+  foreign key (order_key,funding_id,epoch,budget_id,order_row_kind) references engine.paper_order(order_key,funding_id,epoch,budget_id,row_kind),
+  foreign key (funding_id,epoch,budget_id) references engine.paper_budget_root(funding_id,epoch,budget_id),
+  check (integer_realized_delta_cents=payout_cents-released_stake_cents),
+  check ((outcome='INVALID' and result_status='invalid' and payout_cents=released_stake_cents)
+    or (outcome=side and result_status='won' and payout_cents=potential_payout_cents)
+    or (outcome<>'INVALID' and outcome<>side and result_status='lost' and payout_cents=0))
+);
+revoke all on engine.paper_sale_event,engine.paper_settlement_event from public,engine_writer,engine_reader,engine_control_recorder;
+grant select,insert on engine.paper_sale_event,engine.paper_settlement_event to engine_writer;
+grant select on engine.paper_sale_event,engine.paper_settlement_event to engine_reader;
+-- Expected revision/idempotency labels NOT CAS, live aggregate conservation or release-once.
+-- Match child.paper_order.parent_order_key to sale parent, contract/side/venue,
+-- evidence freshness, raw proportional costs and integer floor/ceil policies in adapter.
+-- Raw net may be negative while integer credit is zero; never rawPnL=integer realized.
+-- Canonical decimal encoding must preserve raw identities without rounding to whole cents.
+-- Sale/settlement history namespaces are separate: shared live CAS must serialize them
+-- with entry effects and prevent a full sale followed by a second terminal payout.
+-- Reservation revisions, complete provenance/payload replay and atomic budget effects
+-- remain future fenced adapter proof. No unavailable sale attempt is recorded here.
 
 commit;
