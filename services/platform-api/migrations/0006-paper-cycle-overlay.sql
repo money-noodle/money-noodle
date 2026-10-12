@@ -1,8 +1,8 @@
--- #243 stage 3: empty typed roots plus initial order/reservation storage.
+-- #243 stage 3: roots/orders/reservations plus first immutable entry-effect storage.
 -- Rai approved authoring and isolated HOSTED tests on 2026-10-11T22:44:52Z.
 -- NOT production application, bankroll creation, configuration adoption or activation.
 -- Schema owner only; no runtime DDL. No INSERT, seed/default money or principal values.
--- Order/reservation hosted proof, append events and regime storage remain subsequent slices.
+-- Entry-effect hosted proof, sale/settlement/gate storage and adapters remain unfinished.
 -- Reapplication is idempotent for this definition, not a schema-drift repair protocol.
 begin;
 
@@ -170,5 +170,91 @@ grant select on engine.paper_order,engine.paper_reservation to engine_reader;
 -- NUMERIC is unscaled: no silent cents/quantity rounding; upper comparisons reject NaN/Infinity.
 -- Final filled/inventory lattice is not a constraint on future raw print accumulators.
 -- Raw sale proceeds/PnL vs integer credits/events will be separate later storage.
+
+
+-- First immutable money slice: ENTRY finalization only, not sale/settlement/gates.
+-- Revision metadata is expected history, NOT CAS against live rows or a lease fence.
+-- Composite identities prove existence; adapter must validate current config/run,
+-- complete evidence, matched issuance/venue/contract and atomic budget/order/hold changes.
+create table if not exists engine.paper_entry_effect (
+  transition_key text primary key check (length(transition_key) between 1 and 120 and transition_key=btrim(transition_key,E' \t\n\r\f\013')),
+  order_key text not null references engine.paper_reservation(order_key),
+  funding_id text not null,
+  epoch integer not null,
+  budget_id text not null,
+  order_row_kind text not null check (order_row_kind='entry'),
+  effect_kind text not null check (effect_kind in ('entry-fill','entry-no-fill')),
+  current_effect_config_intent_id text not null references engine.control_intent(id),
+  run_id text not null references engine.job_run_record(run_id),
+  recorded_at timestamptz not null check (isfinite(recorded_at)),
+  order_revision_before bigint not null check (order_revision_before between 1 and 9007199254740990),
+  order_revision_after bigint not null check (order_revision_after=order_revision_before+1),
+  reservation_revision_before bigint not null check (reservation_revision_before between 1 and 9007199254740990),
+  reservation_revision_after bigint not null check (reservation_revision_after=reservation_revision_before+1),
+  budget_revision_before bigint not null check (budget_revision_before between 1 and 9007199254740990),
+  budget_revision_after bigint not null check (budget_revision_after=budget_revision_before+1),
+  result_status text not null check (result_status in ('open','unfilled','rejected')),
+  reservation_before_cents bigint not null check (reservation_before_cents between 1 and 1000000000000),
+  retained_stake_cents bigint not null check (retained_stake_cents between 0 and 1000000000000),
+  released_cents bigint not null check (released_cents between 0 and 1000000000000),
+  unique (order_key,order_revision_after),
+  unique (order_key,reservation_revision_after),
+  unique (funding_id,epoch,budget_id,budget_revision_after),
+  unique (transition_key,order_key,funding_id,epoch,budget_id,effect_kind),
+  foreign key (order_key,funding_id,epoch,budget_id,order_row_kind) references engine.paper_order(order_key,funding_id,epoch,budget_id,row_kind),
+  foreign key (funding_id,epoch,budget_id) references engine.paper_budget_root(funding_id,epoch,budget_id),
+  check (retained_stake_cents+released_cents=reservation_before_cents),
+  check ((effect_kind='entry-fill' and result_status='open' and retained_stake_cents>0)
+    or (effect_kind='entry-no-fill' and result_status in ('unfilled','rejected') and retained_stake_cents=0))
+);
+
+-- Final accounting evidence, not every off-lattice maker print/queue accumulator.
+-- observed_quantity/raw_purchase_cents preserve unscaled raw evidence separately
+-- from finalized_quantity and integer fee/stake/payout/release plans. No raw=rounded CHECK.
+create table if not exists engine.paper_entry_fill_event (
+  event_key text primary key check (length(event_key) between 1 and 120 and event_key=btrim(event_key,E' \t\n\r\f\013')),
+  transition_key text not null unique,
+  order_key text not null,
+  funding_id text not null,
+  epoch integer not null,
+  budget_id text not null,
+  effect_kind text not null check (effect_kind in ('entry-fill','entry-no-fill')),
+  run_id text not null references engine.job_run_record(run_id),
+  current_effect_config_intent_id text not null references engine.control_intent(id),
+  evidence_version text not null check (length(evidence_version) between 1 and 120),
+  venue text not null check (venue in ('kalshi','polymarket')),
+  liquidity_role text not null check (liquidity_role in ('maker','taker')),
+  evidence_disposition text not null check (evidence_disposition in ('observed','data-unavailable','quote-refused')),
+  no_fill_reason text check (no_fill_reason in ('rested_no_fill','ioc_no_fill','data_unavailable','pre_submit_quote_moved')),
+  observed_quantity numeric not null check (observed_quantity>=0 and observed_quantity<=1000000),
+  finalized_quantity numeric not null check (finalized_quantity>=0 and finalized_quantity<=1000000),
+  raw_purchase_cents numeric not null check (raw_purchase_cents>=0 and raw_purchase_cents<=1000000000000),
+  fee_cents bigint not null check (fee_cents between 0 and 1000000000000),
+  retained_stake_cents bigint not null check (retained_stake_cents between 0 and 1000000000000),
+  potential_payout_cents bigint not null check (potential_payout_cents between 0 and 1000000000000),
+  released_cents bigint not null check (released_cents between 0 and 1000000000000),
+  recorded_at timestamptz not null check (isfinite(recorded_at)),
+  foreign key (transition_key,order_key,funding_id,epoch,budget_id,effect_kind) references engine.paper_entry_effect(transition_key,order_key,funding_id,epoch,budget_id,effect_kind),
+  foreign key (order_key,funding_id,epoch,budget_id) references engine.paper_order(order_key,funding_id,epoch,budget_id),
+  foreign key (funding_id,epoch,budget_id) references engine.paper_budget_root(funding_id,epoch,budget_id),
+  check ((venue='kalshi' and finalized_quantity*100=trunc(finalized_quantity*100))
+    or (venue='polymarket' and finalized_quantity=trunc(finalized_quantity))),
+  check ((effect_kind='entry-fill' and evidence_disposition='observed' and no_fill_reason is null
+      and observed_quantity>0 and finalized_quantity>0 and raw_purchase_cents>0 and retained_stake_cents>0)
+    or (effect_kind='entry-no-fill' and no_fill_reason is not null and observed_quantity=0 and finalized_quantity=0
+      and raw_purchase_cents=0 and fee_cents=0 and retained_stake_cents=0 and potential_payout_cents=0)),
+  check ((evidence_disposition='observed' and (no_fill_reason is null or no_fill_reason in ('rested_no_fill','ioc_no_fill')))
+    or (evidence_disposition='data-unavailable' and no_fill_reason is not null and no_fill_reason='data_unavailable')
+    or (evidence_disposition='quote-refused' and no_fill_reason is not null and no_fill_reason='pre_submit_quote_moved'))
+);
+revoke all on engine.paper_entry_effect,engine.paper_entry_fill_event from public,engine_writer,engine_reader,engine_control_recorder;
+grant select,insert on engine.paper_entry_effect,engine.paper_entry_fill_event to engine_writer;
+grant select on engine.paper_entry_effect,engine.paper_entry_fill_event to engine_reader;
+-- No owner INSERT/default economics, no new old-table keys/indexes or platform grants.
+-- One transition per order+budget revision in this initial single-order protocol.
+-- Effect/event completeness, equal run/config/money fields across rows, fee/rounding
+-- formulas, payout mapping and same-key/full-payload replay comparison require adapter.
+-- A FK cannot require the reciprocal event: transaction must append BOTH or neither.
+-- Sale raw net (including negative), integer credits/realized and settlement/gates NEXT.
 
 commit;
