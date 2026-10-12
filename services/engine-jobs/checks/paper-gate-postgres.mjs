@@ -31,7 +31,7 @@ export async function paperGatePostgresContract(admin, writer, { reader, recorde
     [{ minimum_policy_windows: 3 },'23514'], [{ minimum_policy_windows: 501 },'23514'],
     [{ evidence_half_life_windows: '1.99' },'23514'], [{ evidence_half_life_windows: 'NaN' },'23514'],
     [{ evidence_half_life_windows: 'Infinity' },'23514'], [{ pause_confidence: '0.89' },'23514'],
-    [{ resume_confidence: '0.985' },'23514'], [{ resume_confidence: '0.981', pause_confidence: '0.99' },'23514'],
+    [{ resume_confidence: '0.985' },'23514'], [{ resume_confidence: '0.98', pause_confidence: '0.985' },'23514'],
     [{ initialized_at: 'infinity' },'23514'], [{ bundle_id: 'unknown' },'23514'],
   ];
   for (const [i,[patch,code]] of gBad.entries())
