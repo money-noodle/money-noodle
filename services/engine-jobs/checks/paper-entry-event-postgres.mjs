@@ -132,10 +132,11 @@ export async function paperEntryEventPostgresContract(
     }),
     '23505',
   );
-  for (const [i, [disposition, reason, status]] of [
-    ['observed', 'rested_no_fill', 'unfilled'],
-    ['data-unavailable', 'data_unavailable', 'rejected'],
-    ['quote-refused', 'pre_submit_quote_moved', 'unfilled'],
+  for (const [i, [disposition, reason, status, route]] of [
+    ['observed', 'rested_no_fill', 'unfilled', 'maker'],
+    ['data-unavailable', 'data_unavailable', 'rejected', 'maker'],
+    ['quote-refused', 'pre_submit_quote_moved', 'unfilled', 'taker'],
+    ['observed', 'ioc_no_fill', 'unfilled', 'taker'],
   ].entries()) {
     const key = 'zero-' + i;
     await insert('paper_entry_effect', {
@@ -150,6 +151,7 @@ export async function paperEntryEventPostgresContract(
       ...zero,
       evidence_disposition: disposition,
       no_fill_reason: reason,
+      liquidity_role: route,
     };
     await rejects(
       insert('paper_entry_fill_event', {
@@ -159,7 +161,38 @@ export async function paperEntryEventPostgresContract(
       }),
       '23514',
     );
+    if (disposition === 'observed')
+      await rejects(
+        insert('paper_entry_fill_event', {
+          ...row,
+          event_key: 'swapped-reason-' + i,
+          no_fill_reason: route === 'maker' ? 'ioc_no_fill' : 'rested_no_fill',
+        }),
+        '23514',
+      );
     await insert('paper_entry_fill_event', row);
+  }
+  // Conservative reduction is valid, without imposing observed=final or raw=rounded money.
+  await insert('paper_entry_effect', {
+    ...effect('conservative-fill', 30),
+    retained_stake_cents: 25,
+    released_cents: 75,
+  });
+  await insert('paper_entry_fill_event', {
+    ...fill('conservative-fill'),
+    observed_quantity: '1.009',
+    finalized_quantity: 1,
+    raw_purchase_cents: 25,
+    retained_stake_cents: 25,
+    potential_payout_cents: 100,
+    released_cents: 75,
+  });
+  // Each new key conflicts ONLY its nominated after-revision, all other revisions fresh.
+  for (const [i, field] of ['order', 'reservation', 'budget'].entries()) {
+    const row = effect('isolated-revision-' + field, 300 + i);
+    row[field + '_revision_before'] = 10;
+    row[field + '_revision_after'] = 11;
+    await rejects(insert('paper_entry_effect', row), '23505');
   }
   const [raw] = await writer.unsafe(
     "select raw_purchase_cents,retained_stake_cents from engine.paper_entry_fill_event where transition_key='positive-fill'",
@@ -175,8 +208,8 @@ export async function paperEntryEventPostgresContract(
         (table === 'paper_entry_effect' ? 'transition_key' : 'event_key'),
     );
   const before = await Promise.all(tables.map(snapshot));
-  assert.equal(before[0].length, 4);
-  assert.equal(before[1].length, 4);
+  assert.equal(before[0].length, 6);
+  assert.equal(before[1].length, 6);
   await admin.unsafe(
     readFileSync('services/platform-api/migrations/0006-paper-cycle-overlay.sql', 'utf8'),
   );

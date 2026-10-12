@@ -243,7 +243,9 @@ create table if not exists engine.paper_entry_fill_event (
       and observed_quantity>0 and finalized_quantity>0 and raw_purchase_cents>0 and retained_stake_cents>0)
     or (effect_kind='entry-no-fill' and no_fill_reason is not null and observed_quantity=0 and finalized_quantity=0
       and raw_purchase_cents=0 and fee_cents=0 and retained_stake_cents=0 and potential_payout_cents=0)),
-  check ((evidence_disposition='observed' and (no_fill_reason is null or no_fill_reason in ('rested_no_fill','ioc_no_fill')))
+  check ((evidence_disposition='observed' and (no_fill_reason is null
+      or (no_fill_reason is not null and ((liquidity_role='maker' and no_fill_reason='rested_no_fill')
+        or (liquidity_role='taker' and no_fill_reason='ioc_no_fill')))))
     or (evidence_disposition='data-unavailable' and no_fill_reason is not null and no_fill_reason='data_unavailable')
     or (evidence_disposition='quote-refused' and no_fill_reason is not null and no_fill_reason='pre_submit_quote_moved'))
 );
