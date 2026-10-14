@@ -4,9 +4,12 @@ import process from 'node:process';
 import { decodePaperGateSampleRows } from '../dist/domain/paper-gate-row-codec.js';
 export async function paperGateRowCodecPostgresContract(admin) {
   assert.equal(process.env.GITHUB_ACTIONS, 'true');
-  const [stored] = await admin.unsafe(
-    "select (to_jsonb(c)-'created_at'-'closes_at') || jsonb_build_object('created_at_us',(extract(epoch from c.created_at)*1000000)::numeric(30,0)::text,'closes_at_us',(extract(epoch from c.closes_at)*1000000)::numeric(30,0)::text,'selected_side_probability',c.selected_side_probability::text,'ask_price',c.ask_price::text,'estimated_fee_rate',c.estimated_fee_rate::text,'predicted_net_edge',c.predicted_net_edge::text) as candidate, (to_jsonb(o)-'closes_at'-'resolved_at'-'recorded_at') || jsonb_build_object('closes_at_us',(extract(epoch from o.closes_at)*1000000)::numeric(30,0)::text,'resolved_at_us',(extract(epoch from o.resolved_at)*1000000)::numeric(30,0)::text,'recorded_at_us',(extract(epoch from o.recorded_at)*1000000)::numeric(30,0)::text,'realized_edge',o.realized_edge::text) as outcome, (extract(epoch from o.recorded_at)*1000000)::numeric(30,0)::text as cutoff from engine.paper_gate_candidate c join engine.paper_gate_outcome o on o.candidate_key=c.candidate_key where c.generation_key='gate-generation' and c.side='UP'",
+  const rows = await admin.unsafe(
+    "select (to_jsonb(c)-'created_at'-'closes_at') || jsonb_build_object('created_at_us',(extract(epoch from c.created_at)*1000000)::numeric(30,0)::text,'closes_at_us',(extract(epoch from c.closes_at)*1000000)::numeric(30,0)::text,'selected_side_probability',c.selected_side_probability::text,'ask_price',c.ask_price::text,'estimated_fee_rate',c.estimated_fee_rate::text,'predicted_net_edge',c.predicted_net_edge::text) as candidate, (to_jsonb(o)-'closes_at'-'resolved_at'-'recorded_at') || jsonb_build_object('closes_at_us',(extract(epoch from o.closes_at)*1000000)::numeric(30,0)::text,'resolved_at_us',(extract(epoch from o.resolved_at)*1000000)::numeric(30,0)::text,'recorded_at_us',(extract(epoch from o.recorded_at)*1000000)::numeric(30,0)::text,'realized_edge',o.realized_edge::text) as outcome, (extract(epoch from o.recorded_at)*1000000)::numeric(30,0)::text as cutoff from engine.paper_gate_candidate c join engine.paper_gate_outcome o on o.candidate_key=c.candidate_key where c.candidate_key=$1::text",
+    ['k'.repeat(120)],
   );
+  assert.equal(rows.length, 1);
+  const [stored] = rows;
   assert.ok(stored);
   const c = stored.candidate,
     o = stored.outcome;
