@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { decodePaperGateSampleRows } from './domain/paper-gate-row-codec.js';
+import {
+  decodePaperGateSampleRows,
+  type PaperGateRowScope,
+} from './domain/paper-gate-row-codec.js';
 import { PAPER_REGIME_SAMPLE_BUY_POLICY as policy } from './domain/paper-regime.js';
-const scope = {
+const scope: PaperGateRowScope = {
   generation_key: 'g',
   funding_id: 'f',
   epoch: 1,
