@@ -11,6 +11,7 @@
 import assert from 'node:assert/strict';
 import process from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
+import postgres from 'postgres';
 import { createPostgresGateCoverageStore } from '../dist/adapters/engine-store/postgres-gate-coverage-store.js';
 import { PAPER_GATE_COVERAGE_PROTOCOL } from '../dist/domain/paper-gate-coverage.js';
 
@@ -477,6 +478,30 @@ export async function paperGateCoveragePostgresContract(admin, port) {
   // returns early, is blocked by the wrong backend or on the wrong statement, or the
   // lease expires before the observation, the recorded evidence is missing and this
   // vector fails instead of passing by fall-through.
+  // The harness's `admin` handle is a SINGLE connection. The holder below keeps a
+  // transaction open while the observer must query concurrently, so each needs its own
+  // connection or the holder would occupy `admin` and the observer would queue behind
+  // it forever. Same superuser the harness already uses; no new role or grant.
+  const holderSql = postgres('postgres://postgres@127.0.0.1:' + port + '/postgres', {
+    max: 1,
+    prepare: false,
+    connection: { statement_timeout: 20000, idle_in_transaction_session_timeout: 20000 },
+  });
+  const observerSql = postgres('postgres://postgres@127.0.0.1:' + port + '/postgres', {
+    max: 1,
+    prepare: false,
+    connection: { statement_timeout: 20000 },
+  });
+  // Takes the handle explicitly: inside the holder it MUST be that transaction's own
+  // `tx`, because the pool holds a single connection which the open transaction
+  // occupies, and a pool-level query would queue behind itself forever.
+  const leaseLiveOn = async (sql) => {
+    const [row] = await sql.unsafe(
+      'select (expires_at>clock_timestamp()) as live from engine.job_lease where capability=$1',
+      [CAPABILITY],
+    );
+    return row.live === true;
+  };
   const lockEvidence = { observations: 0 };
   let lockRan = false;
   const lockStore = createPostgresGateCoverageStore(writerUrl, {
@@ -496,7 +521,7 @@ export async function paperGateCoveragePostgresContract(admin, port) {
       const observed = new Promise((resolve) => {
         signalObserved = resolve;
       });
-      lockEvidence.holder = admin
+      lockEvidence.holder = holderSql
         .begin(async (tx) => {
           const holderSelf = await tx.unsafe('select pg_backend_pid()::text as pid');
           lockEvidence.holderPid = Number(holderSelf[0].pid);
@@ -508,11 +533,11 @@ export async function paperGateCoveragePostgresContract(admin, port) {
           // Hold the row lock, unchanged, until the observer has seen the adapter
           // blocked while the lease was still live AND the lease has since expired.
           await observed;
-          for (let i = 0; i < 200; i++) {
-            if (!(await leaseLive())) break;
+          for (let i = 0; i < 400; i++) {
+            if (!(await leaseLiveOn(tx))) break;
             await delay(25);
           }
-          lockEvidence.expiredBeforeRelease = !(await leaseLive());
+          lockEvidence.expiredBeforeRelease = !(await leaseLiveOn(tx));
         })
         .catch((error) => {
           lockEvidence.holderError = error.code ?? String(error);
@@ -524,11 +549,12 @@ export async function paperGateCoveragePostgresContract(admin, port) {
       lockEvidence.observer = (async () => {
         try {
           for (let i = 0; i < 200; i++) {
-            const [row] = await admin.unsafe(
+            const [row] = await observerSql.unsafe(
               "select a.pid::text as pid, coalesce(array_to_string(pg_blocking_pids(a.pid),','),'') as blockers, a.state, a.wait_event_type, a.wait_event, position('for update' in a.query) as fence_marker, position('engine.job_lease' in a.query) as table_marker, clock_timestamp()::text as observed_at, (select l.expires_at > clock_timestamp() from engine.job_lease l where l.capability=$2) as lease_live, (select l.expires_at::text from engine.job_lease l where l.capability=$2) as expires_at from pg_stat_activity a where a.pid=$1",
               [String(lockEvidence.readerPid), CAPABILITY],
             );
             lockEvidence.observations += 1;
+            lockEvidence.lastRow = row;
             if (
               row !== undefined &&
               row.blockers === String(lockEvidence.holderPid) &&
@@ -613,8 +639,10 @@ export async function paperGateCoveragePostgresContract(admin, port) {
     });
   } finally {
     await lockStore.close();
-    // Never leave the holder or observer dangling, whatever failed above.
+    // Never leave the holder or observer dangling, whatever failed above, and always
+    // release both dedicated connections so a failure cannot hang the contract.
     await Promise.allSettled([lockEvidence.observer, lockEvidence.holder]);
+    await Promise.allSettled([holderSql.end({ timeout: 5 }), observerSql.end({ timeout: 5 })]);
   }
   await restoreLease();
 
