@@ -85,10 +85,14 @@ export function createPostgresGateCoverageStore(
   /** Deterministic test barriers. `afterHeadRead` lands BETWEEN two reads — after the
    * head and its event, before the universe, inputs and control reads — so a
    * concurrent commit there would change a READ COMMITTED result and must not change
-   * this one. `beforeFinalFence` lands after every read and before the final fence. */
+   * this one. `beforeFinalFence` lands after every read and before the final fence,
+   * and receives this transaction's own backend process id so a test can observe,
+   * from a separate connection, that the final locking statement is genuinely blocked
+   * and by which backend. The id is queried ONLY when a barrier is supplied, so a
+   * production read issues no extra statement for it. */
   testEffects?: {
     afterHeadRead?: () => Promise<void>;
-    beforeFinalFence?: () => Promise<void>;
+    beforeFinalFence?: (context: { backendPid: number }) => Promise<void>;
   },
 ): PaperGateCoverageStore {
   const sql = postgres(connectionString, {
@@ -199,7 +203,10 @@ export function createPostgresGateCoverageStore(
             typeof newest.epoch === 'string' &&
             /^[1-9][0-9]{0,9}$/.test(newest.epoch);
 
-          await testEffects?.beforeFinalFence?.();
+          if (testEffects?.beforeFinalFence !== undefined) {
+            const self = await one(tx, 'select pg_backend_pid()::text as pid', []);
+            await testEffects.beforeFinalFence({ backendPid: Number(self?.pid) });
+          }
 
           // Final boundary, in two statements on purpose.
           //

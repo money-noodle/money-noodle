@@ -462,58 +462,148 @@ export async function paperGateCoveragePostgresContract(admin, port) {
   }
   await restoreLease();
 
-  // 12. Expiry WHILE the final `for update` waits for the lock on an UNCHANGED row.
-  // Measured on PostgreSQL 16: the locking read's qualification, `clock_timestamp()`
-  // included, is evaluated BEFORE the lock wait, so that statement alone returns an
-  // expired lease as live. The adapter therefore re-validates liveness in a separate
-  // statement once the lock is held. This vector is what fails without that fix.
-  const lockEvidence = {};
+  // 12. Expiry WHILE the final `for update` genuinely WAITS for the lock on an
+  // UNCHANGED row. Measured on PostgreSQL 16: that statement's qualification,
+  // `clock_timestamp()` included, is evaluated BEFORE the lock wait, so it alone
+  // returns an expired lease as live. The adapter therefore re-validates liveness in a
+  // separate statement once the lock is held, and THIS vector is what fails without it.
+  //
+  // The proof is a direct observation, not a callback, a boolean the holder sets about
+  // itself, or elapsed time: a separate observer connection watches
+  // `pg_blocking_pids()` for the adapter's own backend id and must see it blocked BY
+  // the holder's backend id, on the final locking statement, WHILE the lease is still
+  // live on the database clock. Only after that observation does the holder wait for
+  // the natural expiry and release the row unchanged. If the adapter never blocks,
+  // returns early, is blocked by the wrong backend or on the wrong statement, or the
+  // lease expires before the observation, the recorded evidence is missing and this
+  // vector fails instead of passing by fall-through.
+  const lockEvidence = { observations: 0 };
   let lockRan = false;
   const lockStore = createPostgresGateCoverageStore(writerUrl, {
-    beforeFinalFence: async () => {
+    beforeFinalFence: async ({ backendPid }) => {
       if (lockRan) return;
       lockRan = true;
-      // No UPDATE here on purpose: the short expiry was set BEFORE the read began, so
-      // nothing commits over the lease row and the 40001 path cannot fire. The only
-      // thing this barrier does is hold the row's lock, unchanged.
+      lockEvidence.readerPid = backendPid;
+      // No UPDATE anywhere in this barrier: the expiry was set BEFORE the read began,
+      // so nothing commits over the lease row and the 40001 path cannot fire or mask
+      // this one. Owner, token, expiry and the row version are all left untouched.
       lockEvidence.liveBeforeBlock = await leaseLive();
-      let locked;
-      const held = new Promise((resolve) => {
-        locked = resolve;
+      let signalLocked;
+      const locked = new Promise((resolve) => {
+        signalLocked = resolve;
       });
-      // Hold the row lock WITHOUT changing the row, then release it unchanged. An
-      // update here would raise 40001 and prove a different path.
-      lockEvidence.holderReleased = false;
+      let signalObserved;
+      const observed = new Promise((resolve) => {
+        signalObserved = resolve;
+      });
       lockEvidence.holder = admin
         .begin(async (tx) => {
+          const holderSelf = await tx.unsafe('select pg_backend_pid()::text as pid');
+          lockEvidence.holderPid = Number(holderSelf[0].pid);
           await tx.unsafe(
             'select capability from engine.job_lease where capability=$1 for update',
             [CAPABILITY],
           );
-          locked();
-          await delay(1800);
-          lockEvidence.holderReleased = true;
+          signalLocked();
+          // Hold the row lock, unchanged, until the observer has seen the adapter
+          // blocked while the lease was still live AND the lease has since expired.
+          await observed;
+          for (let i = 0; i < 200; i++) {
+            if (!(await leaseLive())) break;
+            await delay(25);
+          }
+          lockEvidence.expiredBeforeRelease = !(await leaseLive());
         })
         .catch((error) => {
-          lockEvidence.holderError = error.code;
+          lockEvidence.holderError = error.code ?? String(error);
+          signalObserved();
         });
-      await held;
+      await locked;
+      // The observer runs while this barrier's caller is blocked, so it is started and
+      // deliberately NOT awaited here; its promise is awaited after the read resolves.
+      lockEvidence.observer = (async () => {
+        try {
+          for (let i = 0; i < 200; i++) {
+            const [row] = await admin.unsafe(
+              "select a.pid::text as pid, coalesce(array_to_string(pg_blocking_pids(a.pid),','),'') as blockers, a.state, a.wait_event_type, a.wait_event, position('for update' in a.query) as fence_marker, position('engine.job_lease' in a.query) as table_marker, clock_timestamp()::text as observed_at, (select l.expires_at > clock_timestamp() from engine.job_lease l where l.capability=$2) as lease_live, (select l.expires_at::text from engine.job_lease l where l.capability=$2) as expires_at from pg_stat_activity a where a.pid=$1",
+              [String(lockEvidence.readerPid), CAPABILITY],
+            );
+            lockEvidence.observations += 1;
+            if (
+              row !== undefined &&
+              row.blockers === String(lockEvidence.holderPid) &&
+              row.fence_marker > 0 &&
+              row.table_marker > 0 &&
+              row.lease_live === true
+            ) {
+              lockEvidence.blockedWhileLive = {
+                blockers: row.blockers,
+                expiresAt: row.expires_at,
+                // Captured in the SAME statement as the blocking relationship, so the
+                // liveness and the block are observed together rather than inferred.
+                leaseLiveAtObservation: row.lease_live,
+                observedAt: row.observed_at,
+                state: row.state,
+                waitEvent: row.wait_event,
+                waitEventType: row.wait_event_type,
+              };
+              break;
+            }
+            await delay(25);
+          }
+        } catch (error) {
+          lockEvidence.observerError = error.code ?? String(error);
+        } finally {
+          signalObserved();
+        }
+      })();
     },
   });
   try {
-    // Live now, expiring during the lock wait that the barrier is about to cause.
+    // Live now, with a budget that must comfortably outlast the observation and still
+    // expire well inside the adapter's configured 3000ms lock_timeout and 5000ms
+    // statement_timeout, neither of which is changed here.
     await admin.unsafe(
-      "update engine.job_lease set expires_at=clock_timestamp()+interval '1200 milliseconds' where capability=$1",
+      "update engine.job_lease set expires_at=clock_timestamp()+interval '1500 milliseconds' where capability=$1",
       [CAPABILITY],
     );
     assert.equal(await leaseLive(), true);
     const blocked = await lockStore.readCoverage(scopeOf(GENESIS), fence);
+    // Flags captured AT read resolution, before any holder or observer cleanup.
+    const atResolution = {
+      blockedWhileLive: lockEvidence.blockedWhileLive,
+      holderError: lockEvidence.holderError,
+      observerError: lockEvidence.observerError,
+      ran: lockRan,
+      readerPid: lockEvidence.readerPid,
+    };
+    await lockEvidence.observer;
     await lockEvidence.holder;
-    assert.equal(lockRan, true);
+    assert.equal(atResolution.ran, true);
     assert.equal(lockEvidence.liveBeforeBlock, true);
-    // The adapter's final statement really waited for the holder's lock.
-    assert.equal(lockEvidence.holderReleased, true);
-    assert.equal(lockEvidence.holderError, undefined);
+    assert.equal(atResolution.observerError, undefined);
+    assert.equal(atResolution.holderError, undefined);
+    assert.ok(Number.isInteger(atResolution.readerPid) && atResolution.readerPid > 0);
+    assert.ok(Number.isInteger(lockEvidence.holderPid) && lockEvidence.holderPid > 0);
+    assert.notEqual(atResolution.readerPid, lockEvidence.holderPid);
+    // THE observation: the adapter's own backend was blocked by the holder's backend,
+    // on the final locking statement against engine.job_lease, while the lease was
+    // still live. Absent this, the vector fails rather than silently proving nothing.
+    assert.ok(
+      atResolution.blockedWhileLive !== undefined,
+      'adapter was never observed blocked by the holder while the lease was live',
+    );
+    assert.equal(atResolution.blockedWhileLive.blockers, String(lockEvidence.holderPid));
+    assert.equal(atResolution.blockedWhileLive.leaseLiveAtObservation, true);
+    assert.equal(atResolution.blockedWhileLive.waitEventType, 'Lock');
+    // A row-lock wait reports the holder's transaction id, or the tuple itself when
+    // several waiters queue; both are this lock wait, nothing else is.
+    assert.ok(
+      ['transactionid', 'tuple'].includes(atResolution.blockedWhileLive.waitEvent),
+      'unexpected wait event ' + String(atResolution.blockedWhileLive.waitEvent),
+    );
+    // The lease then expired naturally, before the unchanged lock was released.
+    assert.equal(lockEvidence.expiredBeforeRelease, true);
     assert.equal(await leaseLive(), false);
     // The lock was released UNCHANGED, so this is not the 40001 path.
     assert.deepEqual(blocked, {
@@ -523,6 +613,8 @@ export async function paperGateCoveragePostgresContract(admin, port) {
     });
   } finally {
     await lockStore.close();
+    // Never leave the holder or observer dangling, whatever failed above.
+    await Promise.allSettled([lockEvidence.observer, lockEvidence.holder]);
   }
   await restoreLease();
 
