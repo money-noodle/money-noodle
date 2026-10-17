@@ -10,11 +10,23 @@
 // initialization, reset or authority, and no count taken from the selected rows is
 // treated as evidence for itself.
 //
-// What this does NOT prove, and must never be read as proving: external or
-// historical completeness beyond this snapshot, that no later row exists, current
-// admission authority, provider or funding authority, or that a future write will
-// replay or compare-and-set correctly. Coverage here means exactly "the persisted
-// universe visible in that one transaction".
+// The universe is exactly the candidates VISIBLE IN THIS SNAPSHOT whose `created_at`
+// is at or before the receipt's cutoff. It is not every row the table will ever hold,
+// not every row visible now outside the transaction, and not candidates created after
+// the cutoff — those are outside this receipt by the same cutoff rule the row decoder
+// already applies.
+//
+// What this does NOT prove, and must never be read as proving: external or historical
+// completeness beyond this snapshot, that no later row exists, current admission
+// authority, provider or funding authority, or that a future write will replay or
+// compare-and-set correctly. Coverage here means exactly "the persisted universe
+// visible in that one transaction, bounded by the cutoff".
+//
+// A returned receipt is a HISTORICAL READ ATTESTATION. The caller receives it after the
+// reading transaction has ended, so it attests what was true under a live fence during
+// that transaction. It is NOT evidence that the lease is still held when the caller
+// reads it, and it confers no write capability inside any transaction. Nothing may
+// carry it into another transaction and treat it as that transaction's own fence.
 //
 // Clocks: every database instant arrives as exact signed epoch-microsecond TEXT,
 // extracted in SQL before any driver Date, and is decoded with the existing
@@ -57,13 +69,18 @@ export type PaperGateCoverageRefusal =
 export interface PaperGateCoverageFence {
   capability: string;
   owner: string;
+  /** bigint, matching the store's `fencing_token bigint`. A caller holding the cycle
+   * store's `number` token must convert explicitly; no implicit narrowing happens
+   * here, and that conversion is still to be wired when the two seams meet. */
   fencingToken: bigint;
 }
 
 export interface PaperGateCoverageReceipt {
   protocol: typeof PAPER_GATE_COVERAGE_PROTOCOL;
   scope: PaperGateRowScope;
-  /** Head pointer, bound into the proof so a later head cannot inherit it. */
+  /** Head pointer, bound into the proof so a later head cannot inherit it. The head is
+   * the generation's declared latest event; it is NOT proof that no higher revision row
+   * exists, only that the head and the event it points at agree. */
   headEventKey: string;
   headRevision: bigint;
   eventKind: 'genesis' | 'evaluated';
@@ -75,7 +92,10 @@ export interface PaperGateCoverageReceipt {
   recordedAtMicroseconds: bigint;
   /** Source ISO; the schema pins this column to whole milliseconds. */
   evidenceObservedAtIso: string;
-  /** Derived from the constrained persisted genesis/evaluated row, never from absent rows. */
+  /** Read from the CONSTRAINED PERSISTED genesis or evaluated row, never from absent
+   * rows. A genesis row is evidence of a constrained persisted row bound to the
+   * generation's own initialization run; it is not proof that a genuine initialization
+   * or reset protocol was executed by whoever wrote it. */
   lineage: PaperRegimeLineage;
   /** Independently enumerated in this snapshot, ascending by window then candidate key. */
   universeCandidateKeys: readonly string[];
@@ -249,7 +269,8 @@ export function verifyPaperGateCoverage(
   )
     return refuse('event', 'captured-counts');
 
-  // Lineage comes from the constrained persisted row, never from absence of rows.
+  // Lineage is read from the constrained persisted row, never from absence of rows.
+  // This establishes the row's shape and its binding, not writer genuineness.
   let lineage: PaperRegimeLineage;
   if (event.event_kind === 'genesis') {
     if (
@@ -263,6 +284,14 @@ export function verifyPaperGateCoverage(
       inputCount !== 0
     )
       return refuse('lineage', 'genesis');
+    // A genesis event must be the generation's OWN declared initialization run, not
+    // merely some run that wrote a genesis-shaped row. Only genesis is bound this way:
+    // a later evaluated event legitimately carries a different write run.
+    if (
+      !text(generation.initialization_run_id) ||
+      generation.initialization_run_id !== event.run_id
+    )
+      return refuse('lineage', 'genesis-run-binding');
     lineage = {
       kind: 'initialized',
       initializationRunId: event.run_id,
@@ -283,8 +312,12 @@ export function verifyPaperGateCoverage(
     lineage = { kind: 'persisted', stateRunId: event.run_id, revision: Number(eventRevision) };
   }
 
-  // Independent enumeration. The adapter reads one row past the schema ceiling so a
-  // truncated or paginated universe fails closed instead of silently shrinking.
+  // Independent enumeration. The adapter reads one row past the schema's own ceiling,
+  // and the ceiling is applied to the TOTAL rows read before the cutoff filter below.
+  // That is a deliberate fail-closed limit, not a query optimisation: a generation
+  // holding more candidate rows than the schema's captured counts can describe is
+  // refused outright rather than silently truncated, paginated or filtered down to a
+  // plausible-looking subset.
   if (!Array.isArray(snapshot.universe)) return refuse('universe-overflow', 'not-enumerated');
   if (snapshot.universe.length > PAPER_GATE_UNIVERSE_LIMIT)
     return refuse('universe-overflow', 'above-schema-ceiling');
@@ -417,7 +450,8 @@ export function verifyPaperGateCoverage(
     },
   };
 }
-// A verified receipt is a read proof for one snapshot. It does not create, adopt,
-// reset or initialise a generation, does not admit paper entries, does not grant
-// provider or funding authority, and does not prove any future write will replay or
-// compare-and-set correctly.
+// A verified receipt is a read attestation for one snapshot, delivered after that
+// transaction ended. It does not create, adopt, reset or initialise a generation, does
+// not admit paper entries, does not grant provider or funding authority, does not
+// remain true about lease liveness after delivery, and does not prove any future write
+// will replay or compare-and-set correctly.

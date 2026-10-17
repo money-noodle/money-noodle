@@ -17,9 +17,16 @@
 //     of a row that a concurrent transaction has committed over raises serialization
 //     failure 40001, so a lease takeover or token replacement aborts the whole
 //     transaction instead of letting a stale result be admitted.
-//   * **All or nothing.** Any refusal or error rolls the transaction back and returns
-//     no receipt. Nothing partial is returned and nothing is carried to another
-//     transaction: the receipt is scoped to the snapshot that produced it.
+//   * **All or nothing.** No refusal ever returns a partial receipt. Because this file
+//     writes nothing, an ordinary refusal simply COMMITS a read-only transaction and
+//     returns the refusal — rollback is not required for correctness and is not
+//     claimed; a fence failure detected by the server aborts the transaction instead.
+//     Either way the caller gets a refusal and no receipt.
+//
+// The returned receipt is a HISTORICAL READ ATTESTATION: it is handed back after the
+// transaction has ended, so it attests what was true under a live fence during that
+// transaction. It does not assert the lease is still held when the caller reads it and
+// grants no write capability in any transaction.
 //
 // Clocks cross the boundary as exact signed epoch-microsecond TEXT, extracted in
 // PostgreSQL before any driver Date, so no recorded or cutoff authority is truncated
@@ -75,8 +82,14 @@ export interface PaperGateCoverageStore {
 
 export function createPostgresGateCoverageStore(
   connectionString: string,
-  /** Deterministic test barrier, run after the snapshot and before the final fence. */
-  testEffects?: { afterSnapshot?: () => Promise<void> },
+  /** Deterministic test barriers. `afterHeadRead` lands BETWEEN two reads — after the
+   * head and its event, before the universe, inputs and control reads — so a
+   * concurrent commit there would change a READ COMMITTED result and must not change
+   * this one. `beforeFinalFence` lands after every read and before the final fence. */
+  testEffects?: {
+    afterHeadRead?: () => Promise<void>;
+    beforeFinalFence?: () => Promise<void>;
+  },
 ): PaperGateCoverageStore {
   const sql = postgres(connectionString, {
     max: 1,
@@ -127,7 +140,7 @@ export function createPostgresGateCoverageStore(
           const generation = leaseHeld
             ? await one(
                 tx,
-                `select ${NAMESPACE.join(',')},actor,source_kind,gate_formula,bundle_id,settings_descriptor,enabled from engine.paper_gate_generation where ${NAMESPACE_PREDICATE}`,
+                `select ${NAMESPACE.join(',')},actor,source_kind,gate_formula,bundle_id,settings_descriptor,enabled,initialization_run_id from engine.paper_gate_generation where ${NAMESPACE_PREDICATE}`,
                 values,
               )
             : null;
@@ -153,6 +166,10 @@ export function createPostgresGateCoverageStore(
                   `select ${NAMESPACE.join(',')},event_key,event_kind,revision_after::text as revision_after,prior_event_key,revision_before::text as revision_before,previous_phase,result_phase,projected_phase,current_effect_config_intent_id,latest_intent_id,run_id,source_kind,evidence_version,coverage_receipt_id,${MICROSECONDS('evidence_observed_at', 'evidence_observed_at_us')},${MICROSECONDS('coverage_cutoff_at', 'coverage_cutoff_at_us')},${MICROSECONDS('recorded_at', 'recorded_at_us')},captured_candidate_count::text as captured_candidate_count,captured_resolved_count::text as captured_resolved_count,captured_unresolved_count::text as captured_unresolved_count,input_count::text as input_count,${MICROSECONDS('universe_first_closes_at', 'universe_first_closes_at_us')},${MICROSECONDS('universe_last_closes_at', 'universe_last_closes_at_us')} from engine.paper_gate_phase_event where event_key=$7 and ${NAMESPACE_PREDICATE}`,
                   [...values, head.latest_event_key],
                 );
+          // Mid-read barrier: everything above is head/event state, everything below is
+          // separately queried state. A concurrent commit landing here is the case that
+          // distinguishes one snapshot from two.
+          await testEffects?.afterHeadRead?.();
           const inputs =
             event === null
               ? []
@@ -182,15 +199,35 @@ export function createPostgresGateCoverageStore(
             typeof newest.epoch === 'string' &&
             /^[1-9][0-9]{0,9}$/.test(newest.epoch);
 
-          await testEffects?.afterSnapshot?.();
+          await testEffects?.beforeFinalFence?.();
 
-          // Final boundary. A committed lease takeover raises 40001 here under
-          // REPEATABLE READ, which aborts the whole transaction; an expiry or a
-          // token replacement that is still visible in this snapshot fails the match.
-          const still = await tx.unsafe(
+          // Final boundary, in two statements on purpose.
+          //
+          // The locking read takes the row lock. Any committed UPDATE of this row since
+          // the snapshot — a takeover, a token replacement, even a heartbeat by the same
+          // owner — raises serialization failure 40001 here under REPEATABLE READ and
+          // aborts the whole transaction, which fails closed.
+          //
+          // The locking read alone is NOT sufficient for liveness. Measured against
+          // PostgreSQL 16: when this statement waits for a lock held by another
+          // transaction that does not change the row, the qualification — including
+          // `clock_timestamp()` — has already been evaluated before the wait, so a lease
+          // that expires DURING the wait is still returned. The second statement
+          // re-validates owner, token and expiry against a FRESH database clock after
+          // the lock is held; the row cannot change while this transaction holds its
+          // lock, so that read is authoritative. It is a separate statement rather than
+          // a nested expression so no planner choice can fold it back before the wait.
+          const locked = await tx.unsafe(
             'select capability from engine.job_lease where capability=$1 and owner=$2 and fencing_token=$3 and expires_at > clock_timestamp() for update',
             [fence.capability, fence.owner, fence.fencingToken.toString()],
           );
+          const live =
+            locked.length === 1
+              ? await tx.unsafe(
+                  'select capability from engine.job_lease where capability=$1 and owner=$2 and fencing_token=$3 and expires_at > clock_timestamp()',
+                  [fence.capability, fence.owner, fence.fencingToken.toString()],
+                )
+              : [];
           return verifyPaperGateCoverage(
             {
               event,
@@ -198,7 +235,7 @@ export function createPostgresGateCoverageStore(
               head,
               inputs: [...inputs] as readonly unknown[],
               leaseHeld,
-              leaseStillHeld: still.length === 1,
+              leaseStillHeld: locked.length === 1 && live.length === 1,
               newestControlIntentId: newest === null ? null : newest.id,
               newestControlIntentValid,
               rootsPresent: roots,

@@ -46,6 +46,7 @@ const generation = () => ({
   bundle_id: PAPER_HISTORICAL_REGIME_CONTRACT,
   settings_descriptor: 'regime-settings-v1:true:4:2.5:0.99:0.75',
   enabled: true,
+  initialization_run_id: 'run-genesis',
 });
 const head = () => ({
   ...scope,
@@ -473,6 +474,95 @@ describe('persisted gate coverage receipt verification', () => {
       expect(moved.receipt.recordedLatestIntentStillNewest).toBe(false);
       expect(moved.receipt.completeness).toBe('persisted-universe-in-this-snapshot-only');
       expect(moved.receipt.replayCompareAndSet).toBe('not-proved');
+    }
+  });
+
+  it('binds a genesis lineage to the generation own initialization run', () => {
+    const genesisHead = {
+      ...head(),
+      latest_event_key: 'event-0',
+      revision: '0',
+      event_kind: 'genesis',
+      projected_phase: 'warming',
+    };
+    const genesisEvent = {
+      ...event(),
+      event_key: 'event-0',
+      event_kind: 'genesis',
+      revision_after: '0',
+      prior_event_key: null,
+      revision_before: null,
+      previous_phase: null,
+      result_phase: null,
+      projected_phase: 'warming',
+      run_id: 'run-genesis',
+      captured_candidate_count: '0',
+      captured_resolved_count: '0',
+      captured_unresolved_count: '0',
+      input_count: '0',
+      universe_first_closes_at_us: null,
+      universe_last_closes_at_us: null,
+    };
+    const base = { head: genesisHead, event: genesisEvent, inputs: [], universe: [] };
+    expect(verify(base).kind).toBe('verified');
+    // A genesis-shaped row written by some OTHER run is refused.
+    expect(verify({ ...base, event: { ...genesisEvent, run_id: 'run-other' } })).toEqual(
+      refusal('lineage', 'genesis-run-binding'),
+    );
+    expect(
+      verify({ ...base, generation: { ...generation(), initialization_run_id: 'run-other' } }),
+    ).toEqual(refusal('lineage', 'genesis-run-binding'));
+    expect(verify({ ...base, generation: { ...generation(), initialization_run_id: '' } })).toEqual(
+      refusal('lineage', 'genesis-run-binding'),
+    );
+    // An EVALUATED event may legitimately carry a different write run.
+    const evaluated = verify({ event: { ...event(), run_id: 'run-later-writer' } });
+    expect(evaluated.kind).toBe('verified');
+    if (evaluated.kind === 'verified')
+      expect(evaluated.receipt.lineage).toEqual({
+        kind: 'persisted',
+        stateRunId: 'run-later-writer',
+        revision: 7,
+      });
+  });
+
+  it('scopes the universe by created_at against the receipt cutoff', () => {
+    // POSITIVE: a candidate created AFTER the cutoff is outside this receipt's universe,
+    // so an older attestation stays verified with its own appropriately scoped universe.
+    const later = universeRow('cand-later', WINDOW_B, null);
+    later.created_at_us = '1791772202000001';
+    const scoped = verify({ universe: [...universe(), later] });
+    expect(scoped.kind).toBe('verified');
+    if (scoped.kind === 'verified') {
+      expect(scoped.receipt.universeCandidateKeys).toEqual(['cand-a', 'cand-b', 'cand-pending']);
+      expect(scoped.receipt.universeCandidateKeys).not.toContain('cand-later');
+    }
+    // NEGATIVE: a candidate created AT the cutoff that the receipt never captured is
+    // inside the universe and therefore drift.
+    const backdated = universeRow('cand-backdated', WINDOW_B, null);
+    backdated.created_at_us = '1791772202000000';
+    expect(verify({ universe: [...universe(), backdated] })).toEqual(
+      refusal('universe-drift', 'captured-counts-disagree'),
+    );
+    // An outcome recorded after the cutoff leaves its candidate unresolved, not absent.
+    const postCutoff = universeRow('cand-post', WINDOW_B, '1791772202000001');
+    postCutoff.created_at_us = CREATED;
+    const mixed = verify({
+      universe: [universe()[0], postCutoff],
+      event: {
+        ...event(),
+        captured_candidate_count: '2',
+        captured_resolved_count: '1',
+        captured_unresolved_count: '1',
+        input_count: '1',
+        universe_last_closes_at_us: WINDOW_B,
+      },
+      inputs: [inputRow('0', 'cand-a')],
+    });
+    expect(mixed.kind).toBe('verified');
+    if (mixed.kind === 'verified') {
+      expect(mixed.receipt.resolvedCandidateKeys).toEqual(['cand-a']);
+      expect(mixed.receipt.unresolvedCandidateKeys).toEqual(['cand-post']);
     }
   });
 
