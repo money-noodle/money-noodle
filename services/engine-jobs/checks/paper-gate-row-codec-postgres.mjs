@@ -32,12 +32,27 @@ export async function paperGateRowCodecPostgresContract(admin) {
   assert.equal(result.qualificationReceiptId, 'synthetic-not-qualified');
   assert.equal(result.recordedAtMicroseconds, BigInt(stored.cutoff));
   assert.equal(decodePaperGateSampleRows(c, null, scope, stored.cutoff).kind, 'unavailable');
+  // One millisecond PAST the recorded clock, exact and still millisecond-aligned, so the
+  // only invariant it breaks is resolved<=recorded. The previous `stored.cutoff + '1'`
+  // was string concatenation: it multiplied the instant by ten and refused for range and
+  // alignment instead, which never exercised the intended negative causality.
+  const resolvedAfterRecorded = (BigInt(stored.cutoff) + 1000n).toString();
+  const causality = decodePaperGateSampleRows(
+    c,
+    { ...o, resolved_at_us: resolvedAfterRecorded },
+    scope,
+    stored.cutoff,
+  );
+  assert.equal(causality.kind, 'malformed');
+  assert.equal(causality.reason, 'outcome-time');
+  assert.equal(BigInt(resolvedAfterRecorded) % 1000n, 0n);
+  assert.equal(BigInt(resolvedAfterRecorded) - BigInt(stored.cutoff), 1000n);
   for (const patch of [
     { contract_id: 'foreign' },
     { resolution_receipt_id: '' },
     { evidence_version: 'unknown' },
     { realized_edge: '0.48250000000000001' },
-    { resolved_at_us: stored.cutoff + '1' },
+    { resolved_at_us: resolvedAfterRecorded },
     { recorded_at_us: (BigInt(stored.cutoff) + 1n).toString() },
   ])
     assert.equal(

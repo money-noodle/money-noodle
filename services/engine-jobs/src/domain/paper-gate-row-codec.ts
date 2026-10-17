@@ -69,6 +69,21 @@ function record(value: unknown, keys: readonly string[]): Record<string, unknown
     ? r
     : undefined;
 }
+/** The scope half of this decoder's existing `scope` refusal, extracted UNCHANGED so a
+ * caller can reject a malformed scope before it has any row to decode. Same keys, same
+ * bounds, same policy literal: one source of truth, no second divergent validator. */
+export function paperGateRowScopeIsValid(scope: unknown): boolean {
+  const r = record(scope, namespace);
+  return (
+    r !== undefined &&
+    !namespace.some((k) =>
+      k === 'epoch'
+        ? !Number.isSafeInteger(r[k]) || (r[k] as number) < 1 || (r[k] as number) > 2147483647
+        : !id(r[k]),
+    ) &&
+    r.sample_policy === PAPER_REGIME_SAMPLE_BUY_POLICY
+  );
+}
 export type PaperGateRowResult =
   | {
       kind: 'malformed';
@@ -109,17 +124,7 @@ export function decodePaperGateSampleRows(
     reason: Extract<PaperGateRowResult, { kind: 'malformed' }>['reason'],
   ): PaperGateRowResult => ({ kind: 'malformed', reason });
   const bound = decodePaperDbMicroseconds(cutoff);
-  if (
-    !record(scope, namespace) ||
-    namespace.some((k) =>
-      k === 'epoch'
-        ? !Number.isSafeInteger(scope[k]) || scope[k] < 1 || scope[k] > 2147483647
-        : !id(scope[k]),
-    ) ||
-    scope.sample_policy !== PAPER_REGIME_SAMPLE_BUY_POLICY ||
-    bound === undefined
-  )
-    return fail('scope');
+  if (!paperGateRowScopeIsValid(scope) || bound === undefined) return fail('scope');
   const c = record(candidate, candidateKeys);
   if (
     !c ||

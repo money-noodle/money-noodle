@@ -16,6 +16,14 @@
 // as unresolved with UNKNOWN cause, never as zero-neutral, pending or invalid evidence,
 // and never silently dropped.
 //
+// One settlement window holds at most one candidate. 0006 declares UNIQUE
+// (generation_key, sample_policy, closes_at) on the candidate table and a scope pins
+// both of those columns, so a scoped read cannot contain two distinct candidates for one
+// window. Such input is refused as a contradiction instead of being resolved into a
+// winner: picking one would synthesise a first-qualified source fact the rows and the
+// schema do not contain, and would make the emitted chronology depend on the caller's
+// read order. The refusal covers unresolved candidates as well as resolved ones.
+//
 // Display-id acceptance is the row decoder's JS raw-length/trim subset of the SQL
 // candidate_id domain, not a universal lossless SQL domain claim; a stored id outside
 // that subset is refused by the decoder rather than narrowed here.
@@ -26,10 +34,15 @@
 // instant bounds source resolution times of SELECTED samples only.
 import {
   decodePaperGateSampleRows,
+  paperGateRowScopeIsValid,
   type PaperGateRowResult,
   type PaperGateRowScope,
 } from './paper-gate-row-codec.js';
-import { paperSourceIsoToDbMicroseconds } from './paper-time-codec.js';
+import {
+  decodePaperDbMicroseconds,
+  paperDbTimeToSourceIso,
+  paperSourceIsoToDbMicroseconds,
+} from './paper-time-codec.js';
 import type { RegimeGateObservation } from './paper-regime.js';
 
 export const PAPER_GATE_RETENTION_CONTRACT = 'paper-gate-declared-resolved-window-retention-v1';
@@ -53,8 +66,11 @@ export type PaperGateHistoryResult =
         | 'entries'
         | 'coverage'
         | 'observed-time'
+        | 'cutoff'
+        | 'scope'
         | 'row'
         | 'duplicate-candidate-key'
+        | 'duplicate-window-candidate'
         | 'duplicate-display-id'
         | 'observed-time-bound'
         | 'coverage-mismatch';
@@ -76,7 +92,10 @@ export type PaperGateHistoryResult =
       observations: readonly RegimeGateObservation[];
       /** Parallel to `observations`. */
       selectedCandidateKeys: readonly string[];
-      /** Same-window candidates after the first qualified one; retained, not dropped. */
+      /** Always empty, kept for result-shape compatibility. A scoped read cannot
+       * contain two distinct candidates for one window (0006 UNIQUE on
+       * `(generation_key, sample_policy, closes_at)`), so there is no within-window
+       * contest to resolve and no first-qualified source fact is synthesised here. */
       supersededCandidateKeys: readonly string[];
       /** Valid-only absent outcome. */
       unresolvedCandidateKeys: readonly string[];
@@ -101,6 +120,19 @@ function exact(value: unknown, keys: readonly string[]): Record<string, unknown>
     : undefined;
 }
 
+/**
+ * The candidate row's settlement window as an exact source instant, read with the row
+ * decoder's OWN qualified codec (`paperDbTimeToSourceIso`) rather than a second domain.
+ * Only ever called on a candidate the decoder has already accepted, so this adds no
+ * validation of its own and cannot narrow, widen or round what the decoder admits; it
+ * exists solely because the decoder's `unavailable` result does not carry the window.
+ */
+function closesAtSourceIso(candidate: unknown): string | undefined {
+  if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate))
+    return undefined;
+  return paperDbTimeToSourceIso((candidate as Record<string, unknown>).closes_at_us);
+}
+
 /** Exact source instant that is also an aligned settlement window; no flooring. */
 function sourceWindow(value: unknown): bigint | undefined {
   const microseconds = paperSourceIsoToDbMicroseconds(value);
@@ -111,11 +143,13 @@ function sourceWindow(value: unknown): bigint | undefined {
 
 /**
  * Orders already-persisted candidate/outcome rows by original source chronology,
- * keeps the first qualified candidate per settlement window, retains superseded and
- * unresolved candidate keys, and reconciles the caller's declared retained coverage.
+ * retains unresolved candidate keys, and reconciles the caller's declared retained
+ * coverage. Coverage, cutoff, scope and the source observed instant are all validated
+ * before any row is read, so an empty entry list cannot report a bad input as success.
  *
  * A missing declared window is `unavailable` with UNKNOWN cause, not an invented
- * zero sample; a declared window that contradicts the rows is malformed.
+ * zero sample; a declared window that contradicts the rows is malformed; and two
+ * distinct candidates for one window are refused rather than ranked.
  */
 export function selectPaperGateRetainedHistory(
   entries: unknown,
@@ -147,9 +181,18 @@ export function selectPaperGateRetainedHistory(
   // Source-side guard, deliberately not the DB cutoff and never derived from it.
   const observedAt = paperSourceIsoToDbMicroseconds(sourceObservedAtIso);
   if (observedAt === undefined) return fail('observed-time', null);
+  // Cutoff and scope are validated here as well as inside the row decoder, because an
+  // empty entry list would otherwise never reach the decoder and an invalid cutoff or
+  // scope would be reported as a successful empty selection. Both reuse the decoder's
+  // own qualified domain — the exact signed epoch-microsecond codec and the extracted
+  // scope predicate — so neither narrows, widens nor rounds what the decoder accepts.
+  if (decodePaperDbMicroseconds(dbCutoffMicroseconds) === undefined) return fail('cutoff', null);
+  if (!paperGateRowScopeIsValid(scope)) return fail('scope', null);
   if (!Array.isArray(entries) || entries.length > MAX_RETAINED_ROWS) return fail('entries', null);
   const list: readonly unknown[] = entries;
   const candidateKeys = new Set<string>();
+  /** Window to the candidate key that occupies it, for the uniqueness refusal below. */
+  const windowOwners = new Map<string, string>();
   const resolved: { window: bigint; index: number; row: Decoded }[] = [];
   const unresolvedCandidateKeys: string[] = [];
   for (const [index, entry] of list.entries()) {
@@ -162,40 +205,49 @@ export function selectPaperGateRetainedHistory(
       dbCutoffMicroseconds,
     );
     if (row.kind === 'malformed') return fail('row', index);
-    // candidate_key is the persisted primary key: a repeat means the same row twice.
+    // candidate_key is the persisted primary key: a repeat means the same row twice,
+    // and it is checked first so an identical row never reports as a window contest.
     if (candidateKeys.has(row.candidateKey)) return fail('duplicate-candidate-key', index);
     candidateKeys.add(row.candidateKey);
+    // Read the window from the already-decoded candidate with the decoder's own
+    // qualified codec, so an unresolved row is covered by the uniqueness refusal too.
+    const windowIso = closesAtSourceIso(pair.candidate);
+    if (windowIso === undefined) return fail('row', index);
+    const owner = windowOwners.get(windowIso);
+    // 0006 declares UNIQUE (generation_key, sample_policy, closes_at) and this scope
+    // pins both of those columns, so two DISTINCT candidates for one window cannot come
+    // from a scoped read of that table. Refuse the contradiction rather than invent a
+    // winner: choosing one would manufacture a first-qualified source fact that neither
+    // the rows nor the schema contain, and would depend on the caller's read order.
+    if (owner !== undefined && owner !== row.candidateKey)
+      return fail('duplicate-window-candidate', index);
+    windowOwners.set(windowIso, row.candidateKey);
     if (row.kind === 'unavailable') {
       unresolvedCandidateKeys.push(row.candidateKey);
       continue;
     }
-    const window = sourceWindow(row.observation.closesAt);
+    if (windowIso !== row.observation.closesAt) return fail('row', index);
+    const window = sourceWindow(windowIso);
     if (window === undefined) return fail('row', index);
     resolved.push({ index, row, window });
   }
-  // Explicit index tiebreak preserves original input order for equal windows rather
-  // than relying on sort stability or re-ordering ties by a different DB clock.
-  const ordered = [...resolved].sort((left, right) =>
-    left.window === right.window ? left.index - right.index : left.window < right.window ? -1 : 1,
-  );
-  const takenWindows = new Set<string>();
+  // Windows are unique per the refusal above, so this comparator never sees a tie and
+  // no caller read order can change the emitted chronology.
+  const ordered = [...resolved].sort((left, right) => (left.window < right.window ? -1 : 1));
   const displayIds = new Set<string>();
   const observations: RegimeGateObservation[] = [];
   const selectedCandidateKeys: string[] = [];
+  /** Always empty; see the result type. No within-window contest can exist. */
   const supersededCandidateKeys: string[] = [];
   let selectedMaxRecordedAtMicroseconds: bigint | null = null;
+  // Every resolved row reaches both guards below. There is no superseded branch that
+  // could skip the source observed bound or the display-id uniqueness check.
   for (const item of ordered) {
-    const { closesAt, id, resolvedAt } = item.row.observation;
-    if (takenWindows.has(closesAt)) {
-      // Later same-window candidate: the first qualified one already won the window.
-      supersededCandidateKeys.push(item.row.candidateKey);
-      continue;
-    }
+    const { id, resolvedAt } = item.row.observation;
     const resolvedMicroseconds = paperSourceIsoToDbMicroseconds(resolvedAt);
     if (resolvedMicroseconds === undefined) return fail('row', item.index);
     if (resolvedMicroseconds > observedAt) return fail('observed-time-bound', item.index);
     if (displayIds.has(id)) return fail('duplicate-display-id', item.index);
-    takenWindows.add(closesAt);
     displayIds.add(id);
     observations.push(item.row.observation);
     selectedCandidateKeys.push(item.row.candidateKey);
@@ -205,11 +257,12 @@ export function selectPaperGateRetainedHistory(
     )
       selectedMaxRecordedAtMicroseconds = item.row.recordedAtMicroseconds;
   }
+  const selectedWindows = new Set(observations.map((observation) => observation.closesAt));
   // A selected window outside the declaration means the declaration is wrong, which is
   // a contradiction rather than a gap; report it before any missing-window gap.
   if (observations.some((observation) => !declaredWindows.has(observation.closesAt)))
     return fail('coverage-mismatch', null);
-  const missingWindows = [...declaredWindows].filter((window) => !takenWindows.has(window));
+  const missingWindows = [...declaredWindows].filter((window) => !selectedWindows.has(window));
   if (missingWindows.length > 0)
     return { kind: 'unavailable', missingWindows, reason: 'declared-resolved-window-missing' };
   return {

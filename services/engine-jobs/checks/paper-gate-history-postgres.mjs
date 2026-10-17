@@ -24,8 +24,15 @@ export async function paperGateHistoryPostgresContract(admin) {
     'select (extract(epoch from max(o.recorded_at))*1000000)::numeric(30,0)::text as cutoff from engine.paper_gate_outcome o join engine.paper_gate_candidate c on c.candidate_key=o.candidate_key where c.generation_key=$1::text',
     [generation],
   );
+  // Independent literal fixture expectations, not a value derived from the same read:
+  // the recorded bound and the sample policy are pinned here and the persisted rows must
+  // match them, so a changed fixture cannot quietly redefine what is being asserted.
+  const EXPECTED_CUTOFF = '1791772202000000';
+  const EXPECTED_POLICY =
+    'buy-binary-edge-net5-nocap-quality50-owned55-price10to75-late30-persist2of15-v22';
   const cutoff = bound.cutoff;
-  assert.equal(cutoff, String(Date.parse('2026-10-12T02:30:02.000Z') * 1000));
+  assert.equal(cutoff, EXPECTED_CUTOFF);
+  assert.equal(EXPECTED_CUTOFF, String(Date.parse('2026-10-12T02:30:02.000Z') * 1000));
   const scope = Object.fromEntries(
     [
       'generation_key',
@@ -36,6 +43,8 @@ export async function paperGateHistoryPostgresContract(admin) {
       'sample_policy',
     ].map((k) => [k, rows[0].candidate[k]]),
   );
+  assert.equal(scope.sample_policy, EXPECTED_POLICY);
+  assert.equal(scope.generation_key, generation);
   const entries = rows.map((r) => ({ candidate: r.candidate, outcome: r.outcome }));
   const WINDOW_A = '2026-10-12T02:15:00.000Z';
   const WINDOW_B = '2026-10-12T02:30:00.000Z';
@@ -56,14 +65,14 @@ export async function paperGateHistoryPostgresContract(admin) {
     observations: [
       {
         id: 'd'.repeat(256),
-        policyVersion: scope.sample_policy,
+        policyVersion: EXPECTED_POLICY,
         closesAt: WINDOW_A,
         resolvedAt: '2026-10-12T02:15:01.000Z',
         realizedEdge: 0.4825,
       },
       {
         id: 'phase-second',
-        policyVersion: scope.sample_policy,
+        policyVersion: EXPECTED_POLICY,
         closesAt: WINDOW_B,
         resolvedAt: '2026-10-12T02:30:01.000Z',
         realizedEdge: 0.4825,
@@ -73,7 +82,7 @@ export async function paperGateHistoryPostgresContract(admin) {
     supersededCandidateKeys: [],
     unresolvedCandidateKeys: ['phase-pending-candidate'],
     unresolvedCause: 'unknown',
-    selectedMaxRecordedAtMicroseconds: BigInt(cutoff),
+    selectedMaxRecordedAtMicroseconds: 1791772202000000n,
   });
   // Persisted candidate with no valid outcome row stays unknown-cause, never a 0 edge.
   assert.deepEqual(select(cover(WINDOW_A, WINDOW_B, PENDING_WINDOW)), {
@@ -99,6 +108,42 @@ export async function paperGateHistoryPostgresContract(admin) {
     reason: 'duplicate-candidate-key',
     rowIndex: 3,
   });
+  // Exactly one microsecond below the real recorded bound: the DESC read puts the row
+  // carrying that recorded clock first, so the decoder refuses it at row index 0. This
+  // pins the exact-microsecond boundary against real rows rather than a rounded second.
+  assert.equal(String(BigInt(EXPECTED_CUTOFF) - 1n), '1791772201999999');
+  assert.deepEqual(
+    selectPaperGateRetainedHistory(
+      entries,
+      scope,
+      String(BigInt(EXPECTED_CUTOFF) - 1n),
+      observed,
+      cover(WINDOW_A, WINDOW_B),
+    ),
+    { kind: 'malformed', reason: 'row', rowIndex: 0 },
+  );
+  // One microsecond above it still reads cleanly, so the refusal above is the boundary
+  // itself and not an unrelated malformation of these fixtures.
+  assert.equal(
+    selectPaperGateRetainedHistory(
+      entries,
+      scope,
+      String(BigInt(EXPECTED_CUTOFF) + 1n),
+      observed,
+      cover(WINDOW_A, WINDOW_B),
+    ).kind,
+    'selected',
+  );
+  // An invalid cutoff or scope is refused up front, not reported as an empty success.
+  assert.deepEqual(selectPaperGateRetainedHistory([], scope, undefined, observed, cover()), {
+    kind: 'malformed',
+    reason: 'cutoff',
+    rowIndex: null,
+  });
+  assert.deepEqual(
+    selectPaperGateRetainedHistory([], { ...scope, epoch: 0 }, cutoff, observed, cover()),
+    { kind: 'malformed', reason: 'scope', rowIndex: null },
+  );
   // Declared coverage is reconciled, never established: no completeness/evidence is
   // produced here, and FK/read/selection still cannot prove source qualification,
   // whole retained history, generation authority or current admission.
