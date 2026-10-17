@@ -88,7 +88,8 @@ export type PaperGateHistoryResult =
       retention: typeof PAPER_GATE_RETENTION_CONTRACT;
       /** Never 'complete': declared coverage is reconciled, never established. */
       completeness: 'declared-not-proved';
-      /** Source chronology, ties by original input order, one window at most once. */
+      /** Ascending source chronology. Windows are unique, so there is no tie to break
+       * and no caller read order can change this sequence. */
       observations: readonly RegimeGateObservation[];
       /** Parallel to `observations`. */
       selectedCandidateKeys: readonly string[];
