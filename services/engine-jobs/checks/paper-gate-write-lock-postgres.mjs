@@ -7,12 +7,21 @@
 // Every wait is observed directly in `pg_locks` joined to `pg_stat_activity`, never timed
 // with a sleep, and every observation has a real elapsed deadline so a failure cannot
 // hang. A recorder is never awaited inside a writer barrier.
+//
+// Note, October 18, 2026: the REAL recorder now takes this same key, as code and tests
+// only and not deployed — see `./paper-gate-control-recorder-lock-postgres.mjs`, which
+// drives it and records the permission fact that still blocks its granted role. The
+// synthetic participant below is kept because it exercises the writer against a
+// participant whose timing this contract controls; it is not a claim about the real one.
 import assert from 'node:assert/strict';
 import process from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
 import postgres from 'postgres';
 import { createPostgresPaperGateWriter as createTestArtifactPaperGateWriter } from '../dist-test-support/adapters/engine-store/postgres-paper-gate-writer.js';
 import { AUDITED_POLICY_FIXTURE } from '../dist-test-support/test-support/paper-gate-audited-policy-fixture.js';
+// The PRODUCTION constant, imported from the production artifact so the statement this
+// contract executes is the one the writer ships, not a copy of it.
+import { PAPER_GATE_WRITE_LOCK_RELEASE_ALL_SQL } from '../dist/adapters/engine-store/paper-gate-write-lock.js';
 
 const CAPABILITY = 'budget:paper';
 // Its own epoch band, so this contract cannot disturb or be disturbed by another.
@@ -372,6 +381,30 @@ export async function paperGateWriteLockPostgresContract(admin, port) {
       await expiring.close();
     }
     await restoreLease();
+
+    // The production release-all statement, EXECUTED rather than only asserted. The
+    // writer reaches it only when `pg_advisory_unlock` reports false, which does not
+    // happen on a direct endpoint, so without this vector the shipped constant is run by
+    // no PostgreSQL-backed test at all. A dedicated session takes the key, runs the
+    // imported constant, and the catalog shows the key free afterwards. `void` is all it
+    // returns, so nothing in the result is read as a confirmation.
+    const releaseAllSession = postgres('postgres://postgres@127.0.0.1:' + port + '/postgres', {
+      max: 1,
+      prepare: false,
+      connection: { statement_timeout: 20000 },
+    });
+    try {
+      await releaseAllSession.unsafe('select pg_advisory_lock(hashtextextended($1::text,0))', [
+        LOCK_TEXT,
+      ]);
+      assert.equal(await lockHolders(), '1');
+      assert.equal(PAPER_GATE_WRITE_LOCK_RELEASE_ALL_SQL, 'select pg_advisory_unlock_all()');
+      const rows = await releaseAllSession.unsafe(PAPER_GATE_WRITE_LOCK_RELEASE_ALL_SQL, []);
+      assert.equal(rows.length, 1);
+      assert.equal(await lockHolders(), '0');
+    } finally {
+      await releaseAllSession.end({ timeout: 5 }).catch(() => undefined);
+    }
   } finally {
     await recorderSql.end({ timeout: 5 });
     await admin.unsafe('delete from engine.paper_gate_head where generation_key=$1', [GEN]);

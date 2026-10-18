@@ -764,12 +764,11 @@ describe('paper gate write lock endpoint and ownership', () => {
     expect(PAPER_GATE_WRITE_LOCK_RELEASE_ALL_SQL).not.toContain(' as ');
   });
 
-  it('documents that only the VERDICT is unit-tested, never the adapter refusal path', () => {
-    // An honest limit kept next to the thing it limits: every case above exercises the
-    // pure verdict function. The adapter path that CONSUMES a failing verdict — refusing
-    // `write-lock-<detail>` before any mutation — is NOT exercised by any test, because
-    // reproducing a reassigned backend needs a session-multiplexing proxy, and a test
-    // seam that forced the verdict would prove the seam rather than the protocol.
-    expect(verifyPaperGateWriteLockOwnership).toBeTypeOf('function');
-  });
+  // An honest limit, recorded here rather than as a test that asserts nothing: every case
+  // above exercises the pure verdict function. The adapter path that CONSUMES a failing
+  // verdict — refusing `write-lock-<detail>` before any mutation — is NOT exercised by any
+  // test, because reproducing a reassigned backend needs a session-multiplexing proxy and
+  // a seam that forced the verdict would prove the seam rather than the protocol. The
+  // limit is also stated in the lock module, at the adapter's refusal branch, and in the
+  // hosted contract's returned `ownershipRefusalPathTested: false`.
 });

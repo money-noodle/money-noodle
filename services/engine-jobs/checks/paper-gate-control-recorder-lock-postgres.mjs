@@ -84,6 +84,112 @@ const GENERATION_INPUTS = {
   resumeConfidence: '0.75',
 };
 
+/** The application name every blocking session in THIS contract sets, so a forced
+ * termination can be restricted to a backend this test owns. */
+const BLOCKER_APP = 'mn243-recorder-lock-test-blocker';
+
+/**
+ * TEST-ONLY cleanup for a vector that parks REAL participants behind a blocking key.
+ *
+ * The rule it exists to enforce: never await a participant that can only finish once the
+ * key is free until the CATALOG proves the blocking backend no longer holds it. The
+ * escalation is release -> force-end the blocking session -> terminate its backend, and
+ * each step is verified by the caller's own per-pid probe before any dependent is awaited.
+ *
+ * What it does NOT promise: nothing here can guarantee "no leak" if the database is
+ * unreachable. When every step fails, the owned handles are force-closed and the
+ * dependents are deliberately NOT awaited, so the caller fails with its own error and the
+ * collected cleanup errors instead of waiting without a bound. It never throws: a cleanup
+ * must not replace the failure that caused it.
+ *
+ * `release` returns the server's own boolean. `holdGone` is a predicate over the catalog,
+ * polled inside the caller's existing observation budget. `terminate` is optional and is
+ * expected to refuse any backend it cannot prove belongs to this test.
+ */
+export async function freeKeyThenSettle(options) {
+  const {
+    budgetMs = 4000,
+    closers = [],
+    dependents = [],
+    forceEnd,
+    holdGone,
+    pollMs = 25,
+    release,
+    terminate,
+  } = options;
+  const order = [];
+  const closeErrors = [];
+  const settle = async (value) => (typeof value === 'function' ? value() : value);
+  const poll = async () => {
+    const startedAt = Date.now();
+    for (;;) {
+      if ((await holdGone().catch(() => false)) === true) return true;
+      if (Date.now() - startedAt >= budgetMs) return false;
+      await delay(pollMs);
+    }
+  };
+  const runClosers = async () => {
+    for (const closer of closers)
+      await settle(closer).catch((error) => {
+        closeErrors.push(String((error && error.message) || error));
+      });
+    order.push('closers-run');
+  };
+  let released = false;
+  try {
+    released = (await release()) === true;
+    order.push(released ? 'released' : 'release-false');
+  } catch {
+    order.push('release-rejected');
+  }
+  // Polled BEFORE escalating, deliberately: when the probe already proves this backend
+  // holds nothing, destroying its session would be a cost with no purpose. A `false` or a
+  // rejection that leaves the hold in place is exactly what the probe catches.
+  let gone = await poll();
+  let forced = false;
+  let terminated = false;
+  if (!gone && forceEnd !== undefined) {
+    forced = true;
+    order.push('force-end');
+    await forceEnd().catch(() => order.push('force-end-failed'));
+    gone = await poll();
+  }
+  if (!gone && terminate !== undefined) {
+    terminated = true;
+    order.push('terminate');
+    order.push('terminate:' + String(await terminate().catch(() => 'terminate-failed')));
+    gone = await poll();
+  }
+  order.push(gone ? 'hold-gone' : 'hold-still-held');
+  if (!gone) {
+    // Owned resources are force-closed and the dependents are NOT awaited: a participant
+    // blocked on a key nobody could free would wait with no bound of its own.
+    await runClosers();
+    order.push('dependents-not-awaited');
+    return {
+      closeErrors,
+      dependentsAwaited: false,
+      forced,
+      holdGone: false,
+      order,
+      released,
+      terminated,
+    };
+  }
+  await Promise.allSettled(dependents.filter((d) => d !== undefined).map((d) => settle(d)));
+  order.push('dependents-settled');
+  await runClosers();
+  return {
+    closeErrors,
+    dependentsAwaited: true,
+    forced,
+    holdGone: true,
+    order,
+    released,
+    terminated,
+  };
+}
+
 export async function paperGateControlRecorderLockPostgresContract(admin, port) {
   assert.equal(process.env.GITHUB_ACTIONS, 'true');
   assert.ok(/^\d+$/.test(String(port)));
@@ -178,6 +284,36 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
       "select a.pid::text as pid, a.usename as role, a.application_name as app, a.wait_event_type as wait_type from pg_locks l join pg_stat_activity a on a.pid=l.pid where l.locktype='advisory' and not l.granted and l.classid::bigint = ((hashtextextended($1::text,0) >> 32) & 4294967295) and l.objid::bigint = (hashtextextended($1::text,0) & 4294967295) and a.wait_event_type='Lock' order by a.application_name asc, a.pid asc",
       [LOCK_TEXT],
     );
+  /** Granted holders of THIS key on ONE backend. `'0'` means that backend freed it —
+   * which `lockHolders()` cannot tell us, because the recorder and the writer legitimately
+   * hold the key the moment the blocker lets go. */
+  const blockerHolds = async (pid) => {
+    const [row] = await observe(
+      "select count(*)::text as n from pg_locks where locktype='advisory' and granted and pid = $2::int and classid::bigint = ((hashtextextended($1::text,0) >> 32) & 4294967295) and objid::bigint = (hashtextextended($1::text,0) & 4294967295)",
+      [LOCK_TEXT, pid],
+    );
+    return row.n;
+  };
+  /** Last resort, and deliberately narrow. It terminates ONE backend, only on this
+   * disposable loopback test cluster, only the pid captured in the same statement that
+   * took the hold, and only after the catalog confirms that backend is this test's own
+   * blocking session (its application name), runs as the local superuser over loopback,
+   * and is actually a granted holder of this key. Anything else is refused and reported.
+   * No deployed or production session is ever a candidate: the only connection strings in
+   * this contract are 127.0.0.1 on the disposable port asserted above. */
+  const terminateBackendIfOurs = async (pid) => {
+    if (pid === undefined) return 'no-pid';
+    const [row] = await observe(
+      "select a.usename as role, a.application_name as app, (a.client_addr is null or a.client_addr = '127.0.0.1'::inet) as loopback, (select count(*) from pg_locks l where l.locktype='advisory' and l.granted and l.pid = a.pid and l.classid::bigint = ((hashtextextended($1::text,0) >> 32) & 4294967295) and l.objid::bigint = (hashtextextended($1::text,0) & 4294967295))::text as holds from pg_stat_activity a where a.pid = $2::int",
+      [LOCK_TEXT, pid],
+    );
+    if (row === undefined) return 'backend-gone';
+    if (row.app !== BLOCKER_APP || row.role !== 'postgres' || row.loopback !== true)
+      return 'refused-identity';
+    if (row.holds === '0') return 'refused-not-holder';
+    await admin.unsafe('select pg_terminate_backend($1::int)', [pid]);
+    return 'terminated';
+  };
   const untilAtLeast = async (probe, wanted, label) => {
     const startedAt = Date.now();
     while (Date.now() - startedAt < OBSERVATION_BUDGET_MS) {
@@ -248,6 +384,9 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
       runId: RUN,
     });
 
+  let facts;
+  let primary;
+  let primaryPresent = false;
   try {
     // 0. The recorder's own session, as the real client configures it. Its wait on the
     // advisory lock is bounded only by whatever timeouts actually exist, so they are
@@ -423,8 +562,10 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
     try {
       written = await holder.write(evaluateAt('recorder-eval-a', 0n), fence);
     } finally {
+      // Settled, then closed, with the close collected so it cannot replace a failing
+      // assertion from the barrier above.
       await Promise.allSettled([queued]);
-      await holder.close();
+      await holder.close().catch(() => undefined);
     }
     assert.equal(written.kind, 'written', describe(written));
     // The fail-closed ownership check ran and passed on this direct endpoint.
@@ -477,7 +618,7 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
     const blocker = postgres('postgres://postgres@127.0.0.1:' + port + '/postgres', {
       max: 1,
       prepare: false,
-      connection: { statement_timeout: 20000 },
+      connection: { application_name: BLOCKER_APP, statement_timeout: 20000 },
     });
     let recorderFirst;
     let writerAfter;
@@ -486,17 +627,37 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
     let pendingWrite;
     let bothObserved = false;
     let queuedIdentities;
+    let blockerPid;
+    let keyAcquired = false;
     let keyReleased = false;
-    // Idempotent: a second call after a mid-vector failure is a no-op rather than a
-    // second unlock that would report false and raise over the real failure.
+    let primary;
+    let primaryPresent = false;
+    let recorderFirstCleanup;
+    // Returns the SERVER's own boolean and marks the key released only when PostgreSQL
+    // says so, so a `false` — which is what a release landing on a different backend
+    // looks like — escalates instead of being recorded as success. Idempotent, and a
+    // no-op before the hold is taken.
     const releaseKey = async () => {
-      if (keyReleased) return;
-      keyReleased = true;
-      await blocker.unsafe('select pg_advisory_unlock(hashtextextended($1::text,0))', [LOCK_TEXT]);
+      if (!keyAcquired || keyReleased) return true;
+      const [row] = await blocker.unsafe(
+        'select pg_advisory_unlock(hashtextextended($1::text,0)) as released',
+        [LOCK_TEXT],
+      );
+      keyReleased = row.released === true;
+      return keyReleased;
     };
     try {
-      await blocker.unsafe('select pg_advisory_lock(hashtextextended($1::text,0))', [LOCK_TEXT]);
+      // The holder's pid comes from the SAME statement that takes the hold, so it cannot
+      // belong to a different backend than the one holding the key.
+      const [held] = await blocker.unsafe(
+        'select pg_backend_pid()::text as pid, pg_advisory_lock(hashtextextended($1::text,0))',
+        [LOCK_TEXT],
+      );
+      keyAcquired = true;
+      blockerPid = held.pid;
+      assert.ok(/^\d+$/.test(String(blockerPid)));
       assert.equal(await lockHolders(), '1');
+      assert.equal(await blockerHolds(blockerPid), '1');
       // Settle-shaped, so a rejection becomes data instead of an unhandled rejection that
       // could surface over the assertions below.
       recorderFirst = recordPause('recorder-first').then(
@@ -517,20 +678,46 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
       await untilAtLeast(lockWaiters, 2, 'the writer queued behind the recorder');
       queuedIdentities = await waiterIdentities();
       bothObserved = true;
-      // Released only after BOTH waits were observed, so the queue order asserted below
-      // is the one PostgreSQL granted and not a race — and released BEFORE anything is
-      // awaited, so no queued participant is ever awaited while the key is still held.
-      await releaseKey();
-      writerSettled = await pendingWrite;
+      // Nothing is released or awaited here: the key is freed, verified and the
+      // participants settled by ONE cleanup path below, so the body cannot take the
+      // happy-path ordering while a failure takes a different one.
+    } catch (error) {
+      // An explicit flag, not truthiness: a thrown `undefined`, `null` or `false` is still
+      // a primary failure and must not be swallowed by the cleanup result.
+      primary = error;
+      primaryPresent = true;
     } finally {
-      // Cleanup in this order on EVERY path, including an assertion failure above: free
-      // the key first so neither queued participant can be stuck, then let both settle,
-      // then close every handle. Nothing here throws over the primary failure.
-      await releaseKey().catch(() => undefined);
-      await Promise.allSettled([pendingWrite, recorderFirst]);
-      if (queuedWriter !== undefined) await queuedWriter.close().catch(() => undefined);
-      await blocker.end({ timeout: 5 });
+      recorderFirstCleanup = await freeKeyThenSettle({
+        budgetMs: OBSERVATION_BUDGET_MS,
+        closers: [
+          () => (queuedWriter === undefined ? Promise.resolve() : queuedWriter.close()),
+          () => blocker.end({ timeout: 5 }),
+        ],
+        dependents: [pendingWrite, recorderFirst],
+        forceEnd: () => blocker.end({ timeout: 0 }),
+        holdGone: async () => blockerPid === undefined || (await blockerHolds(blockerPid)) === '0',
+        pollMs: 25,
+        release: releaseKey,
+        terminate: () => terminateBackendIfOurs(blockerPid),
+      });
     }
+    // The primary failure is rethrown with its identity intact, before anything is said
+    // about the cleanup.
+    if (primaryPresent) throw primary;
+    assert.deepEqual(
+      {
+        closeErrors: recorderFirstCleanup.closeErrors,
+        dependentsAwaited: recorderFirstCleanup.dependentsAwaited,
+      },
+      { closeErrors: [], dependentsAwaited: true },
+      describe(recorderFirstCleanup),
+    );
+    assert.deepEqual(recorderFirstCleanup.order, [
+      'released',
+      'hold-gone',
+      'dependents-settled',
+      'closers-run',
+    ]);
     assert.equal(bothObserved, true);
     // Two waiters, exactly one of them the REAL recorder's own session, so the second is
     // the writer and not a second recorder — identity, not arithmetic on a count.
@@ -545,8 +732,8 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
       ['Lock'],
       describe(queuedIdentities),
     );
-    // The queued write resolved rather than rejected, and its rejection would be reported
-    // here instead of being masked by the comparison that follows.
+    // Both participants were settled by the cleanup, so reading them here cannot wait.
+    writerSettled = await pendingWrite;
     assert.ok(
       writerSettled !== undefined && 'result' in writerSettled,
       'the queued writer did not resolve: ' + describe(writerSettled),
@@ -565,6 +752,269 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
     );
     assert.equal(await eventCount('recorder-eval-c'), '0');
     assert.equal(await lockHolders(), '0');
+
+    // 4b. FAULT-INJECTION ORACLES for that cleanup. The failures the cleanup exists to
+    // survive cannot be produced on a direct loopback connection, so they are INJECTED —
+    // into the test helper's arguments only, never into production code and never through
+    // a seam in the adapter. Everything else is real: a real blocking session, the real
+    // recorder adapter and client on the substitute role, a real blocked wait observed by
+    // application name, and the catalog's own per-pid answer. No sleep is used, and every
+    // wait is bounded by the existing observation budget.
+    const newBlocker = () =>
+      postgres('postgres://postgres@127.0.0.1:' + port + '/postgres', {
+        max: 1,
+        prepare: false,
+        connection: { application_name: BLOCKER_APP, statement_timeout: 20000 },
+        // `pg_advisory_unlock` on a session holding nothing raises a WARNING; O2 expects
+        // the `false` it returns, not its console output.
+        onnotice: () => {},
+      });
+    const holdKeyWithPid = async (session) => {
+      const [row] = await session.unsafe(
+        'select pg_backend_pid()::text as pid, pg_advisory_lock(hashtextextended($1::text,0))',
+        [LOCK_TEXT],
+      );
+      return row.pid;
+    };
+    const faults = {};
+
+    // O1 + O3: a REJECTED unlock with a genuinely blocked real recorder behind the key.
+    // The forced end has to be what frees it, and the dependent must still be pending at
+    // that moment — ordering proved by state, not by timing.
+    {
+      const oracleBlocker = newBlocker();
+      try {
+        const pid = await holdKeyWithPid(oracleBlocker);
+        let dependentSettled = false;
+        const dependent = recordPause('oracle-forced').then(
+          (recorded) => {
+            dependentSettled = true;
+            return { recorded };
+          },
+          (error) => {
+            dependentSettled = true;
+            return { error: String(error && error.code) };
+          },
+        );
+        await untilAtLeast(
+          recorderLockWaiters,
+          1,
+          'the real recorder queued behind the rejected-unlock oracle',
+        );
+        let settledAtForceEnd;
+        const result = await freeKeyThenSettle({
+          budgetMs: OBSERVATION_BUDGET_MS,
+          closers: [],
+          dependents: [dependent],
+          forceEnd: () => {
+            settledAtForceEnd = dependentSettled;
+            return oracleBlocker.end({ timeout: 0 });
+          },
+          holdGone: async () => (await blockerHolds(pid)) === '0',
+          pollMs: 25,
+          release: () => Promise.reject(new Error('injected unlock failure')),
+          terminate: () => terminateBackendIfOurs(pid),
+        });
+        assert.deepEqual(result.order.slice(0, 2), ['release-rejected', 'force-end']);
+        assert.deepEqual(result.order.slice(-3), [
+          'hold-gone',
+          'dependents-settled',
+          'closers-run',
+        ]);
+        assert.deepEqual(
+          {
+            dependentsAwaited: result.dependentsAwaited,
+            forced: result.forced,
+            holdGone: result.holdGone,
+            released: result.released,
+          },
+          { dependentsAwaited: true, forced: true, holdGone: true, released: false },
+        );
+        // O3: it was the escalation that freed the key, not a polite unlock.
+        assert.equal(settledAtForceEnd, false);
+        const settledDependent = await dependent;
+        assert.ok(settledDependent.recorded !== undefined, describe(settledDependent));
+        assert.equal(typeof settledDependent.recorded.id, 'string');
+        faults.rejectedUnlock = result.terminated ? 'forced-then-terminated' : 'forced';
+        faults.dependentPendingAtForceEnd = settledAtForceEnd === false;
+        faults.escalationOrder = result.order;
+      } finally {
+        await oracleBlocker.end({ timeout: 0 }).catch(() => undefined);
+      }
+      await admin.unsafe(
+        "delete from engine.control_intent where capability=$1 and epoch=$2 and action='pause'",
+        [CAPABILITY, EPOCH],
+      );
+      assert.equal(await lockHolders(), '0');
+    }
+
+    // O2: the real unlock on a session that holds NOTHING returns `false`, while a
+    // DIFFERENT session holds the key. Nothing is given to the helper as a dependent,
+    // because nothing may be parked behind a key this cleanup is not responsible for, and
+    // the other holder releases explicitly below.
+    {
+      const idleBlocker = newBlocker();
+      const otherHolder = newBlocker();
+      try {
+        const [self] = await idleBlocker.unsafe('select pg_backend_pid()::text as pid', []);
+        const otherPid = await holdKeyWithPid(otherHolder);
+        assert.notEqual(self.pid, otherPid);
+        assert.equal(await lockHolders(), '1');
+        const result = await freeKeyThenSettle({
+          budgetMs: OBSERVATION_BUDGET_MS,
+          closers: [],
+          dependents: [],
+          forceEnd: () => idleBlocker.end({ timeout: 0 }),
+          holdGone: async () => (await blockerHolds(self.pid)) === '0',
+          pollMs: 25,
+          release: async () => {
+            const [row] = await idleBlocker.unsafe(
+              'select pg_advisory_unlock(hashtextextended($1::text,0)) as released',
+              [LOCK_TEXT],
+            );
+            return row.released === true;
+          },
+          terminate: () => terminateBackendIfOurs(self.pid),
+        });
+        // The server said `false`, and the per-pid probe then proved there was nothing on
+        // THIS backend to free — so no session was destroyed for no reason. The sketch for
+        // this oracle expected `forced: true`; polling before escalating is the stricter
+        // behaviour and this is the measured outcome, recorded as it is.
+        assert.deepEqual(
+          {
+            forced: result.forced,
+            holdGone: result.holdGone,
+            released: result.released,
+            terminated: result.terminated,
+          },
+          { forced: false, holdGone: true, released: false, terminated: false },
+        );
+        assert.deepEqual(result.order, [
+          'release-false',
+          'hold-gone',
+          'dependents-settled',
+          'closers-run',
+        ]);
+        // And the probe cannot false-positive on another holder: the key IS still held,
+        // by the other session, at this exact point.
+        assert.equal(await lockHolders(), '1');
+        assert.equal(await blockerHolds(otherPid), '1');
+        assert.equal(await blockerHolds(self.pid), '0');
+        faults.falseUnlock = 'release-false-nothing-to-free';
+      } finally {
+        await otherHolder
+          .unsafe('select pg_advisory_unlock(hashtextextended($1::text,0))', [LOCK_TEXT])
+          .catch(() => undefined);
+        await otherHolder.end({ timeout: 5 }).catch(() => undefined);
+        await idleBlocker.end({ timeout: 5 }).catch(() => undefined);
+      }
+      assert.equal(await lockHolders(), '0');
+    }
+
+    // O4: a closer that rejects is COLLECTED, and the helper still resolves.
+    {
+      const result = await freeKeyThenSettle({
+        budgetMs: OBSERVATION_BUDGET_MS,
+        closers: [() => Promise.reject(new Error('injected close failure'))],
+        dependents: [],
+        holdGone: async () => true,
+        pollMs: 25,
+        release: async () => true,
+      });
+      assert.deepEqual(result.order, [
+        'released',
+        'hold-gone',
+        'dependents-settled',
+        'closers-run',
+      ]);
+      assert.equal(result.closeErrors.length, 1);
+      assert.match(result.closeErrors[0], /injected close failure/);
+      faults.closeFailure = 'collected';
+    }
+
+    // O5: the primary failure survives a cleanup that itself fails twice. Identity, by an
+    // explicit present-flag rather than truthiness.
+    {
+      const primaryError = new Error('injected primary failure');
+      let captured;
+      let capturedPresent = false;
+      let oracleCleanup;
+      try {
+        throw primaryError;
+      } catch (error) {
+        captured = error;
+        capturedPresent = true;
+      } finally {
+        oracleCleanup = await freeKeyThenSettle({
+          budgetMs: OBSERVATION_BUDGET_MS,
+          closers: [() => Promise.reject(new Error('injected close failure'))],
+          dependents: [],
+          holdGone: async () => true,
+          pollMs: 25,
+          release: () => Promise.reject(new Error('injected unlock failure')),
+        });
+      }
+      assert.equal(capturedPresent, true);
+      assert.equal(captured === primaryError, true);
+      assert.equal(oracleCleanup.closeErrors.length, 1);
+      assert.deepEqual(oracleCleanup.order, [
+        'release-rejected',
+        'hold-gone',
+        'dependents-settled',
+        'closers-run',
+      ]);
+      faults.primaryPreserved = captured === primaryError;
+    }
+
+    // O5b: EVERY step fails and the hold never clears. The one thing that must not happen
+    // is awaiting a participant that can only finish once the key is free: the owned
+    // handles are closed, the dependent is left alone, and the helper returns. A short
+    // budget is used because every input here is injected — this is the helper's own
+    // logic, not an observation of the database.
+    {
+      // A THUNK dependent, so "was it awaited" is observable: the helper only calls it on
+      // the path that settles dependents, and it would never resolve if it did.
+      let neverSettledAwaited = false;
+      let closersRan = false;
+      const result = await freeKeyThenSettle({
+        budgetMs: 200,
+        closers: [
+          () => {
+            closersRan = true;
+            return Promise.resolve();
+          },
+        ],
+        dependents: [
+          () => {
+            neverSettledAwaited = true;
+            return new Promise(() => {});
+          },
+        ],
+        forceEnd: () => Promise.reject(new Error('injected force-end failure')),
+        holdGone: async () => false,
+        pollMs: 25,
+        release: () => Promise.reject(new Error('injected unlock failure')),
+        terminate: async () => 'refused-identity',
+      });
+      assert.deepEqual(
+        {
+          dependentsAwaited: result.dependentsAwaited,
+          holdGone: result.holdGone,
+          terminated: result.terminated,
+        },
+        { dependentsAwaited: false, holdGone: false, terminated: true },
+      );
+      assert.deepEqual(result.order.slice(-3), [
+        'hold-still-held',
+        'closers-run',
+        'dependents-not-awaited',
+      ]);
+      assert.ok(result.order.includes('terminate:refused-identity'), describe(result.order));
+      assert.equal(neverSettledAwaited, false);
+      assert.equal(closersRan, true);
+      assert.equal(result.closeErrors.length, 0);
+      faults.allStepsFail = 'closed-without-settling';
+    }
 
     // 5. A host this project KNOWS multiplexes sessions refuses `required` mode BEFORE
     // anything is acquired or connected, so a pooled endpoint can never carry this
@@ -586,7 +1036,7 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
     } finally {
       await pooled.close();
     }
-    return {
+    facts = {
       grantedRoleCanSelect: granted.can_select,
       grantedRoleStatementOutcomes: grantOutcomes,
       observedQueuedWaiters: queuedIdentities.map((row) => ({
@@ -599,30 +1049,45 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
         role: writerFirstWaiters[0].role,
         wait: writerFirstWaiters[0].wait_type,
       },
+      cleanupFaultInjection: faults,
+      cleanupOrder: recorderFirstCleanup.order,
       ownershipRefusalPathTested: false,
       probeStatementTimeoutMs: PROBE_STATEMENT_TIMEOUT_MS,
       recorderLockTimeout: String(recorderTimeouts.lock_timeout),
       recorderStatementTimeout: String(recorderTimeouts.statement_timeout),
     };
-  } finally {
-    await recorderClient.close();
-    await grantedClient.close();
-    await admin.unsafe('delete from engine.control_intent where actor=$1', [GRANT_PROBE_ACTOR]);
-    await admin.unsafe('delete from engine.paper_gate_head where generation_key=$1', [GEN]);
-    await admin.unsafe('delete from engine.paper_gate_phase_event where generation_key=$1', [GEN]);
-    await admin.unsafe('delete from engine.paper_gate_generation where generation_key=$1', [GEN]);
-    await admin.unsafe('delete from engine.paper_budget_root where funding_id=$1', [FUNDING]);
-    await admin.unsafe('delete from engine.paper_funding_root where funding_id=$1', [FUNDING]);
-    await admin.unsafe('delete from engine.control_intent where capability=$1 and epoch>=$2', [
-      CAPABILITY,
-      EPOCH,
-    ]);
-    await admin.unsafe('delete from engine.job_lease where capability=$1', [CAPABILITY]);
+  } catch (error) {
+    // An explicit flag again, so a thrown `undefined` or `false` is still a failure.
+    primary = error;
+    primaryPresent = true;
   }
+  // Teardown, with EVERY step collected rather than thrown: a close or a delete that
+  // fails must not replace the failure that brought us here. These were bare awaits in a
+  // `finally`, so the last one to fail decided what a reviewer saw.
+  const teardownErrors = [];
+  const teardown = async (step) => {
+    await step().catch((error) => teardownErrors.push(String((error && error.message) || error)));
+  };
+  await teardown(() => recorderClient.close());
+  await teardown(() => grantedClient.close());
+  for (const [statement, values] of [
+    ['delete from engine.control_intent where actor=$1', [GRANT_PROBE_ACTOR]],
+    ['delete from engine.paper_gate_head where generation_key=$1', [GEN]],
+    ['delete from engine.paper_gate_phase_event where generation_key=$1', [GEN]],
+    ['delete from engine.paper_gate_generation where generation_key=$1', [GEN]],
+    ['delete from engine.paper_budget_root where funding_id=$1', [FUNDING]],
+    ['delete from engine.paper_funding_root where funding_id=$1', [FUNDING]],
+    ['delete from engine.control_intent where capability=$1 and epoch>=$2', [CAPABILITY, EPOCH]],
+    ['delete from engine.job_lease where capability=$1', [CAPABILITY]],
+  ])
+    await teardown(() => admin.unsafe(statement, values));
+  if (primaryPresent) throw primary;
+  if (teardownErrors.length > 0) assert.fail('teardown failed: ' + describe(teardownErrors));
   // Both sides take the same key, proved by each being observed waiting on the other's
   // hold with the REAL adapters. That is CODE ORDERING in one process against one
   // database, under a role that can execute the statement. It is not a deployment:
   // current write admission still needs the engine writer running `required` on a DIRECT
   // endpoint, the recorder build live, and — per vector 1 — a principal decision on the
   // `returning id` / `select` grant conflict that today refuses the granted role.
+  return { ...facts, teardownErrors: teardownErrors.length };
 }
