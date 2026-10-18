@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CONTROL_INTENT_TABLE,
   EngineStoreError,
+  CONTROL_WRITE_LOCK_NAMESPACE,
   createPostgresControlRecorder,
   createPostgresEngineReader,
 } from './postgres-engine-store.js';
@@ -200,7 +201,58 @@ describe('recording intent', () => {
       NOW,
       'run-1',
       '{"mode":"observe"}',
+      'money-noodle/paper-gate-capability-write/v1:budget:paper',
     ]);
+  });
+
+  it('takes the per-capability write lock in the same single statement', () => {
+    const client = fakeClient([[{ id: 'intent-9' }]]);
+    return createPostgresControlRecorder({ client, schema: 'engine' })
+      .record({
+        action: 'pause',
+        actor: 'account',
+        capability: 'budget:paper',
+        epoch: 3,
+        parameters: null,
+        recordedAt: NOW,
+        runId: 'run-1',
+      })
+      .then(() => {
+        const [statement] = client.statements;
+        // One statement, so the lock is acquired before the insert can take effect and
+        // is released by that statement's implicit commit — which is all the pooled
+        // endpoint this client targets allows.
+        expect(client.statements).toHaveLength(1);
+        expect(statement?.text).toContain(
+          'from pg_advisory_xact_lock(hashtextextended($8::text, 0))',
+        );
+        expect(statement?.text).toContain('returning id');
+        expect(statement?.text).toContain('select $1, $2, $3, $4, $5, $6, $7');
+        expect(statement?.text).not.toContain('values (');
+        expect(statement?.parameters).toHaveLength(8);
+        // The key text is the engine's namespace plus the capability, verbatim.
+        expect(statement?.parameters[7]).toBe(`${CONTROL_WRITE_LOCK_NAMESPACE}:budget:paper`);
+        expect(CONTROL_WRITE_LOCK_NAMESPACE).toBe('money-noodle/paper-gate-capability-write/v1');
+      });
+  });
+
+  it('keys the lock by the capability it is recording for, not a fixed value', () => {
+    const client = fakeClient([[{ id: 'intent-10' }]]);
+    return createPostgresControlRecorder({ client, schema: 'engine' })
+      .record({
+        action: 'resume',
+        actor: 'account',
+        capability: 'budget:forecast',
+        epoch: 2,
+        parameters: null,
+        recordedAt: NOW,
+        runId: 'run-3',
+      })
+      .then(() => {
+        expect(client.statements[0]?.parameters[7]).toBe(
+          `${CONTROL_WRITE_LOCK_NAMESPACE}:budget:forecast`,
+        );
+      });
   });
 
   it('writes a null rather than an empty document when there are no parameters', async () => {

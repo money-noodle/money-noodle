@@ -19,6 +19,7 @@ import { paperGateCoveragePostgresContract } from './paper-gate-coverage-postgre
 import { paperAuthorityPostgresContract } from './paper-authority-postgres.mjs';
 import { paperGateWriterPostgresContract } from './paper-gate-writer-postgres.mjs';
 import { paperGateWriteLockPostgresContract } from './paper-gate-write-lock-postgres.mjs';
+import { paperGateControlRecorderLockPostgresContract } from './paper-gate-control-recorder-lock-postgres.mjs';
 export async function paperRootPostgresContract(admin, writer, port) {
   if (process.env.GITHUB_ACTIONS !== 'true' || !/^\d+$/.test(port))
     throw Error('Hosted disposable loopback test only.');
@@ -282,6 +283,11 @@ export async function paperRootPostgresContract(admin, writer, port) {
     await paperAuthorityPostgresContract(admin, port);
     await paperGateWriterPostgresContract(admin, port);
     await paperGateWriteLockPostgresContract(admin, port);
+    const recorderLock = await paperGateControlRecorderLockPostgresContract(admin, port);
+    // Printed because these are MEASURED facts the reviewer needs, not decoration: the
+    // granted recorder role's `select` privilege, the outcome of each statement form under
+    // it, and the recorder session's actual timeouts.
+    console.log('Control-recorder lock contract measured: ' + JSON.stringify(recorderLock));
     console.log(
       'Paper root ONLY: reapply/fixture FK/XOR/binding/bounds/correction-conservation/duplicate and actual low-role privilege assertions passed; NOT paper adapter/transaction/current-authority proof.',
     );

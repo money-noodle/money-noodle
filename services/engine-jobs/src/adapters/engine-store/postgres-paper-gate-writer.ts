@@ -98,11 +98,15 @@ import {
 import type { RegimeGatePhase } from '../../domain/paper-regime.js';
 import { grantsAuditedPolicy } from './paper-gate-audited-policy-gate.js';
 import {
-  PAPER_GATE_WRITE_LOCK_ACQUIRE_SQL,
+  PAPER_GATE_WRITE_LOCK_ACQUIRE_WITH_PID_SQL,
+  PAPER_GATE_WRITE_LOCK_OWNERSHIP_SQL,
   PAPER_GATE_WRITE_LOCK_RELEASE_ALL_SQL,
   PAPER_GATE_WRITE_LOCK_RELEASE_SQL,
+  classifyPaperGateWriteLockEndpoint,
   paperGateWriteLockText,
+  verifyPaperGateWriteLockOwnership,
   type PaperGateWriteLockMode,
+  type PaperGateWriteLockVerdict,
 } from './paper-gate-write-lock.js';
 import { MICRO, readPaperAuthorityRawInTransaction } from './paper-authority-sql.js';
 
@@ -135,9 +139,14 @@ export interface PaperGateWriter {
 export interface PaperGateWriterOptions {
   /** Per-capability write serialization. `off` is the default and preserves the measured
    * non-participating behaviour; `required` takes the session-level advisory lock on a
-   * connection it opens for that call, before `BEGIN`. It changes serialization only
-   * and can never grant
-   * admission. */
+   * connection it opens for that call, before `BEGIN`. It changes serialization only and
+   * can never grant admission.
+   *
+   * Recorder participation was approved by Rai on 2026-10-18 as CODE AND TESTS ONLY: the
+   * platform-API recorder now takes the same key, but nothing is deployed or activated.
+   * **Current write admission remains unclaimed** until a deployment in which the engine
+   * writer runs `required` on a DIRECT endpoint and the recorder build carrying that
+   * statement is live. */
   capabilityWriteLock?: PaperGateWriteLockMode;
 }
 
@@ -152,6 +161,9 @@ export interface PaperGateWriterTestEffects {
   /** Reports how the per-capability lock was released, so a test can prove no lock is
    * left behind on a connection that returns to the pool. */
   onWriteLockCleanup?: (outcome: 'released' | 'released-all' | 'cleanup-failed') => void;
+  /** Reports the fail-closed ownership verdict taken as the first statement inside the
+   * transaction, so a test can prove the check ran and what it concluded. */
+  onWriteLockOwnership?: (verdict: PaperGateWriteLockVerdict) => void;
 }
 
 const text = (value: unknown): string | undefined =>
@@ -217,7 +229,7 @@ function createPaperGateWriterCore(
         scope.sample_policy,
       ];
       // 1b. Per-capability write serialization, when required. The lock is SESSION level
-      // on an explicitly RESERVED connection and is taken BEFORE `BEGIN`, so the snapshot
+      // on a connection opened for this one call, taken BEFORE `BEGIN`, so the snapshot
       // below is taken after the wait rather than before it; a transactional lock taken
       // as the first statement would snapshot first and would not be sufficient.
       // Reservation is not optional: `max: 1` alone cannot stop two overlapping calls
@@ -232,11 +244,25 @@ function createPaperGateWriterCore(
       // `finally` below, so even a release that fails cannot leave a lock behind.
       let locked: ReturnType<typeof postgres> | undefined;
       let lockHeld = false;
+      let acquiringBackendPid: number | undefined;
       if (lockMode === 'required') {
+        // A host this project KNOWS multiplexes sessions cannot carry a session-level
+        // lock at all, so `required` mode refuses BEFORE any connection is opened and
+        // before anything is acquired. An unclassified host is NOT thereby proven direct:
+        // that remains an explicit wiring prerequisite, documented in the lock module.
+        if (classifyPaperGateWriteLockEndpoint(connectionString) === 'known-transaction-pooler')
+          return { detail: 'write-lock-endpoint-pooled', kind: 'refused', reason: 'conflict' };
         const connection = postgres(connectionString, CONNECTION_OPTIONS);
         try {
-          // Bounded by this connection's EXISTING `lock_timeout`; no new tolerance.
-          await connection.unsafe(PAPER_GATE_WRITE_LOCK_ACQUIRE_SQL, [lockText] as never[]);
+          // Bounded by this connection's EXISTING `lock_timeout`; no new tolerance. The
+          // acquiring backend reports itself in the SAME statement, so the pid cannot
+          // belong to a session other than the one that took the lock.
+          const acquired = await connection.unsafe(PAPER_GATE_WRITE_LOCK_ACQUIRE_WITH_PID_SQL, [
+            lockText,
+          ] as never[]);
+          acquiringBackendPid = Number(
+            (acquired[0] as { pid?: unknown } | undefined)?.pid ?? Number.NaN,
+          );
         } catch (error) {
           const code = (error as { code?: string }).code;
           // Nothing was locked and nothing was written; the transaction never began, so
@@ -254,6 +280,26 @@ function createPaperGateWriterCore(
       const runner = locked ?? sql;
       try {
         return await runner.begin('isolation level serializable', async (tx) => {
+          // 1c. FAIL-CLOSED ownership check, as the FIRST statement after `BEGIN` and
+          // before any read or mutation: the backend running this transaction must be the
+          // backend that acquired the lock, and must be a granted holder of this exact
+          // key. A mismatch refuses here, with nothing written.
+          if (lockMode === 'required') {
+            const ownership = await one(tx, PAPER_GATE_WRITE_LOCK_OWNERSHIP_SQL, [lockText]);
+            const verdict = verifyPaperGateWriteLockOwnership({
+              acquiringBackendPid,
+              heldByThisBackend: count(ownership?.held),
+              transactionBackendPid: Number(ownership?.pid ?? Number.NaN),
+            });
+            testEffects?.onWriteLockOwnership?.(verdict);
+            if (!verdict.ok)
+              return {
+                detail: 'write-lock-' + verdict.detail,
+                kind: 'refused',
+                reason: 'conflict' as const,
+              };
+          }
+
           // 2. Start fence on the DATABASE clock.
           const lease = await tx.unsafe(
             'select capability from engine.job_lease where capability=$1 and owner=$2 and fencing_token=$3 and expires_at > clock_timestamp()',
@@ -1019,8 +1065,13 @@ function createPaperGateWriterCore(
             }
           }
           testEffects?.onWriteLockCleanup?.(cleanup);
-          // Closed unconditionally: the session ends here, which releases any session
-          // advisory lock the ladder above could not.
+          // Closed unconditionally. On a DIRECT endpoint the session ends here, which
+          // releases any session advisory lock the ladder above could not. Through a
+          // session-multiplexing proxy neither claim holds: the release may not reach the
+          // acquiring backend and ending the logical connection need not terminate a
+          // pooled server backend — which is why `required` mode refuses a known pooler
+          // outright and why an unclassified endpoint still needs an explicit wiring
+          // decision that it is direct.
           await locked.end({ timeout: 5 });
         }
       }

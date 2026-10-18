@@ -50,6 +50,8 @@ const T_RESET = '2026-10-12 01:30:00.000000+00';
 const T_CONFIG_2 = '2026-10-12 01:45:00.000000+00';
 const T_RESET_2 = '2026-10-12 01:50:00.000000+00';
 const T_CONFIG_3 = '2026-10-12 01:55:00.000000+00';
+const T_RESET_3 = '2026-10-12 02:05:00.000000+00';
+const T_CONFIG_4 = '2026-10-12 02:10:00.000000+00';
 const OBSERVED_ISO = '2026-10-14T00:00:00.000Z';
 const CUTOFF_ISO = '2026-10-14T00:00:00.000Z';
 // Four 15 minute windows from 2026-10-12T02:15:00Z, all before the cutoff above.
@@ -1104,6 +1106,83 @@ export async function paperGateWriterPostgresContract(admin, port) {
       await initLoser.close();
     }
 
+    // 18e. F-B2: two writers racing a FRESH namespace with DIFFERENT generation keys,
+    // with the lock OFF. Neither hits a unique constraint — the generation and head
+    // primary keys are the keys themselves, which differ — so the only thing that can
+    // stop two generations occupying one namespace is the namespace predicate read under
+    // SERIALIZABLE. The expectation is therefore a serialization failure, not a unique
+    // violation, and exactly one commit with no orphans.
+    const unlocked = (effects) =>
+      createTestArtifactPaperGateWriter(writerUrl, effects, AUDITED_POLICY_FIXTURE);
+    // A genuinely FRESH namespace: its own configure intent, newest so the authority
+    // binds it, with a reset barrier ordering after the previous generation's configure.
+    await intent('writer-reset-3', 'reset', T_RESET_3, {});
+    await intent('writer-config-4', 'configure', T_CONFIG_4, CONFIG);
+    const freshScope = {
+      ...raceScope,
+      generation_config_intent_id: 'writer-config-4',
+      generation_key: 'writer-generation-diffkey-a',
+    };
+    let diffKeyRan = false;
+    const diffKeyLoser = unlocked({
+      afterAuthorityRead: async () => {
+        if (diffKeyRan) return;
+        diffKeyRan = true;
+        const inner = unlocked();
+        try {
+          const won = await inner.write(
+            requestOf({
+              eventKey: 'writer-diffkey-winner',
+              kind: 'reset',
+              priorGenerationKey: 'writer-generation-race',
+              resetBarrierIntentId: 'writer-reset-3',
+              scope: { ...freshScope, generation_key: 'writer-generation-diffkey-b' },
+            }),
+            fence,
+          );
+          assert.equal(won.kind, 'written', describe(won));
+        } finally {
+          await inner.close();
+        }
+      },
+    });
+    try {
+      const lost = await diffKeyLoser.write(
+        requestOf({
+          eventKey: 'writer-diffkey-loser',
+          kind: 'reset',
+          priorGenerationKey: 'writer-generation-race',
+          resetBarrierIntentId: 'writer-reset-3',
+          scope: freshScope,
+        }),
+        fence,
+      );
+      assert.equal(diffKeyRan, true);
+      assert.equal(lost.kind, 'refused', describe(lost));
+      assert.equal(lost.reason, 'conflict');
+      // The point of the vector: the predicate read is what stops it, so the refusal is
+      // a serialization failure and NOT a unique violation.
+      assert.equal(lost.detail, 'serialization-failure', describe(lost));
+      // Exactly one generation occupies the namespace, with no orphan event or head.
+      const [namespaceRows] = await admin.unsafe(
+        'select (select count(*)::text from engine.paper_gate_generation g where g.funding_id=$1 and g.epoch=$2 and g.budget_id=$3 and g.generation_config_intent_id=$4 and g.sample_policy=$5) as generations, (select count(*)::text from engine.paper_gate_phase_event e where e.generation_config_intent_id=$4 and e.funding_id=$1 and e.epoch=$2) as events, (select count(*)::text from engine.paper_gate_head h where h.generation_config_intent_id=$4 and h.funding_id=$1 and h.epoch=$2) as heads',
+        [FUNDING, EPOCH, BUDGET, 'writer-config-4', POLICY],
+      );
+      // Exactly one generation, event and head in the fresh namespace: the winner's.
+      assert.deepEqual(namespaceRows, { events: '1', generations: '1', heads: '1' });
+      assert.equal(
+        (
+          await admin.unsafe(
+            'select count(*)::text as n from engine.paper_gate_phase_event where event_key=$1',
+            ['writer-diffkey-loser'],
+          )
+        )[0].n,
+        '0',
+      );
+    } finally {
+      await diffKeyLoser.close();
+    }
+
     // 19. `engine_reader` cannot write any of these tables, whatever the writer does.
     const reader = postgres('postgres://engine_reader@127.0.0.1:' + port + '/postgres', {
       max: 1,
@@ -1199,9 +1278,9 @@ export async function paperGateWriterPostgresContract(admin, port) {
     // that measurement rather than assumed either way. Only the two transitions with a
     // resolved universe carry inputs; the race and max-epoch generations have none.
     const lateCommitted = lateOutcome === 'committed-under-superseded-intent' ? 1 : 0;
-    assert.equal(Number(after[0].generations), Number(before[0].generations) + 4);
-    assert.equal(Number(after[0].heads), Number(before[0].heads) + 4);
-    assert.equal(Number(after[0].events), Number(before[0].events) + 7 + lateCommitted);
+    assert.equal(Number(after[0].generations), Number(before[0].generations) + 5);
+    assert.equal(Number(after[0].heads), Number(before[0].heads) + 5);
+    assert.equal(Number(after[0].events), Number(before[0].events) + 8 + lateCommitted);
     assert.equal(Number(after[0].inputs), Number(before[0].inputs) + 10 + 5 * lateCommitted);
     assert.equal(Number(after[0].leases), 1);
     return { lateOutcome, raceDetail };
@@ -1228,7 +1307,11 @@ export async function paperGateWriterPostgresContract(admin, port) {
     await admin.unsafe('delete from engine.paper_gate_generation where generation_key=any($1)', [
       [GEN, GEN_RESET, 'writer-generation-race'],
     ]);
-    for (const key of ['writer-generation-max-epoch']) {
+    for (const key of [
+      'writer-generation-max-epoch',
+      'writer-generation-diffkey-a',
+      'writer-generation-diffkey-b',
+    ]) {
       await admin.unsafe('delete from engine.paper_gate_head where generation_key=$1', [key]);
       await admin.unsafe('delete from engine.paper_gate_phase_event where generation_key=$1', [
         key,

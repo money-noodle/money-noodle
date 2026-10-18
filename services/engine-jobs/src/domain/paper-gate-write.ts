@@ -550,8 +550,15 @@ export interface PaperGatePersistedGeneration {
 /** A genesis or reset replay compares the GENERATION too, not only the event: settings,
  * labels, the initialization run and the reset provenance are all accepted semantic
  * fields, so a request differing in any of them is a different request and is refused.
- * `priorGenerationKey` is not a persisted column, so it is re-derived against real
- * history rather than ignored; an unverifiable differing claim is rejected. */
+ *
+ * **Two kinds of provenance, labelled rather than blurred.** `resetOrigin` and
+ * `resetBarrierIntentId` are DERIVED: read from the persisted generation row. The prior
+ * generation is a VALIDATED CLAIM: `priorGenerationKey` is not a persisted column, so the
+ * caller's claim is checked against real history with the same predicate the write path
+ * applies, against the PERSISTED barrier. This module does not silently pick a "newest
+ * plausible" prior generation in place of the claim; an unverifiable differing claim is
+ * rejected. Tightening that to a derived selection would change the request contract and
+ * is left as a proposal, not done here. */
 export function comparePaperGateGenerationReplay(
   persisted: PaperGatePersistedGeneration,
   request: PaperGateWriteRequest,

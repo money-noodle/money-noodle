@@ -228,17 +228,51 @@ export function createPostgresEngineReader(options: EngineStoreOptions): EngineR
   });
 }
 
+/** The namespace half of the per-capability control write lock text.
+ *
+ * This literal is DUPLICATED from the engine side, which owns it:
+ * `services/engine-jobs/src/adapters/engine-store/paper-gate-write-lock.ts`
+ * (`PAPER_GATE_WRITE_LOCK_NAMESPACE`). There is no cross-project import between these
+ * two deployables, so the two copies are kept honest by a hosted contract that runs THIS
+ * adapter against THAT writer and observes one waiting on the other's lock — a string
+ * mismatch would stop the wait being observed and fail the vector.
+ *
+ * Approved by Rai on 2026-10-18 as code and tests only: not deployed, not activated, and
+ * no schema, grant, role, migration, API shape or access-policy change accompanies it. */
+export const CONTROL_WRITE_LOCK_NAMESPACE = 'money-noodle/paper-gate-capability-write/v1';
+
 export function createPostgresControlRecorder(options: EngineStoreOptions): ControlRecorderPort {
   const { client, schema } = options;
   return Object.freeze({
     async record(intent: Omit<IntentRow, 'id'>): Promise<{ readonly id: string }> {
-      // `returning id` is the only thing this connection reads, and it reads its
-      // own insert. The role holds no `SELECT`, so this cannot become a query.
+      // The per-capability advisory lock is taken by the SAME single statement, so it is
+      // acquired before the insert can take effect and released by that statement's
+      // implicit commit. One statement is one transaction, so a transaction pooler cannot
+      // split the hold from the insert. Every capability's intent takes its own key: only
+      // `budget:paper` has a gate writer today, and the rest simply serialize their own
+      // inserts. The engine side owns the key derivation and this is kept honest by a
+      // hosted contract that observes each side waiting on the other's hold.
+      //
+      // MEASURED CONFLICT, unresolved and not worked around here: `returning id` requires
+      // `SELECT` on `id`, and `engine_control_recorder` is granted `INSERT` only
+      // (migration 0001), so PostgreSQL refuses this statement `42501` under that role.
+      // That is equally true of the form without the lock, so it is pre-existing rather
+      // than introduced here, and
+      // `services/engine-jobs/checks/paper-gate-control-recorder-lock-postgres.mjs`
+      // vector 1 asserts both halves of that. Resolving it means either dropping
+      // `returning id` and the id this port returns — an API-shape change — or granting
+      // the one column, `grant select (id) on engine.control_intent to
+      // engine_control_recorder`, which was MEASURED to be sufficient and leaves the role
+      // unable to read any other column or any other row's. Both are a migration or an
+      // API change; this change is authorized for code and tests only, so the statement
+      // is left exactly as it was apart from the lock and the decision stays with the
+      // principal.
       const rows = await run(
         client,
         `insert into "${schema}"."${CONTROL_INTENT_TABLE}"
            (capability, action, actor, epoch, recorded_at, run_id, parameters)
-         values ($1, $2, $3, $4, $5, $6, $7)
+         select $1, $2, $3, $4, $5, $6, $7
+           from pg_advisory_xact_lock(hashtextextended($8::text, 0))
          returning id`,
         [
           intent.capability,
@@ -248,6 +282,7 @@ export function createPostgresControlRecorder(options: EngineStoreOptions): Cont
           intent.recordedAt,
           intent.runId,
           intent.parameters === null ? null : JSON.stringify(intent.parameters),
+          `${CONTROL_WRITE_LOCK_NAMESPACE}:${intent.capability}`,
         ],
       );
       const first = rows[0];

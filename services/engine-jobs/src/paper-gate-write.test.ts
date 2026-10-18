@@ -29,6 +29,12 @@ import {
 } from './adapters/engine-store/paper-gate-audited-policy-gate.js';
 import { AUDITED_POLICY_FIXTURE } from './test-support/paper-gate-audited-policy-fixture.js';
 import {
+  PAPER_GATE_WRITE_LOCK_NAMESPACE,
+  classifyPaperGateWriteLockEndpoint,
+  paperGateWriteLockText,
+  verifyPaperGateWriteLockOwnership,
+} from './adapters/engine-store/paper-gate-write-lock.js';
+import {
   PAPER_HISTORICAL_REGIME_CONTRACT,
   PAPER_REGIME_SAMPLE_BUY_POLICY,
   PAPER_RESTRICTIVE_REGIME_PROPOSAL,
@@ -652,5 +658,92 @@ describe('paper gate generation replay comparison', () => {
     ).toBe('prior_generation_key');
     // An evaluate request has no generation to compare.
     expect(comparePaperGateGenerationReplay(resetRow, EVALUATE)).toBeUndefined();
+  });
+});
+
+describe('paper gate write lock endpoint and ownership', () => {
+  it('derives the lock text both participants must agree on', () => {
+    expect(PAPER_GATE_WRITE_LOCK_NAMESPACE).toBe('money-noodle/paper-gate-capability-write/v1');
+    expect(paperGateWriteLockText('budget:paper')).toBe(
+      'money-noodle/paper-gate-capability-write/v1:budget:paper',
+    );
+  });
+
+  it('refuses hosts it KNOWS multiplex sessions', () => {
+    for (const url of [
+      'postgres://u@ep-cool-1234-pooler.eu-central-1.aws.neon.tech/db',
+      'postgresql://u:p@my-pgbouncer.internal:6432/db',
+      'postgres://u@aws-0-eu-west-2.pooler.supabase.com:6543/postgres',
+    ])
+      expect(classifyPaperGateWriteLockEndpoint(url)).toBe('known-transaction-pooler');
+  });
+
+  it('calls everything else UNCLASSIFIED, never "direct"', () => {
+    for (const url of [
+      'postgres://engine_writer@127.0.0.1:5432/postgres',
+      'postgres://u@ep-cool-1234.eu-central-1.aws.neon.tech/db',
+      // An unparseable string is not a claim of directness either.
+      'not-a-url',
+      '',
+    ])
+      expect(classifyPaperGateWriteLockEndpoint(url)).toBe('unclassified');
+  });
+
+  it('accepts ownership only when the acquiring backend is this one and holds the key', () => {
+    expect(
+      verifyPaperGateWriteLockOwnership({
+        acquiringBackendPid: 4242,
+        heldByThisBackend: 1,
+        transactionBackendPid: 4242,
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  it('fails closed on every other shape, naming which one', () => {
+    const cases: readonly (readonly [
+      string,
+      Parameters<typeof verifyPaperGateWriteLockOwnership>[0],
+    ])[] = [
+      [
+        'acquiring-pid-unknown',
+        { acquiringBackendPid: undefined, heldByThisBackend: 1, transactionBackendPid: 1 },
+      ],
+      [
+        'acquiring-pid-unknown',
+        { acquiringBackendPid: Number.NaN, heldByThisBackend: 1, transactionBackendPid: 1 },
+      ],
+      [
+        'acquiring-pid-unknown',
+        { acquiringBackendPid: 0, heldByThisBackend: 1, transactionBackendPid: 1 },
+      ],
+      [
+        'transaction-pid-unknown',
+        { acquiringBackendPid: 7, heldByThisBackend: 1, transactionBackendPid: undefined },
+      ],
+      [
+        'transaction-pid-unknown',
+        { acquiringBackendPid: 7, heldByThisBackend: 1, transactionBackendPid: Number.NaN },
+      ],
+      // A proxy that handed the transaction a different backend than the one that
+      // locked: refused before anything is written.
+      [
+        'backend-reassigned',
+        { acquiringBackendPid: 7, heldByThisBackend: 1, transactionBackendPid: 8 },
+      ],
+      [
+        'lock-not-owned',
+        { acquiringBackendPid: 7, heldByThisBackend: 0, transactionBackendPid: 7 },
+      ],
+      [
+        'lock-not-owned',
+        { acquiringBackendPid: 7, heldByThisBackend: 2, transactionBackendPid: 7 },
+      ],
+      [
+        'lock-not-owned',
+        { acquiringBackendPid: 7, heldByThisBackend: undefined, transactionBackendPid: 7 },
+      ],
+    ];
+    for (const [detail, ownership] of cases)
+      expect(verifyPaperGateWriteLockOwnership(ownership)).toEqual({ detail, ok: false });
   });
 });
