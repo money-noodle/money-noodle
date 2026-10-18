@@ -18,10 +18,12 @@
 // succeed identically, so the lock change is privilege-neutral and the refusal is
 // pre-existing. The minimum sufficient grant was measured separately on a disposable
 // cluster — `grant select (id) on engine.control_intent to engine_control_recorder` makes
-// the shipped statement succeed and leaves the role unable to read any other column — but
-// that is a grant and migration change, and dropping `returning id` is an API/port-shape
-// change; this batch is authorized for neither, so the blocker is asserted as a negative
-// control here and left for the principal to decide.
+// the shipped statement succeed — but that grant is NOT restricted to the role's own
+// inserted rows: a column privilege lets it read `id` for every row of the table. It is a
+// grant and migration change, dropping `returning id` is an API/port-shape change, and a
+// third option (generate the id in the API, response shape unchanged, no extra grant) is
+// PROPOSED AND NOT APPROVED. This batch is authorized for none of them, so the blocker is
+// asserted as a negative control here and left for the principal to decide.
 //
 // Because of that, vectors 2 and 3 construct the real recorder over the `engine_writer`
 // connection string, which does hold `select` and `insert` on the one table. REAL
@@ -129,8 +131,25 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
     [CAPABILITY, OWNER, TOKEN.toString()],
   );
 
+  // The application name the REAL recorder's own client factory sets, which is how a
+  // waiter is identified as the recorder rather than merely counted.
+  const RECORDER_APP = 'platform-api-control-recorder';
+  // How long an observation may take to appear. This is the EXISTING harness budget for
+  // these vectors; it is a TEST bound only.
+  const OBSERVATION_BUDGET_MS = 4000;
+  // And a per-query bound DERIVED from it rather than from any production setting: one
+  // probe may not consume more than half the budget it is polling inside. Applied with
+  // `set local`, so it lives and dies with the probe's own transaction and changes no
+  // session, role or production default. No production timeout is introduced anywhere by
+  // this contract — the recorder's own wait is measured as unbounded and left that way.
+  const PROBE_STATEMENT_TIMEOUT_MS = OBSERVATION_BUDGET_MS / 2;
+  const observe = (text, values) =>
+    admin.begin(async (tx) => {
+      await tx.unsafe('set local statement_timeout = ' + PROBE_STATEMENT_TIMEOUT_MS, []);
+      return tx.unsafe(text, values);
+    });
   const lockHolders = async () => {
-    const [row] = await admin.unsafe(
+    const [row] = await observe(
       "select count(*)::text as n from pg_locks where locktype='advisory' and granted and classid::bigint = ((hashtextextended($1::text,0) >> 32) & 4294967295) and objid::bigint = (hashtextextended($1::text,0) & 4294967295)",
       [LOCK_TEXT],
     );
@@ -138,15 +157,30 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
   };
   /** Ungranted waiters on exactly this key, confirmed as lock waits in activity. */
   const lockWaiters = async () => {
-    const [row] = await admin.unsafe(
+    const [row] = await observe(
       "select count(*)::text as n from pg_locks l join pg_stat_activity a on a.pid=l.pid where l.locktype='advisory' and not l.granted and l.classid::bigint = ((hashtextextended($1::text,0) >> 32) & 4294967295) and l.objid::bigint = (hashtextextended($1::text,0) & 4294967295) and a.wait_event_type='Lock'",
       [LOCK_TEXT],
     );
     return row.n;
   };
+  /** The same, narrowed to the REAL recorder's own session by application name, so the
+   * identity of the waiter is asserted and not inferred from a count. */
+  const recorderLockWaiters = async () => {
+    const [row] = await observe(
+      "select count(*)::text as n from pg_locks l join pg_stat_activity a on a.pid=l.pid where l.locktype='advisory' and not l.granted and l.classid::bigint = ((hashtextextended($1::text,0) >> 32) & 4294967295) and l.objid::bigint = (hashtextextended($1::text,0) & 4294967295) and a.wait_event_type='Lock' and a.application_name=$2",
+      [LOCK_TEXT, RECORDER_APP],
+    );
+    return row.n;
+  };
+  /** Who is actually waiting: backend pid, role and application name, from the catalog. */
+  const waiterIdentities = async () =>
+    observe(
+      "select a.pid::text as pid, a.usename as role, a.application_name as app, a.wait_event_type as wait_type from pg_locks l join pg_stat_activity a on a.pid=l.pid where l.locktype='advisory' and not l.granted and l.classid::bigint = ((hashtextextended($1::text,0) >> 32) & 4294967295) and l.objid::bigint = (hashtextextended($1::text,0) & 4294967295) and a.wait_event_type='Lock' order by a.application_name asc, a.pid asc",
+      [LOCK_TEXT],
+    );
   const untilAtLeast = async (probe, wanted, label) => {
     const startedAt = Date.now();
-    while (Date.now() - startedAt < 4000) {
+    while (Date.now() - startedAt < OBSERVATION_BUDGET_MS) {
       if (Number(await probe()) >= wanted) return;
       await delay(25);
     }
@@ -238,6 +272,19 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
     assert.ok(typeof recorderTimeouts.lock_timeout === 'string');
     assert.ok(typeof recorderTimeouts.statement_timeout === 'string');
     assert.equal(timeouts.lock_timeout, recorderTimeouts.lock_timeout);
+    // And a failure-path regression for the observer bound this contract adds, so the
+    // bound is proven to be in effect rather than merely written: a probe that outlasts
+    // PROBE_STATEMENT_TIMEOUT_MS is cancelled with 57014 instead of hanging. This bounds
+    // the TEST observer only — it is applied with `set local` inside the probe's own
+    // transaction and changes no production setting, role or default.
+    const probeBound = await observe(
+      'select pg_sleep(' + (PROBE_STATEMENT_TIMEOUT_MS / 1000 + 1) + ')',
+      [],
+    ).then(
+      () => 'not-bounded',
+      (error) => String(error && error.code),
+    );
+    assert.equal(probeBound, '57014');
 
     // 1. GRANT NEGATIVE CONTROL. The role the schema grants the recorder cannot execute
     // the recorder's statement at all. First through the REAL adapter, which refuses.
@@ -352,6 +399,7 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
     let queued;
     let ownershipVerdict;
     let cleanup;
+    let writerFirstWaiters;
     const holder = locked({
       onWriteLockOwnership: (verdict) => {
         ownershipVerdict = verdict;
@@ -364,7 +412,10 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
         queued = recordPause('writer-first').catch((error) => ({
           error: String(error && error.code),
         }));
-        await untilAtLeast(lockWaiters, 1, 'the real recorder waiting on the advisory key');
+        await untilAtLeast(recorderLockWaiters, 1, 'the real recorder waiting on the advisory key');
+        // Not a count: the waiter's own backend pid, role and application name, read from
+        // the catalog while it is genuinely blocked on THIS key.
+        writerFirstWaiters = await waiterIdentities();
         assert.equal(await pauseCount(), '0');
       },
     });
@@ -378,6 +429,16 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
     assert.equal(written.kind, 'written', describe(written));
     // The fail-closed ownership check ran and passed on this direct endpoint.
     assert.deepEqual(ownershipVerdict, { ok: true });
+    // Exactly one waiter was observed, it was the REAL recorder's own session, and it was
+    // waiting on a lock — pid, role and application name, not a timer.
+    assert.equal(writerFirstWaiters.length, 1, describe(writerFirstWaiters));
+    assert.equal(writerFirstWaiters[0].app, RECORDER_APP);
+    assert.equal(writerFirstWaiters[0].wait_type, 'Lock');
+    assert.ok(/^\d+$/.test(String(writerFirstWaiters[0].pid)), describe(writerFirstWaiters));
+    // The substitute ROLE is asserted, so the limit is in the evidence and not only in
+    // the prose: this is `engine_writer`, because vector 1 showed the granted recorder
+    // role cannot execute the statement at all.
+    assert.equal(writerFirstWaiters[0].role, 'engine_writer');
     assert.equal(cleanup, 'released');
     // The event bound the intent that was standing BEFORE the pause, read from the row.
     const [bound] = await admin.unsafe(
@@ -420,35 +481,80 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
     });
     let recorderFirst;
     let writerAfter;
+    let writerSettled;
+    let queuedWriter;
+    let pendingWrite;
     let bothObserved = false;
+    let queuedIdentities;
+    let keyReleased = false;
+    // Idempotent: a second call after a mid-vector failure is a no-op rather than a
+    // second unlock that would report false and raise over the real failure.
+    const releaseKey = async () => {
+      if (keyReleased) return;
+      keyReleased = true;
+      await blocker.unsafe('select pg_advisory_unlock(hashtextextended($1::text,0))', [LOCK_TEXT]);
+    };
     try {
       await blocker.unsafe('select pg_advisory_lock(hashtextextended($1::text,0))', [LOCK_TEXT]);
       assert.equal(await lockHolders(), '1');
-      recorderFirst = recordPause('recorder-first').catch((error) => ({
-        error: String(error && error.code),
-      }));
-      await untilAtLeast(lockWaiters, 1, 'the real recorder queued behind the third session');
+      // Settle-shaped, so a rejection becomes data instead of an unhandled rejection that
+      // could surface over the assertions below.
+      recorderFirst = recordPause('recorder-first').then(
+        (recorded) => ({ recorded }),
+        (error) => ({ error: String(error && error.code) }),
+      );
+      await untilAtLeast(
+        recorderLockWaiters,
+        1,
+        'the real recorder, by application name, queued behind the third session',
+      );
       assert.equal(await pauseCount(), '0');
-      const queuedWriter = locked();
-      try {
-        writerAfter = queuedWriter.write(evaluateAt('recorder-eval-c', 1n), fence);
-        await untilAtLeast(lockWaiters, 2, 'the writer queued behind the recorder');
-        bothObserved = true;
-      } finally {
-        // Release only after BOTH waits were observed, so the queue order is the one
-        // asserted below and not a race.
-        await blocker.unsafe('select pg_advisory_unlock(hashtextextended($1::text,0))', [
-          LOCK_TEXT,
-        ]);
-        const result = await writerAfter;
-        await queuedWriter.close();
-        writerAfter = result;
-      }
+      queuedWriter = locked();
+      pendingWrite = queuedWriter.write(evaluateAt('recorder-eval-c', 1n), fence).then(
+        (result) => ({ result }),
+        (error) => ({ error }),
+      );
+      await untilAtLeast(lockWaiters, 2, 'the writer queued behind the recorder');
+      queuedIdentities = await waiterIdentities();
+      bothObserved = true;
+      // Released only after BOTH waits were observed, so the queue order asserted below
+      // is the one PostgreSQL granted and not a race — and released BEFORE anything is
+      // awaited, so no queued participant is ever awaited while the key is still held.
+      await releaseKey();
+      writerSettled = await pendingWrite;
     } finally {
+      // Cleanup in this order on EVERY path, including an assertion failure above: free
+      // the key first so neither queued participant can be stuck, then let both settle,
+      // then close every handle. Nothing here throws over the primary failure.
+      await releaseKey().catch(() => undefined);
+      await Promise.allSettled([pendingWrite, recorderFirst]);
+      if (queuedWriter !== undefined) await queuedWriter.close().catch(() => undefined);
       await blocker.end({ timeout: 5 });
     }
     assert.equal(bothObserved, true);
-    const recordedFirst = await recorderFirst;
+    // Two waiters, exactly one of them the REAL recorder's own session, so the second is
+    // the writer and not a second recorder — identity, not arithmetic on a count.
+    assert.equal(queuedIdentities.length, 2, describe(queuedIdentities));
+    assert.equal(
+      queuedIdentities.filter((row) => row.app === RECORDER_APP).length,
+      1,
+      describe(queuedIdentities),
+    );
+    assert.deepEqual(
+      [...new Set(queuedIdentities.map((row) => row.wait_type))],
+      ['Lock'],
+      describe(queuedIdentities),
+    );
+    // The queued write resolved rather than rejected, and its rejection would be reported
+    // here instead of being masked by the comparison that follows.
+    assert.ok(
+      writerSettled !== undefined && 'result' in writerSettled,
+      'the queued writer did not resolve: ' + describe(writerSettled),
+    );
+    writerAfter = writerSettled.result;
+    const firstSettled = await recorderFirst;
+    assert.ok(firstSettled.recorded !== undefined, describe(firstSettled));
+    const recordedFirst = firstSettled.recorded;
     assert.equal(typeof recordedFirst.id, 'string', describe(recordedFirst));
     assert.equal(await pauseCount(), '1');
     // The recorder was granted first, so the writer snapshotted after its wait and saw
@@ -483,6 +589,18 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
     return {
       grantedRoleCanSelect: granted.can_select,
       grantedRoleStatementOutcomes: grantOutcomes,
+      observedQueuedWaiters: queuedIdentities.map((row) => ({
+        app: row.app,
+        role: row.role,
+        wait: row.wait_type,
+      })),
+      observedRecorderWaiter: {
+        app: writerFirstWaiters[0].app,
+        role: writerFirstWaiters[0].role,
+        wait: writerFirstWaiters[0].wait_type,
+      },
+      ownershipRefusalPathTested: false,
+      probeStatementTimeoutMs: PROBE_STATEMENT_TIMEOUT_MS,
       recorderLockTimeout: String(recorderTimeouts.lock_timeout),
       recorderStatementTimeout: String(recorderTimeouts.statement_timeout),
     };

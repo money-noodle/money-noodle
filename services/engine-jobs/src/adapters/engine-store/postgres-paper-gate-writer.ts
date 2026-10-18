@@ -41,19 +41,29 @@
 //     the head CAS — and aborts or refuses.
 //   * A concurrent INSERT of a NEWER control intent (a pause, reset or configure
 //     recorded after this transaction's snapshot and committed before its COMMIT) is
-//     NOT ordered against this write unless that recorder also runs at SERIALIZABLE.
-//     PostgreSQL's serializable guarantee holds only among transactions that are all
-//     serializable, and the control recorder's isolation is outside this module's
-//     surface. So this writer linearizes against the lease and against other writers,
-//     and its authority check is "the control record as of this transaction's snapshot",
-//     NOT "no superseding intent exists at commit".
+//     NOT ordered against this write by isolation alone. So this writer linearizes
+//     against the lease and against other writers, and its authority check is "the
+//     control record as of this transaction's snapshot", NOT "no superseding intent
+//     exists at commit".
 //
-// That gap is deliberate and reported rather than papered over: this batch does not
-// claim current write admission. Closing it needs one of three things, none of which is
-// in this batch's allowed surface — the control recorder taking a per-capability lock
-// the writer also takes (`pg_advisory_xact_lock` needs no grant, but needs the recorder
-// side), every control writer running SERIALIZABLE, or a per-capability control-generation
-// row the recorder bumps and the writer locks `for update` (a schema change).
+// **Raising every control writer to SERIALIZABLE is WITHDRAWN as an option**, because it
+// does not close that gap: an insert-only recorder creates a single read-write dependency
+// edge against this writer, not a cycle, so SSI has nothing to abort. The hosted vector
+// measured exactly that — the write committing under a superseded intent.
+//
+// What does order the two is a lock both sides take, and **the recorder side now takes
+// it**: `services/platform-api/.../postgres-engine-store.ts` acquires the same
+// per-capability key in its single INSERT statement, approved as CODE AND TESTS ONLY and
+// **not deployed and not activated**. See `./paper-gate-write-lock.ts` for the key
+// derivation, the direct-endpoint prerequisite, and the measured permission fact that the
+// granted recorder role cannot execute that statement at all today.
+//
+// **Current write admission is therefore still NOT claimed.** It needs the writer running
+// `capabilityWriteLock: 'required'` on a proven DIRECT endpoint, the recorder build live,
+// and the pending principal decision on that permission fact. The mode defaults to `off`
+// and nothing is wired. (The remaining alternative, a per-capability control-generation
+// row the recorder bumps and the writer locks `for update`, is a schema change and is not
+// proposed here.)
 //
 // ## Availability
 //
@@ -292,6 +302,10 @@ function createPaperGateWriterCore(
               transactionBackendPid: Number(ownership?.pid ?? Number.NaN),
             });
             testEffects?.onWriteLockOwnership?.(verdict);
+            // The `{ok: true}` branch is exercised hosted. The refusal branch below is
+            // NOT: a failing verdict needs a session-multiplexing proxy to arise
+            // genuinely, and no test forces it, so this ordering is reviewed code rather
+            // than measured behaviour. Recorded here instead of being papered over.
             if (!verdict.ok)
               return {
                 detail: 'write-lock-' + verdict.detail,
@@ -1057,6 +1071,14 @@ function createPaperGateWriterCore(
               if ((rows[0] as { released?: unknown } | undefined)?.released !== true) {
                 // Should not happen on the acquiring session; clear everything this
                 // session holds before the connection goes away.
+                //
+                // KNOWN LIMITATION, documented rather than relabelled in this batch:
+                // `released-all` does not distinguish "this session never owned the lock"
+                // from "the release reported false", because `pg_advisory_unlock` returns
+                // false for both and `pg_advisory_unlock_all` returns `void`. A separate
+                // `release-not-owned` outcome would need the ownership probe repeated in
+                // the cleanup path, which changes an observable test-effect label and is
+                // deliberately left out of this batch.
                 await locked.unsafe(PAPER_GATE_WRITE_LOCK_RELEASE_ALL_SQL, [] as never[]);
                 cleanup = 'released-all';
               }

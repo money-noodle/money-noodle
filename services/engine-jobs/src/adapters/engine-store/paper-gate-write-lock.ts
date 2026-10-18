@@ -60,16 +60,16 @@ export function paperGateWriteLockText(capability: string): string {
  * so a participating recorder can be written against the identical derivation. */
 export const PAPER_GATE_WRITE_LOCK_KEY_SQL = 'hashtextextended($1::text, 0)';
 
-/** Blocking session-level acquisition, bounded by the connection's own `lock_timeout`. */
-export const PAPER_GATE_WRITE_LOCK_ACQUIRE_SQL = `select pg_advisory_lock(${PAPER_GATE_WRITE_LOCK_KEY_SQL}) is null as acquired`;
-
 /** Release on the SAME session. Returns false when this session did not hold it. */
 export const PAPER_GATE_WRITE_LOCK_RELEASE_SQL = `select pg_advisory_unlock(${PAPER_GATE_WRITE_LOCK_KEY_SQL}) as released`;
 
 /** Last-resort cleanup for the same session, so a release that reports false cannot leave
- * a lock behind on a connection that goes back to the pool. */
-export const PAPER_GATE_WRITE_LOCK_RELEASE_ALL_SQL =
-  'select pg_advisory_unlock_all() is null as cleared';
+ * a lock behind on a connection that goes away.
+ *
+ * `pg_advisory_unlock_all()` returns `void`, so there is nothing here to read as a
+ * confirmation and no alias pretends otherwise. The caller records that it fell back to
+ * this statement; it does not record a success it cannot observe. */
+export const PAPER_GATE_WRITE_LOCK_RELEASE_ALL_SQL = 'select pg_advisory_unlock_all()';
 
 /** Whether this capability's lock is currently held by SOME session, for the tests and
  * for the leak check after a failure.
@@ -151,7 +151,14 @@ export type PaperGateWriteLockVerdict =
  * backend later. A single matching pid proves one moment, not a property. Through a
  * session-multiplexing proxy none of the cleanup guarantees hold either: the release may
  * not reach the acquiring backend, and ending the logical connection does not terminate a
- * pooled server backend. Directness therefore stays an explicit wiring prerequisite. */
+ * pooled server backend. Directness therefore stays an explicit wiring prerequisite.
+ *
+ * **Test coverage limit, stated rather than implied:** this function is unit-tested over
+ * every verdict shape, but the ADAPTER path that consumes a failing verdict — refusing
+ * `write-lock-<detail>` before any mutation — is **not exercised by any test**. Producing
+ * a genuinely reassigned backend needs a session-multiplexing proxy, and a seam that
+ * forced the verdict would prove the seam rather than the protocol. So the refusal
+ * ordering here is reviewed code, not measured behaviour. */
 export function verifyPaperGateWriteLockOwnership(
   ownership: PaperGateWriteLockOwnership,
 ): PaperGateWriteLockVerdict {

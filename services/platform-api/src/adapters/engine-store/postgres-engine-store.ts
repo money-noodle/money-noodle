@@ -262,11 +262,12 @@ export function createPostgresControlRecorder(options: EngineStoreOptions): Cont
       // vector 1 asserts both halves of that. Resolving it means either dropping
       // `returning id` and the id this port returns — an API-shape change — or granting
       // the one column, `grant select (id) on engine.control_intent to
-      // engine_control_recorder`, which was MEASURED to be sufficient and leaves the role
-      // unable to read any other column or any other row's. Both are a migration or an
-      // API change; this change is authorized for code and tests only, so the statement
-      // is left exactly as it was apart from the lock and the decision stays with the
-      // principal.
+      // engine_control_recorder`, which was MEASURED to be sufficient. That grant is NOT
+      // limited to this role's own inserted rows: a column privilege permits reading `id`
+      // for every row of the table, so it widens the role's read surface, narrowly but
+      // really. Both options are a migration or an API change; this change is authorized
+      // for code and tests only, so the statement is left exactly as it was apart from
+      // the lock, and the remedy stays a PROPOSAL pending the principal's decision.
       const rows = await run(
         client,
         `insert into "${schema}"."${CONTROL_INTENT_TABLE}"

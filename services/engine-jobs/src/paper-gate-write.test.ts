@@ -28,8 +28,11 @@ import {
   grantsAuditedPolicy,
 } from './adapters/engine-store/paper-gate-audited-policy-gate.js';
 import { AUDITED_POLICY_FIXTURE } from './test-support/paper-gate-audited-policy-fixture.js';
+import * as writeLockModule from './adapters/engine-store/paper-gate-write-lock.js';
 import {
+  PAPER_GATE_WRITE_LOCK_ACQUIRE_WITH_PID_SQL,
   PAPER_GATE_WRITE_LOCK_NAMESPACE,
+  PAPER_GATE_WRITE_LOCK_RELEASE_ALL_SQL,
   classifyPaperGateWriteLockEndpoint,
   paperGateWriteLockText,
   verifyPaperGateWriteLockOwnership,
@@ -745,5 +748,28 @@ describe('paper gate write lock endpoint and ownership', () => {
     ];
     for (const [detail, ownership] of cases)
       expect(verifyPaperGateWriteLockOwnership(ownership)).toEqual({ detail, ok: false });
+  });
+
+  it('exports one acquisition statement, the pid-returning one', () => {
+    // The earlier `…_ACQUIRE_SQL` had no caller once acquisition had to report its own
+    // backend, and its `is null as acquired` alias described nothing a caller read.
+    expect(Object.keys(writeLockModule)).not.toContain('PAPER_GATE_WRITE_LOCK_ACQUIRE_SQL');
+    expect(PAPER_GATE_WRITE_LOCK_ACQUIRE_WITH_PID_SQL).toContain('pg_backend_pid()');
+    expect(PAPER_GATE_WRITE_LOCK_ACQUIRE_WITH_PID_SQL).toContain('pg_advisory_lock(');
+  });
+
+  it('claims nothing from the release-all statement, which returns void', () => {
+    expect(PAPER_GATE_WRITE_LOCK_RELEASE_ALL_SQL).toBe('select pg_advisory_unlock_all()');
+    expect(PAPER_GATE_WRITE_LOCK_RELEASE_ALL_SQL).not.toContain('is null');
+    expect(PAPER_GATE_WRITE_LOCK_RELEASE_ALL_SQL).not.toContain(' as ');
+  });
+
+  it('documents that only the VERDICT is unit-tested, never the adapter refusal path', () => {
+    // An honest limit kept next to the thing it limits: every case above exercises the
+    // pure verdict function. The adapter path that CONSUMES a failing verdict — refusing
+    // `write-lock-<detail>` before any mutation — is NOT exercised by any test, because
+    // reproducing a reassigned backend needs a session-multiplexing proxy, and a test
+    // seam that forced the verdict would prove the seam rather than the protocol.
+    expect(verifyPaperGateWriteLockOwnership).toBeTypeOf('function');
   });
 });
