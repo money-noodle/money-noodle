@@ -47,7 +47,7 @@
 
 import postgres from 'postgres';
 
-import { MAX_INTENT_CLOCK_SKEW_MS } from '../../domain/intent.js';
+import { readPaperAuthorityRawInTransaction } from './paper-authority-sql.js';
 import {
   buildPaperAuthorityEvidence,
   paperAuthorityFenceIsValid,
@@ -57,24 +57,8 @@ import {
   type PaperAuthorityScope,
 } from '../../domain/paper-authority-evidence.js';
 
-/** Exact signed epoch microseconds as TEXT, extracted before any driver Date.
- * `control_intent.recorded_at` carries no `isfinite` check, so a non-finite timestamp
- * is reported as NULL rather than allowed to raise on the numeric cast. */
-const MICRO = (column: string): string =>
-  `case when isfinite(${column}) then (extract(epoch from ${column})*1000000)::numeric(30,0)::text else null end`;
-
 /** Serialization failure: a concurrent commit moved a row this fence locked. */
 const SERIALIZATION_FAILURE = '40001';
-
-/** `(epoch, recorded_at, id)` as a PostgreSQL row, compared lexicographically by the
- * server. The same ordering as `control_intent_latest_idx`. */
-const ORDER_KEY = (alias: string): string =>
-  `row(${alias}.epoch, ${alias}.recorded_at, ${alias}.id)`;
-
-// `epoch_text`, never `epoch`: an output column named `epoch` SHADOWS the table column
-// in `order by epoch desc`, which would order the authoritative epoch as TEXT and put
-// epoch 9 above epoch 10. The alias keeps the ordering on the integer column.
-const INTENT_COLUMNS = `id,capability,action,actor,epoch::text as epoch_text,${MICRO('recorded_at')} as recorded_at_us,(isfinite(recorded_at) and recorded_at - clock_timestamp() <= $2::interval) as time_valid,parameters`;
 
 export interface PaperAuthorityStore {
   readAuthority(
@@ -132,9 +116,6 @@ export function createPostgresPaperAuthorityStore(
         return { detail: 'fence', kind: 'refused', reason: 'scope' };
       if (scope.capability !== fence.capability)
         return { detail: 'capability-mismatch', kind: 'refused', reason: 'scope' };
-      // The existing approved allowance, carried to the server as an interval so the
-      // comparison is made against the database clock. No tolerance is invented here.
-      const skew = `${MAX_INTENT_CLOCK_SKEW_MS} milliseconds`;
       try {
         return await sql.begin('isolation level repeatable read', async (tx) => {
           // Start fence: owner, token and a live expiry on the DATABASE clock.
@@ -143,64 +124,17 @@ export function createPostgresPaperAuthorityStore(
             [fence.capability, fence.owner, fence.fencingToken.toString()],
           );
           const leaseHeld = lease.length === 1;
-          const observed = leaseHeld
-            ? await one(tx, `select ${MICRO('clock_timestamp()')} as observed_at_us`, [])
-            : null;
-          // The standing intent: GLOBAL latest for the capability, not filtered to the
-          // requested epoch, newest first under the authoritative ordering. A malformed
-          // newest row is returned as the newest row.
-          const latest = leaseHeld
-            ? await one(
-                tx,
-                `select ${INTENT_COLUMNS} from engine.control_intent where capability=$1 order by epoch desc, recorded_at desc, id desc limit 1`,
-                [fence.capability, skew],
-              )
-            : null;
-          // Mid-read barrier: the standing intent is above, everything compared against
-          // it is below. A concurrent commit landing here is the case that distinguishes
-          // one snapshot from two.
-          await testEffects?.afterLatestRead?.();
-          // The configure row this request could bind: newest `configure` for the
-          // capability AT the requested epoch, malformed parameters included. The
-          // reducer requires `configure.epoch === snapshot.epoch`, so the epoch filter
-          // is that requirement and not a narrowing of the standing intent.
-          const configure = leaseHeld
-            ? await one(
-                tx,
-                `select ${INTENT_COLUMNS} from engine.control_intent where capability=$1 and action='configure' and epoch=$3 order by epoch desc, recorded_at desc, id desc limit 1`,
-                [fence.capability, skew, scope.epoch],
-              )
-            : null;
-          // Ordering and the reset barrier, computed by the server over the two rows it
-          // already chose. The reset is global for the capability, under the same
-          // ordering, so a reset recorded under a newer epoch orders after a configure
-          // under an older one.
-          const ordering =
-            latest === null || configure === null
-              ? null
-              : await one(
-                  tx,
-                  `select (${ORDER_KEY('c')} <= ${ORDER_KEY('l')}) as configure_at_or_before_latest, (r.id is null or ${ORDER_KEY('r')} < ${ORDER_KEY('c')}) as configure_after_reset, r.id as newest_reset_id from engine.control_intent c cross join engine.control_intent l left join (select id,epoch,recorded_at from engine.control_intent where capability=$1 and action='reset' order by epoch desc, recorded_at desc, id desc limit 1) r on true where c.id=$2 and l.id=$3`,
-                  [fence.capability, configure.id, latest.id],
-                );
-          // The funding and budget root pair, joined on the FULL primary key, located
-          // by the configure row's own persisted parameters and actor — extracted in
-          // SQL, so no JS coercion picks the key. Identity is then reported from the
-          // ROWS, so the reducer compares two independent persisted sources.
-          //
-          // `other_epoch_root_exists` is audit only; no epoch policy is invented here,
-          // and the lookup deliberately uses the requested epoch, which makes the
-          // reducer's own epoch equality a construction of this lookup rather than an
-          // independent fact. The independently discriminating facts are the pair's
-          // existence, the exact conservation identity and the birth-intent binding.
-          const funding =
-            configure === null
-              ? null
-              : await one(
-                  tx,
-                  `select f.funding_id,f.epoch::text as epoch_text,f.budget_id,b.starting_cents::text as starting_cents,b.available_cents::text as available_cents,b.reserved_cents::text as reserved_cents,b.realized_cents::text as realized_cents,b.correction_cents::text as correction_cents,b.revision::text as revision,((b.available_cents::numeric + b.reserved_cents::numeric) = (b.starting_cents::numeric + b.realized_cents::numeric + b.correction_cents::numeric)) as identity_holds,(b.revision >= 1) as revision_valid,(b.birth_config_intent_id = f.birth_config_intent_id) as birth_bound,exists(select 1 from engine.control_intent bi where bi.id=f.birth_config_intent_id and bi.capability=$1 and bi.action='configure' and bi.epoch=f.epoch and bi.actor=f.actor) as birth_intent_bound,exists(select 1 from engine.paper_funding_root o where o.funding_id=f.funding_id and o.budget_id=f.budget_id and o.epoch<>f.epoch) as other_epoch_root_exists from engine.control_intent ci join engine.paper_funding_root f on f.funding_id = ci.parameters->>'funding_id' and f.epoch = $3 and f.budget_id = ci.actor || ':paper' join engine.paper_budget_root b on b.funding_id=f.funding_id and b.epoch=f.epoch and b.budget_id=f.budget_id where ci.id=$2`,
-                  [fence.capability, configure.id, scope.epoch],
-                );
+          // The SAME verified statements the writer runs, from one shared module. The
+          // mid-read barrier lands between the standing intent and everything compared
+          // against it: a concurrent commit there would change a READ COMMITTED result
+          // and must not change this one.
+          const raw = await readPaperAuthorityRawInTransaction(
+            tx,
+            fence.capability,
+            scope.epoch,
+            leaseHeld,
+            testEffects?.afterLatestRead,
+          );
 
           if (testEffects?.beforeFinalFence !== undefined) {
             const self = await one(tx, 'select pg_backend_pid()::text as pid', []);
@@ -220,15 +154,7 @@ export function createPostgresPaperAuthorityStore(
                 )
               : [];
           return buildPaperAuthorityEvidence(
-            {
-              configure,
-              funding,
-              latest,
-              leaseHeld,
-              leaseStillHeld: locked.length === 1 && live.length === 1,
-              observedAtMicroseconds: observed === null ? null : observed.observed_at_us,
-              ordering,
-            },
+            { ...raw, leaseStillHeld: locked.length === 1 && live.length === 1 },
             scope,
             fence,
           );

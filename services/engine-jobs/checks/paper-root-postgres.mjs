@@ -17,6 +17,7 @@ import { paperGateRowCodecPostgresContract } from './paper-gate-row-codec-postgr
 import { paperGateHistoryPostgresContract } from './paper-gate-history-postgres.mjs';
 import { paperGateCoveragePostgresContract } from './paper-gate-coverage-postgres.mjs';
 import { paperAuthorityPostgresContract } from './paper-authority-postgres.mjs';
+import { paperGateWriterPostgresContract } from './paper-gate-writer-postgres.mjs';
 export async function paperRootPostgresContract(admin, writer, port) {
   if (process.env.GITHUB_ACTIONS !== 'true' || !/^\d+$/.test(port))
     throw Error('Hosted disposable loopback test only.');
@@ -278,6 +279,7 @@ export async function paperRootPostgresContract(admin, writer, port) {
     await paperGateHistoryPostgresContract(admin);
     await paperGateCoveragePostgresContract(admin, port);
     await paperAuthorityPostgresContract(admin, port);
+    await paperGateWriterPostgresContract(admin, port);
     console.log(
       'Paper root ONLY: reapply/fixture FK/XOR/binding/bounds/correction-conservation/duplicate and actual low-role privilege assertions passed; NOT paper adapter/transaction/current-authority proof.',
     );

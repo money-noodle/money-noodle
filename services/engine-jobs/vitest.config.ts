@@ -16,6 +16,8 @@ export default defineConfig({
         'services/engine-jobs/src/adapters/engine-store/postgres-forecast-store.ts',
         'services/engine-jobs/src/adapters/engine-store/postgres-gate-coverage-store.ts',
         'services/engine-jobs/src/adapters/engine-store/postgres-paper-authority-store.ts',
+        'services/engine-jobs/src/adapters/engine-store/postgres-paper-gate-writer.ts',
+        'services/engine-jobs/src/adapters/engine-store/paper-authority-sql.ts',
         'services/engine-jobs/src/test-support/**',
       ],
       include: ['services/engine-jobs/src/**/*.ts'],

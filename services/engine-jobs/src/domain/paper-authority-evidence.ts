@@ -320,11 +320,23 @@ export function buildPaperAuthorityEvidence(
     orderingWellFormed = false;
   }
 
+  // The funding identity is read from the ROW. A row whose identity cannot be
+  // recognised is incomplete, never an empty string or a zero epoch standing in for one:
+  // a substituted identity would be compared against the configuration and could only
+  // mislead.
+  const fundingId = raw.funding === null ? undefined : text(raw.funding.funding_id);
+  const fundingBudgetId = raw.funding === null ? undefined : text(raw.funding.budget_id);
+  const fundingEpoch = raw.funding === null ? undefined : epochFromText(raw.funding.epoch_text);
+  const fundingIdentityWellFormed =
+    raw.funding === null ||
+    (fundingId !== undefined && fundingBudgetId !== undefined && fundingEpoch !== undefined);
+
   const complete =
     observedAtMicroseconds !== undefined &&
     latestWellFormed &&
     configureWellFormed &&
     fundingWellFormed &&
+    fundingIdentityWellFormed &&
     orderingWellFormed;
 
   const snapshot: PaperAuthoritySnapshot = {
@@ -335,10 +347,10 @@ export function buildPaperAuthorityEvidence(
     configureTimeValid: configure?.timeValid === true,
     epoch: scope.epoch,
     funding:
-      fundingFacts === undefined
+      fundingFacts === undefined || !fundingIdentityWellFormed
         ? undefined
         : {
-            budgetId: text(raw.funding?.budget_id) ?? '',
+            budgetId: fundingBudgetId as string,
             // Every flag must hold. The reducer sees ONE boolean, so no sub-fact can
             // be mistaken for authority by itself.
             conserved:
@@ -346,8 +358,8 @@ export function buildPaperAuthorityEvidence(
               fundingFacts.revisionValid &&
               fundingFacts.birthBound &&
               fundingFacts.birthIntentBound,
-            epoch: epochFromText(raw.funding?.epoch_text) ?? 0,
-            id: text(raw.funding?.funding_id) ?? '',
+            epoch: fundingEpoch as number,
+            id: fundingId as string,
           },
     latest: latest?.intent,
     latestTimeValid: latest?.timeValid === true,

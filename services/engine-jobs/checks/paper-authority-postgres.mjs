@@ -188,6 +188,16 @@ export async function paperAuthorityPostgresContract(admin, port) {
     ])
       refusal(await store.readAuthority(scope, wrong), 'lease-not-held', 'start-boundary');
 
+    // 2b. N1: an EXPIRED lease refuses at the start boundary too, not only a wrong
+    // owner or token. `job_lease` checks `expires_at >= acquired_at`, so both columns
+    // move back.
+    await admin.unsafe(
+      "update engine.job_lease set acquired_at=clock_timestamp()-interval '2 seconds',expires_at=clock_timestamp()-interval '1 second' where capability=$1",
+      [CAPABILITY],
+    );
+    refusal(await store.readAuthority(scope, fence), 'lease-not-held', 'start-boundary');
+    await restoreLease();
+
     // 3. A valid snapshot. The production decision refuses `bundle-unavailable` because
     // the adapter uses the reducer's own default availability and accepts no override.
     const valid = await readOf();
@@ -548,6 +558,50 @@ export async function paperAuthorityPostgresContract(admin, port) {
       BIRTH,
       JSON.stringify(CONFIG),
     ]);
+
+    // 14b. N2: a funding root with NO budget root half. The pair is joined on the full
+    // primary key, so half a pair is not a pair and no funding evidence is invented.
+    await admin.unsafe(
+      'delete from engine.paper_budget_root where funding_id=$1 and epoch=$2 and budget_id=$3',
+      [FUNDING, EPOCH, BUDGET],
+    );
+    const fundingOnly = await readOf();
+    assert.equal(fundingOnly.snapshot.funding, undefined);
+    assert.equal(fundingOnly.fundingFacts, undefined);
+    assert.equal(fundingOnly.snapshot.complete, true);
+    assert.deepEqual(fundingOnly.decisionUnderProductionBundle, {
+      allowed: false,
+      reason: 'funding-invalid',
+    });
+    await admin.unsafe(
+      'insert into engine.paper_budget_root(funding_id,epoch,budget_id,birth_config_intent_id,latest_intent_id,starting_cents,available_cents,reserved_cents,realized_cents,correction_cents,revision,last_run_id,recorded_at) values($1,$2,$3,$4,$4,1000,700,300,0,0,4,$5,clock_timestamp())',
+      [FUNDING, EPOCH, BUDGET, BIRTH, RUN],
+    );
+    assert.equal((await readOf()).snapshot.funding.conserved, true);
+
+    // 14c. N3: a current resume that references a configure recorded under an OLDER
+    // epoch. The configure read is epoch-scoped because the reducer requires an equal
+    // epoch, so the older row is never the candidate: the current-epoch row is, and the
+    // resume is refused for naming something else.
+    await intent('auth-old-epoch-configure', 'configure', T_LATEST, CONFIG, ACTOR, EPOCH - 1);
+    await intent('auth-current-resume', 'resume', T_LATEST, {
+      paper_config_version: 1,
+      config_intent_id: 'auth-old-epoch-configure',
+    });
+    const oldEpoch = await readOf();
+    assert.equal(oldEpoch.snapshot.latest.id, 'auth-current-resume');
+    // The older-epoch row was NOT selected, even though it is the one referenced.
+    assert.equal(oldEpoch.snapshot.configure.id, BIRTH);
+    assert.equal(oldEpoch.snapshot.configure.epoch, EPOCH);
+    assert.deepEqual(oldEpoch.decisionUnderProductionBundle, {
+      allowed: false,
+      reason: 'resume-reference-invalid',
+    });
+    await admin.unsafe('delete from engine.control_intent where id=$1', [
+      'auth-old-epoch-configure',
+    ]);
+    await clearVectorIntents();
+    assert.equal((await readOf()).snapshot.configure.id, BIRTH);
 
     // 15. ONE coherent snapshot, with genuinely different pre and post states. The
     // barrier commits a NEWER malformed configure between the standing-intent read and
