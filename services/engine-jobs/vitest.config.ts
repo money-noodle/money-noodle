@@ -15,6 +15,7 @@ export default defineConfig({
         // Exercised by the remote-only disposable PostgreSQL contract target.
         'services/engine-jobs/src/adapters/engine-store/postgres-forecast-store.ts',
         'services/engine-jobs/src/adapters/engine-store/postgres-gate-coverage-store.ts',
+        'services/engine-jobs/src/adapters/engine-store/postgres-paper-authority-store.ts',
         'services/engine-jobs/src/test-support/**',
       ],
       include: ['services/engine-jobs/src/**/*.ts'],
