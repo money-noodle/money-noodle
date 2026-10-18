@@ -478,41 +478,106 @@ export async function paperGateCoveragePostgresContract(admin, port) {
   // returns early, is blocked by the wrong backend or on the wrong statement, or the
   // lease expires before the observation, the recorded evidence is missing and this
   // vector fails instead of passing by fall-through.
-  // The harness's `admin` handle is a SINGLE connection. The holder below keeps a
+  //
+  // BOUNDING, STATED PRECISELY. Every wait below is bounded by a REAL elapsed
+  // deadline and by its own connection's `statement_timeout`, never by iteration
+  // count: an iteration budget says nothing about elapsed time once query duration and
+  // host scheduling are counted. The blocked span the adapter actually experiences is
+  // anchored to the fixture lease's ABSOLUTE expiry instant — `LEASE_BUDGET_MS` after
+  // the update that sets it — because the holder releases as soon as the DATABASE
+  // clock passes that instant; it is not the sum of the diagnostic deadlines. Those
+  // deadlines are fail-closed backstops for the case where that never happens, chosen
+  // to leave margin under the adapter's unchanged 3000ms `lock_timeout`. This is an
+  // engineered margin, NOT a hard real-time guarantee: host scheduling can stretch any
+  // of it, and the deliberate property is that when it does, the vector FAILS with the
+  // diagnostics below rather than hanging or passing vacuously.
+  const LEASE_BUDGET_MS = 1500;
+  const OBSERVE_DEADLINE_MS = 900;
+  const OBSERVE_STATEMENT_TIMEOUT_MS = 500;
+  const HOLDER_STATEMENT_TIMEOUT_MS = 2000;
+  const EXPIRY_DEADLINE_MS = 2500;
+  const POLL_MS = 25;
+  // Well inside the adapter's unchanged 3000ms `lock_timeout`: an observation phase
+  // that ran past this could only end in a lock timeout, so the bound is asserted
+  // rather than assumed.
+  const BLOCKED_SPAN_CEILING_MS = 2900;
+  const HOLDER_FAULT = 'harness-holder-fault-before-lock';
+  // Captured in the SAME statement as the blocking relationship, so liveness and the
+  // block are observed together rather than inferred from two reads. Only positions
+  // are selected from `query`, never its text.
+  const OBSERVER_QUERY =
+    "select a.pid::text as pid, coalesce(array_to_string(pg_blocking_pids(a.pid),','),'') as blockers, a.state, a.wait_event_type, a.wait_event, position('for update' in a.query) as fence_marker, position('engine.job_lease' in a.query) as table_marker, clock_timestamp()::text as observed_at, (select l.expires_at > clock_timestamp() from engine.job_lease l where l.capability=$2) as lease_live, (select l.expires_at::text from engine.job_lease l where l.capability=$2) as expires_at from pg_stat_activity a where a.pid=$1";
+
+  // ONE barrier implementation, shared by the real proof below and by the two focused
+  // failure-path regressions after it, so those regressions exercise the SAME settle
+  // and deadline code the proof depends on instead of a look-alike copy. `faults` are
+  // harness-only and default off: nothing is injected into the adapter, the domain or
+  // any other production module, and with no faults the behaviour is exactly the
+  // proof's.
+  //
+  // The harness's `admin` handle is a SINGLE connection. The holder keeps a
   // transaction open while the observer must query concurrently, so each needs its own
   // connection or the holder would occupy `admin` and the observer would queue behind
   // it forever. Same superuser the harness already uses; no new role or grant.
-  const holderSql = postgres('postgres://postgres@127.0.0.1:' + port + '/postgres', {
-    max: 1,
-    prepare: false,
-    connection: { statement_timeout: 20000, idle_in_transaction_session_timeout: 20000 },
-  });
-  const observerSql = postgres('postgres://postgres@127.0.0.1:' + port + '/postgres', {
-    max: 1,
-    prepare: false,
-    connection: { statement_timeout: 20000 },
-  });
-  // Takes the handle explicitly: inside the holder it MUST be that transaction's own
-  // `tx`, because the pool holds a single connection which the open transaction
-  // occupies, and a pool-level query would queue behind itself forever.
-  const leaseLiveOn = async (sql) => {
-    const [row] = await sql.unsafe(
-      'select (expires_at>clock_timestamp()) as live from engine.job_lease where capability=$1',
-      [CAPABILITY],
-    );
-    return row.live === true;
-  };
-  const lockEvidence = { observations: 0 };
-  let lockRan = false;
-  const lockStore = createPostgresGateCoverageStore(writerUrl, {
-    beforeFinalFence: async ({ backendPid }) => {
-      if (lockRan) return;
-      lockRan = true;
-      lockEvidence.readerPid = backendPid;
-      // No UPDATE anywhere in this barrier: the expiry was set BEFORE the read began,
+  const lockWaitBarrier = (faults = {}) => {
+    const holderSql = postgres('postgres://postgres@127.0.0.1:' + port + '/postgres', {
+      max: 1,
+      prepare: false,
+      connection: {
+        statement_timeout: HOLDER_STATEMENT_TIMEOUT_MS,
+        // The holder transaction is deliberately idle between its own statements while
+        // it waits; this bound only has to outlast the whole hold.
+        idle_in_transaction_session_timeout: 20000,
+      },
+    });
+    const observerSql = postgres('postgres://postgres@127.0.0.1:' + port + '/postgres', {
+      max: 1,
+      prepare: false,
+      // Caps a SINGLE observation query, so one slow read cannot silently spend the
+      // whole elapsed deadline.
+      connection: { statement_timeout: OBSERVE_STATEMENT_TIMEOUT_MS },
+    });
+    // Takes the handle explicitly: inside the holder it MUST be that transaction's own
+    // `tx`, because the pool holds a single connection which the open transaction
+    // occupies, and a pool-level query would queue behind itself forever.
+    const leaseLiveOn = async (sql) => {
+      const [row] = await sql.unsafe(
+        'select (expires_at>clock_timestamp()) as live from engine.job_lease where capability=$1',
+        [CAPABILITY],
+      );
+      return row.live === true;
+    };
+    const evidence = { observations: 0 };
+    // Compact, non-sensitive diagnostics for any failure message: pids, states, wait
+    // events, elapsed milliseconds and synthetic fixture timestamps only. No query
+    // text, no connection string, no credential, no account or money value.
+    evidence.diagnostics = () =>
+      JSON.stringify({
+        blockedWhileLive: evidence.blockedWhileLive,
+        expiredBeforeRelease: evidence.expiredBeforeRelease,
+        expiryWaitMs: evidence.expiryWaitMs,
+        expiryWaitSkipped: evidence.expiryWaitSkipped,
+        holderError: evidence.holderError,
+        holderErrorMessage: evidence.holderErrorMessage,
+        holderPid: evidence.holderPid,
+        lastRow: evidence.lastRow,
+        lockAcquired: evidence.lockAcquired,
+        observations: evidence.observations,
+        observeMs: evidence.observeMs,
+        observerError: evidence.observerError,
+        observerTimedOut: evidence.observerTimedOut,
+        readerPid: evidence.readerPid,
+      });
+    let ran = false;
+    const barrier = async ({ backendPid }) => {
+      if (ran) return;
+      ran = true;
+      evidence.ran = true;
+      evidence.readerPid = backendPid;
+      // No UPDATE anywhere in this barrier: the expiry is set BEFORE the read begins,
       // so nothing commits over the lease row and the 40001 path cannot fire or mask
       // this one. Owner, token, expiry and the row version are all left untouched.
-      lockEvidence.liveBeforeBlock = await leaseLive();
+      evidence.liveBeforeBlock = await leaseLive();
       let signalLocked;
       const locked = new Promise((resolve) => {
         signalLocked = resolve;
@@ -521,52 +586,82 @@ export async function paperGateCoveragePostgresContract(admin, port) {
       const observed = new Promise((resolve) => {
         signalObserved = resolve;
       });
-      lockEvidence.holder = holderSql
+      evidence.holder = holderSql
         .begin(async (tx) => {
           const holderSelf = await tx.unsafe('select pg_backend_pid()::text as pid');
-          lockEvidence.holderPid = Number(holderSelf[0].pid);
+          evidence.holderPid = Number(holderSelf[0].pid);
+          // Harness-only fault, default off: fail BEFORE the lock is acquired. That is
+          // exactly the path that used to leave the barrier's `await locked` pending
+          // forever, hanging the adapter's open transaction with no diagnosis.
+          if (faults.failBeforeLock === true) throw new Error(HOLDER_FAULT);
           await tx.unsafe(
             'select capability from engine.job_lease where capability=$1 for update',
             [CAPABILITY],
           );
-          signalLocked();
+          evidence.lockAcquired = true;
+          signalLocked(undefined);
           // Hold the row lock, unchanged, until the observer has seen the adapter
           // blocked while the lease was still live AND the lease has since expired.
           await observed;
-          for (let i = 0; i < 400; i++) {
-            if (!(await leaseLiveOn(tx))) break;
-            await delay(25);
+          if (evidence.blockedWhileLive === undefined) {
+            // Nothing was observed, so this vector has already failed and there is
+            // nothing left to hold the lock for. Release promptly instead of spending
+            // the expiry budget and risking the adapter's lock timeout on top.
+            evidence.expiryWaitSkipped = true;
+            return;
           }
-          lockEvidence.expiredBeforeRelease = !(await leaseLiveOn(tx));
+          const expiryStartedAt = Date.now();
+          while (Date.now() - expiryStartedAt < EXPIRY_DEADLINE_MS) {
+            if (!(await leaseLiveOn(tx))) break;
+            await delay(POLL_MS);
+          }
+          evidence.expiryWaitMs = Date.now() - expiryStartedAt;
+          evidence.expiredBeforeRelease = !(await leaseLiveOn(tx));
         })
         .catch((error) => {
-          lockEvidence.holderError = error.code ?? String(error);
+          evidence.holderError = error.code ?? String(error);
+          evidence.holderErrorMessage = error.message ?? String(error);
+          // Settle BOTH gates on EVERY holder failure path. A holder that fails BEFORE
+          // `signalLocked` must not leave `await locked` below pending: that hung the
+          // adapter's open transaction with no diagnosis and no failure. The original
+          // error is preserved and handed back through `locked`, so the barrier fails
+          // PROMPTLY with it rather than continuing into an observation that can no
+          // longer happen and then passing or failing for the wrong reason.
+          signalLocked(error);
           signalObserved();
         });
-      await locked;
+      const lockFailure = await locked;
+      if (lockFailure !== undefined) {
+        evidence.lockedSettledWithFailure = true;
+        throw lockFailure;
+      }
       // The observer runs while this barrier's caller is blocked, so it is started and
       // deliberately NOT awaited here; its promise is awaited after the read resolves.
-      lockEvidence.observer = (async () => {
+      const expectedBlocker = faults.impossibleBlocker === true ? -1 : String(evidence.holderPid);
+      evidence.observer = (async () => {
+        const observeStartedAt = Date.now();
         try {
-          for (let i = 0; i < 200; i++) {
-            const [row] = await observerSql.unsafe(
-              "select a.pid::text as pid, coalesce(array_to_string(pg_blocking_pids(a.pid),','),'') as blockers, a.state, a.wait_event_type, a.wait_event, position('for update' in a.query) as fence_marker, position('engine.job_lease' in a.query) as table_marker, clock_timestamp()::text as observed_at, (select l.expires_at > clock_timestamp() from engine.job_lease l where l.capability=$2) as lease_live, (select l.expires_at::text from engine.job_lease l where l.capability=$2) as expires_at from pg_stat_activity a where a.pid=$1",
-              [String(lockEvidence.readerPid), CAPABILITY],
-            );
-            lockEvidence.observations += 1;
-            lockEvidence.lastRow = row;
+          // A REAL elapsed deadline. The previous loop bounded iterations only: 200
+          // polls at 25ms is 5000ms of sleep BEFORE query duration, which outlives the
+          // adapter's 3000ms lock_timeout, so a non-matching run could end in a lock
+          // timeout instead of this vector's own diagnosis.
+          while (Date.now() - observeStartedAt < OBSERVE_DEADLINE_MS) {
+            const [row] = await observerSql.unsafe(OBSERVER_QUERY, [
+              String(evidence.readerPid),
+              CAPABILITY,
+            ]);
+            evidence.observations += 1;
+            evidence.lastRow = row;
             if (
               row !== undefined &&
-              row.blockers === String(lockEvidence.holderPid) &&
+              row.blockers === String(expectedBlocker) &&
               row.fence_marker > 0 &&
               row.table_marker > 0 &&
               row.lease_live === true
             ) {
-              lockEvidence.blockedWhileLive = {
+              evidence.blockedWhileLive = {
                 blockers: row.blockers,
                 expiresAt: row.expires_at,
-                // Captured in the SAME statement as the blocking relationship, so the
-                // liveness and the block are observed together rather than inferred.
                 leaseLiveAtObservation: row.lease_live,
                 observedAt: row.observed_at,
                 state: row.state,
@@ -575,32 +670,54 @@ export async function paperGateCoveragePostgresContract(admin, port) {
               };
               break;
             }
-            await delay(25);
+            await delay(POLL_MS);
           }
         } catch (error) {
-          lockEvidence.observerError = error.code ?? String(error);
+          evidence.observerError = error.code ?? String(error);
         } finally {
+          evidence.observeMs = Date.now() - observeStartedAt;
+          evidence.observerTimedOut = evidence.blockedWhileLive === undefined;
+          // Always release the holder, on the match path, the deadline path and the
+          // error path alike, so no failure can strand the open transaction.
           signalObserved();
         }
       })();
-    },
+    };
+    return {
+      barrier,
+      evidence,
+      // Never leave the holder or observer dangling, whatever failed, and always
+      // release both dedicated connections so a failure cannot hang the contract.
+      dispose: async () => {
+        await Promise.allSettled([evidence.observer, evidence.holder]);
+        await Promise.allSettled([holderSql.end({ timeout: 5 }), observerSql.end({ timeout: 5 })]);
+      },
+    };
+  };
+
+  const lockWait = lockWaitBarrier();
+  const lockEvidence = lockWait.evidence;
+  const lockStore = createPostgresGateCoverageStore(writerUrl, {
+    beforeFinalFence: lockWait.barrier,
   });
   try {
     // Live now, with a budget that must comfortably outlast the observation and still
     // expire well inside the adapter's configured 3000ms lock_timeout and 5000ms
     // statement_timeout, neither of which is changed here.
     await admin.unsafe(
-      "update engine.job_lease set expires_at=clock_timestamp()+interval '1500 milliseconds' where capability=$1",
-      [CAPABILITY],
+      "update engine.job_lease set expires_at=clock_timestamp()+($2||' milliseconds')::interval where capability=$1",
+      [CAPABILITY, String(LEASE_BUDGET_MS)],
     );
     assert.equal(await leaseLive(), true);
+    const blockedStartedAt = Date.now();
     const blocked = await lockStore.readCoverage(scopeOf(GENESIS), fence);
+    const blockedSpanMs = Date.now() - blockedStartedAt;
     // Flags captured AT read resolution, before any holder or observer cleanup.
     const atResolution = {
       blockedWhileLive: lockEvidence.blockedWhileLive,
       holderError: lockEvidence.holderError,
       observerError: lockEvidence.observerError,
-      ran: lockRan,
+      ran: lockEvidence.ran,
       readerPid: lockEvidence.readerPid,
     };
     await lockEvidence.observer;
@@ -609,6 +726,7 @@ export async function paperGateCoveragePostgresContract(admin, port) {
     assert.equal(lockEvidence.liveBeforeBlock, true);
     assert.equal(atResolution.observerError, undefined);
     assert.equal(atResolution.holderError, undefined);
+    assert.equal(lockEvidence.lockAcquired, true);
     assert.ok(Number.isInteger(atResolution.readerPid) && atResolution.readerPid > 0);
     assert.ok(Number.isInteger(lockEvidence.holderPid) && lockEvidence.holderPid > 0);
     assert.notEqual(atResolution.readerPid, lockEvidence.holderPid);
@@ -617,7 +735,8 @@ export async function paperGateCoveragePostgresContract(admin, port) {
     // still live. Absent this, the vector fails rather than silently proving nothing.
     assert.ok(
       atResolution.blockedWhileLive !== undefined,
-      'adapter was never observed blocked by the holder while the lease was live',
+      'adapter was never observed blocked by the holder while the lease was live ' +
+        lockEvidence.diagnostics(),
     );
     assert.equal(atResolution.blockedWhileLive.blockers, String(lockEvidence.holderPid));
     assert.equal(atResolution.blockedWhileLive.leaseLiveAtObservation, true);
@@ -626,11 +745,22 @@ export async function paperGateCoveragePostgresContract(admin, port) {
     // several waiters queue; both are this lock wait, nothing else is.
     assert.ok(
       ['transactionid', 'tuple'].includes(atResolution.blockedWhileLive.waitEvent),
-      'unexpected wait event ' + String(atResolution.blockedWhileLive.waitEvent),
+      'unexpected wait event ' +
+        String(atResolution.blockedWhileLive.waitEvent) +
+        ' ' +
+        lockEvidence.diagnostics(),
     );
     // The lease then expired naturally, before the unchanged lock was released.
+    assert.equal(lockEvidence.expiryWaitSkipped, undefined);
     assert.equal(lockEvidence.expiredBeforeRelease, true);
     assert.equal(await leaseLive(), false);
+    // The blocked span really stayed inside the adapter's unchanged lock_timeout, so
+    // the margin is measured rather than assumed. It is anchored to the lease's
+    // absolute expiry, not to the sum of the diagnostic deadlines.
+    assert.ok(
+      blockedSpanMs < BLOCKED_SPAN_CEILING_MS,
+      'blocked span ' + String(blockedSpanMs) + 'ms ' + lockEvidence.diagnostics(),
+    );
     // The lock was released UNCHANGED, so this is not the 40001 path.
     assert.deepEqual(blocked, {
       kind: 'refused',
@@ -639,14 +769,127 @@ export async function paperGateCoveragePostgresContract(admin, port) {
     });
   } finally {
     await lockStore.close();
-    // Never leave the holder or observer dangling, whatever failed above, and always
-    // release both dedicated connections so a failure cannot hang the contract.
-    await Promise.allSettled([lockEvidence.observer, lockEvidence.holder]);
-    await Promise.allSettled([holderSql.end({ timeout: 5 }), observerSql.end({ timeout: 5 })]);
+    await lockWait.dispose();
   }
   await restoreLease();
 
-  // 13. No partial receipt and no write by the adapter. Every row added above came
+  // 13 and 14 are focused regressions for the BARRIER ITSELF — the harness code the
+  // proof above depends on — not for the adapter. Both faults are harness-only; no
+  // production module is altered or fault-injected. Node reports an unhandled
+  // rejection on a later turn of the microtask queue, so the collector stays installed
+  // across both vectors and is drained before it is asserted.
+  const unhandled = [];
+  const collectUnhandled = (reason) => {
+    unhandled.push(reason instanceof Error ? reason.message : String(reason));
+  };
+  process.on('unhandledRejection', collectUnhandled);
+  try {
+    // 13. The holder fails BEFORE it acquires the lock. Previously the holder's catch
+    // recorded the error and signalled only the OBSERVED gate, so the barrier's
+    // `await locked` never settled: the adapter sat in an open transaction with the
+    // contract hanging and nothing to diagnose. It must now settle promptly, preserve
+    // the original error, and never start an observation that cannot happen.
+    const faulted = lockWaitBarrier({ failBeforeLock: true });
+    const faultStore = createPostgresGateCoverageStore(writerUrl, {
+      beforeFinalFence: faulted.barrier,
+    });
+    try {
+      const faultStartedAt = Date.now();
+      await assert.rejects(
+        () => faultStore.readCoverage(scopeOf(GENESIS), fence),
+        (error) => {
+          // The ORIGINAL error, not a substitute and not a timeout: the adapter
+          // rethrows anything that is not a serialization failure.
+          assert.equal(error.message, HOLDER_FAULT);
+          return true;
+        },
+      );
+      const faultSpanMs = Date.now() - faultStartedAt;
+      // Promptly: a hang used to mean the adapter's own 8000ms
+      // idle_in_transaction_session_timeout was the only thing that ended the run.
+      assert.ok(
+        faultSpanMs < BLOCKED_SPAN_CEILING_MS,
+        'holder fault took ' + String(faultSpanMs) + 'ms ' + faulted.evidence.diagnostics(),
+      );
+      assert.equal(faulted.evidence.ran, true);
+      assert.equal(faulted.evidence.lockedSettledWithFailure, true);
+      assert.equal(faulted.evidence.holderErrorMessage, HOLDER_FAULT);
+      // The lock was never taken and no observation was started, so there is no
+      // dangling observer promise and no vacuous evidence either.
+      assert.equal(faulted.evidence.lockAcquired, undefined);
+      assert.equal(faulted.evidence.observer, undefined);
+      assert.equal(faulted.evidence.blockedWhileLive, undefined);
+      assert.equal(faulted.evidence.observations, 0);
+    } finally {
+      await faultStore.close();
+      await faulted.dispose();
+    }
+    await restoreLease();
+
+    // 14. The observer never matches. It must stop on its REAL elapsed deadline,
+    // release the holder on that path too, surface its diagnostics, and leave the
+    // contract running — all well inside the adapter's unchanged 3000ms lock_timeout,
+    // which the old iteration-only budget of 200 polls at 25ms could not promise. The
+    // blocker it looks for is forced to a value no backend id can take, so the real
+    // polling, deadline and cleanup paths run unchanged. The lease is deliberately
+    // left long here: the adapter should block, then complete normally once the holder
+    // releases, which is what makes the cleanup observable.
+    const nonMatch = lockWaitBarrier({ impossibleBlocker: true });
+    const nonMatchStore = createPostgresGateCoverageStore(writerUrl, {
+      beforeFinalFence: nonMatch.barrier,
+    });
+    try {
+      const nonMatchStartedAt = Date.now();
+      const stillVerified = await nonMatchStore.readCoverage(scopeOf(GENESIS), fence);
+      const nonMatchSpanMs = Date.now() - nonMatchStartedAt;
+      await nonMatch.evidence.observer;
+      await nonMatch.evidence.holder;
+      assert.equal(nonMatch.evidence.ran, true);
+      assert.equal(nonMatch.evidence.lockAcquired, true);
+      assert.equal(nonMatch.evidence.holderError, undefined);
+      assert.equal(nonMatch.evidence.observerError, undefined);
+      // It really polled and really timed out, rather than short-circuiting: the
+      // last row is kept for diagnosis even though it never matched.
+      assert.ok(
+        nonMatch.evidence.observations > 0,
+        'observer never polled ' + nonMatch.evidence.diagnostics(),
+      );
+      assert.notEqual(nonMatch.evidence.lastRow, undefined);
+      assert.equal(nonMatch.evidence.observerTimedOut, true);
+      assert.equal(nonMatch.evidence.blockedWhileLive, undefined);
+      // Bounded by elapsed time: it ran to its deadline and no further than that
+      // deadline plus one capped query.
+      assert.ok(
+        nonMatch.evidence.observeMs >= OBSERVE_DEADLINE_MS,
+        'observer stopped early ' + nonMatch.evidence.diagnostics(),
+      );
+      assert.ok(
+        nonMatch.evidence.observeMs <= OBSERVE_DEADLINE_MS + OBSERVE_STATEMENT_TIMEOUT_MS + 500,
+        'observer overran ' + nonMatch.evidence.diagnostics(),
+      );
+      // The holder released on the no-observation path without spending the expiry
+      // budget, so the whole blocked span stayed inside the adapter's lock_timeout and
+      // the read completed instead of timing out.
+      assert.equal(nonMatch.evidence.expiryWaitSkipped, true);
+      assert.equal(nonMatch.evidence.expiryWaitMs, undefined);
+      assert.ok(
+        nonMatchSpanMs < BLOCKED_SPAN_CEILING_MS,
+        'non-matching span ' + String(nonMatchSpanMs) + 'ms ' + nonMatch.evidence.diagnostics(),
+      );
+      assert.equal(stillVerified.kind, 'verified');
+    } finally {
+      await nonMatchStore.close();
+      await nonMatch.dispose();
+    }
+    await restoreLease();
+    // Drain the microtask queue so a rejection that was going to be reported has been.
+    await delay(50);
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off('unhandledRejection', collectUnhandled);
+  }
+
+  // 15. No partial receipt and no write by the adapter. Every row added above came
   // from this contract's own fixture helpers, never from the adapter.
   const after = await admin.unsafe(
     'select (select count(*) from engine.paper_gate_phase_event) as events, (select count(*) from engine.paper_gate_head) as heads, (select count(*) from engine.paper_gate_candidate) as candidates, (select count(*) from engine.paper_gate_outcome) as outcomes',

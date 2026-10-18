@@ -179,6 +179,26 @@ Its limits are part of the contract. Coverage means the persisted universe visib
 
 **Write composition is not done.** Phase and head writing, genuine initialization/reset mutation, current-authority admission, transaction replay and compare-and-set, and the fenced atomic write adapter all remain unimplemented; a coherent fenced read proves none of them. Measured during this work on PostgreSQL 16: a `select … where expires_at > clock_timestamp() … for update` that waits for a lock on an otherwise unchanged row evaluates its qualification before the wait, so a lease expiring during the wait is still returned; the adapter therefore re-validates liveness in a separate statement once the lock is held. Compiled bundle availability remains false and the runtime paper refusal is unchanged.
 
+### Lock-wait proof bounding and harness controls — 2026-10-18
+
+The expiry-during-lock-wait proof in `checks/paper-gate-coverage-postgres.mjs` is a direct observation, not a callback or elapsed time: a dedicated observer connection must see, in ONE statement, the adapter's own backend id blocked by the holder's backend id on the final locking statement against `engine.job_lease` while the lease is still live on the database clock. Two harness-only defects in that vector are fixed here, with no change to the adapter, the domain, migrations, grants or any runtime timeout.
+
+- The holder's failure handler settled only the observation gate, so a holder that failed BEFORE acquiring the lock left the barrier's lock gate pending: the adapter sat in an open transaction, the original fault was lost, and the run ended only when the adapter's own idle-in-transaction bound tore the connection down. The handler now settles both gates on every failure path, hands the original error back, and fails promptly.
+- The observer was bounded by iteration count only. Two hundred polls at 25ms is 5000ms of sleep before query duration, which outlives the adapter's 3000ms lock timeout, so a non-matching run could end in a cancelled locking statement rather than its own diagnosis. The observer now stops on a real elapsed deadline, each poll is additionally capped by its own connection statement timeout, the holder releases promptly when nothing was observed, and the last polled row, poll count, elapsed milliseconds and any error are surfaced for diagnosis.
+
+**Bounding is an engineered margin, not a hard real-time guarantee.** Every wait has a real elapsed deadline, so no path can hang; the blocked span the adapter experiences is anchored to the fixture lease's absolute expiry instant, because the holder releases as soon as the database clock passes it, rather than to the sum of the diagnostic deadlines. Host scheduling can stretch any of it. The deliberate property is that when it does, the vector fails with those diagnostics instead of hanging or passing vacuously, and the measured blocked span is itself asserted to stay inside the adapter's unchanged lock timeout.
+
+**Dated control record** (hosted disposable PostgreSQL 16, approved workspace, synthetic rows only; no raw logs or captures retained).
+
+| Date | Mutation (never committed) | Assertion exercised | Outcome |
+| --- | --- | --- | --- |
+| 2026-10-17 | adapter: remove only the fresh post-lock database-clock check | expiry-during-lock-wait must refuse `lease-lost`/`final-boundary` | failed: a verified receipt was returned under the same observed blocked-while-live sequence; restored by precise edit |
+| 2026-10-18 | adapter: same removal, re-run against the rewritten vector | same | failed the same way under the changed oracle, so the rewritten vector still discriminates the fix |
+| 2026-10-18 | harness copy: holder failure handler no longer settles the lock gate | holder-fault vector must fail promptly with the original error | failed after about ten seconds with a closed connection in place of the original fault, which is the defect this fix removes |
+| 2026-10-18 | harness copy: observer bounded by iteration count only | non-matching observer must stay inside the adapter lock timeout | failed with a cancelled statement due to lock timeout, which is the defect the elapsed deadline removes |
+
+Authored cases are not executed cases, and a passing fenced read still proves none of the write composition listed above.
+
 ## Independent F1/F7 IOC corrections
 
 `paper-ioc-conservative-microprice-v2` intentionally corrects inherited quantity/price epsilon behavior. Shared bounded book normalization, finite request/side/time validation and conservative hundredth-quantity flooring prevent overflow or rounding .0099999999 displayed units up to .01. Re-sweeping best-to-worst at the reduced quantity trims excess from the worst consumed level. Integer micro-dollar comparison rejects .500001 buys above a .5 cap and .499999 sells below a .5 minimum; only sub-tick representation dust is normalized. Entry and sale accounting require explicit authorized maximum/minimum prices and bind actual average/cash to them. Missing book remains unavailable, not an observed IOC miss. Four literal groups are authored; no unchanged-all-float parity or runtime authority is claimed. The F2–F6 guards are now implemented in pure code as summarized below, awaiting fresh independent confirmation and current hosted CI qualification.
