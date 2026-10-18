@@ -57,11 +57,18 @@
 //
 // ## Availability
 //
-// The exported production factory has NO parameter that can enable a positive admission
-// decision: it fixes availability to `COMPILED_PAPER_BUNDLE_AVAILABLE`, which is `false`,
-// so a record that is otherwise valid refuses `bundle-unavailable`. The core below takes
-// availability explicitly and is reachable only through `src/test-support/`, which no
-// runtime entry point imports and which a unit test asserts stays that way.
+// This module exports exactly ONE factory and no availability-taking function. The core
+// is module-private. The factory accepts an optional opaque `admission` value and asks
+// `./paper-gate-audited-policy-gate.js` whether it is THIS artifact's audited-policy
+// token. In the production build that gate has no token at all, so the answer is always
+// `false` and an otherwise valid record refuses `bundle-unavailable` — including when the
+// caller passes the genuine fixture token imported from the separate test-support
+// artifact. A forged symbol or object is refused by identity.
+//
+// The test-support build replaces that one gate file and compiles the SAME source into
+// `dist-test-support`, which `tsconfig.build.json` never produces, `.dockerignore`
+// ignores and the Dockerfile does not copy. One real adapter, two artifacts: the positive
+// path exercises exactly this code, not a surrogate.
 
 import postgres from 'postgres';
 
@@ -74,9 +81,11 @@ import { PAPER_GATE_UNIVERSE_LIMIT } from '../../domain/paper-gate-coverage.js';
 import {
   PAPER_GATE_EVIDENCE_VERSION,
   PAPER_GATE_GENESIS_REVISION,
+  comparePaperGateGenerationReplay,
   comparePaperGateReplay,
   derivePaperGateEvaluation,
   derivePaperGateUniverse,
+  paperGateEpochFromText,
   paperGateIsoMilliseconds,
   paperGateWriteRequestIsValid,
   type PaperGateFence,
@@ -87,11 +96,23 @@ import {
   type PaperGateWriteResult,
 } from '../../domain/paper-gate-write.js';
 import type { RegimeGatePhase } from '../../domain/paper-regime.js';
+import { grantsAuditedPolicy } from './paper-gate-audited-policy-gate.js';
+import {
+  PAPER_GATE_WRITE_LOCK_ACQUIRE_SQL,
+  PAPER_GATE_WRITE_LOCK_RELEASE_ALL_SQL,
+  PAPER_GATE_WRITE_LOCK_RELEASE_SQL,
+  paperGateWriteLockText,
+  type PaperGateWriteLockMode,
+} from './paper-gate-write-lock.js';
 import { MICRO, readPaperAuthorityRawInTransaction } from './paper-authority-sql.js';
 
 const SERIALIZATION_FAILURE = '40001';
 const DEADLOCK_DETECTED = '40P01';
 const UNIQUE_VIOLATION = '23505';
+/** `lock_timeout` elapsed while waiting for a lock, and the statement-level cancel that
+ * can surface instead. Both arrive BEFORE any mutation when they come from acquisition. */
+const LOCK_NOT_AVAILABLE = '55P03';
+const QUERY_CANCELED = '57014';
 
 /** Thrown for any refusal decided after the first mutation, so the transaction rolls
  * back and the refusal is mapped OUTSIDE the transaction. A normal return would
@@ -111,6 +132,15 @@ export interface PaperGateWriter {
   close(): Promise<void>;
 }
 
+export interface PaperGateWriterOptions {
+  /** Per-capability write serialization. `off` is the default and preserves the measured
+   * non-participating behaviour; `required` takes the session-level advisory lock on a
+   * connection it opens for that call, before `BEGIN`. It changes serialization only
+   * and can never grant
+   * admission. */
+  capabilityWriteLock?: PaperGateWriteLockMode;
+}
+
 export interface PaperGateWriterTestEffects {
   /** Between the standing-intent read and everything compared against it. */
   afterAuthorityRead?: () => Promise<void>;
@@ -119,6 +149,9 @@ export interface PaperGateWriterTestEffects {
   /** After every mutation, before the final fence; receives this transaction's own
    * backend process id so a test can observe the locking statement genuinely blocked. */
   beforeFinalFence?: (context: { backendPid: number }) => Promise<void>;
+  /** Reports how the per-capability lock was released, so a test can prove no lock is
+   * left behind on a connection that returns to the pool. */
+  onWriteLockCleanup?: (outcome: 'released' | 'released-all' | 'cleanup-failed') => void;
 }
 
 const text = (value: unknown): string | undefined =>
@@ -136,24 +169,26 @@ const count = (value: unknown): number | undefined => {
   return Number.isSafeInteger(parsed) ? parsed : undefined;
 };
 
-/** Not exported from the package's production surface. `src/test-support/` is the only
- * place that passes `auditedBundleAvailable`, and a unit test asserts no other
- * non-test module imports this function. */
-export function createPaperGateWriterCore(
+/** MODULE-PRIVATE. Not exported, so no artifact offers an availability-taking entry
+ * point; the only way in is the factory below, through this artifact's own gate. */
+function createPaperGateWriterCore(
   connectionString: string,
   auditedBundleAvailable: boolean,
   testEffects?: PaperGateWriterTestEffects,
+  lockMode: PaperGateWriteLockMode = 'off',
 ): PaperGateWriter {
-  const sql = postgres(connectionString, {
+  /** The reader's bounds, unchanged, and shared with the per-write locked connection so
+   * no timeout differs between the two paths. */
+  const CONNECTION_OPTIONS = {
     max: 1,
     prepare: false,
-    // The reader's bounds, unchanged.
     connection: {
       statement_timeout: 5000,
       lock_timeout: 3000,
       idle_in_transaction_session_timeout: 8000,
     },
-  });
+  } as const;
+  const sql = postgres(connectionString, CONNECTION_OPTIONS);
   type Transaction = postgres.TransactionSql;
 
   async function one(
@@ -181,8 +216,44 @@ export function createPaperGateWriterCore(
         scope.generation_config_intent_id,
         scope.sample_policy,
       ];
+      // 1b. Per-capability write serialization, when required. The lock is SESSION level
+      // on an explicitly RESERVED connection and is taken BEFORE `BEGIN`, so the snapshot
+      // below is taken after the wait rather than before it; a transactional lock taken
+      // as the first statement would snapshot first and would not be sufficient.
+      // Reservation is not optional: `max: 1` alone cannot stop two overlapping calls
+      // from sharing a backend, and session advisory locks are re-entrant per session.
+      const lockText = paperGateWriteLockText(fence.capability);
+      // This call's OWN physical connection, not a handle borrowed from a shared pool.
+      // That is what makes the session-level lock safe: session advisory locks are
+      // re-entrant per session, so two overlapping calls sharing a backend would each
+      // believe they held it, and `max: 1` cannot prevent that. postgres.js reserved
+      // handles also expose no `begin`, so a per-call connection is the only way to run
+      // the transaction on the very session that holds the lock. It is CLOSED in the
+      // `finally` below, so even a release that fails cannot leave a lock behind.
+      let locked: ReturnType<typeof postgres> | undefined;
+      let lockHeld = false;
+      if (lockMode === 'required') {
+        const connection = postgres(connectionString, CONNECTION_OPTIONS);
+        try {
+          // Bounded by this connection's EXISTING `lock_timeout`; no new tolerance.
+          await connection.unsafe(PAPER_GATE_WRITE_LOCK_ACQUIRE_SQL, [lockText] as never[]);
+        } catch (error) {
+          const code = (error as { code?: string }).code;
+          // Nothing was locked and nothing was written; the transaction never began, so
+          // this connection is closed here and the `finally` below never sees it.
+          await connection.end({ timeout: 5 });
+          if (code === LOCK_NOT_AVAILABLE || code === QUERY_CANCELED)
+            return { detail: 'write-lock-timeout', kind: 'refused', reason: 'conflict' };
+          throw error;
+        }
+        // Assigned only once the lock is genuinely held, so the cleanup path below is
+        // reached exactly when there is something to clean up.
+        locked = connection;
+        lockHeld = true;
+      }
+      const runner = locked ?? sql;
       try {
-        return await sql.begin('isolation level serializable', async (tx) => {
+        return await runner.begin('isolation level serializable', async (tx) => {
           // 2. Start fence on the DATABASE clock.
           const lease = await tx.unsafe(
             'select capability from engine.job_lease where capability=$1 and owner=$2 and fencing_token=$3 and expires_at > clock_timestamp()',
@@ -194,7 +265,7 @@ export function createPaperGateWriterCore(
           // 3. The event this request names, if it is already recorded.
           const existing = await one(
             tx,
-            `select generation_key,funding_id,epoch::text as epoch_text,budget_id,generation_config_intent_id,sample_policy,event_kind,revision_after::text as revision_after,prior_event_key,revision_before::text as revision_before,previous_phase,result_phase,projected_phase,current_effect_config_intent_id,latest_intent_id,run_id,source_kind,evidence_version,coverage_receipt_id,${MICRO('evidence_observed_at')} as evidence_observed_at_us,${MICRO('coverage_cutoff_at')} as coverage_cutoff_at_us,captured_candidate_count::text as captured_candidate_count,captured_resolved_count::text as captured_resolved_count,captured_unresolved_count::text as captured_unresolved_count,input_count::text as input_count,${MICRO('universe_first_closes_at')} as universe_first_closes_at_us,${MICRO('universe_last_closes_at')} as universe_last_closes_at_us from engine.paper_gate_phase_event where event_key=$1`,
+            `select generation_key,funding_id,epoch::text as epoch_text,budget_id,generation_config_intent_id,sample_policy,event_kind,revision_after::text as revision_after,prior_event_key,revision_before::text as revision_before,previous_phase,result_phase,projected_phase,current_effect_config_intent_id,latest_intent_id,run_id,source_kind,evidence_version,coverage_receipt_id,${MICRO('evidence_observed_at')} as evidence_observed_at_us,${MICRO('coverage_cutoff_at')} as coverage_cutoff_at_us,captured_candidate_count::text as captured_candidate_count,captured_resolved_count::text as captured_resolved_count,captured_unresolved_count::text as captured_unresolved_count,input_count::text as input_count,${MICRO('universe_first_closes_at')} as universe_first_closes_at_us,${MICRO('universe_last_closes_at')} as universe_last_closes_at_us,(select p.run_id from engine.paper_gate_phase_event p where p.event_key=paper_gate_phase_event.prior_event_key) as prior_event_run_id from engine.paper_gate_phase_event where event_key=$1`,
             [request.eventKey],
           );
 
@@ -214,7 +285,10 @@ export function createPaperGateWriterCore(
           );
           const headRow = await one(
             tx,
-            'select generation_key,latest_event_key,revision::text as revision,event_kind,projected_phase from engine.paper_gate_head where generation_key=$1',
+            // The head event's own `run_id` comes with it: a persisted regime lineage's
+            // state run is the run that WROTE the current head event, not the
+            // generation's initialization run.
+            'select h.generation_key,h.latest_event_key,h.revision::text as revision,h.event_kind,h.projected_phase,e.run_id as head_event_run_id from engine.paper_gate_head h join engine.paper_gate_phase_event e on e.event_key=h.latest_event_key where h.generation_key=$1',
             [scope.generation_key],
           );
 
@@ -254,6 +328,10 @@ export function createPaperGateWriterCore(
             priorEventKey: string | undefined,
             previousPhase: RegimeGatePhase,
             nowMs: number,
+            /** The run that wrote the event this transition follows. Required for a
+             * persisted lineage; absent only at genesis, where the lineage is the
+             * initialization run instead. */
+            priorEventRunId: string | undefined,
           ): Promise<Derived | { refusal: PaperGateWriteRefusal; detail: string }> => {
             if (generationRow === null) return { detail: 'absent', refusal: 'generation' };
             const minimumPolicyWindows = count(generationRow.minimum_policy_windows);
@@ -292,6 +370,8 @@ export function createPaperGateWriterCore(
             const universeShape = derivePaperGateUniverse(entries);
             if (universeShape === undefined)
               return { detail: 'universe-shape', refusal: 'universe' };
+            if (revisionBefore !== PAPER_GATE_GENESIS_REVISION && priorEventRunId === undefined)
+              return { detail: 'prior-event-run', refusal: 'head' };
             const lineage =
               revisionBefore === PAPER_GATE_GENESIS_REVISION
                 ? ({
@@ -303,7 +383,8 @@ export function createPaperGateWriterCore(
                 : ({
                     kind: 'persisted',
                     revision: Number(revisionBefore),
-                    stateRunId: String(generationRow.initialization_run_id),
+                    // The run that wrote the event being followed, as 0006 records it.
+                    stateRunId: priorEventRunId ?? '',
                   } as const);
             const outcome = derivePaperGateEvaluation(
               {
@@ -399,11 +480,81 @@ export function createPaperGateWriterCore(
                 text(existing.prior_event_key),
                 previousPhase,
                 nowMs,
+                // On replay the prior event is the one the RECORDED event follows, read
+                // from history rather than from the present head.
+                text(existing.prior_event_run_id),
               );
               if ('refusal' in derived)
                 return { detail: derived.detail, kind: 'refused', reason: derived.refusal };
               replayIntended = derived.intended;
-            } else replayIntended = genesisIntent();
+            } else {
+              replayIntended = genesisIntent();
+              // F3: a genesis or reset replay must agree on the GENERATION as well. The
+              // three `numeric` settings are compared by PostgreSQL against the request's
+              // decimal text, so the comparison is exact and introduces no JS coercion.
+              const g = request.kind === 'evaluate' ? undefined : request.generation;
+              const persistedGeneration =
+                g === undefined
+                  ? null
+                  : await one(
+                      tx,
+                      'select bundle_id,profile_claim,enabled,minimum_policy_windows::text as minimum_policy_windows,(evidence_half_life_windows = $7::text::numeric) as half_matches,(pause_confidence = $8::text::numeric) as pause_matches,(resume_confidence = $9::text::numeric) as resume_matches,initialization_run_id,reset_origin,reset_barrier_intent_id from engine.paper_gate_generation where generation_key=$1 and funding_id=$2 and epoch=$3 and budget_id=$4 and generation_config_intent_id=$5 and sample_policy=$6',
+                      [
+                        ...namespace,
+                        g.evidenceHalfLifeWindows,
+                        g.pauseConfidence,
+                        g.resumeConfidence,
+                      ],
+                    );
+              if (persistedGeneration === null)
+                return {
+                  detail: 'generation',
+                  kind: 'refused',
+                  reason: 'replay-mismatch' as const,
+                };
+              // `priorGenerationKey` is not persisted, so it is re-derived against real
+              // history with the SAME predicate the write path applied, using the
+              // PERSISTED barrier rather than the request's claim.
+              let priorVerified: boolean | undefined;
+              if (request.kind === 'reset') {
+                const verified = await one(
+                  tx,
+                  // Every parameter is used, so PostgreSQL can infer each type.
+                  "select g.generation_key from engine.paper_gate_generation g join engine.control_intent p on p.id=g.generation_config_intent_id join engine.control_intent b on b.id=$1 where g.generation_key=$2 and g.funding_id=$3 and g.epoch=$4 and g.budget_id=$5 and b.capability=$6 and b.action='reset' and row(b.epoch,b.recorded_at,b.id) > row(p.epoch,p.recorded_at,p.id)",
+                  [
+                    text(persistedGeneration.reset_barrier_intent_id) ?? '',
+                    request.priorGenerationKey,
+                    scope.funding_id,
+                    scope.epoch,
+                    scope.budget_id,
+                    fence.capability,
+                  ],
+                );
+                priorVerified = verified !== null;
+              }
+              const generationMismatch = comparePaperGateGenerationReplay(
+                {
+                  bundleId: String(persistedGeneration.bundle_id),
+                  enabled: persistedGeneration.enabled === true,
+                  evidenceHalfLifeMatches: persistedGeneration.half_matches === true,
+                  initializationRunId: String(persistedGeneration.initialization_run_id),
+                  minimumPolicyWindows: String(persistedGeneration.minimum_policy_windows),
+                  pauseConfidenceMatches: persistedGeneration.pause_matches === true,
+                  priorGenerationVerified: priorVerified,
+                  profileClaim: String(persistedGeneration.profile_claim),
+                  resetBarrierIntentId: text(persistedGeneration.reset_barrier_intent_id),
+                  resetOrigin: String(persistedGeneration.reset_origin),
+                  resumeConfidenceMatches: persistedGeneration.resume_matches === true,
+                },
+                request,
+              );
+              if (generationMismatch !== undefined)
+                return {
+                  detail: generationMismatch,
+                  kind: 'refused',
+                  reason: 'replay-mismatch' as const,
+                };
+            }
             const inputs = await tx.unsafe(
               'select candidate_key from engine.paper_gate_phase_input where event_key=$1 order by ordinal',
               [request.eventKey] as never[],
@@ -418,7 +569,9 @@ export function createPaperGateWriterCore(
                 coverageCutoffAtMicroseconds: micro(existing.coverage_cutoff_at_us) ?? -1n,
                 coverageReceiptId: String(existing.coverage_receipt_id),
                 currentEffectConfigIntentId: String(existing.current_effect_config_intent_id),
-                epoch: count(existing.epoch_text) ?? -1,
+                // The canonical epoch parser, not the small count parser: the full
+                // PostgreSQL integer domain is legitimate here.
+                epoch: paperGateEpochFromText(existing.epoch_text) ?? -1,
                 eventKind: String(existing.event_kind),
                 evidenceObservedAtMicroseconds: micro(existing.evidence_observed_at_us) ?? -1n,
                 evidenceVersion: String(existing.evidence_version),
@@ -441,7 +594,6 @@ export function createPaperGateWriterCore(
               },
               replayIntended,
               request,
-              fence,
             );
             if (mismatch !== undefined)
               return { detail: mismatch, kind: 'refused', reason: 'replay-mismatch' as const };
@@ -487,7 +639,11 @@ export function createPaperGateWriterCore(
             testEffects?.afterAuthorityRead,
           );
           const evidence = buildPaperAuthorityEvidence(
-            raw,
+            // The START fence result, which was proved above and is all this evidence is
+            // used for: the authority DECISION. It is deliberately not the final fence —
+            // that happens after the mutations, below, and a failure there throws so the
+            // whole transaction rolls back. Nothing here is a caller permission.
+            { ...raw, leaseStillHeld: true },
             { capability: fence.capability, epoch: scope.epoch },
             fence,
           );
@@ -546,6 +702,7 @@ export function createPaperGateWriterCore(
               text(headRow.latest_event_key),
               previousPhase,
               nowMs,
+              text(headRow.head_event_run_id),
             );
             if ('refusal' in derived)
               return { detail: derived.detail, kind: 'refused', reason: derived.refusal };
@@ -558,6 +715,43 @@ export function createPaperGateWriterCore(
               return { detail: 'present', kind: 'refused', reason: 'generation-exists' as const };
             if (headRow !== null)
               return { detail: 'present', kind: 'refused', reason: 'head' as const };
+            // F4: the key is not the namespace. 0006's primary key is the generation key
+            // alone, so a second generation could otherwise occupy the SAME
+            // (funding, epoch, budget, config intent, policy) under a different key.
+            // Occupancy is checked against the real namespace, and the lineage kind is
+            // DERIVED from history rather than taken from `request.kind`.
+            const occupancy = await one(
+              tx,
+              'select (select count(*) from engine.paper_gate_generation g where g.funding_id=$1 and g.epoch=$2 and g.budget_id=$3 and g.generation_config_intent_id=$4 and g.sample_policy=$5)::text as exact_namespace, (select count(*) from engine.paper_gate_generation g where g.funding_id=$1 and g.epoch=$2 and g.budget_id=$3)::text as budget_namespace',
+              [
+                scope.funding_id,
+                scope.epoch,
+                scope.budget_id,
+                scope.generation_config_intent_id,
+                scope.sample_policy,
+              ],
+            );
+            const exactNamespace = count(occupancy?.exact_namespace);
+            const budgetNamespace = count(occupancy?.budget_namespace);
+            if (exactNamespace === undefined || budgetNamespace === undefined)
+              return { detail: 'occupancy', kind: 'refused', reason: 'generation' as const };
+            if (exactNamespace > 0)
+              return {
+                detail: 'namespace-occupied',
+                kind: 'refused',
+                reason: 'generation-exists' as const,
+              };
+            // A first generation for this budget namespace is an initialization; any
+            // later one follows an existing generation and must therefore be a reset with
+            // a real barrier. A post-reset configure presented as `initialize` is
+            // refused rather than mislabelled `none`.
+            const derivedKind = budgetNamespace === 0 ? 'initialize' : 'reset';
+            if (request.kind !== derivedKind)
+              return {
+                detail: 'lineage-kind-' + derivedKind,
+                kind: 'refused',
+                reason: 'generation' as const,
+              };
             if (request.kind === 'reset') {
               // The barrier is the schema's own `reset_origin='post-reset'` plus a real
               // reset intent, not a caller label: it must be an actual `reset` for this
@@ -628,7 +822,7 @@ export function createPaperGateWriterCore(
           }
 
           const inserted = await tx.unsafe(
-            "insert into engine.paper_gate_phase_event(event_key,generation_key,funding_id,epoch,budget_id,generation_config_intent_id,sample_policy,event_kind,revision_after,prior_event_key,revision_before,previous_phase,result_phase,projected_phase,current_effect_config_intent_id,latest_intent_id,run_id,source_kind,evidence_version,coverage_receipt_id,evidence_observed_at,coverage_cutoff_at,recorded_at,captured_candidate_count,captured_resolved_count,captured_unresolved_count,input_count,universe_first_closes_at,universe_last_closes_at,summary_resolved_windows,effective_windows,weighted_mean_edge,standard_error,negative_return_confidence) values($1,$2,$3,$4,$5,$6,$7,$8,$9::bigint,$10,$11::bigint,$12,$13,$14,$15,$16,$17,'prospective-engine-run',$18,$19,$20::text::timestamptz,$21::text::timestamptz,clock_timestamp(),$22,$23,$24,$25,case when $26::text is null then null else timestamptz 'epoch' + ($26::text::bigint) * interval '1 microsecond' end,case when $27::text is null then null else timestamptz 'epoch' + ($27::text::bigint) * interval '1 microsecond' end,$28,$29::text::numeric,$30::text::numeric,$31::text::numeric,$32::text::numeric) returning event_key",
+            "insert into engine.paper_gate_phase_event(event_key,generation_key,funding_id,epoch,budget_id,generation_config_intent_id,sample_policy,event_kind,revision_after,prior_event_key,revision_before,previous_phase,result_phase,projected_phase,current_effect_config_intent_id,latest_intent_id,run_id,source_kind,evidence_version,coverage_receipt_id,evidence_observed_at,coverage_cutoff_at,recorded_at,captured_candidate_count,captured_resolved_count,captured_unresolved_count,input_count,universe_first_closes_at,universe_last_closes_at,summary_resolved_windows,effective_windows,weighted_mean_edge,standard_error,negative_return_confidence) values($1,$2,$3,$4,$5,$6,$7,$8,$9::bigint,$10,$11::bigint,$12,$13,$14,$15,$16,$17,'prospective-engine-run',$18,$19,$20::text::timestamptz,$21::text::timestamptz,clock_timestamp(),$22,$23,$24,$25,(select min(b.closes_at) from engine.paper_gate_candidate b where b.generation_key=$2 and b.funding_id=$3 and b.epoch=$4 and b.budget_id=$5 and b.generation_config_intent_id=$6 and b.sample_policy=$7 and b.created_at <= $21::text::timestamptz and $8='evaluated'),(select max(b.closes_at) from engine.paper_gate_candidate b where b.generation_key=$2 and b.funding_id=$3 and b.epoch=$4 and b.budget_id=$5 and b.generation_config_intent_id=$6 and b.sample_policy=$7 and b.created_at <= $21::text::timestamptz and $8='evaluated'),$26,$27::text::numeric,$28::text::numeric,$29::text::numeric,$30::text::numeric) returning event_key,(extract(epoch from universe_first_closes_at)*1000000)::numeric(30,0)::text as universe_first_closes_at_us,(extract(epoch from universe_last_closes_at)*1000000)::numeric(30,0)::text as universe_last_closes_at_us",
             [
               request.eventKey,
               ...namespace,
@@ -650,12 +844,11 @@ export function createPaperGateWriterCore(
               intended.capturedResolvedCount,
               intended.capturedUnresolvedCount,
               intended.inputCount,
-              intended.universeFirstClosesAtMicroseconds === undefined
-                ? null
-                : intended.universeFirstClosesAtMicroseconds.toString(),
-              intended.universeLastClosesAtMicroseconds === undefined
-                ? null
-                : intended.universeLastClosesAtMicroseconds.toString(),
+              // The universe bounds are NOT transported: the statement derives them with
+              // `min`/`max` over the same predicate, so the stored instants are exact
+              // timestamptz values the server read, never a microsecond integer
+              // multiplied by an interval in float8. The insert returns them and they are
+              // cross-checked against the derived values below.
               regimeNumbers.summaryResolvedWindows,
               regimeNumbers.effectiveWindows,
               regimeNumbers.weightedMeanEdge,
@@ -663,7 +856,18 @@ export function createPaperGateWriterCore(
               regimeNumbers.negativeReturnConfidence,
             ] as never[],
           );
-          if (inserted.length !== 1) fail('conflict', 'event-insert');
+          const insertedRow =
+            inserted.length === 1 ? (inserted[0] as Record<string, unknown>) : null;
+          if (insertedRow === null) fail('conflict', 'event-insert');
+          // The server-derived bounds must be exactly what was derived from the same rows.
+          // A disagreement means the two predicates diverged and the event must not stand.
+          if (
+            micro(insertedRow?.universe_first_closes_at_us) !==
+              intended.universeFirstClosesAtMicroseconds ||
+            micro(insertedRow?.universe_last_closes_at_us) !==
+              intended.universeLastClosesAtMicroseconds
+          )
+            fail('conflict', 'universe-bound-mismatch');
           await testEffects?.afterEventInsert?.();
 
           if (intended.inputCandidateKeys.length > 0) {
@@ -794,6 +998,31 @@ export function createPaperGateWriterCore(
           return { detail: 'unique-violation', kind: 'refused', reason: 'conflict' };
         // Anything else is a real failure and is never turned into a success.
         throw error;
+      } finally {
+        // Released on the SAME session, after success and after failure alike, before the
+        // connection can return to the pool.
+        if (locked !== undefined) {
+          let cleanup: 'released' | 'released-all' | 'cleanup-failed' = 'released';
+          if (lockHeld) {
+            try {
+              const rows = await locked.unsafe(PAPER_GATE_WRITE_LOCK_RELEASE_SQL, [
+                lockText,
+              ] as never[]);
+              if ((rows[0] as { released?: unknown } | undefined)?.released !== true) {
+                // Should not happen on the acquiring session; clear everything this
+                // session holds before the connection goes away.
+                await locked.unsafe(PAPER_GATE_WRITE_LOCK_RELEASE_ALL_SQL, [] as never[]);
+                cleanup = 'released-all';
+              }
+            } catch {
+              cleanup = 'cleanup-failed';
+            }
+          }
+          testEffects?.onWriteLockCleanup?.(cleanup);
+          // Closed unconditionally: the session ends here, which releases any session
+          // advisory lock the ladder above could not.
+          await locked.end({ timeout: 5 });
+        }
       }
     },
     async close(): Promise<void> {
@@ -802,13 +1031,22 @@ export function createPaperGateWriterCore(
   };
 }
 
-/** The production factory. It takes NO availability parameter, so no runtime caller can
- * reach a positive admission decision through it: availability is fixed to
- * `COMPILED_PAPER_BUNDLE_AVAILABLE`, which is `false`, and an otherwise valid record
- * refuses `authority`/`bundle-unavailable`. */
+/** The only factory this module exports. `admission` is an opaque value, never a boolean
+ * and never a loader: this artifact's own gate decides whether it is the audited-policy
+ * token, and the production gate has no token, so the answer there is always `false`.
+ * Availability therefore falls back to `COMPILED_PAPER_BUNDLE_AVAILABLE`, and an
+ * otherwise valid record refuses `authority`/`bundle-unavailable`. */
 export function createPostgresPaperGateWriter(
   connectionString: string,
   testEffects?: PaperGateWriterTestEffects,
+  admission?: unknown,
+  options?: PaperGateWriterOptions,
 ): PaperGateWriter {
-  return createPaperGateWriterCore(connectionString, COMPILED_PAPER_BUNDLE_AVAILABLE, testEffects);
+  const audited = grantsAuditedPolicy(admission) ? true : COMPILED_PAPER_BUNDLE_AVAILABLE;
+  return createPaperGateWriterCore(
+    connectionString,
+    audited,
+    testEffects,
+    options?.capabilityWriteLock ?? 'off',
+  );
 }

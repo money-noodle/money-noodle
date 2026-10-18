@@ -44,7 +44,18 @@ export const PAPER_GATE_SOURCE_KIND = 'prospective-engine-run';
 export const PAPER_GATE_GENESIS_REVISION = 0n;
 /** `paper_gate_phase_event.revision_after` tops out here in 0006. */
 const MAX_REVISION = 9007199254740991n;
-const MAX_EPOCH = 2147483647;
+/** `epoch integer not null check (epoch >= 1)`: the full PostgreSQL `integer` domain. */
+export const MAX_PAPER_GATE_EPOCH = 2147483647;
+
+/** The canonical epoch parser. A count parser bounded to a handful of digits is NOT a
+ * substitute: it would reject legitimate epochs above its digit budget. */
+export function paperGateEpochFromText(value: unknown): number | undefined {
+  if (typeof value !== 'string' || !/^[1-9][0-9]{0,9}$/.test(value)) return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= MAX_PAPER_GATE_EPOCH
+    ? parsed
+    : undefined;
+}
 
 export type PaperGateWriteRefusal =
   | 'scope'
@@ -218,7 +229,7 @@ export function paperGateWriteRequestIsValid(
   if (
     !Number.isSafeInteger(request.scope.epoch) ||
     request.scope.epoch < 1 ||
-    request.scope.epoch > MAX_EPOCH
+    request.scope.epoch > MAX_PAPER_GATE_EPOCH
   )
     return 'scope';
   if (!identity(request.eventKey) || !identity(request.runId)) return 'request';
@@ -515,13 +526,69 @@ export interface PaperGateIntendedEvent {
   inputCandidateKeys: readonly string[];
 }
 
+/** The generation row as the adapter read it back for a genesis or reset replay. The
+ * three `numeric` settings are compared BY POSTGRESQL against the request's decimal text,
+ * so the flags below are exact numeric equality and no JS `Number` coercion is introduced
+ * where exactness is required. */
+export interface PaperGatePersistedGeneration {
+  bundleId: string;
+  profileClaim: string;
+  enabled: boolean;
+  minimumPolicyWindows: string;
+  evidenceHalfLifeMatches: boolean;
+  pauseConfidenceMatches: boolean;
+  resumeConfidenceMatches: boolean;
+  initializationRunId: string;
+  resetOrigin: string;
+  resetBarrierIntentId: string | undefined;
+  /** Whether the claimed prior generation is a real generation in this namespace whose
+   * configure intent orders strictly before the PERSISTED reset barrier — the same
+   * predicate the write path applied. `undefined` when the request made no such claim. */
+  priorGenerationVerified: boolean | undefined;
+}
+
+/** A genesis or reset replay compares the GENERATION too, not only the event: settings,
+ * labels, the initialization run and the reset provenance are all accepted semantic
+ * fields, so a request differing in any of them is a different request and is refused.
+ * `priorGenerationKey` is not a persisted column, so it is re-derived against real
+ * history rather than ignored; an unverifiable differing claim is rejected. */
+export function comparePaperGateGenerationReplay(
+  persisted: PaperGatePersistedGeneration,
+  request: PaperGateWriteRequest,
+): string | undefined {
+  if (request.kind === 'evaluate') return undefined;
+  const generation = request.generation;
+  const expectedOrigin = request.kind === 'reset' ? 'post-reset' : 'none';
+  const expectedBarrier = request.kind === 'reset' ? request.resetBarrierIntentId : undefined;
+  const checks: readonly (readonly [string, boolean])[] = [
+    ['bundle_id', persisted.bundleId === generation.bundleId],
+    ['profile_claim', persisted.profileClaim === generation.profileClaim],
+    ['enabled', persisted.enabled === generation.enabled],
+    [
+      'minimum_policy_windows',
+      persisted.minimumPolicyWindows === String(generation.minimumPolicyWindows),
+    ],
+    ['evidence_half_life_windows', persisted.evidenceHalfLifeMatches],
+    ['pause_confidence', persisted.pauseConfidenceMatches],
+    ['resume_confidence', persisted.resumeConfidenceMatches],
+    ['initialization_run_id', persisted.initializationRunId === request.runId],
+    ['reset_origin', persisted.resetOrigin === expectedOrigin],
+    ['reset_barrier_intent_id', persisted.resetBarrierIntentId === expectedBarrier],
+  ];
+  for (const [field, ok] of checks) if (!ok) return field;
+  // The claimed prior generation must be verifiable against the persisted barrier and
+  // real history. An unverifiable claim is a refusal, never a silent success.
+  if (request.kind === 'reset' && persisted.priorGenerationVerified !== true)
+    return 'prior_generation_key';
+  return undefined;
+}
+
 /** Field-by-field, exact: microseconds as bigints, counts as integers, keys and the
  * ordered input list in order. Any difference is a refusal, never an upsert. */
 export function comparePaperGateReplay(
   persisted: PaperGatePersistedEvent,
   intended: PaperGateIntendedEvent,
   request: PaperGateWriteRequest,
-  fence: PaperGateFence,
 ): string | undefined {
   const scope = request.scope;
   const checks: readonly (readonly [string, boolean])[] = [
@@ -574,9 +641,12 @@ export function comparePaperGateReplay(
       persisted.inputCandidateKeys.length === intended.inputCandidateKeys.length &&
         persisted.inputCandidateKeys.every((key, i) => key === intended.inputCandidateKeys[i]),
     ],
-    // The fence is the writer's own identity, not a persisted column; compared so a
-    // replay under a different capability cannot be reported as a match.
-    ['capability', fence.capability.length > 0 && scope.epoch === persisted.epoch],
+    // There is no capability column on a phase event, so a capability cannot be compared
+    // here and no pseudo-check pretends otherwise. The capability binding is enforced
+    // where it actually lives: the adapter requires `run_id` to name a real
+    // `engine.job_run_record` whose `capability` equals the fence capability BEFORE it
+    // reaches this comparison, and `run_id` itself is compared above. A replay under a
+    // different capability therefore fails on the run record, not here.
   ];
   for (const [field, ok] of checks) if (!ok) return field;
   // On replay the caller's expected revision describes a DIFFERENT intent when it does

@@ -11,6 +11,7 @@
 // uses an explicit barrier with no timing at all: a concurrent writer or recorder is run
 // to completion inside a seam, so the ordering is deterministic.
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import process from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
 import postgres from 'postgres';
@@ -20,11 +21,13 @@ import {
   createLeaseFenceHarness,
 } from './lease-fence-harness.mjs';
 import { createPostgresPaperGateWriter } from '../dist/adapters/engine-store/postgres-paper-gate-writer.js';
-// The positive path is reached through the differently named core, never through the
-// production factory, which takes no availability parameter at all. The TypeScript seam
-// in `src/test-support/` is EXCLUDED from `tsconfig.build.json`, so it is not in the
-// shipped bundle; this check is a check, not product code, and calls the core directly.
-import { createPaperGateWriterCore } from '../dist/adapters/engine-store/postgres-paper-gate-writer.js';
+// Two artifacts, one real adapter. The PRODUCTION factory comes from `dist`, which is
+// what the Dockerfile copies; the positive path comes from the separate
+// `dist-test-support` artifact, compiled from the same source with the one admission-gate
+// file replaced, and is unlocked only by the identity-bound fixture symbol that lives
+// solely in that artifact. There is no availability-taking export in either.
+import { createPostgresPaperGateWriter as createTestArtifactPaperGateWriter } from '../dist-test-support/adapters/engine-store/postgres-paper-gate-writer.js';
+import { AUDITED_POLICY_FIXTURE } from '../dist-test-support/test-support/paper-gate-audited-policy-fixture.js';
 import { createPostgresGateCoverageStore } from '../dist/adapters/engine-store/postgres-gate-coverage-store.js';
 
 const CAPABILITY = 'budget:paper';
@@ -45,6 +48,8 @@ const GEN_RESET = 'writer-generation-post-reset';
 const T_CONFIG = '2026-10-12 01:00:00.000000+00';
 const T_RESET = '2026-10-12 01:30:00.000000+00';
 const T_CONFIG_2 = '2026-10-12 01:45:00.000000+00';
+const T_RESET_2 = '2026-10-12 01:50:00.000000+00';
+const T_CONFIG_3 = '2026-10-12 01:55:00.000000+00';
 const OBSERVED_ISO = '2026-10-14T00:00:00.000Z';
 const CUTOFF_ISO = '2026-10-14T00:00:00.000Z';
 // Four 15 minute windows from 2026-10-12T02:15:00Z, all before the cutoff above.
@@ -175,12 +180,76 @@ export async function paperGateWriterPostgresContract(admin, port) {
   });
 
   const production = createPostgresPaperGateWriter(writerUrl);
-  // Test-only reachability for the positive path: the production factory above has no
-  // parameter that can enable it.
-  const audited = createPaperGateWriterCore(writerUrl, true);
+  /** The positive path, from the test-support ARTIFACT, unlocked by the identity-bound
+   * fixture. The same call against the `dist` factory refuses, which vector 0 proves. */
+  const auditedWriter = (effects) =>
+    createTestArtifactPaperGateWriter(writerUrl, effects, AUDITED_POLICY_FIXTURE);
+  const audited = auditedWriter();
   const coverage = createPostgresGateCoverageStore(writerUrl);
   try {
     const empty = await stateSnapshot();
+
+    // 0. THE ARTIFACT BOUNDARY, executed rather than asserted in prose.
+    //
+    // The production module exports exactly the intended factory and nothing that takes
+    // availability; the fixture is physically absent from `dist`; the `dist` gate refuses
+    // the GENUINE fixture and refuses forged values; and the image copies only `dist`.
+    const prodWriterModule =
+      await import('../dist/adapters/engine-store/postgres-paper-gate-writer.js');
+    assert.deepEqual(Object.keys(prodWriterModule).sort(), ['createPostgresPaperGateWriter']);
+    const prodGate =
+      await import('../dist/adapters/engine-store/paper-gate-audited-policy-gate.js');
+    // No token exists in the shipped artifact, so nothing can be it.
+    assert.equal(prodGate.AUDITED_POLICY_ADMISSION, undefined);
+    assert.equal(prodGate.grantsAuditedPolicy(AUDITED_POLICY_FIXTURE), false);
+    for (const forged of [
+      Symbol('paper-gate-audited-policy-fixture'),
+      Symbol.for('paper-gate-audited-policy-fixture'),
+      {},
+      true,
+      'paper-gate-audited-policy-fixture',
+    ])
+      assert.equal(prodGate.grantsAuditedPolicy(forged), false);
+    // The test artifact's gate is the ONLY one that holds a token, and it is bound to the
+    // fixture's identity: a forged symbol of the same description is refused.
+    const testGate =
+      await import('../dist-test-support/adapters/engine-store/paper-gate-audited-policy-gate.js');
+    assert.equal(testGate.grantsAuditedPolicy(AUDITED_POLICY_FIXTURE), true);
+    assert.equal(testGate.grantsAuditedPolicy(Symbol('paper-gate-audited-policy-fixture')), false);
+    assert.equal(testGate.grantsAuditedPolicy({}), false);
+    assert.equal(testGate.grantsAuditedPolicy(true), false);
+    // The test artifact exports the same single factory: it is the same adapter source,
+    // not a surrogate.
+    const testWriterModule =
+      await import('../dist-test-support/adapters/engine-store/postgres-paper-gate-writer.js');
+    assert.deepEqual(Object.keys(testWriterModule).sort(), ['createPostgresPaperGateWriter']);
+    // The fixture and the test gate are not in the production artifact at all.
+    for (const absent of [
+      '../dist/test-support/paper-gate-audited-policy-fixture.js',
+      '../dist/test-support/paper-gate-audited-policy-gate.test-artifact.js',
+    ])
+      await assert.rejects(
+        () => import(absent),
+        (error) => {
+          assert.equal(error.code, 'ERR_MODULE_NOT_FOUND');
+          return true;
+        },
+      );
+    // The image copies `dist` and nothing else from the project, and the support artifact
+    // is ignored by the build context.
+    const dockerfile = readFileSync('services/engine-jobs/Dockerfile', 'utf8');
+    const copies = dockerfile
+      .split('\n')
+      .filter((line) => line.startsWith('COPY') && line.includes('services/engine-jobs'));
+    assert.ok(copies.length > 0, 'no project COPY lines found');
+    for (const line of copies) assert.equal(line.includes('dist-test-support'), false);
+    assert.ok(
+      copies.some((line) => line.includes('/services/engine-jobs/dist ')),
+      'the image must copy the production dist',
+    );
+    const dockerignore = readFileSync('.dockerignore', 'utf8').split('\n');
+    assert.ok(dockerignore.includes('**/dist-test-support'));
+    assert.ok(dockerignore.includes('**/.test-support-src'));
 
     // 1. Request, scope and fence are refused BEFORE any statement runs.
     for (const [over, reason] of [
@@ -330,11 +399,15 @@ export async function paperGateWriterPostgresContract(admin, port) {
     assert.equal(replay.receipt.headMoved, false);
     assert.deepEqual(await stateSnapshot(), afterGenesis);
     for (const [over, field] of [
-      [{ runId: 'writer-alt-run' }, 'run_id'],
+      // The GENERATION comparison runs first on a genesis replay, so a changed run id is
+      // reported against the generation's own initialization run.
+      [{ runId: 'writer-alt-run' }, 'initialization_run_id'],
       [{ coverageReceiptId: 'other-receipt' }, 'coverage_receipt_id'],
       [{ evidenceObservedAtIso: '2026-10-13T00:00:00.000Z' }, 'evidence_observed_at'],
       [{ coverageCutoffAtIso: '2026-10-13T00:00:00.000Z' }, 'coverage_cutoff_at'],
-      [{ scope: { ...scopeOf(GEN), funding_id: 'other-funding' } }, 'funding_id'],
+      // A changed namespace names a generation that does not exist, so there is nothing
+      // to compare against and the refusal says so rather than guessing a field.
+      [{ scope: { ...scopeOf(GEN), funding_id: 'other-funding' } }, 'generation'],
     ])
       await refusal(
         await audited.write(requestOf(over), fence),
@@ -579,11 +652,11 @@ export async function paperGateWriterPostgresContract(admin, port) {
     // deterministic and no sleep is used as an oracle.
     let raceRan = false;
     let raceDetail;
-    const loser = createPaperGateWriterCore(writerUrl, true, {
+    const loser = auditedWriter({
       afterAuthorityRead: async () => {
         if (raceRan) return;
         raceRan = true;
-        const inner = createPaperGateWriterCore(writerUrl, true);
+        const inner = auditedWriter();
         try {
           const won = await inner.write(
             evaluateRequest({ eventKey: 'writer-eval-3-winner', expectedRevision: 2n }),
@@ -622,49 +695,12 @@ export async function paperGateWriterPostgresContract(admin, port) {
       await loser.close();
     }
 
-    // 13. Simultaneous writers with NO head at all: the same deterministic interleaving
-    // on a brand new generation. Exactly one generation, event and head survive.
-    const newScope = { ...resetScope, generation_key: 'writer-generation-race' };
-    let raceInitRan = false;
-    const initLoser = createPaperGateWriterCore(writerUrl, true, {
-      afterAuthorityRead: async () => {
-        if (raceInitRan) return;
-        raceInitRan = true;
-        const inner = createPaperGateWriterCore(writerUrl, true);
-        try {
-          const won = await inner.write(
-            requestOf({ eventKey: 'writer-race-winner', scope: newScope }),
-            fence,
-          );
-          assert.equal(won.kind, 'written', describe(won));
-        } finally {
-          await inner.close();
-        }
-      },
-    });
-    try {
-      const lost = await initLoser.write(
-        requestOf({ eventKey: 'writer-race-loser', scope: newScope }),
-        fence,
-      );
-      assert.equal(raceInitRan, true);
-      assert.equal(lost.kind, 'refused', describe(lost));
-      assert.equal(lost.reason, 'conflict');
-      const [race] = await admin.unsafe(
-        'select (select count(*)::text from engine.paper_gate_generation where generation_key=$1) as generations, (select count(*)::text from engine.paper_gate_phase_event where generation_key=$1) as events, (select count(*)::text from engine.paper_gate_head where generation_key=$1) as heads',
-        [newScope.generation_key],
-      );
-      assert.deepEqual(race, { events: '1', generations: '1', heads: '1' });
-    } finally {
-      await initLoser.close();
-    }
-
     // 14. A failure thrown AFTER the event insert and BEFORE the head move rolls the
     // whole transaction back. DELETE is revoked on these tables, so rollback is the only
     // thing that can undo a partial write, and a normal return would have committed it.
     const beforeRollback = await stateSnapshot();
     let rollbackRan = false;
-    const rollback = createPaperGateWriterCore(writerUrl, true, {
+    const rollback = auditedWriter({
       afterEventInsert: async () => {
         rollbackRan = true;
         throw new Error('harness-failure-after-event-insert');
@@ -716,7 +752,7 @@ export async function paperGateWriterPostgresContract(admin, port) {
     // (b) A concurrent UPDATE of the exact control row the decision bound IS caught, by
     //     the `for share` revalidation after the mutations.
     let boundRan = false;
-    const boundWriter = createPaperGateWriterCore(writerUrl, true, {
+    const boundWriter = auditedWriter({
       afterAuthorityRead: async () => {
         if (boundRan) return;
         boundRan = true;
@@ -751,7 +787,7 @@ export async function paperGateWriterPostgresContract(admin, port) {
     //     serializable. The vector records whichever way it actually goes, so the
     //     boundary in the documentation is the measured one.
     let laterRan = false;
-    const laterWriter = createPaperGateWriterCore(writerUrl, true, {
+    const laterWriter = auditedWriter({
       afterAuthorityRead: async () => {
         if (laterRan) return;
         laterRan = true;
@@ -803,7 +839,7 @@ export async function paperGateWriterPostgresContract(admin, port) {
       ],
     ]) {
       let ran = false;
-      const fenceWriter = createPaperGateWriterCore(writerUrl, true, {
+      const fenceWriter = auditedWriter({
         beforeFinalFence: async () => {
           if (ran) return;
           ran = true;
@@ -835,7 +871,7 @@ export async function paperGateWriterPostgresContract(admin, port) {
     // decided AFTER the writes, so it must roll back.
     const expiryEvidence = {};
     let expiryRan = false;
-    const expiryWriter = createPaperGateWriterCore(writerUrl, true, {
+    const expiryWriter = auditedWriter({
       beforeFinalFence: async () => {
         if (expiryRan) return;
         expiryRan = true;
@@ -877,7 +913,7 @@ export async function paperGateWriterPostgresContract(admin, port) {
     const lockWaitBarrier = createLeaseFenceHarness({ capability: CAPABILITY, leaseLive, port });
     const lockWait = lockWaitBarrier();
     const lockEvidence = lockWait.evidence;
-    const lockWriter = createPaperGateWriterCore(writerUrl, true, {
+    const lockWriter = auditedWriter({
       beforeFinalFence: lockWait.barrier,
     });
     try {
@@ -935,6 +971,139 @@ export async function paperGateWriterPostgresContract(admin, port) {
     }
     await restoreLease();
 
+    // 18b. F4: the generation KEY is not the namespace. A second initialize for the same
+    // real (funding, epoch, budget, config intent, policy) under a DIFFERENT key is
+    // refused, and the lineage kind must match what history derives rather than what the
+    // caller labelled.
+    const beforeNamespace = await stateSnapshot();
+    await refusal(
+      await audited.write(
+        requestOf({
+          eventKey: 'writer-dup-namespace',
+          scope: { ...resetScope, generation_key: 'writer-generation-duplicate' },
+        }),
+        fence,
+      ),
+      'generation-exists',
+      'namespace-occupied',
+      beforeNamespace,
+    );
+    // A post-reset configure presented as `initialize` may not be written with
+    // `reset_origin='none'`: prior generations exist in this budget namespace, so the
+    // derived lineage is a reset and the mislabel is refused.
+    await intent('writer-reset-2', 'reset', T_RESET_2, {});
+    await intent('writer-config-3', 'configure', T_CONFIG_3, CONFIG);
+    const raceScope = { ...resetScope, generation_config_intent_id: 'writer-config-3' };
+    await refusal(
+      await audited.write(
+        requestOf({
+          eventKey: 'writer-mislabelled',
+          scope: { ...raceScope, generation_key: 'writer-generation-mislabelled' },
+        }),
+        fence,
+      ),
+      'generation',
+      'lineage-kind-reset',
+      beforeNamespace,
+    );
+    // And a reset whose barrier does not order after the claimed prior generation's
+    // configure is still refused in the new namespace.
+    const raceRequest = (over = {}) =>
+      requestOf({
+        eventKey: 'writer-race-winner',
+        kind: 'reset',
+        priorGenerationKey: GEN_RESET,
+        resetBarrierIntentId: 'writer-reset-2',
+        scope: { ...raceScope, generation_key: 'writer-generation-race' },
+        ...over,
+      });
+    await refusal(
+      await audited.write(raceRequest({ resetBarrierIntentId: 'writer-reset' }), fence),
+      'reset-barrier',
+      'barrier-ordering',
+      beforeNamespace,
+    );
+
+    // 18c. Simultaneous writers with NO head at all, in a fresh namespace: the same
+    // deterministic interleaving as the head race. Exactly one generation, event and head
+    // survive and the loser leaves nothing.
+    let raceInitRan = false;
+    const initLoser = auditedWriter({
+      afterAuthorityRead: async () => {
+        if (raceInitRan) return;
+        raceInitRan = true;
+        const inner = auditedWriter();
+        try {
+          const won = await inner.write(raceRequest(), fence);
+          assert.equal(won.kind, 'written', describe(won));
+          assert.equal(won.receipt.revisionAfter, 0n);
+          assert.equal(won.receipt.generationCreated, true);
+        } finally {
+          await inner.close();
+        }
+      },
+    });
+    try {
+      const lost = await initLoser.write(raceRequest({ eventKey: 'writer-race-loser' }), fence);
+      assert.equal(raceInitRan, true);
+      assert.equal(lost.kind, 'refused', describe(lost));
+      assert.equal(lost.reason, 'conflict');
+      const [race] = await admin.unsafe(
+        'select (select count(*)::text from engine.paper_gate_generation where generation_key=$1) as generations, (select count(*)::text from engine.paper_gate_phase_event where generation_key=$1) as events, (select count(*)::text from engine.paper_gate_head where generation_key=$1) as heads',
+        ['writer-generation-race'],
+      );
+      assert.deepEqual(race, { events: '1', generations: '1', heads: '1' });
+      // The post-reset provenance is derived from history, not from the request label.
+      const [provenance] = await admin.unsafe(
+        'select reset_origin,reset_barrier_intent_id from engine.paper_gate_generation where generation_key=$1',
+        ['writer-generation-race'],
+      );
+      assert.deepEqual(provenance, {
+        reset_barrier_intent_id: 'writer-reset-2',
+        reset_origin: 'post-reset',
+      });
+      // An exact replay of the winner still succeeds and writes nothing.
+      const afterRace = await stateSnapshot();
+      const replayRace = await audited.write(raceRequest(), fence);
+      assert.equal(replayRace.kind, 'replayed', describe(replayRace));
+      assert.deepEqual(await stateSnapshot(), afterRace);
+      // F3: every accepted generation field is compared on a reset replay, including the
+      // settings, the reset provenance and the re-derived prior generation.
+      for (const [over, field] of [
+        [{ generation: { ...GENERATION_INPUTS, profileClaim: 'other-profile' } }, 'profile_claim'],
+        [{ generation: { ...GENERATION_INPUTS, enabled: false } }, 'enabled'],
+        [
+          { generation: { ...GENERATION_INPUTS, minimumPolicyWindows: 5 } },
+          'minimum_policy_windows',
+        ],
+        [
+          { generation: { ...GENERATION_INPUTS, evidenceHalfLifeWindows: '3.5' } },
+          'evidence_half_life_windows',
+        ],
+        [{ generation: { ...GENERATION_INPUTS, pauseConfidence: '0.98' } }, 'pause_confidence'],
+        [{ generation: { ...GENERATION_INPUTS, resumeConfidence: '0.7' } }, 'resume_confidence'],
+        [{ kind: 'initialize' }, 'reset_origin'],
+        [{ resetBarrierIntentId: 'writer-reset' }, 'reset_barrier_intent_id'],
+        [{ priorGenerationKey: 'writer-generation-duplicate' }, 'prior_generation_key'],
+      ])
+        await refusal(
+          await audited.write(raceRequest(over), fence),
+          'replay-mismatch',
+          field,
+          afterRace,
+        );
+      // An exactly equal decimal in a different spelling is the SAME numeric: the
+      // comparison is PostgreSQL's, not a string compare.
+      const equalDecimal = await audited.write(
+        raceRequest({ generation: { ...GENERATION_INPUTS, evidenceHalfLifeWindows: '2.50' } }),
+        fence,
+      );
+      assert.equal(equalDecimal.kind, 'replayed', describe(equalDecimal));
+      assert.deepEqual(await stateSnapshot(), afterRace);
+    } finally {
+      await initLoser.close();
+    }
+
     // 19. `engine_reader` cannot write any of these tables, whatever the writer does.
     const reader = postgres('postgres://engine_reader@127.0.0.1:' + port + '/postgres', {
       max: 1,
@@ -959,16 +1128,80 @@ export async function paperGateWriterPostgresContract(admin, port) {
       await reader.end({ timeout: 5 });
     }
 
+    // 19b. F5: the FULL epoch domain, end to end. A seven-digit count parser would have
+    // rejected this legitimate epoch; the canonical parser accepts it, so a genesis write
+    // and its exact replay both succeed at the ceiling. Invalid epochs are refused before
+    // any statement. This runs last because its configure intent becomes the newest.
+    const MAX_EPOCH = 2147483647;
+    const MAX_BUDGET = 'max-epoch-actor:paper';
+    for (const badEpoch of [0, -1, 2147483648, 1.5, '11'])
+      await refusal(
+        await audited.write(requestOf({ scope: { ...scopeOf(GEN), epoch: badEpoch } }), fence),
+        'scope',
+        'scope',
+      );
+    await admin.unsafe(
+      'insert into engine.control_intent(id,capability,action,actor,epoch,recorded_at,run_id,parameters) values($1,$2,$3,$4,$5,$6::text::timestamptz,$7,$8::text::jsonb)',
+      [
+        'writer-max-epoch-config',
+        CAPABILITY,
+        'configure',
+        'max-epoch-actor',
+        MAX_EPOCH,
+        T_CONFIG,
+        RUN,
+        JSON.stringify({ ...CONFIG, budget_id: MAX_BUDGET, funding_id: 'writer-max-funding' }),
+      ],
+    );
+    await admin.unsafe(
+      'insert into engine.paper_funding_root(funding_id,epoch,budget_id,actor,birth_config_intent_id,origin_run_id,materialized_run_id,recorded_at) values($1,$2,$3,$4,$5,$6,$6,clock_timestamp())',
+      [
+        'writer-max-funding',
+        MAX_EPOCH,
+        MAX_BUDGET,
+        'max-epoch-actor',
+        'writer-max-epoch-config',
+        RUN,
+      ],
+    );
+    await admin.unsafe(
+      'insert into engine.paper_budget_root(funding_id,epoch,budget_id,birth_config_intent_id,latest_intent_id,starting_cents,available_cents,reserved_cents,realized_cents,correction_cents,revision,last_run_id,recorded_at) values($1,$2,$3,$4,$4,1000,700,300,0,0,4,$5,clock_timestamp())',
+      ['writer-max-funding', MAX_EPOCH, MAX_BUDGET, 'writer-max-epoch-config', RUN],
+    );
+    const maxScope = {
+      budget_id: MAX_BUDGET,
+      epoch: MAX_EPOCH,
+      funding_id: 'writer-max-funding',
+      generation_config_intent_id: 'writer-max-epoch-config',
+      generation_key: 'writer-generation-max-epoch',
+      sample_policy: POLICY,
+    };
+    const maxRequest = requestOf({ eventKey: 'writer-max-epoch-genesis', scope: maxScope });
+    const maxWritten = await audited.write(maxRequest, fence);
+    assert.equal(maxWritten.kind, 'written', describe(maxWritten));
+    assert.equal(maxWritten.receipt.revisionAfter, 0n);
+    const [maxRow] = await admin.unsafe(
+      'select epoch::text as epoch from engine.paper_gate_phase_event where event_key=$1',
+      ['writer-max-epoch-genesis'],
+    );
+    assert.equal(maxRow.epoch, String(MAX_EPOCH));
+    const afterMax = await stateSnapshot();
+    const maxReplay = await audited.write(maxRequest, fence);
+    assert.equal(maxReplay.kind, 'replayed', describe(maxReplay));
+    assert.deepEqual(await stateSnapshot(), afterMax);
+
     // 20. Nothing outside this contract's own fixtures and writes exists.
     const after = await counts();
-    // Six writes always commit here: two genesis events, the reset generation's genesis,
-    // two evaluated transitions and the head race winner. The seventh depends on the
-    // MEASURED outcome of the superseded-intent vector above, so the expectation is
-    // derived from that measurement rather than assumed either way.
+    // Seven writes always commit here: the first generation's genesis, the reset
+    // generation's genesis, two evaluated transitions on it, the head race winner, the
+    // namespace race winner and the max-epoch genesis. The eighth depends on the MEASURED
+    // outcome of the superseded-intent vector above, so the expectation is derived from
+    // that measurement rather than assumed either way. Only the two transitions with a
+    // resolved universe carry inputs; the race and max-epoch generations have none.
     const lateCommitted = lateOutcome === 'committed-under-superseded-intent' ? 1 : 0;
-    assert.equal(Number(after[0].generations), Number(before[0].generations) + 3);
-    assert.equal(Number(after[0].heads), Number(before[0].heads) + 3);
-    assert.equal(Number(after[0].events), Number(before[0].events) + 6 + lateCommitted);
+    assert.equal(Number(after[0].generations), Number(before[0].generations) + 4);
+    assert.equal(Number(after[0].heads), Number(before[0].heads) + 4);
+    assert.equal(Number(after[0].events), Number(before[0].events) + 7 + lateCommitted);
     assert.equal(Number(after[0].inputs), Number(before[0].inputs) + 10 + 5 * lateCommitted);
     assert.equal(Number(after[0].leases), 1);
     return { lateOutcome, raceDetail };
@@ -994,6 +1227,22 @@ export async function paperGateWriterPostgresContract(admin, port) {
     ]);
     await admin.unsafe('delete from engine.paper_gate_generation where generation_key=any($1)', [
       [GEN, GEN_RESET, 'writer-generation-race'],
+    ]);
+    for (const key of ['writer-generation-max-epoch']) {
+      await admin.unsafe('delete from engine.paper_gate_head where generation_key=$1', [key]);
+      await admin.unsafe('delete from engine.paper_gate_phase_event where generation_key=$1', [
+        key,
+      ]);
+      await admin.unsafe('delete from engine.paper_gate_generation where generation_key=$1', [key]);
+    }
+    await admin.unsafe('delete from engine.paper_budget_root where funding_id=$1', [
+      'writer-max-funding',
+    ]);
+    await admin.unsafe('delete from engine.paper_funding_root where funding_id=$1', [
+      'writer-max-funding',
+    ]);
+    await admin.unsafe('delete from engine.control_intent where id=$1', [
+      'writer-max-epoch-config',
     ]);
     await admin.unsafe('delete from engine.paper_budget_root where funding_id=$1', [FUNDING]);
     await admin.unsafe('delete from engine.paper_funding_root where funding_id=$1', [FUNDING]);

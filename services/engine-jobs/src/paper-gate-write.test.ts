@@ -8,6 +8,9 @@ import {
   comparePaperGateReplay,
   derivePaperGateEvaluation,
   derivePaperGateUniverse,
+  MAX_PAPER_GATE_EPOCH,
+  comparePaperGateGenerationReplay,
+  paperGateEpochFromText,
   paperGateGenerationInputsAreValid,
   paperGateIsoMilliseconds,
   paperGateSettingsFromRow,
@@ -19,11 +22,12 @@ import {
   type PaperGateWriteRequest,
 } from './domain/paper-gate-write.js';
 import type { PaperGateRowScope } from './domain/paper-gate-row-codec.js';
+import { createPostgresPaperGateWriter } from './adapters/engine-store/postgres-paper-gate-writer.js';
 import {
-  createPostgresPaperGateWriter,
-  createPaperGateWriterCore,
-} from './adapters/engine-store/postgres-paper-gate-writer.js';
-import { createTestOnlyAuditedPolicyGateWriter } from './test-support/paper-gate-test-writer.js';
+  AUDITED_POLICY_ADMISSION,
+  grantsAuditedPolicy,
+} from './adapters/engine-store/paper-gate-audited-policy-gate.js';
+import { AUDITED_POLICY_FIXTURE } from './test-support/paper-gate-audited-policy-fixture.js';
 import {
   PAPER_HISTORICAL_REGIME_CONTRACT,
   PAPER_REGIME_SAMPLE_BUY_POLICY,
@@ -184,6 +188,36 @@ const resolvedAt = (window: bigint) => ({
   edge: '0.2',
   recordedAt: window + 2000000n,
   resolvedAt: window + 1000000n,
+});
+
+describe('paper gate epoch parser', () => {
+  it('covers the whole PostgreSQL integer domain, not a digit budget', () => {
+    expect(MAX_PAPER_GATE_EPOCH).toBe(2147483647);
+    expect(paperGateEpochFromText('1')).toBe(1);
+    // A seven-digit count parser would have rejected both of these legitimate epochs.
+    expect(paperGateEpochFromText('10000000')).toBe(10000000);
+    expect(paperGateEpochFromText('2147483647')).toBe(2147483647);
+  });
+
+  it('rejects everything outside that domain', () => {
+    for (const bad of [
+      '0',
+      '-1',
+      '2147483648',
+      '9999999999',
+      '007',
+      '1.5',
+      '',
+      ' 1',
+      '1 ',
+      '+1',
+      '1e3',
+      1,
+      undefined,
+      null,
+    ])
+      expect(paperGateEpochFromText(bad)).toBeUndefined();
+  });
 });
 
 describe('paper gate universe derivation', () => {
@@ -409,7 +443,7 @@ const PERSISTED: PaperGatePersistedEvent = {
 
 describe('paper gate replay comparison', () => {
   it('matches an exactly equal replay', () => {
-    expect(comparePaperGateReplay(PERSISTED, INTENDED, INITIALIZE, FENCE)).toBeUndefined();
+    expect(comparePaperGateReplay(PERSISTED, INTENDED, INITIALIZE)).toBeUndefined();
   });
 
   it('names the first field that differs, for every compared field', () => {
@@ -441,15 +475,13 @@ describe('paper gate replay comparison', () => {
       ['ordered_inputs', { inputCandidateKeys: ['c1'] }],
     ];
     for (const [field, over] of cases)
-      expect(comparePaperGateReplay({ ...PERSISTED, ...over }, INTENDED, INITIALIZE, FENCE)).toBe(
-        field,
-      );
+      expect(comparePaperGateReplay({ ...PERSISTED, ...over }, INTENDED, INITIALIZE)).toBe(field);
   });
 
   it('compares ordered inputs by position, not as a set', () => {
     const persisted = { ...PERSISTED, inputCandidateKeys: ['c1', 'c2'] };
     const intended = { ...INTENDED, inputCandidateKeys: ['c2', 'c1'] };
-    expect(comparePaperGateReplay(persisted, intended, INITIALIZE, FENCE)).toBe('ordered_inputs');
+    expect(comparePaperGateReplay(persisted, intended, INITIALIZE)).toBe('ordered_inputs');
   });
 
   it('compares the expected revision against the RECORDED revision, not the head', () => {
@@ -470,10 +502,10 @@ describe('paper gate replay comparison', () => {
       revisionAfter: 1n,
       revisionBefore: 0n,
     };
-    expect(comparePaperGateReplay(persisted, intended, EVALUATE, FENCE)).toBeUndefined();
-    expect(
-      comparePaperGateReplay(persisted, intended, { ...EVALUATE, expectedRevision: 1n }, FENCE),
-    ).toBe('expected_revision');
+    expect(comparePaperGateReplay(persisted, intended, EVALUATE)).toBeUndefined();
+    expect(comparePaperGateReplay(persisted, intended, { ...EVALUATE, expectedRevision: 1n })).toBe(
+      'expected_revision',
+    );
   });
 });
 
@@ -489,39 +521,136 @@ describe('writer availability boundary', () => {
   };
   walk(root);
 
-  it('keeps the audited-policy core reachable only from test-support and tests', () => {
-    const importers = files.filter(
-      (file) =>
-        !file.includes('/test-support/') &&
-        !file.endsWith('.test.ts') &&
-        !file.endsWith('postgres-paper-gate-writer.ts') &&
-        readFileSync(file, 'utf8').includes('createPaperGateWriterCore'),
-    );
-    expect(importers).toEqual([]);
-  });
-
-  it('keeps the test-only seam out of the shipped build', () => {
-    const build = JSON.parse(
-      readFileSync(join(process.cwd(), 'services/engine-jobs/tsconfig.build.json'), 'utf8'),
-    ) as { exclude: string[] };
-    // The strongest part of the boundary: the test-only wrapper is not compiled into
-    // `dist` at all, so it cannot be imported by anything that ships.
-    expect(build.exclude).toContain('src/test-support/**');
-    expect(typeof createTestOnlyAuditedPolicyGateWriter).toBe('function');
-    expect(createTestOnlyAuditedPolicyGateWriter).not.toBe(createPostgresPaperGateWriter);
-    expect(typeof createPaperGateWriterCore).toBe('function');
-  });
-
-  it('gives the production factory no availability parameter at all', () => {
+  it('ships no availability-taking entry point from the production module', () => {
     const source = readFileSync(
       join(root, 'adapters/engine-store/postgres-paper-gate-writer.ts'),
       'utf8',
     );
+    // The core is module-private: it must not be exported at all, so no artifact can
+    // offer it.
+    expect(source).toContain('function createPaperGateWriterCore(');
+    expect(source).not.toContain('export function createPaperGateWriterCore');
+    const exported = [...source.matchAll(/^export (?:async )?function (\w+)/gm)].map((m) => m[1]);
+    expect(exported).toEqual(['createPostgresPaperGateWriter']);
+    // And the only factory takes an opaque admission value, never a boolean.
     const factory = source.slice(source.indexOf('export function createPostgresPaperGateWriter'));
     const signature = factory.slice(0, factory.indexOf('): PaperGateWriter'));
-    expect(signature).not.toContain('auditedBundleAvailable');
+    expect(signature).toContain('admission?: unknown');
     expect(signature).not.toContain('boolean');
-    // And it passes the compiled constant, never a parameter.
-    expect(factory).toContain('COMPILED_PAPER_BUNDLE_AVAILABLE');
+  });
+
+  it('has no audited-policy token in the production gate, so nothing can be it', () => {
+    expect(AUDITED_POLICY_ADMISSION).toBeUndefined();
+    // The GENUINE fixture is refused by the production gate.
+    expect(grantsAuditedPolicy(AUDITED_POLICY_FIXTURE)).toBe(false);
+    for (const forged of [
+      Symbol('paper-gate-audited-policy-fixture'),
+      Symbol.for('paper-gate-audited-policy-fixture'),
+      {},
+      true,
+      'paper-gate-audited-policy-fixture',
+      undefined,
+    ])
+      expect(grantsAuditedPolicy(forged)).toBe(false);
+    // The factory is callable and does not throw on a forged admission value.
+    expect(typeof createPostgresPaperGateWriter).toBe('function');
+  });
+
+  it('keeps the fixture and the test gate out of the shipped build', () => {
+    const build = JSON.parse(
+      readFileSync(join(process.cwd(), 'services/engine-jobs/tsconfig.build.json'), 'utf8'),
+    ) as { exclude: string[] };
+    expect(build.exclude).toContain('src/test-support/**');
+    // Nothing outside `src/test-support/` may import the fixture, or the token would be
+    // compiled into the production artifact.
+    const importers = files.filter(
+      (file) =>
+        !file.includes('/test-support/') &&
+        !file.endsWith('.test.ts') &&
+        readFileSync(file, 'utf8').includes('paper-gate-audited-policy-fixture'),
+    );
+    expect(importers).toEqual([]);
+  });
+
+  it('keeps the support artifact out of the image and out of git', () => {
+    const dockerfile = readFileSync(join(process.cwd(), 'services/engine-jobs/Dockerfile'), 'utf8');
+    const copies = dockerfile
+      .split('\n')
+      .filter((line) => line.startsWith('COPY') && line.includes('services/engine-jobs'));
+    expect(copies.length).toBeGreaterThan(0);
+    for (const line of copies) expect(line).not.toContain('dist-test-support');
+    const dockerignore = readFileSync(join(process.cwd(), '.dockerignore'), 'utf8');
+    expect(dockerignore).toContain('**/dist-test-support');
+    expect(dockerignore).toContain('**/.test-support-src');
+    const gitignore = readFileSync(join(process.cwd(), '.gitignore'), 'utf8');
+    expect(gitignore).toContain('services/engine-jobs/dist-test-support/');
+  });
+});
+
+describe('paper gate generation replay comparison', () => {
+  const persisted = {
+    bundleId: PAPER_HISTORICAL_REGIME_CONTRACT,
+    enabled: true,
+    evidenceHalfLifeMatches: true,
+    initializationRunId: 'root-paper-run',
+    minimumPolicyWindows: '4',
+    pauseConfidenceMatches: true,
+    priorGenerationVerified: undefined,
+    profileClaim: 'synthetic-writer-profile',
+    resetBarrierIntentId: undefined,
+    resetOrigin: 'none',
+    resumeConfidenceMatches: true,
+  };
+  const reset = {
+    ...COMMON,
+    generation: GENERATION,
+    kind: 'reset' as const,
+    priorGenerationKey: 'writer-generation-prior',
+    resetBarrierIntentId: 'writer-reset',
+  };
+
+  it('accepts an exactly equal initialize replay', () => {
+    expect(comparePaperGateGenerationReplay(persisted, INITIALIZE)).toBeUndefined();
+  });
+
+  it('names each differing generation field, including the reset provenance', () => {
+    const cases: readonly (readonly [string, Record<string, unknown>])[] = [
+      ['bundle_id', { bundleId: PAPER_RESTRICTIVE_REGIME_PROPOSAL }],
+      ['profile_claim', { profileClaim: 'other' }],
+      ['enabled', { enabled: false }],
+      ['minimum_policy_windows', { minimumPolicyWindows: '5' }],
+      ['evidence_half_life_windows', { evidenceHalfLifeMatches: false }],
+      ['pause_confidence', { pauseConfidenceMatches: false }],
+      ['resume_confidence', { resumeConfidenceMatches: false }],
+      ['initialization_run_id', { initializationRunId: 'other-run' }],
+      // An initialize replay against a post-reset row, and the reverse, are both refused:
+      // the request kind is part of the accepted semantics.
+      ['reset_origin', { resetOrigin: 'post-reset' }],
+    ];
+    for (const [field, over] of cases)
+      expect(comparePaperGateGenerationReplay({ ...persisted, ...over }, INITIALIZE)).toBe(field);
+  });
+
+  it('requires the reset provenance and a verifiable prior generation', () => {
+    const resetRow = {
+      ...persisted,
+      priorGenerationVerified: true,
+      resetBarrierIntentId: 'writer-reset',
+      resetOrigin: 'post-reset',
+    };
+    expect(comparePaperGateGenerationReplay(resetRow, reset)).toBeUndefined();
+    expect(
+      comparePaperGateGenerationReplay({ ...resetRow, resetBarrierIntentId: 'other' }, reset),
+    ).toBe('reset_barrier_intent_id');
+    // `priorGenerationKey` is not persisted, so an unverifiable claim is refused rather
+    // than quietly accepted.
+    expect(
+      comparePaperGateGenerationReplay({ ...resetRow, priorGenerationVerified: false }, reset),
+    ).toBe('prior_generation_key');
+    expect(
+      comparePaperGateGenerationReplay({ ...resetRow, priorGenerationVerified: undefined }, reset),
+    ).toBe('prior_generation_key');
+    // An evaluate request has no generation to compare.
+    expect(comparePaperGateGenerationReplay(resetRow, EVALUATE)).toBeUndefined();
   });
 });

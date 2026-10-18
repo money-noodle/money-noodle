@@ -77,14 +77,19 @@ async function one(
 /** Reads the authority inside the CALLER's transaction, so a writer validates present
  * authority in the same transaction and snapshot as its mutation rather than trusting a
  * historical receipt. `midRead` lands between the standing-intent read and everything
- * compared against it, for the test that distinguishes one snapshot from two. */
+ * compared against it, for the test that distinguishes one snapshot from two.
+ *
+ * This helper performs NO final fence, so it does not return `leaseStillHeld` at all:
+ * the return type omits it and every caller must supply the result of its OWN locking
+ * read plus fresh-clock revalidation. A caller that forgets does not compile, which is
+ * the point — it is never a caller permission and never a placeholder. */
 export async function readPaperAuthorityRawInTransaction(
   tx: Transaction,
   capability: string,
   epoch: number,
   leaseHeld: boolean,
   midRead?: () => Promise<void>,
-): Promise<PaperAuthorityRawReads> {
+): Promise<Omit<PaperAuthorityRawReads, 'leaseStillHeld'>> {
   const observed = leaseHeld ? await one(tx, AUTHORITY_SQL.observed, []) : null;
   const latest = leaseHeld
     ? await one(tx, AUTHORITY_SQL.latest, [capability, SKEW_INTERVAL])
@@ -106,11 +111,6 @@ export async function readPaperAuthorityRawInTransaction(
     funding,
     latest,
     leaseHeld,
-    // A PLACEHOLDER. This helper performs no final fence, so every caller MUST replace
-    // this with the result of its own locking read plus fresh-clock revalidation before
-    // building evidence. Left `true` so a caller that forgets is caught by review rather
-    // than by a silently inverted default.
-    leaseStillHeld: true,
     observedAtMicroseconds: observed === null ? null : observed.observed_at_us,
     ordering,
   };
