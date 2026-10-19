@@ -49,6 +49,7 @@ const POLICY = 'buy-binary-edge-net5-nocap-quality50-owned55-price10to75-late30-
 const OBSERVED_ISO = '2026-10-14T00:00:00.000Z';
 const JOB_RUN_CAPABILITY = 'budget:paper-e2e-synthetic';
 const CYCLE_RUN_ID = 'e2e-cycle-run';
+const CYCLE_RUN_ID_WIRED = 'e2e-cycle-run-wired';
 // Twelve scalar fields, exactly as the engine's decoder recognises them. Recognising this
 // shape is NOT adopting it as the operator contract: that is a human decision this test
 // does not make, and no default, cap or funding value here is a selected one.
@@ -476,10 +477,12 @@ export async function paperRunEndToEndPostgresContract(admin, port) {
     });
     assert.deepEqual(await gateCounts(), { events: '3', generations: '1', heads: '1' });
 
-    // 6. THE RUNTIME IS STILL FAIL-CLOSED, composed rather than argued: the real cycle
-    //    job, with the real cycle store, in paper mode, takes its own lease, opens and
-    //    closes its own run record and refuses `mode-not-implemented` with no tick done.
-    //    A standing resume is deliberately in place first, so the refusal is the paper
+    // 6. THE RUNTIME IS STILL FAIL-CLOSED, composed rather than argued, in BOTH shapes:
+    //    unwired, where the paper lane answers exactly what it always answered; and
+    //    WIRED (new, 2026-10-19), where it reads the real persisted authority under its
+    //    own lease fence and records what that read said. Either way it takes its own
+    //    lease, opens and closes its own run record, performs no tick and writes no gate
+    //    row. A standing resume is deliberately in place first, so a refusal is the paper
     //    lane's and not a paused control.
     await recorder.record({
       action: 'resume',
@@ -519,13 +522,190 @@ export async function paperRunEndToEndPostgresContract(admin, port) {
     assert.deepEqual(await gateCounts(), { events: '3', generations: '1', heads: '1' });
     assert.equal(await advisoryLocks(), '0');
 
+    // 6b. THE WIRED LANE. The same real cycle store, the same real control rows, plus the
+    //     REAL persisted authority reader as its `paper` dependency. The production
+    //     decision is what it records — `bundle-unavailable` for an otherwise valid
+    //     configure and resume — and it is no longer a blanket mode refusal.
+    const paperWriteCounts = async () => {
+      const [row] = await admin.unsafe(
+        'select (select count(*) from engine.paper_order)::text as orders, (select count(*) from engine.paper_reservation)::text as reservations, (select count(*) from engine.paper_entry_effect)::text as entry_effects, (select count(*) from engine.paper_sale_event)::text as sales, (select count(*) from engine.paper_gate_candidate)::text as candidates, (select count(*) from engine.paper_gate_outcome)::text as outcomes from engine.control_intent limit 1',
+      );
+      return row;
+    };
+    const paperWritesBefore = await paperWriteCounts();
+    const bookkeeping = async (runId) => {
+      const [row] = await admin.unsafe(
+        'select (select count(*) from engine.control_outcome where applied_run_id=$1)::text as outcomes, (select count(*) from engine.job_run_record where run_id=$1)::text as records, (select last_outcome from engine.job_run where capability=$2) as job_run_outcome from engine.control_intent limit 1',
+        [runId, JOB_RUN_CAPABILITY],
+      );
+      return row;
+    };
+    const wired = await runCycleJob({
+      capability: CAPABILITY,
+      controlEpoch: EPOCH,
+      jobRunCapability: JOB_RUN_CAPABILITY,
+      mode: 'paper',
+      now: () => new Date(),
+      paper: { authority },
+      runId: CYCLE_RUN_ID_WIRED,
+      sleep: async () => undefined,
+      store: cycleStore,
+      ticks: 1,
+    });
+    assert.deepEqual(
+      {
+        mode: wired.mode,
+        outcome: wired.outcome,
+        reason: wired.reason,
+        ticksCompleted: wired.ticksCompleted,
+      },
+      { mode: 'paper', outcome: 'refused', reason: 'paper-bundle-unavailable', ticksCompleted: 0 },
+    );
+    // Control-plane bookkeeping happened — one outcome row, one run record, the job-health
+    // row — and the paper side wrote exactly nothing.
+    const wiredBooks = await bookkeeping(CYCLE_RUN_ID_WIRED);
+    assert.deepEqual(wiredBooks, {
+      job_run_outcome: 'refused',
+      outcomes: '1',
+      records: '1',
+    });
+    const [wiredOutcome] = await admin.unsafe(
+      'select outcome, reason, intent_id from engine.control_outcome where applied_run_id=$1',
+      [CYCLE_RUN_ID_WIRED],
+    );
+    assert.deepEqual(
+      {
+        intent_id: wiredOutcome.intent_id,
+        outcome: wiredOutcome.outcome,
+        reason: wiredOutcome.reason,
+      },
+      { intent_id: wired.intentId, outcome: 'refused', reason: 'paper-bundle-unavailable' },
+    );
+    assert.deepEqual(await gateCounts(), { events: '3', generations: '1', heads: '1' });
+    // Zero PAPER-SIDE writes by this job, measured as "unchanged across the run" rather
+    // than as an absolute count: other contracts in this chain leave their own synthetic
+    // order, reservation, entry-effect and sale rows behind, and the claim here is about
+    // what the cycle job emitted, not about the whole database.
+    assert.deepEqual(await paperWriteCounts(), paperWritesBefore, 'the paper lane wrote rows');
+
+    // 6c. IDEMPOTENCY, unchanged by the wiring: the same run id again writes no second
+    //     outcome and runs nothing.
+    const replayed = await runCycleJob({
+      capability: CAPABILITY,
+      controlEpoch: EPOCH,
+      jobRunCapability: JOB_RUN_CAPABILITY,
+      mode: 'paper',
+      now: () => new Date(),
+      paper: { authority },
+      runId: CYCLE_RUN_ID_WIRED,
+      sleep: async () => undefined,
+      store: cycleStore,
+      ticks: 1,
+    });
+    assert.deepEqual(
+      {
+        outcome: replayed.outcome,
+        reason: replayed.reason,
+        ticksCompleted: replayed.ticksCompleted,
+      },
+      { outcome: 'refused', reason: 'run-already-recorded', ticksCompleted: 0 },
+    );
+    assert.deepEqual(await bookkeeping(CYCLE_RUN_ID_WIRED), {
+      job_run_outcome: 'refused',
+      outcomes: '1',
+      records: '1',
+    });
+
+    // 6d. LEASE CONTENTION, through the real job: another owner holding the lease makes
+    //     the wired lane refuse `lease-held` before it reads anything.
+    const contention = await cycleStore.acquireLease({
+      capability: CAPABILITY,
+      expiresAt: new Date(Date.now() + 600000),
+      now: new Date(),
+      owner: 'e2e-lease-holder',
+    });
+    assert.equal(contention.acquired, true, describe(contention));
+    try {
+      const blocked = await runCycleJob({
+        capability: CAPABILITY,
+        controlEpoch: EPOCH,
+        jobRunCapability: JOB_RUN_CAPABILITY,
+        mode: 'paper',
+        now: () => new Date(),
+        paper: { authority },
+        runId: 'e2e-cycle-run-blocked',
+        sleep: async () => undefined,
+        store: cycleStore,
+        ticks: 1,
+      });
+      assert.deepEqual(
+        {
+          outcome: blocked.outcome,
+          reason: blocked.reason,
+          ticksCompleted: blocked.ticksCompleted,
+        },
+        { outcome: 'refused', reason: 'lease-held', ticksCompleted: 0 },
+      );
+      const [blockedBooks] = await admin.unsafe(
+        'select count(*)::text as n from engine.job_run_record where run_id=$1',
+        ['e2e-cycle-run-blocked'],
+      );
+      assert.equal(blockedBooks.n, '0');
+    } finally {
+      await cycleStore.releaseLease(contention.grant, new Date());
+    }
+
+    // 6e. THE PRODUCTION WRITER STILL CANNOT WRITE, even handed this artifact's own
+    //     audited-policy fixture: the production gate holds no token, so the fixture is
+    //     not its token and the answer is the same refusal.
+    //     A live lease is taken for it through the real port, because a released fence
+    //     would refuse at the start boundary before the availability gate is even
+    //     reached, which would prove nothing about the token.
+    const tokenLease = await cycleStore.acquireLease({
+      capability: CAPABILITY,
+      expiresAt: new Date(Date.now() + 600000),
+      now: new Date(),
+      owner: OWNER,
+    });
+    assert.equal(tokenLease.acquired, true, describe(tokenLease));
+    const tokenFence = {
+      capability: CAPABILITY,
+      owner: tokenLease.grant.owner,
+      fencingToken: BigInt(tokenLease.grant.fencingToken),
+    };
+    const tokenedProduction = createProductionPaperGateWriter(
+      writerUrl,
+      undefined,
+      AUDITED_POLICY_FIXTURE,
+    );
+    try {
+      const refused = await tokenedProduction.write(
+        evaluateAt('e2e-production-token', 2n),
+        tokenFence,
+      );
+      assert.deepEqual(
+        { detail: refused.detail, kind: refused.kind, reason: refused.reason },
+        { detail: 'bundle-unavailable', kind: 'refused', reason: 'authority' },
+      );
+    } finally {
+      await tokenedProduction.close().catch(() => undefined);
+      await cycleStore.releaseLease(tokenLease.grant, new Date()).catch(() => undefined);
+    }
+    assert.deepEqual(await gateCounts(), { events: '3', generations: '1', heads: '1' });
+    assert.equal(await advisoryLocks(), '0');
+
     facts.authorityDecisionDefault = 'bundle-unavailable';
     facts.authorityDecisionOverride = 'allowed';
     facts.heartbeatDuringWrite = 'conflict/serialization-failure';
     facts.heartbeatBetweenWrites = 'both-applied';
     facts.productionGateWrite = 'refused/bundle-unavailable';
     facts.recorderRole = 'engine_control_recorder';
-    facts.runtimePaperMode = 'refused/mode-not-implemented';
+    facts.runtimePaperModeUnwired = 'refused/mode-not-implemented';
+    facts.runtimePaperModeWired = 'refused/paper-bundle-unavailable';
+    facts.runtimePaperWriteRows = 'zero';
+    facts.runtimeIdempotentRerun = 'refused/run-already-recorded';
+    facts.runtimeLeaseHeld = 'refused/lease-held';
+    facts.productionWriterWithFixtureToken = 'refused/bundle-unavailable';
     facts.storedTypeof = 'object';
   } catch (error) {
     primary = error;
@@ -548,8 +728,11 @@ export async function paperRunEndToEndPostgresContract(admin, port) {
     ['delete from engine.paper_budget_root where funding_id=$1', [FUNDING]],
     ['delete from engine.paper_funding_root where funding_id=$1', [FUNDING]],
     ['delete from engine.control_outcome where applied_run_id=$1', [CYCLE_RUN_ID]],
+    ['delete from engine.control_outcome where applied_run_id=$1', [CYCLE_RUN_ID_WIRED]],
     ['delete from engine.job_run where capability=$1', [JOB_RUN_CAPABILITY]],
     ['delete from engine.job_run_record where run_id=$1', [CYCLE_RUN_ID]],
+    ['delete from engine.job_run_record where run_id=$1', [CYCLE_RUN_ID_WIRED]],
+    ['delete from engine.job_run_record where run_id=$1', ['e2e-cycle-run-blocked']],
     ['delete from engine.control_intent where capability=$1 and epoch>=$2', [CAPABILITY, EPOCH]],
     ['delete from engine.job_lease where capability=$1', [CAPABILITY]],
   ])

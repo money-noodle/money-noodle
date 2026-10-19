@@ -9,7 +9,15 @@ import {
   CYCLE_JOB_RUN_CAPABILITY,
   runCycleJob,
   type CycleJobInput,
+  type PaperAuthorityReader,
 } from './application/cycle.js';
+import type {
+  PaperAuthorityEvidence,
+  PaperAuthorityFence,
+  PaperAuthorityReadResult,
+  PaperAuthorityScope,
+} from './domain/paper-authority-evidence.js';
+import type { PaperAuthorityDecision } from './domain/paper-authority.js';
 import {
   CYCLE_REASONS,
   DEFAULT_TICKS,
@@ -285,6 +293,157 @@ describe('the cycle job, stage 1', () => {
     });
   }
 
+  describe('the paper lane, wired and fail-closed (2026-10-19)', () => {
+    // A reader that answers from a script and records exactly what it was asked. The
+    // evidence this job reads is one field, so the rest of the (large) evidence shape is
+    // not fabricated here: only `decisionUnderProductionBundle` is supplied, which is all
+    // `runCycleJob` touches.
+    const asked: { fence: PaperAuthorityFence; scope: PaperAuthorityScope }[] = [];
+    const reader = (result: PaperAuthorityReadResult | (() => never)): PaperAuthorityReader => ({
+      readAuthority: async (scope, fence) => {
+        asked.push({ fence, scope });
+        if (typeof result === 'function') return result();
+        return result;
+      },
+    });
+    const decided = (decision: PaperAuthorityDecision): PaperAuthorityReadResult => ({
+      evidence: {
+        decisionUnderProductionBundle: decision,
+      } as unknown as PaperAuthorityEvidence,
+      kind: 'read',
+    });
+    const paperJob = (authority: PaperAuthorityReader, intents?: readonly IntentRow[]) =>
+      job({
+        intents: intents ?? [intent({ action: 'resume' })],
+        mode: 'paper',
+        paper: { authority },
+      });
+
+    it('records the production bundle refusal instead of a mode problem', async () => {
+      asked.length = 0;
+      const { input, store, slept } = paperJob(
+        reader(decided({ allowed: false, reason: 'bundle-unavailable' })),
+      );
+      const result = await runCycleJob(input);
+
+      expect(result).toMatchObject({
+        mode: 'paper',
+        outcome: 'refused',
+        reason: 'paper-bundle-unavailable',
+        ticksCompleted: 0,
+      });
+      // It asked under THIS run's own fence, for the capability and epoch it is
+      // governed by — never a token or owner from a caller.
+      const lease = store.leases.get(CYCLE_CAPABILITY);
+      expect(asked).toHaveLength(1);
+      expect(asked[0]?.scope).toEqual({ capability: CYCLE_CAPABILITY, epoch: 1 });
+      expect(asked[0]?.fence).toEqual({
+        capability: CYCLE_CAPABILITY,
+        fencingToken: BigInt(lease?.fencingToken ?? -1),
+        owner: lease?.owner,
+      });
+      // Control-plane bookkeeping happened exactly once; nothing paper-side ran.
+      expect(store.outcomes).toHaveLength(1);
+      expect(store.outcomes[0]).toMatchObject({
+        outcome: 'refused',
+        reason: 'paper-bundle-unavailable',
+      });
+      expect(store.jobRuns.get(CYCLE_JOB_RUN_CAPABILITY)).toMatchObject({ lastOutcome: 'refused' });
+      expect(store.runRecords.get('execution-1')).toMatchObject({
+        outcome: 'refused',
+        reason: 'paper-bundle-unavailable',
+      });
+      // No tick, no heartbeat, no sleep, and the lease handed back.
+      expect(store.heartbeats).toEqual([]);
+      expect(slept).toEqual([]);
+      expect(leaseIsLive(store.leases.get(CYCLE_CAPABILITY)?.expiresAt ?? NOW, NOW)).toBe(false);
+    });
+
+    it('separates a refused READ from a refused decision', async () => {
+      asked.length = 0;
+      const { input, store } = paperJob(
+        reader({ detail: 'start-boundary', kind: 'refused', reason: 'lease-lost' }),
+      );
+      expect(await runCycleJob(input)).toMatchObject({
+        outcome: 'refused',
+        reason: 'paper-authority-unreadable',
+      });
+      expect(store.outcomes[0]).toMatchObject({ reason: 'paper-authority-unreadable' });
+    });
+
+    it('records any other authority refusal without re-coding its reason', async () => {
+      asked.length = 0;
+      const { input, store } = paperJob(
+        reader(decided({ allowed: false, reason: 'resume-reference-invalid' })),
+      );
+      expect(await runCycleJob(input)).toMatchObject({
+        outcome: 'refused',
+        reason: 'paper-authority-refused',
+      });
+      expect(store.outcomes[0]).toMatchObject({ reason: 'paper-authority-refused' });
+    });
+
+    it('still refuses when admission is GRANTED, because no producer exists', async () => {
+      // Unreachable while `COMPILED_PAPER_BUNDLE_AVAILABLE` is false — the adapter
+      // computes that decision with the build's own constant — and asserted anyway, so an
+      // allowed decision can never be mistaken for a performed run.
+      asked.length = 0;
+      const { input, store, slept } = paperJob(
+        reader(
+          decided({
+            allowed: true,
+            config: {} as unknown as PaperAuthorityDecision & { allowed: true },
+            configIntentId: 'configure-1',
+            latestIntentId: 'resume-1',
+          } as unknown as PaperAuthorityDecision),
+        ),
+      );
+      const result = await runCycleJob(input);
+
+      expect(result).toMatchObject({
+        outcome: 'refused',
+        reason: 'paper-admission-unimplemented',
+        ticksCompleted: 0,
+      });
+      expect(store.outcomes[0]).toMatchObject({ outcome: 'refused' });
+      expect(store.heartbeats).toEqual([]);
+      expect(slept).toEqual([]);
+    });
+
+    it('asks nothing at all when the control row is paused', async () => {
+      // Order preserved: intent is still evaluated first, and a paused engine reports
+      // `intent-paused` without any authority read happening.
+      asked.length = 0;
+      const { input } = paperJob(
+        reader(decided({ allowed: false, reason: 'bundle-unavailable' })),
+        [intent({ action: 'pause' })],
+      );
+      expect(await runCycleJob(input)).toMatchObject({ reason: 'intent-paused' });
+      expect(asked).toEqual([]);
+    });
+
+    it('does not turn a driver failure into a refusal', async () => {
+      asked.length = 0;
+      const { input, store } = paperJob(
+        reader(() => {
+          throw new Error('connection terminated');
+        }),
+      );
+      await expect(runCycleJob(input)).rejects.toThrow('connection terminated');
+      // Nothing was recorded as an outcome: the run record stays open and the lease
+      // expires on its own, which is the same self-healing path every other unexpected
+      // failure in this job takes.
+      expect(store.outcomes).toEqual([]);
+      expect(store.runRecords.get('execution-1')).toMatchObject({ reason: 'run-incomplete' });
+    });
+
+    it('answers exactly as before when no reader is wired', async () => {
+      const { input, store } = job({ intents: [intent({ action: 'resume' })], mode: 'paper' });
+      expect(await runCycleJob(input)).toMatchObject({ reason: 'mode-not-implemented' });
+      expect(store.outcomes[0]).toMatchObject({ reason: 'mode-not-implemented' });
+    });
+  });
+
   it('reports paused rather than a mode problem when both are true', async () => {
     // Paused is the stronger statement about an engine, and the mode gate still
     // sits before every tick.
@@ -471,6 +630,36 @@ describe('what stage 1 refuses to be', () => {
     }
   });
 
+  it('wires the paper lane with a READER only, and no way to activate it', () => {
+    // The loader boundary for the 2026-10-19 wiring. The entrypoint may construct the
+    // persisted authority READER; it must not construct a gate writer, must not reach
+    // for the test artifact or its fixture, and must not introduce an environment
+    // variable that could turn the refusal into an admission.
+    const entrypoint = readFileSync(join(cycleRoot, 'main.ts'), 'utf8');
+    expect(entrypoint).toContain('createPostgresPaperAuthorityStore');
+    for (const forbidden of [
+      'createPostgresPaperGateWriter',
+      'dist-test-support',
+      'paper-gate-audited-policy-fixture',
+      'AUDITED_POLICY_ADMISSION',
+    ])
+      expect(entrypoint, `the entrypoint must not reference ${forbidden}`).not.toContain(forbidden);
+    // It may NAME the availability constant in a comment — it does, to say why the lane is
+    // fail-closed — but it must not import it, because importing it is the first step to
+    // passing something else in its place.
+    expect(entrypoint).not.toMatch(/from\s+['"][^'"]*paper-authority\.js['"]/u);
+    // Exactly the environment variables it already read: a writer reference, the control
+    // epoch and the Cloud Run execution name. No new one, and nothing paper-specific.
+    expect(
+      [...entrypoint.matchAll(/process\.env\[([A-Z_]+)\]/gu)].map((match) => match[1]),
+    ).toEqual(['CONTROL_EPOCH_ENV', 'EXECUTION_ENV', 'WRITER_URL_ENV']);
+    // And the application port offers no availability argument to override the build's.
+    const application = readFileSync(join(cycleRoot, '..', 'application', 'cycle.ts'), 'utf8');
+    expect(application).toContain('decisionUnderProductionBundle');
+    for (const forbidden of ['auditedBundleAvailable', 'COMPILED_PAPER_BUNDLE_AVAILABLE'])
+      expect(application, `cycle.ts must not take ${forbidden}`).not.toContain(forbidden + ':');
+  });
+
   it('keeps the reason codes a closed set the migration and the runbook both name', () => {
     expect([...CYCLE_REASONS].sort()).toEqual([
       'dry-run',
@@ -481,6 +670,10 @@ describe('what stage 1 refuses to be', () => {
       'intent-stale-epoch',
       'lease-held',
       'mode-not-implemented',
+      'paper-admission-unimplemented',
+      'paper-authority-refused',
+      'paper-authority-unreadable',
+      'paper-bundle-unavailable',
       'run-already-recorded',
     ]);
     const migration = readFileSync(
@@ -505,10 +698,31 @@ describe('what stage 1 refuses to be', () => {
       ),
       'utf8',
     );
+    // The paper lane's reasons are named by the port contract rather than by a
+    // migration: `engine.control_outcome.reason` and `engine.job_run.last_outcome` carry
+    // free text with no CHECK, the applied migrations are immutable, and the document a
+    // human reads for this lane is the port contract. The invariant is unchanged — every
+    // code is named in a durable document — and the document is asserted below.
+    const portContract = readFileSync(
+      join(
+        import.meta.dirname,
+        '..',
+        '..',
+        '..',
+        'docs',
+        'operations',
+        'paper-engine-port-contract.md',
+      ),
+      'utf8',
+    );
     for (const reason of CYCLE_REASONS) {
       // Stage 2 adds its applied reason without rewriting the stage-1 migration.
-      const owner = reason === 'forecast-run' ? forecastMigration : migration;
-      expect(owner, `owning migration must name the reason code ${reason}`).toContain(reason);
+      const owner = reason.startsWith('paper-')
+        ? portContract
+        : reason === 'forecast-run'
+          ? forecastMigration
+          : migration;
+      expect(owner, `owning document must name the reason code ${reason}`).toContain(reason);
     }
     // `run-incomplete` is the open-record placeholder, not a run outcome, so it is
     // in the migration and deliberately not in the closed set above.

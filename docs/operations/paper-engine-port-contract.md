@@ -296,6 +296,28 @@ The mode defaults to **off**, so the measured non-participating behaviour is unc
 - **Directness is a prerequisite, not an inference.** A session-level lock cannot be relied on through a session-multiplexing proxy. The writer refuses `conflict`/`write-lock-endpoint-pooled` for a host this project **knows** pools, **before connecting**, and verifies that the backend running the transaction is the backend that acquired the lock as the **first statement after `BEGIN`**, failing closed before any mutation. An `unclassified` host is explicitly **not** thereby proven direct, and the pid check proves **one moment, not a property**: it does not make a pooler safe. Enabling `required` mode requires naming a direct endpoint.
 - **Still not current write admission.** It needs `required` mode on that direct endpoint, the recorder build live, and the permission decision above. The mode defaults to **off** and nothing is wired.
 
+### Production code wired for authority refusals — NOT ACTIVATED, October 19, 2026
+
+The paper lane of the `engine-cycle` job no longer answers `mode-not-implemented` on sight. It now reads the **persisted authority** under the run's own lease fence and records what that read said. Authorised by the maintainer on 2026-10-19 as **code and tests only**: no scheduler change, no secret binding, no live paper run, no deploy and no merge.
+
+**What was achieved, exactly.** `runCycleJob` takes an optional `paper: { authority }` reader — a narrow application port the persisted adapter satisfies structurally — and the `cycle` entrypoint constructs that reader (and only the reader) when `--mode paper` is passed. The lane then:
+
+| Situation | Recorded reason |
+| --- | --- |
+| no reader wired (every existing caller, and every `dry`/`forecast` run) | `mode-not-implemented`, unchanged |
+| the authority READ refused — malformed scope, or this run's lease not held at the read's own fence | `paper-authority-unreadable` |
+| the read succeeded and the decision under the production bundle was `bundle-unavailable` | `paper-bundle-unavailable` |
+| the read succeeded and the decision refused for any other reason the reducer gave | `paper-authority-refused` |
+| admission GRANTED | `paper-admission-unimplemented` — and still nothing runs |
+
+Each refusal goes through the job's existing bookkeeping: one outcome row against the intent that was evaluated, the job-health row, the run record closed, the lease released, `ticksCompleted: 0`, and the entrypoint exits 0 because a refusal is the job working. These five codes are free text in `engine.control_outcome.reason` and `engine.job_run.last_outcome` — neither column has a CHECK — so **no migration, grant or schema change accompanies them**, and this document is what names them.
+
+**Why this cannot become a live run.** The decision recorded is `decisionUnderProductionBundle`, which the adapter computes with the build's own `COMPILED_PAPER_BUNDLE_AVAILABLE`; that constant is `false`, so an otherwise perfectly valid configure and resume refuses `bundle-unavailable`. Nothing on this path takes an availability argument, reads an environment flag or accepts a token: there is **no new environment variable, boolean or credential** that can turn the refusal into an admission. The `--mode` default is still `dry`, bindings and schedules are untouched, and **no gate generation, phase event, head, order or venue call is emitted by this job on any path**. No writer is constructed in the entrypoint at all, because nothing here may write a gate row; and a historical authority read is never a write permission — the production gate writer re-derives current authority inside its own transaction if it is ever called, which from this job it is not.
+
+**What remains NOT implemented, named rather than stubbed.** The `allowed` branch records `paper-admission-unimplemented` because the producers a paper tick needs — a candidate reader, an evidence/coverage producer and a generation request builder — do not exist, and synthesising them from placeholder values would be a pretend pipeline. That branch is unreachable today. **The full paper engine is therefore not qualified by this change**, and nothing here claims it is.
+
+**Unchanged human decisions.** The twelve-field document remains what the existing **decoder** recognises, not an adopted operator contract. Who may record an intent remains the existing owner path — any session-bound account for a budget kind it owns — with **no operator role invented**. `required` write-lock mode and a named **direct** endpoint, bootstrap values, a maximum evidence age, any timeout or retry policy, and schedule or binding rollout all remain open and untouched.
+
 ### Composed end-to-end paper run — TEST COMPOSITION ONLY, October 19, 2026
 
 `services/engine-jobs/checks/paper-run-end-to-end-postgres.mjs` assembles the ports already on this branch into one hosted contract, against a disposable loopback PostgreSQL. It is a **test artifact**: no production module, no `main.ts` or `cycle.ts` change, no schema, grant, role, config or infrastructure change, nothing activated and nothing deployed.
