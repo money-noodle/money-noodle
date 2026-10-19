@@ -33,6 +33,8 @@
 // a writer barrier.
 import assert from 'node:assert/strict';
 import process from 'node:process';
+import { readFileSync } from 'node:fs';
+import { URL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import postgres from 'postgres';
 import { createPostgresPaperGateWriter as createTestArtifactPaperGateWriter } from '../dist-test-support/adapters/engine-store/postgres-paper-gate-writer.js';
@@ -40,8 +42,12 @@ import { AUDITED_POLICY_FIXTURE } from '../dist-test-support/test-support/paper-
 import {
   CONTROL_WRITE_LOCK_NAMESPACE,
   createPostgresControlRecorder,
+  createPostgresEngineReader,
 } from '../../platform-api/dist/adapters/engine-store/postgres-engine-store.js';
-import { createEngineRecorderClient } from '../../platform-api/dist/adapters/engine-store/engine-query-client.js';
+import {
+  createEngineReaderClient,
+  createEngineRecorderClient,
+} from '../../platform-api/dist/adapters/engine-store/engine-query-client.js';
 
 const CAPABILITY = 'budget:paper';
 // Its own epoch band again, so this contract cannot disturb or be disturbed by another.
@@ -195,6 +201,8 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
   // The role the schema actually grants the recorder — and, since the API now generates
   // the identifier, the role every vector below runs the real adapter under.
   const recorderUrl = 'postgres://engine_control_recorder@127.0.0.1:' + port + '/postgres';
+  // The API's OTHER engine role, used only to read back what the recorder wrote.
+  const readerUrl = 'postgres://engine_reader@127.0.0.1:' + port + '/postgres';
   // The lock text both sides must derive identically. The engine owns the namespace and
   // platform-api duplicates the literal; this contract is what keeps them honest, because
   // a mismatch would stop either side ever being observed waiting on the other.
@@ -448,7 +456,7 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
     );
     // The row is read back by ADMIN only. The recorder cannot read it, which is the point.
     const [persisted] = await admin.unsafe(
-      'select id, capability, action, actor, epoch, run_id, parameters::text as parameters, (recorded_at = $2::text::timestamptz) as recorded_at_matches from engine.control_intent where id=$1',
+      "select id, capability, action, actor, epoch, run_id, parameters::text as parameters, jsonb_typeof(parameters) as parameters_type, parameters->>'recorded_by' as recorded_by, (recorded_at = $2::text::timestamptz) as recorded_at_matches from engine.control_intent where id=$1",
       [grantProbeRecorded.id, '2026-10-12 04:45:00.000000+00'],
     );
     assert.ok(
@@ -463,7 +471,9 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
         epoch: Number(persisted.epoch),
         id: persisted.id,
         parameters: persisted.parameters,
+        parameters_type: persisted.parameters_type,
         recorded_at_matches: persisted.recorded_at_matches,
+        recorded_by: persisted.recorded_by,
         run_id: persisted.run_id,
       },
       {
@@ -472,16 +482,15 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
         capability: CAPABILITY,
         epoch: EPOCH,
         id: grantProbeRecorded.id,
-        // MEASURED, and a PRE-EXISTING DEFECT this row-level verification is the first
-        // thing to expose: the adapter binds `JSON.stringify(parameters)` — a JS string —
-        // to a `jsonb` column, so the driver JSON-encodes it again and the column holds a
-        // JSON *string* rather than the document. That is unchanged by this batch (the
-        // parameter construction is untouched) and it is NOT fixed here: the stored shape
-        // is what a reader would have to parse, so changing it is a data-shape decision
-        // for the principal, not a test-side repair. Asserted as it actually is, and
-        // reported in this contract's returned facts.
-        parameters: '"{\\"recorded_by\\":\\"grant-probe\\"}"',
+        // The column holds the DOCUMENT, in jsonb's own canonical text — a space after
+        // the colon — and `jsonb_typeof` says `object`, so the extraction operator works.
+        // Until 2026-10-19 it held a JSON *string*, because the adapter bound JSON text
+        // that the driver then encoded a second time; `$8::text::jsonb` makes PostgreSQL
+        // parse it exactly once.
+        parameters: '{"recorded_by": "grant-probe"}',
+        parameters_type: 'object',
         recorded_at_matches: true,
+        recorded_by: 'grant-probe',
         run_id: RUN,
       },
     );
@@ -499,23 +508,47 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
       { rules: suppressors.rules, triggers: suppressors.triggers },
       { rules: '0', triggers: '0' },
     );
+    // A TEST-only copy of the production statement, and a drift guard so the copy cannot
+    // silently stop matching: the built adapter's own source is read and asserted to
+    // contain the same fragments. Nothing about production is changed to make this
+    // possible — the artifact is already imported by this contract.
+    const COPIED_INSERT_SQL = `insert into "engine"."control_intent" (id, capability, action, actor, epoch, recorded_at, run_id, parameters) select $1, $2, $3, $4, $5, $6, $7, $8::text::jsonb from pg_advisory_xact_lock(hashtextextended($9::text, 0))`;
+    const shippedAdapter = readFileSync(
+      new URL(
+        '../../platform-api/dist/adapters/engine-store/postgres-engine-store.js',
+        import.meta.url,
+      ),
+      'utf8',
+    );
+    assert.ok(
+      shippedAdapter.includes(
+        '(id, capability, action, actor, epoch, recorded_at, run_id, parameters)',
+      ),
+      'the production statement no longer names the same columns',
+    );
+    // One fragment, ending at the template literal's closing backtick, so it proves BOTH
+    // that the cast is there and that the statement ENDS there — no `returning` can hide
+    // after it. A substring search for the word alone would match this file's comments.
+    assert.ok(
+      shippedAdapter.includes(
+        'select $1, $2, $3, $4, $5, $6, $7, $8::text::jsonb\n           from pg_advisory_xact_lock(hashtextextended($9::text, 0))`',
+      ),
+      'the production statement drifted from the copy this vector runs',
+    );
     const accountingProbe = postgres(recorderUrl, { max: 1, prepare: false });
     let affectedRowCount;
     try {
-      const result = await accountingProbe.unsafe(
-        `insert into "engine"."control_intent" (id, capability, action, actor, epoch, recorded_at, run_id, parameters) select $1, $2, $3, $4, $5, $6, $7, $8 from pg_advisory_xact_lock(hashtextextended($9::text, 0))`,
-        [
-          'accounting-' + grantProbeRecorded.id,
-          CAPABILITY,
-          'pause',
-          GRANT_PROBE_ACTOR,
-          EPOCH,
-          grantProbeIntent.recordedAt,
-          RUN,
-          null,
-          LOCK_TEXT,
-        ],
-      );
+      const result = await accountingProbe.unsafe(COPIED_INSERT_SQL, [
+        'accounting-' + grantProbeRecorded.id,
+        CAPABILITY,
+        'pause',
+        GRANT_PROBE_ACTOR,
+        EPOCH,
+        grantProbeIntent.recordedAt,
+        RUN,
+        null,
+        LOCK_TEXT,
+      ]);
       // postgres.js carries the command tag's row count on the result it returns, and the
       // statement returns no rows: one insert, zero rows read back.
       affectedRowCount = String(result.count);
@@ -581,6 +614,115 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
     }
     assert.deepEqual(rawDenials, { 'select-id': '42501', 'select-star': '42501' });
 
+    // ACTUAL-CONSUMER ROUND TRIP, the first time the API's writer and the API's reader
+    // meet one real database. The row the recorder just wrote is read back through the
+    // REAL `createPostgresEngineReader` over the REAL `createEngineReaderClient`, as
+    // `engine_reader` — the role that actually holds `SELECT`. Signatures are taken from
+    // the port rather than assumed: `readIntentHistory(capability, limit)` returns entries
+    // shaped `{ intent, outcomes }`, and the entry is found BY ID, never by position.
+    const readerClient = createEngineReaderClient(readerUrl);
+    let roundTrip;
+    try {
+      const reader = createPostgresEngineReader({ client: readerClient, schema: 'engine' });
+      const entryById = async (id) =>
+        (await reader.readIntentHistory(CAPABILITY, 20)).find((entry) => entry.intent.id === id);
+      const entry = await entryById(grantProbeRecorded.id);
+      assert.ok(entry !== undefined, 'the real reader did not return the recorded intent');
+      assert.deepEqual(
+        {
+          action: entry.intent.action,
+          actor: entry.intent.actor,
+          capability: entry.intent.capability,
+          epoch: entry.intent.epoch,
+          id: entry.intent.id,
+          runId: entry.intent.runId,
+        },
+        {
+          action: 'pause',
+          actor: GRANT_PROBE_ACTOR,
+          capability: CAPABILITY,
+          epoch: EPOCH,
+          id: grantProbeRecorded.id,
+          runId: RUN,
+        },
+      );
+      // The decoded document, which the reader REFUSES outright if the column holds a
+      // string. Before 2026-10-19 this read was impossible.
+      assert.deepEqual({ ...entry.intent.parameters }, { recorded_by: 'grant-probe' });
+
+      // SQL NULL survives as NULL on both sides: nothing writes the text 'null'.
+      const nullRecorded = await recorder.record({
+        action: 'pause',
+        actor: GRANT_PROBE_ACTOR,
+        capability: CAPABILITY,
+        epoch: EPOCH,
+        parameters: null,
+        recordedAt: new Date('2026-10-12T04:46:00.000Z'),
+        runId: RUN,
+      });
+      const [nullPersisted] = await admin.unsafe(
+        'select (parameters is null) as is_null, jsonb_typeof(parameters) as parameters_type from engine.control_intent where id=$1',
+        [nullRecorded.id],
+      );
+      assert.deepEqual(
+        { is_null: nullPersisted.is_null, parameters_type: nullPersisted.parameters_type },
+        { is_null: true, parameters_type: null },
+      );
+      const nullEntry = await entryById(nullRecorded.id);
+      assert.ok(
+        nullEntry !== undefined,
+        'the real reader did not return the null-parameter intent',
+      );
+      assert.equal(nullEntry.intent.parameters, null);
+
+      // And a configure-shaped document of valid scalars only — strings, integers and a
+      // boolean — so the whole typed domain round-trips and the extraction operator the
+      // engine's own authority SQL uses can see a field. This stores no paper
+      // configuration contract and activates nothing: it is synthetic, in this
+      // contract's own epoch band, and deleted below.
+      const configureDocument = Object.freeze({
+        budget_id: BUDGET,
+        enabled: true,
+        funding_id: FUNDING,
+        paper_config_version: 1,
+        total_cap_cents: 1000,
+      });
+      const configureRecorded = await recorder.record({
+        action: 'configure',
+        actor: GRANT_PROBE_ACTOR,
+        capability: CAPABILITY,
+        epoch: EPOCH,
+        parameters: configureDocument,
+        recordedAt: new Date('2026-10-12T04:47:00.000Z'),
+        runId: RUN,
+      });
+      const [configurePersisted] = await admin.unsafe(
+        "select jsonb_typeof(parameters) as parameters_type, parameters->>'funding_id' as funding_id, parameters->>'total_cap_cents' as total_cap_cents, parameters->>'enabled' as enabled from engine.control_intent where id=$1",
+        [configureRecorded.id],
+      );
+      assert.deepEqual(configurePersisted, {
+        enabled: 'true',
+        funding_id: FUNDING,
+        parameters_type: 'object',
+        total_cap_cents: '1000',
+      });
+      const configureEntry = await entryById(configureRecorded.id);
+      assert.ok(
+        configureEntry !== undefined,
+        'the real reader did not return the configure intent',
+      );
+      assert.deepEqual({ ...configureEntry.intent.parameters }, configureDocument);
+      roundTrip = {
+        configureFundingIdExtracted: configurePersisted.funding_id,
+        nullStaysSqlNull: nullPersisted.is_null === true,
+        readerRole: 'engine_reader',
+        readerReturnedId: entry.intent.id === grantProbeRecorded.id,
+        readerReturnedParameters: { ...entry.intent.parameters },
+      };
+    } finally {
+      await readerClient.close().catch(() => undefined);
+    }
+
     // HISTORICAL REGRESSION, retained: the forms that asked PostgreSQL to RETURN the id
     // are still refused `42501` for this role, and the same forms without `returning` are
     // still accepted. That is the pre-existing defect this batch's approved change routes
@@ -633,8 +775,9 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
       'locked-select-no-returning': 'accepted',
       'locked-select-returning': '42501',
     });
-    // Two adapter inserts plus the two accepted historical forms, and no lock left behind.
-    assert.equal(await probeRows(), '4');
+    // Four adapter/probe inserts plus the two accepted historical forms, and no lock left
+    // behind.
+    assert.equal(await probeRows(), '6');
     assert.equal(await lockHolders(), '0');
     await admin.unsafe('delete from engine.control_intent where actor=$1', [GRANT_PROBE_ACTOR]);
     assert.equal(await probeRows(), '0');
@@ -1171,7 +1314,8 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
       grantedRoleReadDenials: readDenials,
       grantedRoleRawReadDenials: rawDenials,
       grantedRoleRecorded: 'succeeded-as-engine_control_recorder',
-      parametersStoredEncoding: 'pre-existing-defect-jsonb-holds-a-json-string',
+      parametersStoredEncoding: 'jsonb-object',
+      realReaderRoundTrip: roundTrip,
       grantedRoleStatementOutcomes: grantOutcomes,
       observedQueuedWaiters: queuedIdentities.map((row) => ({
         app: row.app,

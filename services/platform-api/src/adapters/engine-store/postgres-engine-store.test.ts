@@ -208,6 +208,11 @@ describe('recording intent', () => {
       '{"mode":"observe"}',
       'money-noodle/paper-gate-capability-write/v1:budget:paper',
     ]);
+    // The document is bound as JSON TEXT and the statement casts it, so PostgreSQL parses
+    // it exactly once. Parsing the bound value back gives the caller's document, which is
+    // what every reader contract requires the column to hold.
+    expect(statement?.text).toContain('$8::text::jsonb');
+    expect(JSON.parse(String(statement?.parameters[7]))).toEqual({ mode: 'observe' });
     // No update, no delete, and now nothing read at all: the role behind this connection
     // holds `INSERT` and nothing else (ADR-0013 §2), and `returning` would have needed
     // `SELECT` on the column it returned.
@@ -306,7 +311,73 @@ describe('recording intent', () => {
       runId: 'run-2',
     });
 
+    // SQL NULL, not the text 'null': a NULL text cast to jsonb is still NULL.
     expect(client.statements[0]?.parameters[7]).toBeNull();
+    expect(client.statements[0]?.parameters[7]).not.toBe('null');
+  });
+
+  it('carries every value the parameter domain allows, parsed back identically', async () => {
+    // Exactly the domain `validateParameters` admits: strings, finite numbers and
+    // booleans, at most twelve keys. Nested documents, arrays and null members are
+    // refused upstream and by this port's own type, so they are not written here.
+    const mixed = Object.freeze({
+      enabled: true,
+      mode: 'observe',
+      paused: false,
+      ratio: 0.125,
+      threshold: -7,
+      total_cap_cents: 1000,
+    });
+    const twelve = Object.freeze(
+      Object.fromEntries(
+        Array.from({ length: 12 }, (_unused, index) => [
+          'key_' + index,
+          index % 2 === 0 ? index : 'v' + index,
+        ]),
+      ) as Record<string, string | number | boolean>,
+    );
+    for (const document of [mixed, twelve, Object.freeze({})]) {
+      const client = fakeClient([[]]);
+      await createPostgresControlRecorder({ client, schema: 'engine' }).record({
+        action: 'configure',
+        actor: 'account',
+        capability: 'budget:paper',
+        epoch: 4,
+        parameters: document,
+        recordedAt: NOW,
+        runId: 'run-9',
+      });
+
+      const bound = client.statements[0]?.parameters[7];
+      expect(typeof bound).toBe('string');
+      expect(JSON.parse(String(bound))).toEqual(document);
+    }
+    // An empty document stays an empty document and never becomes NULL.
+    const empty = fakeClient([[]]);
+    await createPostgresControlRecorder({ client: empty, schema: 'engine' }).record({
+      action: 'configure',
+      actor: 'account',
+      capability: 'budget:paper',
+      epoch: 4,
+      parameters: Object.freeze({}),
+      recordedAt: NOW,
+      runId: 'run-9',
+    });
+    expect(empty.statements[0]?.parameters[7]).toBe('{}');
+  });
+
+  it('keeps the reader strict: a string-shaped jsonb column is refused, not parsed', async () => {
+    // The no-tolerance decision, locked. A row whose `parameters` arrives as a STRING is
+    // exactly what the double-encoding defect produced. The reader refuses it rather than
+    // parsing it, so no reader was loosened to accept the old writer's output and no
+    // legacy shape is quietly tolerated.
+    const stringShaped = fakeClient([[intentRow({ parameters: '{"mode":"observe"}' })]]);
+    await expect(
+      createPostgresEngineReader({ client: stringShaped, schema: 'engine' }).readIntentHistory(
+        'budget:paper',
+        5,
+      ),
+    ).rejects.toMatchObject({ code: 'engine-unexpected-shape' });
   });
 
   it('rejects on a driver failure and returns no identity', async () => {

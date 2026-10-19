@@ -256,7 +256,7 @@ export function createPostgresControlRecorder(options: EngineStoreOptions): Cont
       // Why it is generated rather than read back: `returning id` requires `SELECT` on the
       // returned column, and `engine_control_recorder` is granted `INSERT` and no `SELECT`
       // (migration 0001, whose comment claiming otherwise is corrected in
-      // `docs/architecture/decisions/0013-engine-cycle-and-control.md`). The role therefore
+      // `docs/architecture/decisions/ADR-0013-m4-engine-boundary.md`). The role therefore
       // could not execute the previous statement at all — a pre-existing defect, not one
       // the advisory lock introduced, which
       // `services/engine-jobs/checks/paper-gate-control-recorder-lock-postgres.mjs`
@@ -277,6 +277,22 @@ export function createPostgresControlRecorder(options: EngineStoreOptions): Cont
       // inserts. The engine side owns the key derivation and this is kept honest by a
       // hosted contract that observes each side waiting on the other's hold.
       const id = randomUUID();
+      // `$8::text::jsonb`, fixed 2026-10-19, and the cast is the fix. The parameters were
+      // being DOUBLE-ENCODED: this adapter binds the document as JSON text, the server
+      // described `$8` as `jsonb`, and the driver then JSON-encoded that string a second
+      // time, so the column held a JSON *string* — `"{\"k\":\"v\"}"` — rather than the
+      // document. Every reader contract in this repository requires an object, and this
+      // adapter's own `parameters` decoder refuses a string outright, so a `configure` or
+      // `resume` written that way could not be read back at all. A `pause` with no
+      // parameters was unaffected, which is why it went unnoticed.
+      //
+      // Casting the placeholder makes the server describe `$8` as `text`: the driver sends
+      // the string verbatim and PostgreSQL parses it exactly once. That is what every
+      // engine-side seeder in this repository already does, and it does not depend on the
+      // describe-then-serialise behaviour that caused the bug. `null` still binds as SQL
+      // NULL, because a NULL text cast to jsonb is NULL, and `{}` is preserved as `{}`.
+      // The stored shape is the one the contracts always specified: this corrects the
+      // writer, and no reader was loosened to accept the old one.
       // Success accounting, with no row to count: the statement selects FROM a `void`
       // function, which yields exactly ONE row, and the insert has no `on conflict`, no
       // rule and no trigger on this table (migration 0001 creates none, and the hosted
@@ -289,7 +305,7 @@ export function createPostgresControlRecorder(options: EngineStoreOptions): Cont
         client,
         `insert into "${schema}"."${CONTROL_INTENT_TABLE}"
            (id, capability, action, actor, epoch, recorded_at, run_id, parameters)
-         select $1, $2, $3, $4, $5, $6, $7, $8
+         select $1, $2, $3, $4, $5, $6, $7, $8::text::jsonb
            from pg_advisory_xact_lock(hashtextextended($9::text, 0))`,
         [
           id,
