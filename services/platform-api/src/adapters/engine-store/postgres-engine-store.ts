@@ -15,6 +15,8 @@
 // job's to append (ADR-0013 §3), so the shape a future edit would need in order
 // to make the API apply its own intent simply is not here.
 
+import { randomUUID } from 'node:crypto';
+
 import type {
   ControlRecorderPort,
   EngineReadPort,
@@ -245,6 +247,28 @@ export function createPostgresControlRecorder(options: EngineStoreOptions): Cont
   const { client, schema } = options;
   return Object.freeze({
     async record(intent: Omit<IntentRow, 'id'>): Promise<{ readonly id: string }> {
+      // The identifier is generated HERE, before the insert, and written as a column.
+      // Approved by Rai on 2026-10-19 (#orbit 1561601104473493547, "I approve") in answer
+      // to exactly this: the API generates each intent's UUID before inserting, the port's
+      // response is unchanged, and no database grant or migration accompanies it. Code and
+      // tests only: nothing is deployed by this change.
+      //
+      // Why it is generated rather than read back: `returning id` requires `SELECT` on the
+      // returned column, and `engine_control_recorder` is granted `INSERT` and no `SELECT`
+      // (migration 0001, whose comment claiming otherwise is corrected in
+      // `docs/architecture/decisions/0013-engine-cycle-and-control.md`). The role therefore
+      // could not execute the previous statement at all — a pre-existing defect, not one
+      // the advisory lock introduced, which
+      // `services/engine-jobs/checks/paper-gate-control-recorder-lock-postgres.mjs`
+      // measures as `42501` and keeps as a regression. Generating the id keeps the role
+      // able to READ NOTHING, which is the invariant ADR-0013 §2 exists to protect, and
+      // leaves the applied migration untouched.
+      //
+      // `gen_random_uuid()::text` remains the column's default and is simply not used on
+      // this path. The value is never taken from a caller, so this is not an
+      // idempotency key and gives no retry semantics: a second call records a second
+      // intent, exactly as before.
+      //
       // The per-capability advisory lock is taken by the SAME single statement, so it is
       // acquired before the insert can take effect and released by that statement's
       // implicit commit. One statement is one transaction, so a transaction pooler cannot
@@ -252,30 +276,23 @@ export function createPostgresControlRecorder(options: EngineStoreOptions): Cont
       // `budget:paper` has a gate writer today, and the rest simply serialize their own
       // inserts. The engine side owns the key derivation and this is kept honest by a
       // hosted contract that observes each side waiting on the other's hold.
-      //
-      // MEASURED CONFLICT, unresolved and not worked around here: `returning id` requires
-      // `SELECT` on `id`, and `engine_control_recorder` is granted `INSERT` only
-      // (migration 0001), so PostgreSQL refuses this statement `42501` under that role.
-      // That is equally true of the form without the lock, so it is pre-existing rather
-      // than introduced here, and
-      // `services/engine-jobs/checks/paper-gate-control-recorder-lock-postgres.mjs`
-      // vector 1 asserts both halves of that. Resolving it means either dropping
-      // `returning id` and the id this port returns — an API-shape change — or granting
-      // the one column, `grant select (id) on engine.control_intent to
-      // engine_control_recorder`, which was MEASURED to be sufficient. That grant is NOT
-      // limited to this role's own inserted rows: a column privilege permits reading `id`
-      // for every row of the table, so it widens the role's read surface, narrowly but
-      // really. Both options are a migration or an API change; this change is authorized
-      // for code and tests only, so the statement is left exactly as it was apart from
-      // the lock, and the remedy stays a PROPOSAL pending the principal's decision.
-      const rows = await run(
+      const id = randomUUID();
+      // Success accounting, with no row to count: the statement selects FROM a `void`
+      // function, which yields exactly ONE row, and the insert has no `on conflict`, no
+      // rule and no trigger on this table (migration 0001 creates none, and the hosted
+      // contract asserts the catalog has none), so PostgreSQL cannot insert zero rows and
+      // still succeed. An empty result is therefore the expected shape and is NOT a
+      // failure. Anything the driver raises propagates through `run` as this service's own
+      // error, so the return below is reached only after the single autocommit statement
+      // has committed.
+      await run(
         client,
         `insert into "${schema}"."${CONTROL_INTENT_TABLE}"
-           (capability, action, actor, epoch, recorded_at, run_id, parameters)
-         select $1, $2, $3, $4, $5, $6, $7
-           from pg_advisory_xact_lock(hashtextextended($8::text, 0))
-         returning id`,
+           (id, capability, action, actor, epoch, recorded_at, run_id, parameters)
+         select $1, $2, $3, $4, $5, $6, $7, $8
+           from pg_advisory_xact_lock(hashtextextended($9::text, 0))`,
         [
+          id,
           intent.capability,
           intent.action,
           intent.actor,
@@ -286,9 +303,7 @@ export function createPostgresControlRecorder(options: EngineStoreOptions): Cont
           `${CONTROL_WRITE_LOCK_NAMESPACE}:${intent.capability}`,
         ],
       );
-      const first = rows[0];
-      if (first === undefined) throw new EngineStoreError('engine-unexpected-shape');
-      return Object.freeze({ id: text(first, 'id') });
+      return Object.freeze({ id });
     },
   });
 }

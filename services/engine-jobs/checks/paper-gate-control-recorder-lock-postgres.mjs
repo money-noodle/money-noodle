@@ -4,31 +4,29 @@
 // `createEngineRecorderClient` from platform-api's built output and calls `record()` with
 // the real client options.
 //
-// Recorder participation was approved by Rai on 2026-10-18 as CODE AND TESTS ONLY. This
-// contract proves CODE ORDERING in one process against one database. It is NOT a
-// deployment and NOT activation, and current write admission remains unclaimed.
+// Recorder participation was approved by Rai on 2026-10-18, and the API-generated
+// identifier on 2026-10-19 (#orbit 1561601104473493547), both as CODE AND TESTS ONLY.
+// This contract proves CODE ORDERING and ROLE PERMISSION in one process against one
+// database. It is NOT a deployment and NOT activation, and current write admission
+// remains unclaimed.
 //
-// A MEASURED BLOCKER, found here and recorded rather than worked around (vector 1): the
-// recorder's shipped statement cannot execute at all under the role the schema grants it.
-// `engine_control_recorder` holds `INSERT` and no `SELECT` (migration 0001), and
-// PostgreSQL requires `SELECT` on every column named in `RETURNING`, so
-// `insert ... returning id` is refused `42501` for that role. That is TRUE OF THE
-// STATEMENT AT `b7bc42b`, BEFORE the advisory lock was added: vector 1 runs both forms
-// side by side and both are refused identically, and both forms without `returning`
-// succeed identically, so the lock change is privilege-neutral and the refusal is
-// pre-existing. The minimum sufficient grant was measured separately on a disposable
-// cluster — `grant select (id) on engine.control_intent to engine_control_recorder` makes
-// the shipped statement succeed — but that grant is NOT restricted to the role's own
-// inserted rows: a column privilege lets it read `id` for every row of the table. It is a
-// grant and migration change, dropping `returning id` is an API/port-shape change, and a
-// third option (generate the id in the API, response shape unchanged, no extra grant) is
-// PROPOSED AND NOT APPROVED. This batch is authorized for none of them, so the blocker is
-// asserted as a negative control here and left for the principal to decide.
+// THE ROLE QUALIFICATION, now executed rather than pending (vector 1). The recorder runs
+// under `engine_control_recorder`, the role migration 0001 actually grants it — `INSERT`
+// and no `SELECT` — and the real adapter SUCCEEDS there, because the API generates each
+// intent's UUID before inserting and the statement asks PostgreSQL to return nothing. The
+// row is read back by ADMIN only; the recorder's own client is then refused `42501` on
+// `select id`, on `select *`, on its own row by id, and on another column, with the
+// catalog agreeing (`has_table_privilege` select false, `has_column_privilege` on `id`
+// false). The role still reads nothing, which is the invariant ADR-0013 §2 exists for.
 //
-// Because of that, vectors 2 and 3 construct the real recorder over the `engine_writer`
-// connection string, which does hold `select` and `insert` on the one table. REAL
-// adapter, REAL client factory, REAL statement, SUBSTITUTE ROLE — and the ordering they
-// prove is the statement's, not the granted role's, which vector 1 shows cannot run it.
+// THE PRE-EXISTING DEFECT IS KEPT AS A REGRESSION, not deleted now that it is routed
+// around: `insert ... returning id` is still refused `42501` for this role, in both the
+// `b7bc42b` form and the locked form, while the same two forms without `returning` are
+// still accepted. PostgreSQL requires `SELECT` on every column named in `RETURNING`, and
+// migration 0001's comment claiming `INSERT` alone permits it is wrong — corrected in
+// ADR-0013 and the port contract with a dated note, never by editing the applied
+// migration. No grant was added, no migration was written, and the schema's own
+// `gen_random_uuid()::text` default is untouched.
 //
 // Every wait is observed in `pg_locks` joined to `pg_stat_activity`, never timed with a
 // sleep, with a real elapsed deadline so a failure cannot hang. Nothing is awaited inside
@@ -194,11 +192,9 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
   assert.equal(process.env.GITHUB_ACTIONS, 'true');
   assert.ok(/^\d+$/.test(String(port)));
   const writerUrl = 'postgres://engine_writer@127.0.0.1:' + port + '/postgres';
-  // The role the schema actually grants the recorder, used for the grant negative control.
-  const grantedRecorderUrl = 'postgres://engine_control_recorder@127.0.0.1:' + port + '/postgres';
-  // The role the shipped statement can actually execute under, used for the ordering
-  // vectors. See the header: this is a substitute ROLE, not a substitute adapter.
-  const executableRecorderUrl = writerUrl;
+  // The role the schema actually grants the recorder — and, since the API now generates
+  // the identifier, the role every vector below runs the real adapter under.
+  const recorderUrl = 'postgres://engine_control_recorder@127.0.0.1:' + port + '/postgres';
   // The lock text both sides must derive identically. The engine owns the namespace and
   // platform-api duplicates the literal; this contract is what keeps them honest, because
   // a mismatch would stop either side ever being observed waiting on the other.
@@ -363,15 +359,10 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
     scope,
   });
 
-  // The REAL recorder, twice over: the same adapter and the same client factory, once on
-  // the granted role (vector 1, where it is refused) and once on a role that can execute
-  // the statement (vectors 2 and 3).
-  const grantedClient = createEngineRecorderClient(grantedRecorderUrl);
-  const grantedRecorder = createPostgresControlRecorder({
-    client: grantedClient,
-    schema: 'engine',
-  });
-  const recorderClient = createEngineRecorderClient(executableRecorderUrl);
+  // The REAL recorder: the real adapter, the real client factory, and the role the schema
+  // actually grants it. Every vector below runs under that role — there is no substitute
+  // role anywhere in this contract any more.
+  const recorderClient = createEngineRecorderClient(recorderUrl);
   const recorder = createPostgresControlRecorder({ client: recorderClient, schema: 'engine' });
   const recordPause = (id) =>
     recorder.record({
@@ -394,7 +385,7 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
     const [timeouts] = await admin.unsafe(
       "select (select setting from pg_settings where name='lock_timeout') as lock_timeout, (select setting from pg_settings where name='statement_timeout') as statement_timeout",
     );
-    const recorderProbe = postgres(grantedRecorderUrl, { max: 1, prepare: false });
+    const recorderProbe = postgres(recorderUrl, { max: 1, prepare: false });
     let recorderTimeouts;
     try {
       const [row] = await recorderProbe.unsafe(
@@ -439,27 +430,164 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
       actor: GRANT_PROBE_ACTOR,
       capability: CAPABILITY,
       epoch: EPOCH,
-      parameters: null,
+      parameters: { recorded_by: 'grant-probe' },
       recordedAt: new Date('2026-10-12T04:45:00.000Z'),
       runId: RUN,
     };
-    const grantedAttempt = await grantedRecorder.record(grantProbeIntent).then(
-      () => 'recorded',
-      (error) => String(error && error.code),
+    // THE POSITIVE PATH, under the role the schema grants. The API now generates the
+    // identifier before inserting (approved 2026-10-19), so the statement no longer asks
+    // PostgreSQL to return a column the role may not read, and the real adapter succeeds
+    // as `engine_control_recorder`.
+    const grantProbeRecorded = await recorder.record(grantProbeIntent);
+    assert.equal(typeof grantProbeRecorded.id, 'string');
+    assert.ok(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+        grantProbeRecorded.id,
+      ),
+      'the recorder returned something that is not a v4 UUID: ' + describe(grantProbeRecorded),
     );
-    // The port maps every driver error to one code, so a permission refusal arrives as
-    // `engine-unreachable` and an operator could not tell the two apart from the port.
-    // Recorded as measured, not changed: narrowing that mapping is an API-shape question.
-    assert.equal(grantedAttempt, 'engine-unreachable');
-    assert.equal(await probeRows(), '0');
+    // The row is read back by ADMIN only. The recorder cannot read it, which is the point.
+    const [persisted] = await admin.unsafe(
+      'select id, capability, action, actor, epoch, run_id, parameters::text as parameters, (recorded_at = $2::text::timestamptz) as recorded_at_matches from engine.control_intent where id=$1',
+      [grantProbeRecorded.id, '2026-10-12 04:45:00.000000+00'],
+    );
+    assert.ok(
+      persisted !== undefined,
+      'the generated id is not in the table: ' + grantProbeRecorded.id,
+    );
+    assert.deepEqual(
+      {
+        action: persisted.action,
+        actor: persisted.actor,
+        capability: persisted.capability,
+        epoch: Number(persisted.epoch),
+        id: persisted.id,
+        parameters: persisted.parameters,
+        recorded_at_matches: persisted.recorded_at_matches,
+        run_id: persisted.run_id,
+      },
+      {
+        action: 'pause',
+        actor: GRANT_PROBE_ACTOR,
+        capability: CAPABILITY,
+        epoch: EPOCH,
+        id: grantProbeRecorded.id,
+        // MEASURED, and a PRE-EXISTING DEFECT this row-level verification is the first
+        // thing to expose: the adapter binds `JSON.stringify(parameters)` — a JS string —
+        // to a `jsonb` column, so the driver JSON-encodes it again and the column holds a
+        // JSON *string* rather than the document. That is unchanged by this batch (the
+        // parameter construction is untouched) and it is NOT fixed here: the stored shape
+        // is what a reader would have to parse, so changing it is a data-shape decision
+        // for the principal, not a test-side repair. Asserted as it actually is, and
+        // reported in this contract's returned facts.
+        parameters: '"{\\"recorded_by\\":\\"grant-probe\\"}"',
+        recorded_at_matches: true,
+        run_id: RUN,
+      },
+    );
+    assert.equal(await probeRows(), '1');
+    assert.equal(await lockHolders(), '0');
+    // Success accounting, established rather than assumed. The statement selects FROM a
+    // `void` function, which yields exactly one row; there is no `on conflict`; and the
+    // catalog is asserted to carry no trigger and no rule on this table, so the insert
+    // cannot have silently affected zero rows. The driver's own command tag is read HERE,
+    // in the test, through the real client — production reads no count and needs none.
+    const [suppressors] = await admin.unsafe(
+      "select (select count(*) from pg_trigger t where t.tgrelid = 'engine.control_intent'::regclass and not t.tgisinternal)::text as triggers, (select count(*) from pg_rewrite r where r.ev_class = 'engine.control_intent'::regclass and r.rulename <> '_RETURN')::text as rules",
+    );
+    assert.deepEqual(
+      { rules: suppressors.rules, triggers: suppressors.triggers },
+      { rules: '0', triggers: '0' },
+    );
+    const accountingProbe = postgres(recorderUrl, { max: 1, prepare: false });
+    let affectedRowCount;
+    try {
+      const result = await accountingProbe.unsafe(
+        `insert into "engine"."control_intent" (id, capability, action, actor, epoch, recorded_at, run_id, parameters) select $1, $2, $3, $4, $5, $6, $7, $8 from pg_advisory_xact_lock(hashtextextended($9::text, 0))`,
+        [
+          'accounting-' + grantProbeRecorded.id,
+          CAPABILITY,
+          'pause',
+          GRANT_PROBE_ACTOR,
+          EPOCH,
+          grantProbeIntent.recordedAt,
+          RUN,
+          null,
+          LOCK_TEXT,
+        ],
+      );
+      // postgres.js carries the command tag's row count on the result it returns, and the
+      // statement returns no rows: one insert, zero rows read back.
+      affectedRowCount = String(result.count);
+      assert.equal(result.length, 0);
+    } finally {
+      await accountingProbe.end({ timeout: 5 }).catch(() => undefined);
+    }
+    assert.equal(affectedRowCount, '1');
+    assert.equal(await probeRows(), '2');
 
-    // Then the cause, isolated. Four statement forms on the SAME granted role and the
-    // SAME real client: the `b7bc42b` form and the current locked form, each with and
-    // without `returning id`. The two `returning` forms are refused identically and the
-    // two without succeed identically, so the refusal is caused by `returning id` against
-    // a role holding no `SELECT` — pre-existing, and unaffected by the lock. The SQL here
-    // is deliberately hand-written because one of the forms no longer exists in the
-    // source; the authoritative result for the shipped form is the adapter call above.
+    // THE ROLE'S READ DENIAL STILL HOLDS, which is what generating the id protects. Read
+    // from the catalog, then attempted for real through the recorder's own client.
+    const [granted] = await admin.unsafe(
+      "select has_table_privilege('engine_control_recorder','engine.control_intent','insert')::text as can_insert, has_table_privilege('engine_control_recorder','engine.control_intent','select')::text as can_select, has_column_privilege('engine_control_recorder','engine.control_intent','id','select')::text as can_select_id, has_column_privilege('engine_control_recorder','engine.control_intent','capability','select')::text as can_select_capability, has_table_privilege('engine_control_recorder','engine.control_intent','update')::text as can_update, has_table_privilege('engine_control_recorder','engine.control_intent','delete')::text as can_delete",
+    );
+    assert.deepEqual(granted, {
+      can_delete: 'false',
+      can_insert: 'true',
+      can_select: 'false',
+      can_select_capability: 'false',
+      can_select_id: 'false',
+      can_update: 'false',
+    });
+    const readDenials = {};
+    for (const [label, statement] of [
+      ['select-id', 'select id from "engine"."control_intent" limit 1'],
+      ['select-star', 'select * from "engine"."control_intent" limit 1'],
+      ['select-own-row-by-id', 'select id from "engine"."control_intent" where id = $1'],
+      ['select-capability', 'select capability from "engine"."control_intent" limit 1'],
+    ])
+      readDenials[label] = await recorderClient
+        .query(statement, statement.includes('$1') ? [grantProbeRecorded.id] : [])
+        .then(
+          () => 'READ-WHICH-IS-WRONG',
+          (error) => String(error && error.code),
+        );
+    // Every read is refused `42501`, including the role's OWN row by its own id: the
+    // identifier it returned is not something it can look up. These go through the real
+    // client, which surfaces the driver's code; the ADAPTER is what collapses every
+    // failure to one `engine-unreachable`, which `record()` above demonstrates and which
+    // stays measured and unchanged.
+    assert.deepEqual(readDenials, {
+      'select-capability': '42501',
+      'select-id': '42501',
+      'select-own-row-by-id': '42501',
+      'select-star': '42501',
+    });
+    // And the raw code underneath, on a session of this same role, so the refusal is
+    // named rather than inferred from the port's single error.
+    const denialProbe = postgres(recorderUrl, { max: 1, prepare: false });
+    const rawDenials = {};
+    try {
+      for (const [label, statement] of [
+        ['select-id', 'select id from engine.control_intent limit 1'],
+        ['select-star', 'select * from engine.control_intent limit 1'],
+      ])
+        rawDenials[label] = await denialProbe.unsafe(statement, []).then(
+          () => 'READ-WHICH-IS-WRONG',
+          (error) => String(error && error.code),
+        );
+    } finally {
+      await denialProbe.end({ timeout: 5 }).catch(() => undefined);
+    }
+    assert.deepEqual(rawDenials, { 'select-id': '42501', 'select-star': '42501' });
+
+    // HISTORICAL REGRESSION, retained: the forms that asked PostgreSQL to RETURN the id
+    // are still refused `42501` for this role, and the same forms without `returning` are
+    // still accepted. That is the pre-existing defect this batch's approved change routes
+    // around — not something the advisory lock introduced, and not something a grant was
+    // added for. The SQL here is deliberately hand-written because these forms no longer
+    // exist in the source; the authoritative result for the SHIPPED statement is the
+    // adapter call above, which succeeds.
     const columns = '(capability, action, actor, epoch, recorded_at, run_id, parameters)';
     const target = '"engine"."control_intent"';
     const seven = [
@@ -495,7 +623,7 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
     ];
     const grantOutcomes = {};
     for (const [label, text, values] of grantForms)
-      grantOutcomes[label] = await grantedClient.query(text, values).then(
+      grantOutcomes[label] = await recorderClient.query(text, values).then(
         () => 'accepted',
         (error) => String(error && error.code),
       );
@@ -505,18 +633,9 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
       'locked-select-no-returning': 'accepted',
       'locked-select-returning': '42501',
     });
-    // Exactly the two accepted forms landed, and the lock each statement took is gone
-    // with that statement's implicit commit.
-    assert.equal(await probeRows(), '2');
+    // Two adapter inserts plus the two accepted historical forms, and no lock left behind.
+    assert.equal(await probeRows(), '4');
     assert.equal(await lockHolders(), '0');
-    // The grant itself, read from the catalog rather than assumed from the migration.
-    const [granted] = await admin.unsafe(
-      "select has_table_privilege('engine_control_recorder','engine.control_intent','select')::text as can_select, has_table_privilege('engine_control_recorder','engine.control_intent','insert')::text as can_insert",
-    );
-    assert.deepEqual(
-      { can_insert: granted.can_insert, can_select: granted.can_select },
-      { can_insert: 'true', can_select: 'false' },
-    );
     await admin.unsafe('delete from engine.control_intent where actor=$1', [GRANT_PROBE_ACTOR]);
     assert.equal(await probeRows(), '0');
 
@@ -576,10 +695,10 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
     assert.equal(writerFirstWaiters[0].app, RECORDER_APP);
     assert.equal(writerFirstWaiters[0].wait_type, 'Lock');
     assert.ok(/^\d+$/.test(String(writerFirstWaiters[0].pid)), describe(writerFirstWaiters));
-    // The substitute ROLE is asserted, so the limit is in the evidence and not only in
-    // the prose: this is `engine_writer`, because vector 1 showed the granted recorder
-    // role cannot execute the statement at all.
-    assert.equal(writerFirstWaiters[0].role, 'engine_writer');
+    // The waiting backend's ROLE is asserted, and it is the INTENDED one: the real
+    // `engine_control_recorder`, not a substitute. Vector 1 proved it can now execute the
+    // statement, so there is nothing left to stand in for it.
+    assert.equal(writerFirstWaiters[0].role, 'engine_control_recorder');
     assert.equal(cleanup, 'released');
     // The event bound the intent that was standing BEFORE the pause, read from the row.
     const [bound] = await admin.unsafe(
@@ -732,6 +851,15 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
       ['Lock'],
       describe(queuedIdentities),
     );
+    // The recorder's waiter is the INTENDED role, and the other one is the engine writer:
+    // two different roles on one key, which is the whole point of the protocol.
+    assert.deepEqual(
+      queuedIdentities
+        .map((row) => (row.app === RECORDER_APP ? 'recorder:' + row.role : 'writer:' + row.role))
+        .sort(),
+      ['recorder:engine_control_recorder', 'writer:engine_writer'],
+      describe(queuedIdentities),
+    );
     // Both participants were settled by the cleanup, so reading them here cannot wait.
     writerSettled = await pendingWrite;
     assert.ok(
@@ -757,7 +885,7 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
     // survive cannot be produced on a direct loopback connection, so they are INJECTED —
     // into the test helper's arguments only, never into production code and never through
     // a seam in the adapter. Everything else is real: a real blocking session, the real
-    // recorder adapter and client on the substitute role, a real blocked wait observed by
+    // recorder adapter and client on the INTENDED role, a real blocked wait observed by
     // application name, and the catalog's own per-pid answer. No sleep is used, and every
     // wait is bounded by the existing observation budget.
     const newBlocker = () =>
@@ -1037,7 +1165,13 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
       await pooled.close();
     }
     facts = {
+      grantedRoleAffectedRows: affectedRowCount,
       grantedRoleCanSelect: granted.can_select,
+      grantedRoleCanSelectIdColumn: granted.can_select_id,
+      grantedRoleReadDenials: readDenials,
+      grantedRoleRawReadDenials: rawDenials,
+      grantedRoleRecorded: 'succeeded-as-engine_control_recorder',
+      parametersStoredEncoding: 'pre-existing-defect-jsonb-holds-a-json-string',
       grantedRoleStatementOutcomes: grantOutcomes,
       observedQueuedWaiters: queuedIdentities.map((row) => ({
         app: row.app,
@@ -1069,7 +1203,6 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
     await step().catch((error) => teardownErrors.push(String((error && error.message) || error)));
   };
   await teardown(() => recorderClient.close());
-  await teardown(() => grantedClient.close());
   for (const [statement, values] of [
     ['delete from engine.control_intent where actor=$1', [GRANT_PROBE_ACTOR]],
     ['delete from engine.paper_gate_head where generation_key=$1', [GEN]],
@@ -1084,10 +1217,10 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
   if (primaryPresent) throw primary;
   if (teardownErrors.length > 0) assert.fail('teardown failed: ' + describe(teardownErrors));
   // Both sides take the same key, proved by each being observed waiting on the other's
-  // hold with the REAL adapters. That is CODE ORDERING in one process against one
-  // database, under a role that can execute the statement. It is not a deployment:
-  // current write admission still needs the engine writer running `required` on a DIRECT
-  // endpoint, the recorder build live, and — per vector 1 — a principal decision on the
-  // `returning id` / `select` grant conflict that today refuses the granted role.
+  // hold with the REAL adapters, under the REAL roles. That is CODE ORDERING and ROLE
+  // PERMISSION in one process against one database. It is not a deployment: current write
+  // admission still needs the engine writer running `required` on a proven DIRECT
+  // endpoint and the recorder build live. The recorder's own advisory wait remains
+  // unbounded as measured, and the paper runtime remains refused.
   return { ...facts, teardownErrors: teardownErrors.length };
 }

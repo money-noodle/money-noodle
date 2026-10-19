@@ -171,9 +171,13 @@ describe('reading job health', () => {
   });
 });
 
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
 describe('recording intent', () => {
-  it('appends one row to the control table and returns its identity', async () => {
-    const client = fakeClient([[{ id: 'intent-7' }]]);
+  it('generates the identity itself, writes it as a column, and returns that same value', async () => {
+    // The driver answers with NO rows, which is what an insert without `returning`
+    // produces. That is the success shape now, not a failure.
+    const client = fakeClient([[]]);
     const recorder = createPostgresControlRecorder({ client, schema: 'engine' });
 
     const result = await recorder.record({
@@ -186,14 +190,15 @@ describe('recording intent', () => {
       runId: 'run-1',
     });
 
-    expect(result).toEqual({ id: 'intent-7' });
+    expect(result.id).toMatch(UUID_V4);
     expect(client.statements).toHaveLength(1);
     const [statement] = client.statements;
     expect(statement?.text).toContain(`insert into "engine"."${CONTROL_INTENT_TABLE}"`);
-    // No update, no delete, and nothing read beyond the row it just wrote: the role
-    // behind this connection holds `INSERT` and nothing else (ADR-0013 §2).
-    expect(statement?.text).not.toMatch(/\bupdate\b|\bdelete\b/u);
+    // The value returned to the caller is the value that was INSERTED, compared after the
+    // query resolved — not a second generation and not a read-back.
+    expect(statement?.parameters[0]).toBe(result.id);
     expect(statement?.parameters).toEqual([
+      result.id,
       'budget:paper',
       'pause',
       'account',
@@ -203,10 +208,43 @@ describe('recording intent', () => {
       '{"mode":"observe"}',
       'money-noodle/paper-gate-capability-write/v1:budget:paper',
     ]);
+    // No update, no delete, and now nothing read at all: the role behind this connection
+    // holds `INSERT` and nothing else (ADR-0013 §2), and `returning` would have needed
+    // `SELECT` on the column it returned.
+    expect(statement?.text).not.toMatch(/\bupdate\b|\bdelete\b/u);
+    expect(statement?.text).not.toContain('returning');
+    // The response shape the port publishes is unchanged: one frozen `{ id }`.
+    expect(Object.keys(result)).toEqual(['id']);
+    expect(Object.isFrozen(result)).toBe(true);
+  });
+
+  it('gives independent calls independent identities', async () => {
+    const client = fakeClient([[], []]);
+    const recorder = createPostgresControlRecorder({ client, schema: 'engine' });
+    const intent = {
+      action: 'pause' as const,
+      actor: 'account',
+      capability: 'budget:paper',
+      epoch: 3,
+      parameters: null,
+      recordedAt: NOW,
+      runId: 'run-1',
+    };
+
+    const first = await recorder.record(intent);
+    const second = await recorder.record(intent);
+
+    expect(first.id).not.toBe(second.id);
+    expect(first.id).toMatch(UUID_V4);
+    expect(second.id).toMatch(UUID_V4);
+    // Each call wrote the identity it returned. Nothing here is an idempotency key: the
+    // same intent recorded twice is two rows, as the append-only table intends.
+    expect(client.statements[0]?.parameters[0]).toBe(first.id);
+    expect(client.statements[1]?.parameters[0]).toBe(second.id);
   });
 
   it('takes the per-capability write lock in the same single statement', () => {
-    const client = fakeClient([[{ id: 'intent-9' }]]);
+    const client = fakeClient([[]]);
     return createPostgresControlRecorder({ client, schema: 'engine' })
       .record({
         action: 'pause',
@@ -224,20 +262,21 @@ describe('recording intent', () => {
         // endpoint this client targets allows.
         expect(client.statements).toHaveLength(1);
         expect(statement?.text).toContain(
-          'from pg_advisory_xact_lock(hashtextextended($8::text, 0))',
+          'from pg_advisory_xact_lock(hashtextextended($9::text, 0))',
         );
-        expect(statement?.text).toContain('returning id');
-        expect(statement?.text).toContain('select $1, $2, $3, $4, $5, $6, $7');
+        expect(statement?.text).toContain('select $1, $2, $3, $4, $5, $6, $7, $8');
         expect(statement?.text).not.toContain('values (');
-        expect(statement?.parameters).toHaveLength(8);
-        // The key text is the engine's namespace plus the capability, verbatim.
-        expect(statement?.parameters[7]).toBe(`${CONTROL_WRITE_LOCK_NAMESPACE}:budget:paper`);
+        expect(statement?.text).not.toContain('returning');
+        expect(statement?.parameters).toHaveLength(9);
+        // The key text is the engine's namespace plus the capability, verbatim, and it is
+        // the LAST parameter — the one the lock function reads.
+        expect(statement?.parameters[8]).toBe(`${CONTROL_WRITE_LOCK_NAMESPACE}:budget:paper`);
         expect(CONTROL_WRITE_LOCK_NAMESPACE).toBe('money-noodle/paper-gate-capability-write/v1');
       });
   });
 
   it('keys the lock by the capability it is recording for, not a fixed value', () => {
-    const client = fakeClient([[{ id: 'intent-10' }]]);
+    const client = fakeClient([[]]);
     return createPostgresControlRecorder({ client, schema: 'engine' })
       .record({
         action: 'resume',
@@ -249,14 +288,14 @@ describe('recording intent', () => {
         runId: 'run-3',
       })
       .then(() => {
-        expect(client.statements[0]?.parameters[7]).toBe(
+        expect(client.statements[0]?.parameters[8]).toBe(
           `${CONTROL_WRITE_LOCK_NAMESPACE}:budget:forecast`,
         );
       });
   });
 
   it('writes a null rather than an empty document when there are no parameters', async () => {
-    const client = fakeClient([[{ id: 'intent-8' }]]);
+    const client = fakeClient([[]]);
     await createPostgresControlRecorder({ client, schema: 'engine' }).record({
       action: 'resume',
       actor: 'account',
@@ -267,28 +306,16 @@ describe('recording intent', () => {
       runId: 'run-2',
     });
 
-    expect(client.statements[0]?.parameters[6]).toBeNull();
+    expect(client.statements[0]?.parameters[7]).toBeNull();
   });
 
-  it('refuses an insert that returned nothing, and reports a failure safely', async () => {
-    const empty = fakeClient([[]]);
-    await expect(
-      createPostgresControlRecorder({ client: empty, schema: 'engine' }).record({
-        action: 'pause',
-        actor: 'a',
-        capability: 'c',
-        epoch: 1,
-        parameters: null,
-        recordedAt: NOW,
-        runId: 'r',
-      }),
-    ).rejects.toMatchObject({ code: 'engine-unexpected-shape' });
-
+  it('rejects on a driver failure and returns no identity', async () => {
     const broken = fakeClient(() => {
       throw new Error('role "engine_control_recorder" cannot insert');
     });
+    const recorder = createPostgresControlRecorder({ client: broken, schema: 'engine' });
     await expect(
-      createPostgresControlRecorder({ client: broken, schema: 'engine' }).record({
+      recorder.record({
         action: 'pause',
         actor: 'a',
         capability: 'c',
@@ -298,5 +325,29 @@ describe('recording intent', () => {
         runId: 'r',
       }),
     ).rejects.toMatchObject({ code: 'engine-unreachable', message: 'engine-unreachable' });
+    // One attempt, and nothing retried behind the caller's back.
+    expect(broken.statements).toHaveLength(1);
+  });
+
+  it('treats an unexpected row from the driver as success, not as a shape failure', async () => {
+    // Defensive, and deliberate: the statement asks for nothing back, so whatever a
+    // driver hands over is ignored rather than inspected. An insert that raises is the
+    // only failure, and it is handled above.
+    const chatty = fakeClient([[{ surprise: 'ignored' }]]);
+    const result = await createPostgresControlRecorder({
+      client: chatty,
+      schema: 'engine',
+    }).record({
+      action: 'pause',
+      actor: 'a',
+      capability: 'c',
+      epoch: 1,
+      parameters: null,
+      recordedAt: NOW,
+      runId: 'r',
+    });
+
+    expect(result.id).toBe(chatty.statements[0]?.parameters[0]);
+    expect(result.id).toMatch(UUID_V4);
   });
 });
