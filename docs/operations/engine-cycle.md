@@ -38,8 +38,14 @@ A run records a fixed code, never a sentence, so two runs in the same situation 
 | `intent-future` | `refused` | The latest row was recorded further ahead than the allowed five minutes. |
 | `intent-paused` | `refused` | The latest row is a `pause`, a `reset`, or another non-running action. |
 | `lease-held` | `refused` | Another owner holds a live lease on this capability. |
-| `mode-not-implemented` | `refused` | A lane stage 2 or 3 implements was requested. Nothing ran. |
+| `mode-not-implemented` | `refused` | A lane this build cannot run was requested: the forecast lane without its store and feeds, or the paper lane with no authority reader wired. Nothing ran. |
+| `paper-authority-unreadable` | `refused` | The paper lane asked the persisted authority and the **read itself** refused — a malformed scope, or this run's lease not held at the read's own fence. Nothing was decided. |
+| `paper-bundle-unavailable` | `refused` | The paper lane read authority and the decision under the production bundle was `bundle-unavailable`: the audited policy closure this build carries is not available, so admission is refused however valid the recorded intent is. This is the reason a correctly configured and resumed paper budget records today. |
+| `paper-authority-refused` | `refused` | The paper lane read authority and the production decision refused for another reason the reducer gave — a paused or superseded control, an invalid configuration or resume reference, an unusable funding root. The specific reason is the authority's and is not re-coded here. |
+| `paper-admission-unimplemented` | `refused` | Admission was granted and the lane still did not run, because the producers a paper tick needs — candidates, evidence, a generation to advance — are not implemented. Unreachable while the compiled bundle is unavailable, and present so an allowed decision can never read as a performed run. |
 | `run-already-recorded` | `refused` | This run id already has a record: the execution is a retry of a recorded run. |
+
+The four `paper-*` codes were added on October 19, 2026 with the fail-closed paper wiring. They are **not** named by migration 0004's comment, which predates them: `engine.control_outcome.reason` and `engine.job_run_record.reason` are free text with **no CHECK**, so the codes needed no migration, and [the paper-engine port contract](paper-engine-port-contract.md) is the document that owns them. `engine.job_run.last_outcome` is a different column — it carries the **outcome**, and it **does** have a CHECK on `('applied','refused','superseded')` — and every paper path above records `refused`, which that CHECK already allows.
 
 `run-incomplete` also appears in `engine.job_run_record`, but it is not a run outcome: it is the placeholder an open record carries between step 3 and step 7, so a record that still says `run-incomplete` is a run that never finished.
 

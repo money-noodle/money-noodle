@@ -6,7 +6,7 @@ The lane requires schema-owner migration 0005; no runtime applies it. Later expl
 
 Each tick reads persisted paper provider permissions, obtains public inputs, records qualified 15-second or unqualified minute observations, then resolves a bounded set of due rows. Production probability never reads performance, candidates, promotions or venue prices. Asks influence entry research only. Resolution uses the issuance venue and contract; unavailable, mismatched or unsupported results cannot substitute another venue.
 
-The applied reason is forecast-run. Dry-run is unchanged and paper remains mode-not-implemented. An expired writer cannot mutate forecasts; an opened run stays spent for retry/recovery evidence.
+The applied reason is forecast-run. Dry-run is unchanged. Paper records `mode-not-implemented` **only when no authority reader is wired**; since October 19, 2026 a wired paper lane reads the persisted authority and records that refusal instead — `paper-bundle-unavailable` for an otherwise valid recorded intent — and still runs nothing. See [the paper-engine port contract](paper-engine-port-contract.md) and [the engine-cycle runbook](engine-cycle.md#reason-codes). An expired writer cannot mutate forecasts; an opened run stays spent for retry/recovery evidence.
 
 ## Store topology
 
