@@ -563,6 +563,47 @@ describe('the cycle job, stage 1', () => {
     expect(store.jobRuns.size).toBe(0);
   });
 
+  it('never releases a lease to an instant before it was acquired', async () => {
+    // Parity with the real adapter, whose SQL clamps `expires_at` and `heartbeat_at` up
+    // to `acquired_at`: `acquired_at` comes from the DATABASE clock in microseconds while
+    // a release carries a millisecond `Date`, so a run that acquires and releases inside
+    // one millisecond offers an instant BEFORE its own acquisition and 0004's
+    // `check (expires_at >= acquired_at)` rejected the update, leaving the lease held.
+    const store = new FakeCycleStore([intent()]);
+    const taken = await store.acquireLease({
+      capability: CYCLE_CAPABILITY,
+      expiresAt: leaseExpiry(NOW, 1),
+      now: NOW,
+      owner: 'execution-1',
+    });
+    expect(taken.acquired).toBe(true);
+    if (!taken.acquired) return;
+    const earlier = new Date(NOW.getTime() - 1);
+    await store.releaseLease(taken.grant, earlier);
+    const lease = store.leases.get(CYCLE_CAPABILITY)!;
+    expect(lease.expiresAt.getTime()).toBe(NOW.getTime());
+    expect(lease.heartbeatAt.getTime()).toBe(NOW.getTime());
+    // Released, not extended: the clamped instant is the acquisition, already past.
+    expect(leaseIsLive(lease.expiresAt, NOW)).toBe(false);
+    // Distinct objects, so no later mutation of one field can move another.
+    expect(lease.expiresAt).not.toBe(lease.acquiredAt);
+    expect(lease.heartbeatAt).not.toBe(lease.expiresAt);
+    // The capability is free: a different owner takes it with the next token.
+    const next = await store.acquireLease({
+      capability: CYCLE_CAPABILITY,
+      expiresAt: leaseExpiry(NOW, 1),
+      now: NOW,
+      owner: 'execution-2',
+    });
+    expect(next.acquired).toBe(true);
+    if (!next.acquired) return;
+    expect(next.grant.fencingToken).toBe(taken.grant.fencingToken + 1);
+    // A release that is genuinely later still records that later instant.
+    const later = new Date(NOW.getTime() + 5000);
+    await store.releaseLease(next.grant, later);
+    expect(store.leases.get(CYCLE_CAPABILITY)!.expiresAt.getTime()).toBe(later.getTime());
+  });
+
   it('refuses an outcome against an intent row that does not exist', async () => {
     // The real table has a foreign key to `engine.control_intent`; the double
     // models it, so a reason code invented for a row nobody recorded cannot pass.

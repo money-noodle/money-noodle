@@ -114,9 +114,25 @@ export function createPostgresCycleStore(connectionString: string): CycleStore {
     async releaseLease(grant: LeaseGrant, at: Date) {
       // Expire it rather than delete it: the row carries the fencing token the
       // next acquisition increments, and no role here holds `delete` anyway.
+      //
+      // The release instant is clamped up to `acquired_at` because the two clocks
+      // differ in resolution: `acquired_at` is the DATABASE clock at microsecond
+      // precision, while `at` is a JavaScript `Date`, which carries only
+      // milliseconds. A run that acquires and releases inside the same millisecond
+      // therefore hands back an instant a few hundred microseconds BEFORE its own
+      // acquisition, and 0004's `check (expires_at >= acquired_at)` rejected the
+      // update with `23514` — leaving the lease held until its natural expiry, which
+      // is fail-closed but blocks the capability for no reason. The clamp is the
+      // smallest value that satisfies the constraint; `acquired_at` is already in the
+      // past under the database clock, so the released lease is immediately
+      // available and `clock_timestamp()` is deliberately NOT used to extend it.
+      // Nothing else moves: the capability, owner and token fences stand, the live
+      // `expires_at > clock_timestamp()` fence stands, so a superseded owner still
+      // cannot touch the current lease, and the return behaviour is unchanged.
       const updated = await sql`
         update engine.job_lease
-           set expires_at = ${at}, heartbeat_at = ${at}
+           set expires_at = greatest(${at}::timestamptz, acquired_at),
+               heartbeat_at = greatest(${at}::timestamptz, acquired_at)
          where capability = ${grant.capability}
            and owner = ${grant.owner}
            and fencing_token = ${grant.fencingToken}

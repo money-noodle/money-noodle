@@ -14,7 +14,7 @@ The cycle job is the engine's cadence. It is not a resident worker: Cloud Schedu
 4. **Evaluates intent** against `engine.control_intent` (below). Paused, missing or stale ends the run here.
 5. **Refuses a lane it cannot run.** `--mode forecast` and `--mode paper` are accepted by the entrypoint and refused at run start, so changing the committed arguments before the lane is ported changes what is refused rather than what runs.
 6. **Ticks.** `--ticks 4` by default: four ticks at 15-second spacing, which is one scheduled minute at v1's cadence. Each tick pushes the lease's heartbeat forward. In stage 1 that is the whole tick body.
-7. **Writes exactly one outcome row** against the intent it evaluated, updates its job-health row, closes its run record and releases the lease.
+7. **Writes exactly one outcome row** against the intent it evaluated, updates its job-health row, closes its run record and releases the lease. *(October 21, 2026: the release clamps the instant it records to the lease's own `acquired_at` when the two differ only below a millisecond. `acquired_at` is the database clock in microseconds and a release carries a millisecond `Date`, so a run that acquires and releases inside one millisecond used to offer an earlier instant and 0004's `check (expires_at >= acquired_at)` refused the update — leaving the lease held until it expired. The clamp cannot extend a lease, and the owner, token and live-expiry fences are unchanged.)*
 
 Every write after step 1 carries the fencing token the run was granted, and the store refuses a write whose token is no longer the current one. A run that lost its lease to an expiry — a long pause, a stalled network — finds its own late writes refused instead of overwriting the new owner's.
 

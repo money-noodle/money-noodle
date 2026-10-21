@@ -694,6 +694,91 @@ export async function paperRunEndToEndPostgresContract(admin, port) {
     assert.deepEqual(await gateCounts(), { events: '3', generations: '1', heads: '1' });
     assert.equal(await advisoryLocks(), '0');
 
+    // 6f. LEASE RELEASE ACROSS TWO CLOCK RESOLUTIONS, deterministic rather than timed.
+    //
+    //     `acquired_at` is written by the DATABASE clock at microsecond precision;
+    //     `releaseLease` is handed a JavaScript `Date`, which carries milliseconds. A run
+    //     that acquires and releases inside the same millisecond therefore offers an
+    //     instant a few hundred microseconds BEFORE its own acquisition, and 0004's
+    //     `check (expires_at >= acquired_at)` rejected that update with `23514`, leaving
+    //     the lease held until its natural expiry. CI run 39531285790 attempt 1 failed
+    //     exactly this way on `budget:paper` / `e2e-cycle-run-wired`.
+    //
+    //     This vector reproduces the ordering exactly, with no sleeping and no reliance on
+    //     being fast: the row is seeded with an explicit historical `acquired_at` whose
+    //     microsecond part is non-zero, and the release is handed the SAME instant
+    //     truncated to its millisecond, which is 500us earlier.
+    const CLAMP_CAPABILITY = 'budget:lease-clamp-probe';
+    const CLAMP_OWNER = 'lease-clamp-owner';
+    const CLAMP_ACQUIRED_AT = '2026-10-21T00:00:00.000500Z';
+    const CLAMP_RELEASE_AT = new Date('2026-10-21T00:00:00.000Z');
+    await admin.unsafe(
+      "insert into engine.job_lease(capability,owner,fencing_token,acquired_at,expires_at,heartbeat_at) values($1,$2,1,$3::text::timestamptz,clock_timestamp()+interval '10 minutes',$3::text::timestamptz)",
+      [CLAMP_CAPABILITY, CLAMP_OWNER, CLAMP_ACQUIRED_AT],
+    );
+    const clampGrant = {
+      acquiredAt: new Date(CLAMP_ACQUIRED_AT),
+      capability: CLAMP_CAPABILITY,
+      expiresAt: new Date(Date.now() + 600000),
+      fencingToken: 1,
+      owner: CLAMP_OWNER,
+    };
+    assert.ok(CLAMP_RELEASE_AT.getTime() < Date.parse(CLAMP_ACQUIRED_AT) + 1);
+    // The real adapter, under the intended role: the release commits instead of raising
+    // `23514`, and the clamped instant is `acquired_at` itself, to the microsecond.
+    await cycleStore.releaseLease(clampGrant, CLAMP_RELEASE_AT);
+    const [clamped] = await admin.unsafe(
+      'select expires_at::text as expires_at, heartbeat_at::text as heartbeat_at, acquired_at::text as acquired_at, (expires_at > clock_timestamp()) as live from engine.job_lease where capability=$1',
+      [CLAMP_CAPABILITY],
+    );
+    assert.deepEqual(clamped, {
+      acquired_at: '2026-10-21 00:00:00.0005+00',
+      expires_at: '2026-10-21 00:00:00.0005+00',
+      heartbeat_at: '2026-10-21 00:00:00.0005+00',
+      // Clamping up to `acquired_at` cannot extend a lease: that instant is already past.
+      live: false,
+    });
+    // The capability is free again, which is the whole point of a release.
+    const afterClamp = await cycleStore.acquireLease({
+      capability: CLAMP_CAPABILITY,
+      expiresAt: new Date(Date.now() + 600000),
+      now: new Date(),
+      owner: 'lease-clamp-next-owner',
+    });
+    assert.equal(afterClamp.acquired, true, describe(afterClamp));
+    assert.equal(afterClamp.grant.fencingToken, 2);
+    // The fences are untouched: the superseded token and a wrong owner are both refused,
+    // and neither touches the lease the new owner now holds.
+    const beforeRefusals = await admin.unsafe(
+      'select owner, fencing_token::text as token, expires_at::text as expires_at from engine.job_lease where capability=$1',
+      [CLAMP_CAPABILITY],
+    );
+    for (const refusedGrant of [
+      { ...clampGrant, fencingToken: 1 },
+      { ...afterClamp.grant, owner: 'not-the-owner' },
+      { ...afterClamp.grant, fencingToken: 99 },
+    ])
+      await assert.rejects(
+        () => cycleStore.releaseLease(refusedGrant, new Date()),
+        (error) => /no longer holds the lease/.test(String(error && error.message)),
+      );
+    assert.deepEqual(
+      await admin.unsafe(
+        'select owner, fencing_token::text as token, expires_at::text as expires_at from engine.job_lease where capability=$1',
+        [CLAMP_CAPABILITY],
+      ),
+      beforeRefusals,
+    );
+    // Release it properly, with an instant after acquisition, so the ordinary path is
+    // exercised on the same row as well.
+    await cycleStore.releaseLease(afterClamp.grant, new Date());
+    const [finallyFree] = await admin.unsafe(
+      'select (expires_at > clock_timestamp()) as live from engine.job_lease where capability=$1',
+      [CLAMP_CAPABILITY],
+    );
+    assert.equal(finallyFree.live, false);
+    facts.leaseReleaseClamp = 'released-at-acquired_at-microseconds';
+
     facts.authorityDecisionDefault = 'bundle-unavailable';
     facts.authorityDecisionOverride = 'allowed';
     facts.heartbeatDuringWrite = 'conflict/serialization-failure';
@@ -735,6 +820,7 @@ export async function paperRunEndToEndPostgresContract(admin, port) {
     ['delete from engine.job_run_record where run_id=$1', ['e2e-cycle-run-blocked']],
     ['delete from engine.control_intent where capability=$1 and epoch>=$2', [CAPABILITY, EPOCH]],
     ['delete from engine.job_lease where capability=$1', [CAPABILITY]],
+    ['delete from engine.job_lease where capability=$1', ['budget:lease-clamp-probe']],
   ])
     await teardown(() => admin.unsafe(statement, values));
   if (primaryPresent) throw primary;
