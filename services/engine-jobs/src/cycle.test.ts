@@ -752,7 +752,7 @@ describe('what stage 1 refuses to be', () => {
       'utf8',
     );
     // The paper lane's reasons are named by the port contract rather than by a
-    // migration: `engine.control_outcome.reason` and `engine.job_run.last_outcome` carry
+    // migration: `engine.control_outcome.reason` and `engine.job_run_record.reason` carry
     // free text with no CHECK, the applied migrations are immutable, and the document a
     // human reads for this lane is the port contract. The invariant is unchanged — every
     // code is named in a durable document — and the document is asserted below.
