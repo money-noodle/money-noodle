@@ -49,7 +49,7 @@ const T_LATEST = '2026-10-12 02:00:02.000000+00';
 // Recognising this shape is not adopting it: it is not an approved operator API and no
 // default is chosen here.
 const CONFIG = {
-  paper_config_version: 1,
+  paper_config_version: 2,
   budget_id: BUDGET,
   funding_id: FUNDING,
   total_cap_cents: 1000,
@@ -61,8 +61,18 @@ const CONFIG = {
   paper_providers: 'kalshi',
   market_id: 'crypto-15m',
   policy_bundle: 'paper-v1-blend04-neutral-v7',
+  // The operator-recorded generation profile (D1 = A). Synthetic in-bounds values only;
+  // no strategy value is selected anywhere in this repository. `2.50` and `0.970` are
+  // deliberate spellings the writer's own grammar accepts unchanged.
+  regime_bundle_id: 'paper-regime-historical-warm-lineage-v1',
+  regime_profile_claim: 'synthetic-profile-claim',
+  regime_enabled: true,
+  regime_minimum_policy_windows: 4,
+  regime_evidence_half_life_windows: '2.50',
+  regime_pause_confidence: '0.970',
+  regime_resume_confidence: '0.9',
 };
-const RESUME_REF = { paper_config_version: 1, config_intent_id: BIRTH };
+const RESUME_REF = { paper_config_version: 2, config_intent_id: BIRTH };
 
 export async function paperAuthorityPostgresContract(admin, port) {
   assert.equal(process.env.GITHUB_ACTIONS, 'true');
@@ -349,9 +359,9 @@ export async function paperAuthorityPostgresContract(admin, port) {
     // 9. A resume whose reference does not name the chosen configure row, and a resume
     // whose reference is not the two-field shape at all.
     for (const parameters of [
-      { paper_config_version: 1, config_intent_id: 'not-the-birth-row' },
-      { paper_config_version: 1 },
-      { paper_config_version: 1, config_intent_id: BIRTH, extra_field: 1 },
+      { paper_config_version: 2, config_intent_id: 'not-the-birth-row' },
+      { paper_config_version: 2 },
+      { paper_config_version: 2, config_intent_id: BIRTH, extra_field: 1 },
     ]) {
       await intent('auth-bad-resume', 'resume', T_LATEST, parameters);
       assert.deepEqual((await readOf()).decisionUnderProductionBundle, {
@@ -365,7 +375,7 @@ export async function paperAuthorityPostgresContract(admin, port) {
     // the configure this resume may bind.
     await intent('auth-other-actor', 'configure', T_LATER, CONFIG, 'someone-else');
     await intent('auth-resume-2', 'resume', T_LATEST, {
-      paper_config_version: 1,
+      paper_config_version: 2,
       config_intent_id: 'auth-other-actor',
     });
     const otherActor = await readOf();
@@ -394,7 +404,7 @@ export async function paperAuthorityPostgresContract(admin, port) {
     await intent('auth-c-after-reset', 'configure', T_LATER, CONFIG);
     await admin.unsafe('delete from engine.control_intent where id=$1', ['auth-resume-3']);
     await intent('auth-resume-4', 'resume', T_LATEST, {
-      paper_config_version: 1,
+      paper_config_version: 2,
       config_intent_id: 'auth-c-after-reset',
     });
     const cleared = await readOf();
@@ -585,7 +595,7 @@ export async function paperAuthorityPostgresContract(admin, port) {
     // resume is refused for naming something else.
     await intent('auth-old-epoch-configure', 'configure', T_LATEST, CONFIG, ACTOR, EPOCH - 1);
     await intent('auth-current-resume', 'resume', T_LATEST, {
-      paper_config_version: 1,
+      paper_config_version: 2,
       config_intent_id: 'auth-old-epoch-configure',
     });
     const oldEpoch = await readOf();

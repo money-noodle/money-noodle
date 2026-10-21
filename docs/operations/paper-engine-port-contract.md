@@ -28,12 +28,12 @@ loss pays0c. These are authored arithmetic expectations, not an executed-case co
 
 ## Current control surface and precise unresolved questions
 
-The existing API records control_intent parameters as at most twelve scalar
+The existing API records control_intent parameters as at most twenty scalar *(twelve before October 21, 2026; the raise is recorded as an approved published-contract exception)*
 fields, keys up to39 characters and text values up to120 characters. It validates
 structure, not paper policy. Budget identities live in platform; engine roles
 must not gain platform-schema access. Jobs currently read action/epoch/time/id
 without parameters. The engine-jobs port can extend that DTO/read query while
-using existing control_intent columns, without changing API source.
+using existing control_intent columns. *(Corrected October 21, 2026: the per-control cap in API source and in the published contract moved from twelve to twenty under a named approval; no column, route or action changed.)*
 
 A resume/configure action alone is insufficient paper budget authority. Before
 removing the paper refusal, resolve and independently review:
@@ -42,7 +42,7 @@ removing the paper refusal, resolve and independently review:
    configure intent: explicit total/per-trade/provider/market caps, funding
    identity, enabled paper providers and exact model/policy/calibration identities.
    Missing/malformed configuration is refusal; no historical/default amount grants
-   authority. The twelve-field constraint must be met without encoded arbitrary
+   authority. The field-count constraint — twenty since October 21, 2026 — must be met without encoded arbitrary
    documents or new API paths.
 2. How a bare resume binds the last valid configure in the SAME epoch, and how
    configure/pause/reset/provider-enable rows supersede it. Latest action ordering
@@ -111,7 +111,7 @@ Four literal hardening regression groups accompany these changes, authored but n
 
 ## Pure configuration design — no current authority
 
-`paper-authority.ts` recognizes exactly the twelve scalar fields in the independent control proposal and two-field resume reference. It requires explicit actor-derived paper budget identity, same epoch/actor/config reference, explicit conserved funding match, finite integer caps, closed providers and market, newest malformed configure poisoning, reset barrier and global latest validity. Provider-enable/pause/reset refuse. Dry/forecast reducer is untouched. No store/query or API change accompanies this DTO.
+`paper-authority.ts` recognizes exactly the nineteen scalar fields of the version-2 configure document and the two-field resume reference. *(Corrected October 21, 2026: the recognised document is now version 2 with NINETEEN fields, and the published per-control cap is twenty. See "Generation profile is operator-recorded" below.)* It requires explicit actor-derived paper budget identity, same epoch/actor/config reference, explicit conserved funding match, finite integer caps, closed providers and market, newest malformed configure poisoning, reset barrier and global latest validity. Provider-enable/pause/reset refuse. Dry/forecast reducer is untouched. No store/query or API change accompanies this DTO.
 
 Snapshot completeness, DB-clock validity, ordering and reset booleans must eventually come from a coherent database snapshot using full timestamp precision and bounded latest-by-action queries, NOT a truncated50-row history or JavaScript timestamp sorting. The pure reducer does not prove those booleans or actual funding conservation.
 
@@ -211,7 +211,7 @@ The statement above that `paper-authority.ts` has "no store/query" accompanying 
 
 **Caller claims are never authority.** Completeness, ordering, the reset barrier and conservation reach the reducer only as values the server produced; a representation the evidence builder cannot recognise makes the snapshot incomplete and fails closed. `control_intent.recorded_at` carries no `isfinite` check, so a non-finite newest row is genuinely reachable: it is reported as unrecognisable rather than allowed to raise on the numeric cast or quietly replaced by an older row.
 
-### The twelve-field configure proposal, in plain terms — for approval, not assumed
+### The twelve-field configure proposal, in plain terms — for approval, not assumed *(historical: superseded October 21, 2026 by the approved nineteen-field version-2 document; kept as the record of what was proposed)*
 
 `PaperConfigurationV1` remains a **design proposal**. It is not an approved operator API, not current configuration, and nothing here chooses a default or writes a configure, resume or funding row outside disposable synthetic fixtures. In plain terms a configure intent's parameters would carry: a format version; which funding pot and which paper budget it belongs to (the budget must be the actor's own); four whole-cent ceilings — a total cap, a per-entry cap, and one cap each for the two venues, none above the total; two whole-percent venue shares; which venues are switched on at all; the single market family; and the exact policy bundle identifier. A resume intent would carry just two fields: the format version and the id of the configure intent it is resuming. Approval of this shape, of any specific numbers, and of who may record such an intent all remain the maintainer's to give.
 
@@ -316,7 +316,7 @@ Each refusal goes through the job's existing bookkeeping: one outcome row agains
 
 **What remains NOT implemented, named rather than stubbed.** The `allowed` branch records `paper-admission-unimplemented` because the producers a paper tick needs — a candidate reader, an evidence/coverage producer and a generation request builder — do not exist, and synthesising them from placeholder values would be a pretend pipeline. That branch is unreachable today. **The full paper engine is therefore not qualified by this change**, and nothing here claims it is.
 
-**Unchanged human decisions.** The twelve-field document remains what the existing **decoder** recognises, not an adopted operator contract. Who may record an intent remains the existing owner path — any session-bound account for a budget kind it owns — with **no operator role invented**. `required` write-lock mode and a named **direct** endpoint, bootstrap values, a maximum evidence age, any timeout or retry policy, and schedule or binding rollout all remain open and untouched.
+**Unchanged human decisions.** The twelve-field document remains what the existing **decoder** recognises, not an adopted operator contract. *(Corrected October 21, 2026: the recognised document is now version 2 with NINETEEN fields, and the published per-control cap is twenty. See "Generation profile is operator-recorded" below.)* Who may record an intent remains the existing owner path — any session-bound account for a budget kind it owns — with **no operator role invented**. `required` write-lock mode and a named **direct** endpoint, bootstrap values, a maximum evidence age, any timeout or retry policy, and schedule or binding rollout all remain open and untouched.
 
 ### Writing-lane input map — what a paper write would need, and where it comes from today (October 19, 2026)
 
@@ -333,7 +333,7 @@ Read from the types, the schema and the actual callers at `c704b5af93c980912d6cd
 | `scope.sample_policy` | fixed twice: a literal CHECK on `engine.paper_gate_generation.sample_policy`, and `PaperGateRowScope` typing it as `typeof PAPER_REGIME_SAMPLE_BUY_POLICY` | **fixed by schema and code** |
 | `scope.generation_key` | nothing mints it. The column is a 1–120 character trimmed text primary key with no derivation rule anywhere in the source; every existing caller is a test choosing a literal | **OPEN — no minting rule, none adopted here** |
 | `generation.bundleId` | one of two code constants, CHECKed by the same two values in the schema | **code constant** |
-| `generation.profileClaim`, `enabled`, `minimumPolicyWindows`, `evidenceHalfLifeWindows`, `pauseConfidence`, `resumeConfidence` | **no producer.** The schema bounds each column and the writer validates what it is handed, but no production code supplies a value | **OPEN — decision D1** |
+| `generation.profileClaim`, `enabled`, `minimumPolicyWindows`, `evidenceHalfLifeWindows`, `pauseConfidence`, `resumeConfidence` | **operator-recorded** in the version-2 configure document and consumed by the pure mapping `generationInputsFromConfiguration`; the schema bounds each column, the decoder bounds each field, and no production code calls the mapping | **DECIDED — D1 = A, October 21, 2026; no production producer calls it** |
 | candidate rows (`engine.paper_gate_candidate`) | read only. The coverage store and the gate writer `SELECT` them; there is **no `INSERT` anywhere in either service's source** | **absent — decision D2, no application producer** |
 | outcome rows (`engine.paper_gate_outcome`) | read only, exactly as above | **absent — decision D3, no application producer** |
 | `coverageReceiptId`, `coverageCutoffAtIso`, `evidenceObservedAtIso` | validated, stored and compared on replay, and documented in the types as *claimed* evidence that is never believed. **Nothing produces them** | **producer missing** |
@@ -348,7 +348,7 @@ Read from the types, the schema and the actual callers at `c704b5af93c980912d6cd
 
 Neither is adopted, neither is defaulted, and this document proposes no values. **The exact codes in the source are the source of truth** for every bound and literal above; where this map and the source ever disagree, the source wins and this map is the thing to fix.
 
-**Status of the twelve-field document, unchanged.** It is what the existing **decoder** recognises. It is **not** an adopted operator contract, and the private proposal that sketches a different shape remains **not adopted**; its contents and values are deliberately not reproduced in this repository's public documentation. Who may record an intent remains the existing owner path — any session-bound account for a budget kind it owns — with **no operator role invented**.
+**Status of the twelve-field document, unchanged.** It is what the existing **decoder** recognises. *(Corrected October 21, 2026: the recognised document is now version 2 with NINETEEN fields, and the published per-control cap is twenty. See "Generation profile is operator-recorded" below.)* It is **not** an adopted operator contract, and the private proposal that sketches a different shape remains **not adopted**; its contents and values are deliberately not reproduced in this repository's public documentation. Who may record an intent remains the existing owner path — any session-bound account for a budget kind it owns — with **no operator role invented**.
 
 **Proposed sequencing, carrying no authorisation.** A candidate issuance producer (D2), an outcome resolution producer (D3), and a coverage receipt / evidence-boundary producer would each be a separate bounded change with its own approval; a `generation_key` minting rule and D1 are decisions before, not after, any of that. Naming them here orders the work; it authorises none of it.
 
@@ -362,7 +362,7 @@ Neither is adopted, neither is defaulted, and this document proposes no values. 
 
 What it drives, each through its real port and never through hand-written SQL standing in for the thing being qualified:
 
-- the platform API's **real `validateParameters`** and **real control recorder** as `engine_control_recorder`, writing the twelve-field configuration the engine's decoder recognises and the two-field resume reference — both stored as jsonb **objects**, and the role still refused `42501` on a read;
+- the platform API's **real `validateParameters`** and **real control recorder** as `engine_control_recorder`, writing the configuration the engine's decoder recognises (nineteen fields since October 21, 2026) and the two-field resume reference — both stored as jsonb **objects**, and the role still refused `42501` on a read;
 - the engine's **real lease port** (`createPostgresCycleStore` as `engine_writer`) for acquisition, a refused second acquisition naming the holder, heartbeat and release;
 - the engine's **real persisted authority reader**, whose decision under the production bundle is `bundle-unavailable`, and whose snapshot re-run by the pure reducer with the audited-policy fixture is `allowed` with the configuration **field-for-field as recorded** and the intent ids the ports generated; a real `pause` makes the next read `paused`, a resume whose reference does not name the configure row is `resume-reference-invalid`, and a correct resume restores it;
 - the **production gate writer first**, on a namespace where nothing has been written, refusing `authority`/`bundle-unavailable` with zero rows — so its refusal cannot be mistaken for a replay — and only then the test-artifact writer, which writes a genesis at revision 0 and a **real evaluated advance** to revision 1. *(Qualified October 19, 2026: that advance runs over an **empty candidate universe**, so what it exercises is the authority re-derivation, the replay comparison, the head compare-and-set and the lease fence — not the regime arithmetic, which has no candidates or outcomes to read. Candidate issuance and outcome resolution have no producer at all; see the writing-lane input map in this document.)*
@@ -370,7 +370,7 @@ What it drives, each through its real port and never through hand-written SQL st
 
 Three interleavings are **measured, not asserted as policy**: a real heartbeat committed inside a mutating, non-replay write transaction (after its mutations, before its final row lock) makes that write refuse `conflict`/`serialization-failure` with nothing written and the lease still held by the same owner and token; a heartbeat **between** transactions — the cycle loop's own order — leaves both writes applied; and a write attempted after a real `releaseLease` refuses at the start boundary, as does the authority reader on the same fence. No timeout, retry, money, evidence-age or tolerance rule is introduced: the clock-skew allowance carried by the evidence is the existing `MAX_INTENT_CLOCK_SKEW_MS`.
 
-Admin SQL is used **only** for the synthetic funding/budget root FK fixtures (bound to the configure row the real recorder created), for verification and for teardown. The twelve-field document is **not adopted** as the operator API — it is what the decoder, the authority SQL and the existing authority contract already bind, and adopting it is a human decision. This composition is **not the live engine**, not HTTP, not scheduled, and does not make the issue review-ready.
+Admin SQL is used **only** for the synthetic funding/budget root FK fixtures (bound to the configure row the real recorder created), for verification and for teardown. The configure document is **not adopted** as the operator API by that composition — it is what the decoder, the authority SQL and the existing authority contract already bind, and adopting it is a human decision. This composition is **not the live engine**, not HTTP, not scheduled, and does not make the issue review-ready.
 
 ### Profile bounds are decided on digits, not on binary64 — CORRECTNESS REPAIR, October 21, 2026
 
@@ -421,6 +421,32 @@ The repair is a comparison change only. **No bound, tolerance, epsilon, rounding
 **Qualified how.** A deterministic vector in the composed end-to-end contract, with **no sleeping and no reliance on being fast**: a dedicated lease capability is seeded by admin SQL with an explicit historical `acquired_at` of `2026-10-21T00:00:00.000500Z`, an expiry ten minutes out and `heartbeat_at = acquired_at`; a real grant is built for it and the **real adapter under its intended role** releases with the same instant truncated to its millisecond, 500µs earlier. Before the fix that raised `23514`; after it, the release commits and the row reads back `expires_at` and `heartbeat_at` of exactly `2026-10-21 00:00:00.0005+00` with `expires_at > clock_timestamp()` false, a different owner then acquires the capability at **fencing token 2**, and a superseded token and a wrong owner are both refused without altering the row the new owner holds. A **negative control** — the clamp temporarily reverted, rebuilt and re-run — reproduced `PostgresError … code: '23514' … constraint_name: 'job_lease_check'`, and the clamp was restored before committing. The in-memory parity vector covers the same ordering in the unit suite.
 
 **Out of scope here, deliberately.** No schema, migration, grant, role, dependency, workflow or infrastructure change; no production activation, writer wiring or deployment; production bundle availability stays `false`. The approved `ControlParameters` raise and its compatibility-checker recognition are staged behind the review of this fix.
+
+### Generation profile is operator-recorded — DECIDED (D1 = A), NOT ACTIVATED, October 21, 2026
+
+**What was decided and by whom.** D1 is answered: a paper generation's profile is **operator-recorded per budget**, carried by the existing paper configure control rather than defaulted in code (approval `1561897107432935435`). The per-control parameter cap raise that makes it fit, and the minimal compatibility recognition that publishes it truthfully, were approved on **October 21, 2026 at 01:25:02Z** (`1562275489748484137`), after the cap and nineteen-field document were approved in `1562263384865509428`. Nothing here activates anything.
+
+**The recognised document is version 2, nineteen fields.** Twelve describe the simulated budget exactly as before. The seven `regime_*` fields carry the profile, with the bounds migration 0006 states — no value is chosen here and none is recorded in this repository:
+
+| field | recorded JSON type | bound |
+| --- | --- | --- |
+| `regime_bundle_id` | string | exactly one of the two bundle code constants |
+| `regime_profile_claim` | string | trimmed, 1–120 characters |
+| `regime_enabled` | boolean | — |
+| `regime_minimum_policy_windows` | number | safe integer, 4–500 |
+| `regime_evidence_half_life_windows` | string | plain unsigned decimal text, value 2–500 |
+| `regime_pause_confidence` | string | decimal text, value 0.9–0.9999 |
+| `regime_resume_confidence` | string | decimal text, value 0.5–0.98, and `resume ≤ pause − 0.01` |
+
+The three decimal fields are decided by the **shared exact-decimal helper** this branch already uses for the writer and the regime evaluator, on the recorded digits rather than on a binary64 projection, with the gate writer's own text grammar — so `'2.50'`, `'08'` and `'0.970'` are accepted when their VALUES are in bounds. No canonical-spelling requirement and no precision cap is introduced. Fractional values travel as TEXT so the operator's digits reach `numeric` unchanged. **A version-1 document is REFUSED** as `configuration-invalid` — never upgraded, defaulted or back-filled — and the resume reference now carries `paper_config_version: 2`.
+
+**The published cap, and the one approved exception.** `MAX_PARAMETERS` and the published `ControlParameters.maxProperties` both moved from twelve to **twenty**, for the request and for the recorded parameters a read returns, so the published bound is truthful in both directions and the runtime response validator (Ajv, compiled from this document) accepts a nineteen-field recorded document instead of answering 500 for a row the API itself accepted. The compatibility checker rejects breaking changes as before, with one narrow door: a committed record in `services/platform-api/openapi/compatibility-exceptions.json` naming exactly this change by resolved schema path, property, change kind and exact old and new value, with those values re-read from the baseline and candidate documents. Everything else stays blocked — a neighbouring cap (21, 19, a reverse, a removal), the same widening on another component, another constraint on the same component, a route change, and an unapproved breaking change travelling alongside the approved one. A malformed, duplicated, foreign, unsupported, ambiguous or stale record fails closed; a record matching nothing is historical. The tool is invoked with an explicit **neutral** rules file because it otherwise auto-discovers `./changes-rules.yaml` or `~/.config/changes-rules.yaml`, and such a file can waive a whole class of changes — measured, and asserted by a test that runs the real pinned binary with ambient permissive rules in both locations.
+
+**Still fail-closed, and still not the engine.** `COMPILED_PAPER_BUNDLE_AVAILABLE` stays `false`, the production paper lane still records `paper-bundle-unavailable`, the allowed branch still records `paper-admission-unimplemented`, no writer is constructed in the production path, no reason code changed, no route, action or capability was added, and `PAPER_WARM_ALLOW_PROFILE_SETTINGS` remains an **unused labelled proposal** — asserted by a tripwire over the authority, cycle and entrypoint sources. D2 (candidate issuance), D3 (outcome resolution), the coverage-receipt producer and the `generation_key` minting rule are all **unchanged and deferred**.
+
+**A consequence of existing lineage rules, not a new policy.** `generation_config_intent_id` is part of a generation's identity and a second generation in an occupied namespace must be a reset, so **changing a budget's profile later means reset → configure → resume**, not a configure alone. The writer's lineage rule is untouched.
+
+**Qualified how.** Unit: the decoder's nineteen-key exactness, version 1 and version 3 refused, each profile field individually out of bounds or of the wrong shape, non-decimal strings and numbers refused, the margin on the digits, the inclusive corners, the accepted spellings, the resume reference's version, and the mapping's output passing the writer's own `paperGateGenerationInputsAreValid`; the API's twenty-key acceptance and twenty-one-key refusal with the nineteen-field document fitting; the runtime Ajv assertion over a nineteen-field intent-history response and its twenty-one-field refusal; and the sixteen checker cases above. Hosted, worker-local on a disposable loopback PostgreSQL 16 inside the committed chain: the real validator, the real recorder as `engine_control_recorder`, the real strict reader as `engine_reader` returning the nineteen-field document exactly with its fractional fields still strings, the real persisted authority read (production `bundle-unavailable`, override `allowed` with the configuration field-for-field as recorded), the test-artifact writer's genesis taking `generationInputsFromConfiguration(decision.config)`, the persisted generation's seven profile columns read back equal to the recorded document, and three negative vectors — a version-1 document, a margin-violating profile and an out-of-domain window count — each refused `configuration-invalid` under both the production decision and the audited-fixture override, then removed so the authority the rest of the chain reads is unchanged.
 
 ### Lineage kind is derived, never taken from the request (existing decision)
 

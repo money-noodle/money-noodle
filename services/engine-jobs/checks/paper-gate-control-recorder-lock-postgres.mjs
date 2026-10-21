@@ -65,7 +65,7 @@ const POLICY = 'buy-binary-edge-net5-nocap-quality50-owned55-price10to75-late30-
 const T_CONFIG = '2026-10-12 04:00:00.000000+00';
 const OBSERVED_ISO = '2026-10-14T00:00:00.000Z';
 const CONFIG = {
-  paper_config_version: 1,
+  paper_config_version: 2,
   budget_id: BUDGET,
   funding_id: FUNDING,
   total_cap_cents: 1000,
@@ -77,6 +77,16 @@ const CONFIG = {
   paper_providers: 'kalshi',
   market_id: 'crypto-15m',
   policy_bundle: 'paper-v1-blend04-neutral-v7',
+  // The operator-recorded generation profile (D1 = A). Synthetic in-bounds values only;
+  // no strategy value is selected anywhere in this repository. `2.50` and `0.970` are
+  // deliberate spellings the writer's own grammar accepts unchanged.
+  regime_bundle_id: 'paper-regime-historical-warm-lineage-v1',
+  regime_profile_claim: 'synthetic-profile-claim',
+  regime_enabled: true,
+  regime_minimum_policy_windows: 4,
+  regime_evidence_half_life_windows: '2.50',
+  regime_pause_confidence: '0.970',
+  regime_resume_confidence: '0.9',
 };
 const GENERATION_INPUTS = {
   bundleId: 'paper-regime-historical-warm-lineage-v1',
@@ -684,7 +694,7 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
         budget_id: BUDGET,
         enabled: true,
         funding_id: FUNDING,
-        paper_config_version: 1,
+        paper_config_version: 2,
         total_cap_cents: 1000,
       });
       const configureRecorded = await recorder.record({
@@ -712,7 +722,40 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
         'the real reader did not return the configure intent',
       );
       assert.deepEqual({ ...configureEntry.intent.parameters }, configureDocument);
+      // The FULL nineteen-field version-2 document, through the same recorder and the
+      // same strict reader: the profile fields are stored as recorded, the fractional
+      // ones stay decimal TEXT rather than becoming JSON numbers, and the reader returns
+      // the document exactly. Synthetic, in this contract's own band, deleted below.
+      const versionTwoRecorded = await recorder.record({
+        action: 'configure',
+        actor: GRANT_PROBE_ACTOR,
+        capability: CAPABILITY,
+        epoch: EPOCH,
+        parameters: CONFIG,
+        recordedAt: new Date('2026-10-12T04:48:00.000Z'),
+        runId: RUN,
+      });
+      const [versionTwoPersisted] = await admin.unsafe(
+        "select jsonb_typeof(parameters) as parameters_type, parameters->>'paper_config_version' as version, parameters->>'regime_pause_confidence' as pause, jsonb_typeof(parameters->'regime_pause_confidence') as pause_type, jsonb_typeof(parameters->'regime_enabled') as enabled_type, (select count(*)::text from jsonb_object_keys(parameters)) as field_count from engine.control_intent where id=$1",
+        [versionTwoRecorded.id],
+      );
+      assert.deepEqual(versionTwoPersisted, {
+        enabled_type: 'boolean',
+        field_count: '19',
+        parameters_type: 'object',
+        pause: CONFIG.regime_pause_confidence,
+        pause_type: 'string',
+        version: '2',
+      });
+      const versionTwoEntry = await entryById(versionTwoRecorded.id);
+      assert.ok(
+        versionTwoEntry !== undefined,
+        'the real reader did not return the version-2 configure intent',
+      );
+      assert.deepEqual({ ...versionTwoEntry.intent.parameters }, { ...CONFIG });
+
       roundTrip = {
+        configureDocumentFields: versionTwoPersisted.field_count,
         configureFundingIdExtracted: configurePersisted.funding_id,
         nullStaysSqlNull: nullPersisted.is_null === true,
         readerRole: 'engine_reader',
@@ -775,9 +818,10 @@ export async function paperGateControlRecorderLockPostgresContract(admin, port) 
       'locked-select-no-returning': 'accepted',
       'locked-select-returning': '42501',
     });
-    // Four adapter/probe inserts plus the two accepted historical forms, and no lock left
-    // behind.
-    assert.equal(await probeRows(), '6');
+    // Five adapter/probe inserts — the grant probe, the SQL-NULL row, the typed-domain
+    // configure, the nineteen-field version-2 configure and the lock-mode probe — plus
+    // the two accepted historical forms, and no lock left behind.
+    assert.equal(await probeRows(), '7');
     assert.equal(await lockHolders(), '0');
     await admin.unsafe('delete from engine.control_intent where actor=$1', [GRANT_PROBE_ACTOR]);
     assert.equal(await probeRows(), '0');

@@ -18,7 +18,14 @@ const CONFIGURE_US = '1791772201000000';
 const OBSERVED_US = '1791772203000000';
 
 const config = {
-  paper_config_version: 1,
+  paper_config_version: 2,
+  regime_bundle_id: 'paper-regime-historical-warm-lineage-v1',
+  regime_profile_claim: 'synthetic-profile-claim',
+  regime_enabled: true,
+  regime_minimum_policy_windows: 12,
+  regime_evidence_half_life_windows: '2.50',
+  regime_pause_confidence: '0.970',
+  regime_resume_confidence: '0.9',
   budget_id: 'synthetic:paper',
   funding_id: 'synthetic-funding',
   total_cap_cents: 1000,
@@ -50,7 +57,7 @@ const latestRow = (over: Record<string, unknown> = {}): Record<string, unknown> 
   capability: 'budget:paper',
   epoch_text: '7',
   id: 'R1',
-  parameters: { paper_config_version: 1, config_intent_id: 'C1' },
+  parameters: { paper_config_version: 2, config_intent_id: 'C1' },
   recorded_at_us: LATEST_US,
   time_valid: true,
   ...over,
@@ -312,7 +319,7 @@ describe('paper authority evidence assembly', () => {
   it('refuses a resume whose reference does not name the configure row', () => {
     expect(
       evidenceOf({
-        latest: latestRow({ parameters: { paper_config_version: 1, config_intent_id: 'OTHER' } }),
+        latest: latestRow({ parameters: { paper_config_version: 2, config_intent_id: 'OTHER' } }),
       }).decisionUnderProductionBundle,
     ).toEqual({ allowed: false, reason: 'resume-reference-invalid' });
   });

@@ -27,7 +27,10 @@ import process from 'node:process';
 import { createPostgresCycleStore } from '../dist/adapters/engine-store/postgres-cycle-store.js';
 import { createPostgresPaperAuthorityStore } from '../dist/adapters/engine-store/postgres-paper-authority-store.js';
 import { createPostgresPaperGateWriter as createProductionPaperGateWriter } from '../dist/adapters/engine-store/postgres-paper-gate-writer.js';
-import { evaluatePaperAuthority } from '../dist/domain/paper-authority.js';
+import {
+  evaluatePaperAuthority,
+  generationInputsFromConfiguration,
+} from '../dist/domain/paper-authority.js';
 import { runCycleJob } from '../dist/application/cycle.js';
 import { createPostgresPaperGateWriter } from '../dist-test-support/adapters/engine-store/postgres-paper-gate-writer.js';
 import { AUDITED_POLICY_FIXTURE } from '../dist-test-support/test-support/paper-gate-audited-policy-fixture.js';
@@ -54,7 +57,7 @@ const CYCLE_RUN_ID_WIRED = 'e2e-cycle-run-wired';
 // shape is NOT adopting it as the operator contract: that is a human decision this test
 // does not make, and no default, cap or funding value here is a selected one.
 const CONFIG = Object.freeze({
-  paper_config_version: 1,
+  paper_config_version: 2,
   budget_id: BUDGET,
   funding_id: FUNDING,
   total_cap_cents: 1000,
@@ -66,15 +69,27 @@ const CONFIG = Object.freeze({
   paper_providers: 'kalshi',
   market_id: 'crypto-15m',
   policy_bundle: 'paper-v1-blend04-neutral-v7',
+  // The operator-recorded generation profile (D1 = A). Synthetic in-bounds values only;
+  // no strategy value is selected anywhere in this repository. `2.50` and `0.970` are
+  // deliberate spellings the writer's own grammar accepts unchanged.
+  regime_bundle_id: 'paper-regime-historical-warm-lineage-v1',
+  regime_profile_claim: 'synthetic-profile-claim',
+  regime_enabled: true,
+  regime_minimum_policy_windows: 4,
+  regime_evidence_half_life_windows: '2.50',
+  regime_pause_confidence: '0.970',
+  regime_resume_confidence: '0.9',
 });
+// What the pure mapping must produce from CONFIG's seven profile fields: a rename, with
+// the recorded spellings carried through untouched.
 const GENERATION_INPUTS = Object.freeze({
   bundleId: 'paper-regime-historical-warm-lineage-v1',
   enabled: true,
-  evidenceHalfLifeWindows: '2.5',
+  evidenceHalfLifeWindows: '2.50',
   minimumPolicyWindows: 4,
-  pauseConfidence: '0.99',
-  profileClaim: 'synthetic-e2e-profile',
-  resumeConfidence: '0.75',
+  pauseConfidence: '0.970',
+  profileClaim: 'synthetic-profile-claim',
+  resumeConfidence: '0.9',
 });
 
 export async function paperRunEndToEndPostgresContract(admin, port) {
@@ -126,11 +141,21 @@ export async function paperRunEndToEndPostgresContract(admin, port) {
     //
     // The validator is the real one the signed-in route applies, so the twelve-field
     // document is proved to fit the API's parameter domain before anything is written.
+    assert.equal(Object.keys(CONFIG).length, 19);
     assert.equal(validateParameters(CONFIG), true);
     assert.equal(
       validateParameters({ ...CONFIG, nested: { not: 'allowed' } }),
       false,
       'the parameter domain must still refuse a nested member',
+    );
+    // The cap is twenty: a twenty-first field is refused by the API before any row
+    // exists, which is the boundary the published contract now states.
+    assert.equal(
+      validateParameters(
+        Object.fromEntries(Array.from({ length: 21 }, (_, index) => [`synthetic_${index}`, index])),
+      ),
+      false,
+      'the parameter domain must refuse a twenty-first field',
     );
     const configureRecorded = await recorder.record({
       action: 'configure',
@@ -162,7 +187,7 @@ export async function paperRunEndToEndPostgresContract(admin, port) {
       actor: ACTOR,
       capability: CAPABILITY,
       epoch: EPOCH,
-      parameters: { paper_config_version: 1, config_intent_id: CONFIG_INTENT },
+      parameters: { paper_config_version: 2, config_intent_id: CONFIG_INTENT },
       recordedAt: new Date('2026-10-12T05:01:00.000Z'),
       runId: RUN,
     });
@@ -273,7 +298,7 @@ export async function paperRunEndToEndPostgresContract(admin, port) {
       actor: ACTOR,
       capability: CAPABILITY,
       epoch: EPOCH,
-      parameters: { paper_config_version: 1, config_intent_id: pausedRecorded.id },
+      parameters: { paper_config_version: 2, config_intent_id: pausedRecorded.id },
       recordedAt: new Date('2026-10-12T05:03:00.000Z'),
       runId: RUN,
     });
@@ -288,7 +313,7 @@ export async function paperRunEndToEndPostgresContract(admin, port) {
       actor: ACTOR,
       capability: CAPABILITY,
       epoch: EPOCH,
-      parameters: { paper_config_version: 1, config_intent_id: CONFIG_INTENT },
+      parameters: { paper_config_version: 2, config_intent_id: CONFIG_INTENT },
       recordedAt: new Date('2026-10-12T05:04:00.000Z'),
       runId: RUN,
     });
@@ -303,12 +328,18 @@ export async function paperRunEndToEndPostgresContract(admin, port) {
     // 4. THE GATE WRITE. The PRODUCTION writer goes FIRST, on a namespace where nothing
     //    has been written yet, so its refusal cannot be mistaken for a replay of work the
     //    test artifact had already done.
+    //
+    //    The generation it is handed is DERIVED from the decoded configure document by the
+    //    pure mapping, not hand-written here: the operator-recorded profile is what a
+    //    write would persist.
+    const mappedGeneration = generationInputsFromConfiguration(overridden.config);
+    assert.deepEqual({ ...mappedGeneration }, { ...GENERATION_INPUTS });
     const genesisRequest = {
       coverageCutoffAtIso: OBSERVED_ISO,
       coverageReceiptId: 'e2e-receipt',
       evidenceObservedAtIso: OBSERVED_ISO,
       eventKey: 'e2e-genesis',
-      generation: GENERATION_INPUTS,
+      generation: mappedGeneration,
       kind: 'initialize',
       runId: RUN,
       scope: {
@@ -372,6 +403,113 @@ export async function paperRunEndToEndPostgresContract(admin, port) {
       await advanceWriter.close().catch(() => undefined);
     }
     assert.deepEqual(await gateCounts(), { events: '2', generations: '1', heads: '1' });
+
+    // 4b. THE PERSISTED PROFILE IS THE RECORDED ONE. Read back by admin SQL, with the
+    //     numeric columns as text so no driver conversion sits in the comparison.
+    const [persistedProfile] = await admin.unsafe(
+      'select bundle_id, profile_claim, enabled, minimum_policy_windows::text as minimum_policy_windows, evidence_half_life_windows::text as evidence_half_life_windows, pause_confidence::text as pause_confidence, resume_confidence::text as resume_confidence from engine.paper_gate_generation where generation_key=$1',
+      [GEN],
+    );
+    assert.deepEqual(persistedProfile, {
+      bundle_id: CONFIG.regime_bundle_id,
+      enabled: CONFIG.regime_enabled,
+      // `numeric` keeps the scale it was given, so the recorded spelling survives.
+      evidence_half_life_windows: CONFIG.regime_evidence_half_life_windows,
+      minimum_policy_windows: String(CONFIG.regime_minimum_policy_windows),
+      pause_confidence: CONFIG.regime_pause_confidence,
+      profile_claim: CONFIG.regime_profile_claim,
+      resume_confidence: CONFIG.regime_resume_confidence,
+    });
+
+    // 4c. NEGATIVE VECTORS for the document itself, through the real recorder and the
+    //     real authority read. Each one is recorded in this contract's own epoch band,
+    //     read, and then REMOVED, so the authority the steps below read is exactly the
+    //     authority they read before: the generation on disk is bound to this scope's
+    //     configure intent, and leaving a different configure as the newest row would
+    //     move the namespace rather than test the document.
+    for (const [label, parameters, expected] of [
+      // A version-1 twelve-field document is refused, not upgraded or defaulted.
+      [
+        'version-1',
+        Object.fromEntries(
+          Object.entries(CONFIG)
+            .filter(([key]) => !key.startsWith('regime_'))
+            .concat([['paper_config_version', 1]]),
+        ),
+        'configuration-invalid',
+      ],
+      // A profile whose resume confidence does not clear the margin on the digits.
+      [
+        'margin-violated',
+        { ...CONFIG, regime_pause_confidence: '0.97', regime_resume_confidence: '0.9601' },
+        'configuration-invalid',
+      ],
+      // A profile field outside the 0006 domain.
+      [
+        'windows-out-of-domain',
+        { ...CONFIG, regime_minimum_policy_windows: 501 },
+        'configuration-invalid',
+      ],
+    ]) {
+      // The API's domain accepts all three: these are SEMANTIC refusals by the engine's
+      // decoder, not structural ones by the parameter validator.
+      assert.equal(validateParameters(parameters), true, label);
+      const badConfigure = await recorder.record({
+        action: 'configure',
+        actor: ACTOR,
+        capability: CAPABILITY,
+        epoch: EPOCH,
+        parameters,
+        recordedAt: new Date('2026-10-12T05:04:10.000Z'),
+        runId: RUN,
+      });
+      const badResume = await recorder.record({
+        action: 'resume',
+        actor: ACTOR,
+        capability: CAPABILITY,
+        epoch: EPOCH,
+        parameters: { paper_config_version: 2, config_intent_id: badConfigure.id },
+        recordedAt: new Date('2026-10-12T05:04:20.000Z'),
+        runId: RUN,
+      });
+      const badEvidence = await readEvidence();
+      assert.deepEqual(
+        badEvidence.decisionUnderProductionBundle,
+        { allowed: false, reason: expected },
+        label,
+      );
+      // And with the audited fixture, so the refusal is the DOCUMENT's rather than the
+      // compiled bundle's unavailability.
+      assert.equal(evaluatePaperAuthority(badEvidence.snapshot, true).reason, expected, label);
+      await admin.unsafe('delete from engine.control_intent where id=any($1)', [
+        [badResume.id, badConfigure.id],
+      ]);
+    }
+    // A fresh resume naming THIS scope's original configure row, so the newest authority
+    // is again the one the persisted generation is bound to.
+    const restoredResume = await recorder.record({
+      action: 'resume',
+      actor: ACTOR,
+      capability: CAPABILITY,
+      epoch: EPOCH,
+      parameters: { paper_config_version: 2, config_intent_id: CONFIG_INTENT },
+      recordedAt: new Date('2026-10-12T05:04:30.000Z'),
+      runId: RUN,
+    });
+    const restoredAfterVectors = await readEvidence();
+    assert.deepEqual(restoredAfterVectors.decisionUnderProductionBundle, {
+      allowed: false,
+      reason: 'bundle-unavailable',
+    });
+    const restoredDecision = evaluatePaperAuthority(restoredAfterVectors.snapshot, true);
+    assert.equal(restoredDecision.allowed, true, describe(restoredDecision));
+    assert.deepEqual(
+      {
+        configIntentId: restoredDecision.configIntentId,
+        latestIntentId: restoredDecision.latestIntentId,
+      },
+      { configIntentId: CONFIG_INTENT, latestIntentId: restoredResume.id },
+    );
 
     // 5. INTERLEAVINGS, measured against the real ports rather than asserted as policy.
     //
@@ -489,7 +627,7 @@ export async function paperRunEndToEndPostgresContract(admin, port) {
       actor: ACTOR,
       capability: CAPABILITY,
       epoch: EPOCH,
-      parameters: { paper_config_version: 1, config_intent_id: CONFIG_INTENT },
+      parameters: { paper_config_version: 2, config_intent_id: CONFIG_INTENT },
       recordedAt: new Date('2026-10-12T05:06:00.000Z'),
       runId: RUN,
     });
@@ -822,6 +960,9 @@ export async function paperRunEndToEndPostgresContract(admin, port) {
     assert.deepEqual(await clampRow(), releasedRow);
     facts.leaseReleaseClamp = 'released-at-acquired_at-microseconds';
 
+    facts.configureDocumentVersion = 2;
+    facts.profileRoundTrip = 'recorder-authority-persisted-equal';
+    facts.generationInputsSource = 'decoded-configure';
     facts.authorityDecisionDefault = 'bundle-unavailable';
     facts.authorityDecisionOverride = 'allowed';
     facts.heartbeatDuringWrite = 'conflict/serialization-failure';

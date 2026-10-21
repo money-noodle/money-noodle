@@ -563,6 +563,18 @@ describe('the cycle job, stage 1', () => {
     expect(store.jobRuns.size).toBe(0);
   });
 
+  it('reads no proposal profile constant anywhere on the authority or cycle path', () => {
+    // `PAPER_WARM_ALLOW_PROFILE_SETTINGS` is a labelled PROPOSAL in `paper-regime.ts` and
+    // must stay unused: the generation profile comes from the operator's recorded
+    // configure document, never from a constant that would quietly become a default.
+    for (const file of [
+      'services/engine-jobs/src/domain/paper-authority.ts',
+      'services/engine-jobs/src/application/cycle.ts',
+      'services/engine-jobs/src/cycle/main.ts',
+    ])
+      expect(readFileSync(file, 'utf8')).not.toContain('PAPER_WARM_ALLOW_PROFILE');
+  });
+
   it('never releases a lease to an instant before it was acquired', async () => {
     // Parity with the real adapter, whose SQL clamps `expires_at` and `heartbeat_at` up
     // to `acquired_at`: `acquired_at` comes from the DATABASE clock in microseconds while

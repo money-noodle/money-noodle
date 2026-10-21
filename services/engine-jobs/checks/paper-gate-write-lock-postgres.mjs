@@ -40,7 +40,7 @@ const T_PAUSE = '2026-10-12 03:30:00.000000+00';
 const OBSERVED_ISO = '2026-10-14T00:00:00.000Z';
 const LOCK_TEXT = 'money-noodle/paper-gate-capability-write/v1:' + CAPABILITY;
 const CONFIG = {
-  paper_config_version: 1,
+  paper_config_version: 2,
   budget_id: BUDGET,
   funding_id: FUNDING,
   total_cap_cents: 1000,
@@ -52,6 +52,16 @@ const CONFIG = {
   paper_providers: 'kalshi',
   market_id: 'crypto-15m',
   policy_bundle: 'paper-v1-blend04-neutral-v7',
+  // The operator-recorded generation profile (D1 = A). Synthetic in-bounds values only;
+  // no strategy value is selected anywhere in this repository. `2.50` and `0.970` are
+  // deliberate spellings the writer's own grammar accepts unchanged.
+  regime_bundle_id: 'paper-regime-historical-warm-lineage-v1',
+  regime_profile_claim: 'synthetic-profile-claim',
+  regime_enabled: true,
+  regime_minimum_policy_windows: 4,
+  regime_evidence_half_life_windows: '2.50',
+  regime_pause_confidence: '0.970',
+  regime_resume_confidence: '0.9',
 };
 const GENERATION_INPUTS = {
   bundleId: 'paper-regime-historical-warm-lineage-v1',
