@@ -747,36 +747,79 @@ export async function paperRunEndToEndPostgresContract(admin, port) {
     });
     assert.equal(afterClamp.acquired, true, describe(afterClamp));
     assert.equal(afterClamp.grant.fencingToken, 2);
-    // The fences are untouched: the superseded token and a wrong owner are both refused,
-    // and neither touches the lease the new owner now holds.
-    const beforeRefusals = await admin.unsafe(
-      'select owner, fencing_token::text as token, expires_at::text as expires_at from engine.job_lease where capability=$1',
-      [CLAMP_CAPABILITY],
-    );
-    for (const refusedGrant of [
-      { ...clampGrant, fencingToken: 1 },
-      { ...afterClamp.grant, owner: 'not-the-owner' },
-      { ...afterClamp.grant, fencingToken: 99 },
-    ])
+    // The fences are untouched by every refusal below, and each is checked against the
+    // FULL row — capability, owner, token and all three timestamps — because a subset of
+    // owner, token and expiry cannot tell a refusal apart from a write that moved a
+    // heartbeat or an acquisition stamp. Exactly one row must exist throughout.
+    const CLAMP_ROW_SQL =
+      'select capability, owner, fencing_token::text as token, acquired_at::text as acquired_at, expires_at::text as expires_at, heartbeat_at::text as heartbeat_at from engine.job_lease where capability=$1';
+    const clampRow = async () => {
+      const rows = await admin.unsafe(CLAMP_ROW_SQL, [CLAMP_CAPABILITY]);
+      assert.equal(rows.length, 1, describe(rows));
+      return rows[0];
+    };
+    const clampLive = async () => {
+      const [row] = await admin.unsafe(
+        'select (expires_at > clock_timestamp()) as live from engine.job_lease where capability=$1',
+        [CLAMP_CAPABILITY],
+      );
+      return row.live;
+    };
+    const heldRow = await clampRow();
+    // The lease really is LIVE while the token negatives run, so none of them can be a
+    // vacuous refusal against a lease that had already expired.
+    assert.equal(await clampLive(), true);
+    for (const [label, refusedGrant] of [
+      // The case the first version of this vector could not distinguish: the CURRENT
+      // owner presenting a SUPERSEDED token. Owner equality holds, so only the token
+      // fence can refuse it, and removing that predicate must make this case fail.
+      ['current-owner-stale-token', { ...afterClamp.grant, fencingToken: 1 }],
+      ['current-owner-bogus-token', { ...afterClamp.grant, fencingToken: 99 }],
+      ['wrong-owner-current-token', { ...afterClamp.grant, owner: 'not-the-owner' }],
+      ['stale-owner-and-stale-token', { ...clampGrant, fencingToken: 1 }],
+    ]) {
       await assert.rejects(
         () => cycleStore.releaseLease(refusedGrant, new Date()),
         (error) => /no longer holds the lease/.test(String(error && error.message)),
+        label,
       );
-    assert.deepEqual(
-      await admin.unsafe(
-        'select owner, fencing_token::text as token, expires_at::text as expires_at from engine.job_lease where capability=$1',
-        [CLAMP_CAPABILITY],
-      ),
-      beforeRefusals,
+      assert.deepEqual(await clampRow(), heldRow, label);
+      assert.equal(await clampLive(), true, label);
+    }
+    // For the owner's own release, the acquisition stamp is re-dated by admin SQL to a
+    // fixed historical instant while the expiry stays live. That is a fixture re-stamp,
+    // not a stand-in for a port: owner and token are untouched, the release below is
+    // still the real adapter's, and it makes the released expiry a DETERMINISTIC past
+    // instant rather than something that has to elapse.
+    const OWNER_ACQUIRED_AT = '2026-10-21T00:05:00.000500Z';
+    const OWNER_RELEASE_AT = new Date('2026-10-21T00:06:00.000Z');
+    await admin.unsafe(
+      "update engine.job_lease set acquired_at=$2::text::timestamptz, heartbeat_at=$2::text::timestamptz, expires_at=clock_timestamp()+interval '10 minutes' where capability=$1",
+      [CLAMP_CAPABILITY, OWNER_ACQUIRED_AT],
     );
-    // Release it properly, with an instant after acquisition, so the ordinary path is
-    // exercised on the same row as well.
-    await cycleStore.releaseLease(afterClamp.grant, new Date());
-    const [finallyFree] = await admin.unsafe(
-      'select (expires_at > clock_timestamp()) as live from engine.job_lease where capability=$1',
-      [CLAMP_CAPABILITY],
+    assert.equal(await clampLive(), true);
+    await cycleStore.releaseLease(afterClamp.grant, OWNER_RELEASE_AT);
+    const releasedRow = await clampRow();
+    assert.deepEqual(releasedRow, {
+      acquired_at: '2026-10-21 00:05:00.0005+00',
+      capability: CLAMP_CAPABILITY,
+      // A release instant AFTER the acquisition is recorded as given: the clamp is a
+      // floor, not a rewrite.
+      expires_at: '2026-10-21 00:06:00+00',
+      heartbeat_at: '2026-10-21 00:06:00+00',
+      owner: 'lease-clamp-next-owner',
+      token: '2',
+    });
+    assert.equal(await clampLive(), false);
+    // Repeating that release — SAME owner, SAME token, same instant — is refused by the
+    // live-expiry predicate alone, because the lease it names is now expired. Nothing
+    // moves, and removing that predicate must make this case fail.
+    await assert.rejects(
+      () => cycleStore.releaseLease(afterClamp.grant, OWNER_RELEASE_AT),
+      (error) => /no longer holds the lease/.test(String(error && error.message)),
+      'repeated-release-after-expiry',
     );
-    assert.equal(finallyFree.live, false);
+    assert.deepEqual(await clampRow(), releasedRow);
     facts.leaseReleaseClamp = 'released-at-acquired_at-microseconds';
 
     facts.authorityDecisionDefault = 'bundle-unavailable';
