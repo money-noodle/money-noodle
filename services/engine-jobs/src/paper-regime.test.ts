@@ -51,6 +51,66 @@ const evaluate = (input: PaperRegimeEvidence | undefined, config = settings) =>
     settingsIdentity: paperRegimeSettingsIdentity(config),
   });
 describe('explicit regime evidence without active sentinel collector', () => {
+  it('decides validity on a carried exact source, and refuses a sidecar that is not one', () => {
+    const PAUSE = '0.93999999999999989';
+    const RESUME = '0.92999999999999989';
+    const numbers = {
+      ...settings,
+      pauseConfidence: Number(PAUSE),
+      resumeConfidence: Number(RESUME),
+      evidenceHalfLifeWindows: 2.5,
+    };
+    const source = {
+      evidenceHalfLifeWindows: '2.5',
+      pauseConfidence: PAUSE,
+      resumeConfidence: RESUME,
+    };
+    const run = (config: RegimeGateSettings) => {
+      const settingsIdentity = paperRegimeSettingsIdentity(config);
+      const expected = { ...identity, settingsIdentity };
+      return evaluatePaperRegimeEvidence(
+        { ...evidence(0), identity: expected },
+        PAPER_REGIME_SAMPLE_BUY_POLICY,
+        config,
+        now,
+        30000,
+        expected,
+      );
+    };
+    const unsupported = 'Unsupported explicit paper regime settings.';
+    // Numeric-only callers keep the numeric checks: these very numbers are refused when
+    // nothing proves what they were converted from.
+    expect(run(numbers).reason).toBe(unsupported);
+    // With the real source carried alongside them, the same numbers evaluate.
+    const carried = run({ ...numbers, exactSource: source });
+    expect(carried.reason).not.toBe(unsupported);
+    expect(carried.phase).toBe('open');
+    // The descriptor is computed from the numbers only, so carrying a source cannot
+    // change the persisted identity.
+    expect(paperRegimeSettingsIdentity({ ...numbers, exactSource: source })).toBe(
+      paperRegimeSettingsIdentity(numbers),
+    );
+    // A sidecar that is malformed, out of domain, margin-violating, or that does not
+    // project onto these numbers is refused outright -- it never bypasses validation.
+    for (const bad of [
+      { ...source, pauseConfidence: '0.94' },
+      { ...source, resumeConfidence: '0.93' },
+      { ...source, evidenceHalfLifeWindows: '2.6' },
+      { ...source, pauseConfidence: '0.9399999999999998e0' },
+      { ...source, pauseConfidence: ' 0.93999999999999989' },
+      { ...source, pauseConfidence: '0.99990000000000000001' },
+      { ...source, resumeConfidence: '0.92999999999999990' },
+      { evidenceHalfLifeWindows: '2.5', pauseConfidence: PAUSE },
+      {},
+    ])
+      expect(run({ ...numbers, exactSource: bad as never }).reason).toBe(unsupported);
+    // A source cannot rescue settings that are invalid for other reasons either.
+    expect(run({ ...numbers, exactSource: source, minimumPolicyWindows: 3 }).reason).toBe(
+      unsupported,
+    );
+    expect(run({ ...numbers, exactSource: source, enabled: false }).allowsEntries).toBe(false);
+  });
+
   it('accepts a legal confidence boundary and still refuses a violated margin', () => {
     // Evidence and expectation share the settings identity, so the only thing under test
     // is the settings gate itself.

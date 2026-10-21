@@ -1338,6 +1338,126 @@ export async function paperGateWriterPostgresContract(admin, port) {
     assert.equal(boundaryEval.receipt.headMoved, true);
     assert.deepEqual(boundaryEval.receipt.inputCandidateKeys, []);
 
+    // 19a-coherence. THE REVIEWED COUNTEREXAMPLE, persisted AND evaluated.
+    //
+    // `pause 0.93999999999999989` / `resume 0.92999999999999989` differ by exactly a
+    // hundredth on the recorded digits, so `numeric` accepts the pair and the writer
+    // persists it. Their binary64 projections are `0.9399999999999998` and
+    // `0.9299999999999999`, which differ by a hundredth MINUS one ulp -- so a margin
+    // decided after the conversion refused a generation that was already on disk, leaving
+    // it unevaluable. Validity is now decided on the persisted text that travels with
+    // those numbers, and this vector proves the whole path: initialize, read back, and a
+    // real evaluated transition under the live fence.
+    const PRECISE_EPOCH = 1101;
+    const PRECISE_ACTOR = 'precise-actor';
+    const PRECISE_BUDGET = PRECISE_ACTOR + ':paper';
+    const PRECISE_FUNDING = 'writer-precise-funding';
+    const PRECISE_CONFIG = 'writer-precise-config';
+    const PRECISE_GEN = 'writer-generation-precise';
+    const PRECISE_PAUSE = '0.93999999999999989';
+    const PRECISE_RESUME = '0.92999999999999989';
+    const PRECISE_PROFILE = {
+      ...GENERATION_INPUTS,
+      evidenceHalfLifeWindows: '2.50',
+      pauseConfidence: PRECISE_PAUSE,
+      resumeConfidence: PRECISE_RESUME,
+    };
+    assert.equal(Number(PRECISE_PAUSE), 0.9399999999999998);
+    assert.equal(Number(PRECISE_RESUME), 0.9299999999999999);
+    assert.equal(Number(PRECISE_RESUME) <= Number(PRECISE_PAUSE) - 0.01, false);
+    await intent(
+      PRECISE_CONFIG,
+      'configure',
+      T_CONFIG,
+      { ...CONFIG, budget_id: PRECISE_BUDGET, funding_id: PRECISE_FUNDING },
+      PRECISE_ACTOR,
+      PRECISE_EPOCH,
+    );
+    await admin.unsafe(
+      'insert into engine.paper_funding_root(funding_id,epoch,budget_id,actor,birth_config_intent_id,origin_run_id,materialized_run_id,recorded_at) values($1,$2,$3,$4,$5,$6,$6,clock_timestamp())',
+      [PRECISE_FUNDING, PRECISE_EPOCH, PRECISE_BUDGET, PRECISE_ACTOR, PRECISE_CONFIG, RUN],
+    );
+    await admin.unsafe(
+      'insert into engine.paper_budget_root(funding_id,epoch,budget_id,birth_config_intent_id,latest_intent_id,starting_cents,available_cents,reserved_cents,realized_cents,correction_cents,revision,last_run_id,recorded_at) values($1,$2,$3,$4,$4,1000,700,300,0,0,4,$5,clock_timestamp())',
+      [PRECISE_FUNDING, PRECISE_EPOCH, PRECISE_BUDGET, PRECISE_CONFIG, RUN],
+    );
+    const preciseScope = {
+      budget_id: PRECISE_BUDGET,
+      epoch: PRECISE_EPOCH,
+      funding_id: PRECISE_FUNDING,
+      generation_config_intent_id: PRECISE_CONFIG,
+      generation_key: PRECISE_GEN,
+      sample_policy: POLICY,
+    };
+    const preciseRequest = (over = {}) =>
+      requestOf({
+        eventKey: 'writer-precise-genesis',
+        generation: PRECISE_PROFILE,
+        scope: preciseScope,
+        ...over,
+      });
+    const precisePre = await stateSnapshot();
+    // One unit over the margin on the digits -- the exact invalid neighbour -- is refused
+    // before any statement runs: the probe effect after the in-transaction authority read
+    // never fires, and nothing is written.
+    let preciseSqlReached = false;
+    const precisionProbe = auditedWriter({
+      afterAuthorityRead: () => {
+        preciseSqlReached = true;
+      },
+    });
+    try {
+      for (const over of [
+        { generation: { ...PRECISE_PROFILE, resumeConfidence: '0.92999999999999990' } },
+        { generation: { ...PRECISE_PROFILE, pauseConfidence: '0.99990000000000000001' } },
+      ])
+        await refusal(
+          await precisionProbe.write(preciseRequest(over), fence),
+          'request',
+          'request',
+          precisePre,
+        );
+      assert.equal(preciseSqlReached, false);
+    } finally {
+      await precisionProbe.close();
+    }
+    const preciseGenesis = await audited.write(preciseRequest(), fence);
+    assert.equal(preciseGenesis.kind, 'written', describe(preciseGenesis));
+    assert.equal(preciseGenesis.receipt.revisionAfter, 0n);
+    assert.equal(preciseGenesis.receipt.generationCreated, true);
+    const [preciseRow] = await admin.unsafe(
+      'select pause_confidence::text as pause, resume_confidence::text as resume, evidence_half_life_windows::text as half_life, settings_descriptor, (resume_confidence <= pause_confidence - 0.01) as margin_ok, (pause_confidence - resume_confidence)::text as difference from engine.paper_gate_generation where generation_key=$1',
+      [PRECISE_GEN],
+    );
+    assert.deepEqual(preciseRow, {
+      difference: '0.01000000000000000',
+      half_life: '2.50',
+      margin_ok: true,
+      pause: PRECISE_PAUSE,
+      resume: PRECISE_RESUME,
+      // Still the NUMBER-based descriptor, from the projections, byte for byte unchanged.
+      settings_descriptor: 'regime-settings-v1:true:4:2.5:0.9399999999999998:0.9299999999999999',
+    });
+    // The real evaluated transition: this is the path that refused before the repair.
+    const preciseEval = await audited.write(
+      {
+        coverageCutoffAtIso: CUTOFF_ISO,
+        coverageReceiptId: 'writer-receipt',
+        evidenceObservedAtIso: OBSERVED_ISO,
+        eventKey: 'writer-precise-eval',
+        expectedRevision: 0n,
+        kind: 'evaluate',
+        runId: RUN,
+        scope: preciseScope,
+      },
+      fence,
+    );
+    assert.equal(preciseEval.kind, 'written', describe(preciseEval));
+    assert.equal(preciseEval.receipt.eventKind, 'evaluated');
+    assert.equal(preciseEval.receipt.revisionAfter, 1n);
+    assert.equal(preciseEval.receipt.projectedPhase, 'warming');
+    assert.equal(preciseEval.receipt.headMoved, true);
+
     // 19b. F5: the FULL epoch domain, end to end. A seven-digit count parser would have
     // rejected this legitimate epoch; the canonical parser accepts it, so a genesis write
     // and its exact replay both succeed at the ceiling. Invalid epochs are refused before
@@ -1402,17 +1522,17 @@ export async function paperGateWriterPostgresContract(admin, port) {
 
     // 20. Nothing outside this contract's own fixtures and writes exists.
     const after = await counts();
-    // Nine writes always commit here: the first generation's genesis, the reset
+    // Eleven writes always commit here: the first generation's genesis, the reset
     // generation's genesis, two evaluated transitions on it, the head race winner, the
-    // namespace race winner, the exact-bounds generation's genesis and its evaluated
-    // transition, and the max-epoch genesis. The tenth depends on the MEASURED
+    // namespace race winner, the exact-bounds and high-precision generations' geneses and
+    // their evaluated transitions, and the max-epoch genesis. The twelfth depends on the MEASURED
     // outcome of the superseded-intent vector above, so the expectation is derived from
     // that measurement rather than assumed either way. Only the two transitions with a
     // resolved universe carry inputs; the race and max-epoch generations have none.
     const lateCommitted = lateOutcome === 'committed-under-superseded-intent' ? 1 : 0;
-    assert.equal(Number(after[0].generations), Number(before[0].generations) + 6);
-    assert.equal(Number(after[0].heads), Number(before[0].heads) + 6);
-    assert.equal(Number(after[0].events), Number(before[0].events) + 10 + lateCommitted);
+    assert.equal(Number(after[0].generations), Number(before[0].generations) + 7);
+    assert.equal(Number(after[0].heads), Number(before[0].heads) + 7);
+    assert.equal(Number(after[0].events), Number(before[0].events) + 12 + lateCommitted);
     assert.equal(Number(after[0].inputs), Number(before[0].inputs) + 10 + 5 * lateCommitted);
     assert.equal(Number(after[0].leases), 1);
     return { lateOutcome, raceDetail };
@@ -1442,6 +1562,7 @@ export async function paperGateWriterPostgresContract(admin, port) {
     for (const key of [
       'writer-generation-max-epoch',
       'writer-generation-boundary',
+      'writer-generation-precise',
       'writer-generation-diffkey-a',
       'writer-generation-diffkey-b',
     ]) {
@@ -1451,7 +1572,11 @@ export async function paperGateWriterPostgresContract(admin, port) {
       ]);
       await admin.unsafe('delete from engine.paper_gate_generation where generation_key=$1', [key]);
     }
-    for (const funding of ['writer-max-funding', 'writer-boundary-funding']) {
+    for (const funding of [
+      'writer-max-funding',
+      'writer-boundary-funding',
+      'writer-precise-funding',
+    ]) {
       await admin.unsafe('delete from engine.paper_budget_root where funding_id=$1', [funding]);
       await admin.unsafe('delete from engine.paper_funding_root where funding_id=$1', [funding]);
     }

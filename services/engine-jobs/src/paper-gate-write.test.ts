@@ -42,6 +42,7 @@ import {
   PAPER_REGIME_SAMPLE_BUY_POLICY,
   PAPER_RESTRICTIVE_REGIME_PROPOSAL,
   REGIME_GATE_POLICY_VERSION,
+  paperRegimeSettingsIdentity,
 } from './domain/paper-regime.js';
 
 // `sample_policy` is a literal type on the scope, so the object is typed rather than
@@ -330,10 +331,20 @@ describe('paper gate settings and evaluation derivation', () => {
     expect(paperGateSettingsFromRow(GEN_ROW)).toEqual({
       enabled: true,
       evidenceHalfLifeWindows: 2.5,
+      // The persisted text travels with the numbers, for validity only: it is absent
+      // from the descriptor, which is still the number-based identity.
+      exactSource: {
+        evidenceHalfLifeWindows: '2.5',
+        pauseConfidence: '0.99',
+        resumeConfidence: '0.75',
+      },
       minimumPolicyWindows: 4,
       pauseConfidence: 0.99,
       resumeConfidence: 0.75,
     });
+    expect(paperRegimeSettingsIdentity(paperGateSettingsFromRow(GEN_ROW)!)).toBe(
+      GEN_ROW.settingsDescriptor,
+    );
     expect(
       paperGateSettingsFromRow({
         ...GEN_ROW,
@@ -341,6 +352,64 @@ describe('paper gate settings and evaluation derivation', () => {
       }),
     ).toBeUndefined();
     expect(paperGateSettingsFromRow({ ...GEN_ROW, pauseConfidence: 'x' })).toBeUndefined();
+  });
+
+  it('keeps an SQL-legal high-precision profile evaluable, with the identity unchanged', () => {
+    // The reviewed counterexample: the recorded digits differ by exactly a hundredth, so
+    // `numeric` accepts the pair and the writer persists it. Their binary64 projections
+    // differ by a hundredth minus one ulp, so a margin decided after conversion refused a
+    // generation that was already on disk. The exact source travels with the numbers.
+    const PAUSE = '0.93999999999999989';
+    const RESUME = '0.92999999999999989';
+    const descriptor = `regime-settings-v1:true:4:2.5:${Number(PAUSE)}:${Number(RESUME)}`;
+    const row = {
+      ...GEN_ROW,
+      evidenceHalfLifeWindows: '2.50',
+      pauseConfidence: PAUSE,
+      resumeConfidence: RESUME,
+      settingsDescriptor: descriptor,
+    };
+    expect(descriptor).toBe('regime-settings-v1:true:4:2.5:0.9399999999999998:0.9299999999999999');
+    const settings = paperGateSettingsFromRow(row);
+    expect(settings).toEqual({
+      enabled: true,
+      evidenceHalfLifeWindows: 2.5,
+      exactSource: {
+        evidenceHalfLifeWindows: '2.50',
+        pauseConfidence: PAUSE,
+        resumeConfidence: RESUME,
+      },
+      minimumPolicyWindows: 4,
+      pauseConfidence: 0.9399999999999998,
+      resumeConfidence: 0.9299999999999999,
+    });
+    // The persisted descriptor is still the number-based identity, byte for byte.
+    expect(paperRegimeSettingsIdentity(settings!)).toBe(row.settingsDescriptor);
+    const derived = derivePaperGateEvaluation(
+      row,
+      [],
+      'warming',
+      {
+        initializationRunId: 'root-paper-run',
+        kind: 'initialized',
+        priorGenerationState: 'none',
+        revision: 0,
+      },
+      OBSERVED_MS,
+      NOW_MS,
+    );
+    expect('refusal' in derived).toBe(false);
+    if ('refusal' in derived) return;
+    expect(derived.evaluation.phase).toBe('warming');
+    expect(derived.evaluation.reason).not.toBe('Unsupported explicit paper regime settings.');
+    // One unit over the margin on the digits is refused at the row, before any evaluation.
+    expect(
+      paperGateSettingsFromRow({
+        ...row,
+        resumeConfidence: '0.92999999999999990',
+        settingsDescriptor: `regime-settings-v1:true:4:2.5:${Number(PAUSE)}:${Number('0.92999999999999990')}`,
+      }),
+    ).toBeUndefined();
   });
 
   it('bounds the persisted row on its text before the lossy number conversion', () => {
@@ -354,14 +423,24 @@ describe('paper gate settings and evaluation derivation', () => {
     expect(paperGateSettingsFromRow(boundary)).toEqual({
       enabled: true,
       evidenceHalfLifeWindows: 2.5,
+      exactSource: {
+        evidenceHalfLifeWindows: '2.5',
+        pauseConfidence: '0.94',
+        resumeConfidence: '0.93',
+      },
       minimumPolicyWindows: 4,
       pauseConfidence: 0.94,
       resumeConfidence: 0.93,
     });
-    // The spelling stays the writer's: '2.50' is the same value as '2.5'.
-    expect(paperGateSettingsFromRow({ ...boundary, evidenceHalfLifeWindows: '2.50' })).toEqual(
-      paperGateSettingsFromRow(boundary),
-    );
+    // The spelling stays the writer's: '2.50' is the same value as '2.5', so the numbers,
+    // the descriptor and the verdict are identical; only the carried source text differs,
+    // because it is the text the column actually holds.
+    const spelled = paperGateSettingsFromRow({ ...boundary, evidenceHalfLifeWindows: '2.50' })!;
+    const plain = paperGateSettingsFromRow(boundary)!;
+    expect({ ...spelled, exactSource: undefined }).toEqual({ ...plain, exactSource: undefined });
+    expect(spelled.exactSource?.evidenceHalfLifeWindows).toBe('2.50');
+    expect(plain.exactSource?.evidenceHalfLifeWindows).toBe('2.5');
+    expect(paperRegimeSettingsIdentity(spelled)).toBe(paperRegimeSettingsIdentity(plain));
     // Out of the 0006 domain by digits `Number` would round away.
     expect(
       paperGateSettingsFromRow({

@@ -34,7 +34,7 @@ import {
   type RegimeGatePhase,
   type RegimeGateSettings,
 } from './paper-regime.js';
-import { paperBoundDecimalWithin, paperBoundMarginSatisfied } from './paper-bound-decimal.js';
+import { paperExactRegimeSourceWithinDomains } from './paper-bound-decimal.js';
 import { PAPER_GATE_UNIVERSE_LIMIT } from './paper-gate-coverage.js';
 import { paperGateRowScopeIsValid, type PaperGateRowScope } from './paper-gate-row-codec.js';
 
@@ -201,12 +201,13 @@ export function paperGateGenerationInputsAreValid(inputs: PaperGateGenerationInp
   if (!decimal(inputs.evidenceHalfLifeWindows)) return false;
   if (!decimal(inputs.pauseConfidence)) return false;
   if (!decimal(inputs.resumeConfidence)) return false;
-  return (
-    paperBoundDecimalWithin(inputs.evidenceHalfLifeWindows, '2', '500') &&
-    paperBoundDecimalWithin(inputs.pauseConfidence, '0.9', '0.9999') &&
-    paperBoundDecimalWithin(inputs.resumeConfidence, '0.5', '0.98') &&
-    paperBoundMarginSatisfied(inputs.resumeConfidence, inputs.pauseConfidence)
-  );
+  // The domains and the margin, from the one place that owns those literals, so the
+  // request validator, the row mapping and the evaluator cannot drift apart.
+  return paperExactRegimeSourceWithinDomains({
+    evidenceHalfLifeWindows: inputs.evidenceHalfLifeWindows,
+    pauseConfidence: inputs.pauseConfidence,
+    resumeConfidence: inputs.resumeConfidence,
+  });
 }
 
 /** Validated BEFORE any statement runs, so a malformed request never reaches the driver
@@ -322,27 +323,30 @@ export interface PaperGateGenerationRow {
 export function paperGateSettingsFromRow(
   row: PaperGateGenerationRow,
 ): RegimeGateSettings | undefined {
+  // The 0006 domains, decided on the persisted TEXT and BEFORE the `Number` conversions
+  // below, because that conversion is lossy: a column value such as
+  // `0.99990000000000000001` is outside `pause_confidence between 0.9 and 0.9999`, yet
+  // `Number` makes it exactly `0.9999` and no later check could tell the difference.
+  const exactSource = {
+    evidenceHalfLifeWindows: row.evidenceHalfLifeWindows,
+    pauseConfidence: row.pauseConfidence,
+    resumeConfidence: row.resumeConfidence,
+  };
   if (
     typeof row.enabled !== 'boolean' ||
     !Number.isSafeInteger(row.minimumPolicyWindows) ||
-    !decimal(row.evidenceHalfLifeWindows) ||
-    !decimal(row.pauseConfidence) ||
-    !decimal(row.resumeConfidence) ||
-    // The 0006 domains, decided on the persisted TEXT and BEFORE the `Number`
-    // conversions below, because that conversion is lossy: a column value such as
-    // `0.99990000000000000001` is outside `pause_confidence between 0.9 and 0.9999`, yet
-    // `Number` makes it exactly `0.9999` and no later check could tell the difference.
-    // The conversion that follows is unchanged, and so is the number-based settings
-    // descriptor it is compared against.
-    !paperBoundDecimalWithin(row.evidenceHalfLifeWindows, '2', '500') ||
-    !paperBoundDecimalWithin(row.pauseConfidence, '0.9', '0.9999') ||
-    !paperBoundDecimalWithin(row.resumeConfidence, '0.5', '0.98') ||
-    !paperBoundMarginSatisfied(row.resumeConfidence, row.pauseConfidence)
+    !paperExactRegimeSourceWithinDomains(exactSource)
   )
     return undefined;
+  // The numbers are the ones the arithmetic has always used, converted exactly as
+  // before, and the number-based descriptor they are compared against is unchanged. The
+  // persisted TEXT travels with them so the evaluator can decide validity on the digits
+  // the column holds: a profile `numeric` accepts has to stay evaluable, and the
+  // projection alone cannot prove its margin.
   const settings: RegimeGateSettings = {
     enabled: row.enabled,
     evidenceHalfLifeWindows: Number(row.evidenceHalfLifeWindows),
+    exactSource,
     minimumPolicyWindows: row.minimumPolicyWindows,
     pauseConfidence: Number(row.pauseConfidence),
     resumeConfidence: Number(row.resumeConfidence),

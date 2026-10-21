@@ -6,6 +6,8 @@ import {
   paperBoundDecimalFromNumber,
   paperBoundDecimalWithin,
   paperBoundMarginSatisfied,
+  paperExactRegimeSourceAdmits,
+  paperExactRegimeSourceWithinDomains,
   paperNumberMarginSatisfied,
 } from './domain/paper-bound-decimal.js';
 import { paperGateGenerationInputsAreValid } from './domain/paper-gate-write.js';
@@ -91,6 +93,88 @@ describe('exact decimal bounds for the persisted regime profile', () => {
     expect(paperNumberMarginSatisfied(0.8907, 0.9007)).toBe(true);
     expect(paperNumberMarginSatisfied(0.9301, 0.94)).toBe(false);
     expect(paperNumberMarginSatisfied(0.93, Number.NaN)).toBe(false);
+  });
+
+  it('admits an exact source only when it is real and projects onto those very numbers', () => {
+    const source = {
+      evidenceHalfLifeWindows: '2.50',
+      pauseConfidence: '0.93999999999999989',
+      resumeConfidence: '0.92999999999999989',
+    };
+    const numeric = {
+      evidenceHalfLifeWindows: 2.5,
+      pauseConfidence: Number(source.pauseConfidence),
+      resumeConfidence: Number(source.resumeConfidence),
+    };
+    // SQL-legal: the difference is exactly a hundredth on the recorded digits, while the
+    // projections differ by a hundredth minus one ulp.
+    expect(paperExactRegimeSourceWithinDomains(source)).toBe(true);
+    expect(paperExactRegimeSourceAdmits(source, numeric)).toBe(true);
+    expect(numeric.resumeConfidence <= numeric.pauseConfidence - 0.01).toBe(false);
+    expect(paperNumberMarginSatisfied(numeric.resumeConfidence, numeric.pauseConfidence)).toBe(
+      false,
+    );
+    // A source that does not project onto these numbers is not a source.
+    expect(paperExactRegimeSourceAdmits(source, { ...numeric, pauseConfidence: 0.94 })).toBe(false);
+    expect(paperExactRegimeSourceAdmits(source, { ...numeric, evidenceHalfLifeWindows: 2.6 })).toBe(
+      false,
+    );
+    expect(paperExactRegimeSourceAdmits(source, { ...numeric, resumeConfidence: 0.93 })).toBe(
+      false,
+    );
+    // Malformed, out-of-domain or margin-violating text is not a source either.
+    for (const patch of [
+      { pauseConfidence: '0.9e0' },
+      { pauseConfidence: '+0.94' },
+      { pauseConfidence: ' 0.94' },
+      { pauseConfidence: '0.99990000000000000001' },
+      { resumeConfidence: '0.98000000000000000001' },
+      { resumeConfidence: '0.9299999999999999' },
+      { evidenceHalfLifeWindows: '1.9999' },
+      { evidenceHalfLifeWindows: `2.${'0'.repeat(23)}` },
+    ])
+      expect(paperExactRegimeSourceWithinDomains({ ...source, ...patch })).toBe(false);
+    for (const bad of [undefined, null, 'text', 42, [], { pauseConfidence: '0.94' }])
+      expect(paperExactRegimeSourceWithinDomains(bad)).toBe(false);
+  });
+
+  it('matches an independent oracle on 16- to 20-digit pairs on both sides of the margin', () => {
+    // pause = 0.94 - 11 units at the given scale, which at scale 17 is exactly the
+    // reviewed counterexample; resume = pause - 0.01 exactly, and one unit above it.
+    const text = (coefficient: bigint, scale: number) =>
+      `0.${coefficient.toString().padStart(scale, '0')}`;
+    const checked: string[] = [];
+    for (let scale = 16; scale <= 20; scale += 1) {
+      const unit = 10n ** BigInt(scale - 2);
+      const pauseCoefficient = 94n * unit - 11n;
+      const legal = pauseCoefficient - unit;
+      const pause = text(pauseCoefficient, scale);
+      for (const [resumeCoefficient, expected] of [
+        [legal, true],
+        [legal + 1n, false],
+      ] as const) {
+        const resume = text(resumeCoefficient, scale);
+        // Independent oracle: pad both to a common scale by string surgery and compare
+        // one integer, never the helper's own alignment.
+        const pad = (value: string) => {
+          const [, fraction = ''] = value.split('.');
+          return BigInt((fraction + '0'.repeat(24)).slice(0, 24));
+        };
+        expect(pad(resume) + pad('0.01') <= pad(pause)).toBe(expected);
+        expect(paperBoundMarginSatisfied(resume, pause)).toBe(expected);
+        expect(
+          paperExactRegimeSourceWithinDomains({
+            evidenceHalfLifeWindows: '2.50',
+            pauseConfidence: pause,
+            resumeConfidence: resume,
+          }),
+        ).toBe(expected);
+        checked.push(`${pause}/${resume}=${expected}`);
+      }
+    }
+    expect(checked).toHaveLength(10);
+    expect(checked).toContain('0.93999999999999989/0.92999999999999989=true');
+    expect(checked).toContain('0.93999999999999989/0.92999999999999990=false');
   });
 
   it('agrees with an independent integer oracle across a 3000-pair boundary sweep', () => {

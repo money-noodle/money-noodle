@@ -99,3 +99,51 @@ export function paperNumberMarginSatisfied(lower: unknown, upper: unknown): bool
   const b = paperBoundDecimalFromNumber(upper);
   return a !== undefined && b !== undefined && paperBoundMarginSatisfied(a, b);
 }
+
+/** The three decimal profile fields as the EXACT text a `numeric` column holds. Carried
+ * alongside the numeric settings so validity can be decided on the recorded digits; the
+ * arithmetic still runs on the numbers. */
+export interface PaperExactRegimeSettingsSource {
+  readonly evidenceHalfLifeWindows: string;
+  readonly pauseConfidence: string;
+  readonly resumeConfidence: string;
+}
+
+/** The 0006 domains and the margin, on exact text. The bound literals live here only, so
+ * the request validator, the row mapping and the evaluator cannot drift apart. */
+export function paperExactRegimeSourceWithinDomains(
+  source: unknown,
+): source is PaperExactRegimeSettingsSource {
+  if (!source || typeof source !== 'object') return false;
+  const s = source as Record<string, unknown>;
+  return (
+    paperBoundDecimalWithin(s.evidenceHalfLifeWindows, '2', '500') &&
+    paperBoundDecimalWithin(s.pauseConfidence, '0.9', '0.9999') &&
+    paperBoundDecimalWithin(s.resumeConfidence, '0.5', '0.98') &&
+    paperBoundMarginSatisfied(s.resumeConfidence, s.pauseConfidence)
+  );
+}
+
+/** Whether an exact source may decide validity for THESE numbers.
+ *
+ * It must be a real source: writer-grammar text inside the domains with the margin
+ * satisfied on digits, AND projecting onto exactly these numbers under the SAME `Number`
+ * conversion the row mapping performs. Lost digits are never reconstructed from the
+ * rounded number; agreement is proved in the one direction that is sound, text to number.
+ * A source that fails any part of this is not a shortcut and not silently ignored: the
+ * caller refuses. There is no flag, token or option anywhere that skips this. */
+export function paperExactRegimeSourceAdmits(
+  source: unknown,
+  numeric: {
+    readonly evidenceHalfLifeWindows: number;
+    readonly pauseConfidence: number;
+    readonly resumeConfidence: number;
+  },
+): boolean {
+  if (!paperExactRegimeSourceWithinDomains(source)) return false;
+  return (
+    Number(source.evidenceHalfLifeWindows) === numeric.evidenceHalfLifeWindows &&
+    Number(source.pauseConfidence) === numeric.pauseConfidence &&
+    Number(source.resumeConfidence) === numeric.resumeConfidence
+  );
+}

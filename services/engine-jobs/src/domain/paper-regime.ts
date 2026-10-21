@@ -1,5 +1,9 @@
 // Selected historical pure arithmetic only; no environment/store/sentinel/network imports.
-import { paperNumberMarginSatisfied } from './paper-bound-decimal.js';
+import {
+  paperExactRegimeSourceAdmits,
+  paperNumberMarginSatisfied,
+  type PaperExactRegimeSettingsSource,
+} from './paper-bound-decimal.js';
 export const REGIME_GATE_POLICY_VERSION = 'adaptive-fee-edge-window-v1';
 
 export type RegimeGatePhase = 'disabled' | 'warming' | 'open' | 'closed';
@@ -18,6 +22,12 @@ export interface RegimeGateSettings {
   evidenceHalfLifeWindows: number;
   pauseConfidence: number;
   resumeConfidence: number;
+  /** Optional: the exact decimal text these numbers were converted FROM, when the caller
+   * read them from `numeric` columns. The arithmetic below never reads it — it exists so
+   * validity can be decided on the recorded digits instead of on a projection that has
+   * already lost some. It is internal plumbing, not a published shape: it is absent from
+   * the settings descriptor, from every persisted row and from every external contract. */
+  exactSource?: PaperExactRegimeSettingsSource;
 }
 
 export interface RegimeGateEvaluation {
@@ -188,6 +198,55 @@ export interface PaperRegimeEvidence {
   previousPhasePolicyVersion: string;
   observations: RegimeGateObservation[];
 }
+/**
+ * Settings validity, in ONE place for every caller.
+ *
+ * The numbers are what the arithmetic uses, and that arithmetic is unchanged. What decides
+ * validity is the exact recorded value whenever the caller carries one, because a profile
+ * the `numeric` column accepts must stay EVALUABLE. Deciding the margin on the projection
+ * alone refused SQL-legal profiles after they had already been persisted: `Number` maps
+ * pause `0.93999999999999989` / resume `0.92999999999999989` — a pair whose difference is
+ * exactly `0.01` — onto `0.9399999999999998` / `0.9299999999999999`, whose difference is
+ * a hundredth minus one ulp.
+ *
+ * A caller carrying no exact source is validated exactly as before, on its numbers, so
+ * invalid numeric settings never pass for want of a source. A caller carrying one must
+ * carry a REAL one — writer-grammar text, inside the 0006 domains, margin satisfied on
+ * digits, and projecting onto these very numbers under the same conversion the row
+ * mapping performs — and a source that fails any part of that is refused rather than
+ * ignored. No flag, token, option or environment value skips any of this, and it decides
+ * numeric input validity only: nothing here grants admission, and the compiled bundle
+ * remains unavailable.
+ */
+const regimeSettingsUnsupported = (settings: RegimeGateSettings, historical: boolean): boolean => {
+  if (!settings) return true;
+  if (historical ? typeof settings.enabled !== 'boolean' : settings.enabled !== true) return true;
+  if (
+    !Number.isSafeInteger(settings.minimumPolicyWindows) ||
+    settings.minimumPolicyWindows < 4 ||
+    settings.minimumPolicyWindows > 500
+  )
+    return true;
+  if (
+    !Number.isFinite(settings.evidenceHalfLifeWindows) ||
+    !Number.isFinite(settings.pauseConfidence) ||
+    !Number.isFinite(settings.resumeConfidence)
+  )
+    return true;
+  if (settings.exactSource !== undefined)
+    return !paperExactRegimeSourceAdmits(settings.exactSource, settings);
+  return (
+    settings.evidenceHalfLifeWindows < 2 ||
+    settings.evidenceHalfLifeWindows > 500 ||
+    settings.pauseConfidence < 0.9 ||
+    settings.pauseConfidence > 0.9999 ||
+    settings.resumeConfidence < 0.5 ||
+    settings.resumeConfidence > 0.98 ||
+    // `resume <= pause - 0.01` on each number's own exact spelling rather than on a
+    // binary64 subtraction, which refused legal pairs such as `0.94` / `0.93`.
+    !paperNumberMarginSatisfied(settings.resumeConfidence, settings.pauseConfidence)
+  );
+};
 /** No store or collector. All snapshot facts are required caller evidence, not proven by this helper.
  * Disabled or insufficient evidence refuses instead of inheriting permissive disabled/warm-up authority.
  */
@@ -214,25 +273,7 @@ function evaluatePaperRegimeContract(
   });
   if (
     policyVersion !== PAPER_REGIME_SAMPLE_BUY_POLICY ||
-    !settings ||
-    (historical ? typeof settings.enabled !== 'boolean' : settings.enabled !== true) ||
-    !Number.isSafeInteger(settings.minimumPolicyWindows) ||
-    settings.minimumPolicyWindows < 4 ||
-    settings.minimumPolicyWindows > 500 ||
-    !Number.isFinite(settings.evidenceHalfLifeWindows) ||
-    settings.evidenceHalfLifeWindows < 2 ||
-    settings.evidenceHalfLifeWindows > 500 ||
-    !Number.isFinite(settings.pauseConfidence) ||
-    settings.pauseConfidence < 0.9 ||
-    settings.pauseConfidence > 0.9999 ||
-    !Number.isFinite(settings.resumeConfidence) ||
-    settings.resumeConfidence < 0.5 ||
-    settings.resumeConfidence > 0.98 ||
-    // `resume <= pause - 0.01`, decided on each number's own exact decimal spelling
-    // rather than on a binary64 subtraction, which refused legal pairs such as
-    // `pause 0.94` / `resume 0.93`. Same rule, same bound, no tolerance added; the
-    // settings themselves stay numbers and their descriptor is untouched.
-    !paperNumberMarginSatisfied(settings.resumeConfidence, settings.pauseConfidence)
+    regimeSettingsUnsupported(settings, historical)
   )
     return refuse('Unsupported explicit paper regime settings.');
   const identityValid =
