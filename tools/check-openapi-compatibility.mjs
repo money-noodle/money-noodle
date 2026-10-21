@@ -2,23 +2,29 @@
 
 // Rejects breaking changes to the published v1 contract, with ONE narrow door.
 //
-// A breaking change passes only when a committed exception record names exactly it: the
-// same resolved schema path, property, change kind and exact old and new value, with the
-// values independently re-read from the baseline and candidate documents rather than
-// believed from the report. Everything else is blocked, including an unapproved breaking
-// change that happens to travel alongside an approved one.
+// The door is not "whatever a record in the exception file says". The approved change is
+// fixed IN THIS SOURCE — contract, resolved schema path, property, change kind, exact old
+// and new value, and the named approval that granted it — and a committed record is only
+// the statement that this comparison is the one carrying it. A record with an unknown id,
+// an unknown tuple or different provenance is refused even when it is internally
+// consistent with the specifications and the tool's report, so a future exception needs a
+// separately authorised change here rather than a new line in a data file.
 //
-// Fail-closed, deliberately: a tool error, a non-zero exit, empty or unparsable output, a
-// report whose enumerated changes disagree with its own summary, a malformed or duplicated
-// exception record, a record whose declared values no longer match the documents, or a
-// record that could match more than one change all REJECT. A record that matches nothing
-// at all is the ordinary state once its change has merged, so it is reported as historical
-// and does not reject.
+// Fail-closed, deliberately. A tool error, a non-zero exit, output that is neither the
+// pinned no-change form nor a complete normal report, a summary that disagrees with the
+// enumerated changes, a malformed or duplicated record, a record whose declared values do
+// not match the documents, or a record that could match more than one change all REJECT.
 //
-// The tool is always invoked with an explicit neutral rules file. It otherwise
+// The three accepted outcomes, measured against the pinned 0.2.11 binary:
+//   * the exact no-change form `{"message":"No changes found between specifications"}`;
+//   * a normal report whose only breaking change is the approved one, with a record
+//     stating it (the state while the change is in flight);
+//   * a normal report, or the no-change form, while the approved value is ALREADY the
+//     baseline — the record is then historical and inert, and admits nothing.
+//
+// The tool is always invoked with an explicit neutral rules file: it otherwise
 // auto-discovers `./changes-rules.yaml` and `~/.config/changes-rules.yaml`, and such a
-// file can turn a whole class of changes non-breaking; see that file's header for the
-// measured behaviour.
+// file can turn a whole class of changes non-breaking.
 
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -31,25 +37,53 @@ export const CONTRACT_PATH = 'services/platform-api/openapi/platform-api.v1.yaml
 export const EXCEPTIONS_PATH = 'services/platform-api/openapi/compatibility-exceptions.json';
 export const RULES_PATH = 'tools/openapi-changes-rules.neutral.yaml';
 export const EXCEPTIONS_VERSION = 'openapi-compatibility-exception-v1';
+/** The pinned tool's successful "nothing changed" answer, verbatim. */
+export const NO_CHANGE_MESSAGE = 'No changes found between specifications';
+/** Exactly the top-level keys the pinned tool emits for a normal report, in both its
+ * file-to-file and its git-baseline modes. Anything else is not a report we understand. */
+const REPORT_KEYS = ['changes', 'modifiedPath', 'originalPath', 'reportSummary'];
+const REQUIRED_REPORT_KEYS = ['changes', 'reportSummary'];
 
-const RECORD_FIELDS = [
-  'id',
+/**
+ * The approved exceptions, fixed here rather than taken from the data file.
+ *
+ * `reason` is prose and deliberately not part of the identity; everything else is. A
+ * record must match one of these entries field for field, so an altered value, an unknown
+ * id, another component or a different approval cannot authorise anything.
+ */
+export const APPROVED_EXCEPTIONS = Object.freeze([
+  Object.freeze({
+    approvalSource: '#orbit 1562275489748484137',
+    approvedAtIso: '2026-10-21T01:25:02Z',
+    approver: 'Rai',
+    changeKind: 'modified',
+    contract: CONTRACT_PATH,
+    id: 'control-parameters-max-properties-12-to-20',
+    new: '20',
+    original: '12',
+    property: 'maxProperties',
+    schemaPath: "$.components.schemas['ControlParameters']",
+    type: 'schema',
+  }),
+]);
+const IDENTITY_FIELDS = [
+  'approvalSource',
   'approvedAtIso',
   'approver',
-  'approvalSource',
-  'reason',
-  'contract',
-  'type',
-  'schemaPath',
-  'property',
   'changeKind',
-  'original',
+  'contract',
+  'id',
   'new',
+  'original',
+  'property',
+  'schemaPath',
+  'type',
 ];
+const RECORD_FIELDS = [...IDENTITY_FIELDS, 'reason'];
 const SCHEMA_PATH_PATTERN = /^\$\.components\.schemas\['([A-Za-z0-9_.-]+)'\]$/u;
 
-/** Parsed exception records, or a list of reasons why the file cannot be trusted. */
-export function loadExceptions(text, contractPath = CONTRACT_PATH) {
+/** Parsed exception records, or the reasons the file cannot be trusted. */
+export function loadExceptions(text, approved = APPROVED_EXCEPTIONS) {
   let document;
   try {
     document = JSON.parse(text);
@@ -85,24 +119,22 @@ export function loadExceptions(text, contractPath = CONTRACT_PATH) {
       continue;
     }
     seen.add(record.id);
-    if (record.contract !== contractPath) {
-      failures.push(`${where} names contract ${record.contract}, not ${contractPath}`);
-      continue;
-    }
-    if (record.type !== 'schema') {
-      failures.push(`${where} has unsupported type ${record.type}`);
+    // The identity check: this record must BE an approved exception, not merely look like
+    // a well-formed one. An unknown id, an altered value pair, another component or
+    // property, or different approval provenance all stop here.
+    const match = approved.find((candidate) =>
+      IDENTITY_FIELDS.every((field) => candidate[field] === record[field]),
+    );
+    if (match === undefined) {
+      failures.push(
+        `${where} (${record.id}) is not an approved exception: ${record.type} ${record.schemaPath} ` +
+          `${record.property} ${record.changeKind} ${record.original} -> ${record.new}, approved by ` +
+          `${record.approver} ${record.approvalSource} ${record.approvedAtIso}`,
+      );
       continue;
     }
     if (!SCHEMA_PATH_PATTERN.test(record.schemaPath)) {
       failures.push(`${where} has an unresolvable schema path ${record.schemaPath}`);
-      continue;
-    }
-    if (record.changeKind !== 'modified') {
-      failures.push(`${where} has unsupported change kind ${record.changeKind}`);
-      continue;
-    }
-    if (Number.isNaN(Date.parse(record.approvedAtIso))) {
-      failures.push(`${where} has an unparsable approval instant ${record.approvedAtIso}`);
       continue;
     }
     records.push(record);
@@ -113,8 +145,8 @@ export function loadExceptions(text, contractPath = CONTRACT_PATH) {
 /**
  * The scalar value of one property of one named schema, read straight from the YAML text.
  *
- * Deliberately tiny and deliberately strict: it exists only to corroborate an exception's
- * declared values against the documents themselves, so anything it cannot resolve
+ * Deliberately tiny and deliberately strict: it exists only to corroborate an approved
+ * exception's values against the documents themselves, so anything it cannot resolve
  * unambiguously — a missing schema, a repeated schema name, a repeated property inside the
  * schema, a non-scalar value — returns `undefined` and the caller rejects.
  */
@@ -164,47 +196,111 @@ export function resolveSchemaScalar(yamlText, schemaName, property) {
   return value;
 }
 
-/** Enumerated breaking changes, cross-checked against the report's own summary. */
-export function breakingChangesOf(report) {
-  if (!report || typeof report !== 'object' || Array.isArray(report))
-    return { failures: ['report is not an object'] };
-  if (!Array.isArray(report.changes)) return { failures: ['report carries no changes array'] };
-  const failures = [];
-  for (const [index, change] of report.changes.entries())
-    if (!change || typeof change !== 'object' || typeof change.breaking !== 'boolean')
-      failures.push(`change[${index}] has no breaking flag`);
-  if (failures.length > 0) return { failures };
-  const breaking = report.changes.filter((change) => change.breaking === true);
-  // The summary is never the authority, but a summary that disagrees with the enumerated
-  // changes means the report was truncated or is not the report we think it is.
-  const summary = report.reportSummary;
-  if (summary !== undefined) {
-    if (!summary || typeof summary !== 'object' || Array.isArray(summary))
-      return { failures: ['report summary is not an object'] };
-    let counted = 0;
-    for (const section of Object.values(summary)) {
-      if (!section || typeof section !== 'object')
-        return { failures: ['report summary is malformed'] };
-      const value = section.breakingChanges;
-      if (value !== undefined && !Number.isInteger(value))
-        return { failures: ['report summary breaking count is not an integer'] };
-      counted += value ?? 0;
-    }
-    if (counted !== breaking.length)
-      return {
-        failures: [
-          `report summary counts ${counted} breaking change(s) but ${breaking.length} are enumerated`,
-        ],
-      };
+const isCount = (value) => Number.isSafeInteger(value) && value >= 0;
+
+/**
+ * The tool's stdout, as one of the two forms the pinned binary actually produces.
+ *
+ * Measured on 0.2.11, in both file-to-file and git-baseline mode: a normal report carries
+ * exactly `changes`, `modifiedPath`, `originalPath` and `reportSummary`; every summary
+ * section carries both `totalChanges` and `breakingChanges`; and those counts agree with
+ * the enumerated changes. A comparison with nothing to say is the one-key message form
+ * instead. Anything else — an empty change list presented as a report, a summary that
+ * counts changes the report does not list, an error or partial envelope, a truncated
+ * object — is refused rather than read as "no changes".
+ */
+export function parseReport(text) {
+  let report;
+  try {
+    report = JSON.parse(text);
+  } catch (error) {
+    return {
+      failures: [`the compatibility report is not JSON: ${String(error && error.message)}`],
+    };
   }
-  return { breaking, changes: report.changes };
+  if (!report || typeof report !== 'object' || Array.isArray(report))
+    return { failures: ['the compatibility report is not an object'] };
+  const keys = Object.keys(report);
+  if (keys.length === 1 && keys[0] === 'message') {
+    if (report.message !== NO_CHANGE_MESSAGE)
+      return { failures: [`unrecognised compatibility message: ${String(report.message)}`] };
+    return { breaking: [], changes: [], kind: 'no-change' };
+  }
+  const unexpected = keys.filter((key) => !REPORT_KEYS.includes(key));
+  if (unexpected.length > 0)
+    return {
+      failures: [`the compatibility report carries unexpected fields: ${unexpected.join(', ')}`],
+    };
+  for (const required of REQUIRED_REPORT_KEYS)
+    if (!Object.hasOwn(report, required))
+      return { failures: [`the compatibility report has no ${required}`] };
+  if (!Array.isArray(report.changes))
+    return { failures: ['the compatibility report changes is not an array'] };
+  if (report.changes.length === 0)
+    return {
+      failures: [
+        'the compatibility report lists no changes; a comparison with nothing to report uses the no-change form',
+      ],
+    };
+  for (const [index, change] of report.changes.entries()) {
+    if (!change || typeof change !== 'object' || Array.isArray(change))
+      return { failures: [`change[${index}] is not an object`] };
+    if (typeof change.breaking !== 'boolean')
+      return { failures: [`change[${index}] has no breaking flag`] };
+  }
+  const summary = report.reportSummary;
+  if (!summary || typeof summary !== 'object' || Array.isArray(summary))
+    return { failures: ['the compatibility report summary is not an object'] };
+  const sections = Object.entries(summary);
+  if (sections.length === 0) return { failures: ['the compatibility report summary is empty'] };
+  let total = 0;
+  let breakingCount = 0;
+  for (const [name, section] of sections) {
+    if (!section || typeof section !== 'object' || Array.isArray(section))
+      return { failures: [`report summary section ${name} is not an object`] };
+    if (!isCount(section.totalChanges) || !isCount(section.breakingChanges))
+      return {
+        failures: [`report summary section ${name} has no non-negative integer change counts`],
+      };
+    if (section.breakingChanges > section.totalChanges)
+      return {
+        failures: [`report summary section ${name} counts more breaking changes than changes`],
+      };
+    total += section.totalChanges;
+    breakingCount += section.breakingChanges;
+  }
+  const breaking = report.changes.filter((change) => change.breaking === true);
+  if (total !== report.changes.length)
+    return {
+      failures: [
+        `report summary counts ${total} change(s) but ${report.changes.length} are enumerated`,
+      ],
+    };
+  if (breakingCount !== breaking.length)
+    return {
+      failures: [
+        `report summary counts ${breakingCount} breaking change(s) but ${breaking.length} are enumerated`,
+      ],
+    };
+  return { breaking, changes: report.changes, kind: 'report' };
 }
 
-/** Which breaking changes an exception admits, and which stay blocked. */
+/**
+ * Which breaking changes an approved exception admits, and which stay blocked.
+ *
+ * A record is ACTIVE while the documents hold the approved transition (baseline carries
+ * the old value, candidate the new one) and may then admit exactly one matching change.
+ * It is HISTORICAL and inert once the approved value is on both sides, which is the
+ * ordinary state after the change has merged; it admits nothing at all in that state, so a
+ * later move away from the approved value is blocked like any other breaking change.
+ * Anything else is a stale record and rejects.
+ */
 export function classifyChanges({ breaking, records, baselineText, candidateText }) {
   const failures = [];
   const approved = [];
   const blocked = [];
+  const historical = [];
+  const active = [];
   const consumed = new Set();
   const describe = (change) =>
     `${change.type ?? 'unknown'} ${change.path ?? '?'} ${change.property ?? '?'} ` +
@@ -219,14 +315,17 @@ export function classifyChanges({ breaking, records, baselineText, candidateText
       );
       continue;
     }
-    if (baselineValue !== record.original || candidateValue !== record.new)
+    if (baselineValue === record.original && candidateValue === record.new) active.push(record);
+    else if (baselineValue === record.new && candidateValue === record.new)
+      historical.push(record.id);
+    else
       failures.push(
         `exception ${record.id} is stale: it approves ${record.original} -> ${record.new} but the documents hold ${baselineValue} -> ${candidateValue}`,
       );
   }
-  if (failures.length > 0) return { approved, blocked, failures, unused: [] };
+  if (failures.length > 0) return { approved, blocked, failures, historical, unused: [] };
   for (const change of breaking) {
-    const matches = records.filter(
+    const matches = active.filter(
       (record) =>
         change.type === record.type &&
         change.path === record.schemaPath &&
@@ -255,7 +354,8 @@ export function classifyChanges({ breaking, records, baselineText, candidateText
     approved,
     blocked,
     failures,
-    unused: records.filter((record) => !consumed.has(record.id)).map((record) => record.id),
+    historical,
+    unused: active.filter((record) => !consumed.has(record.id)).map((record) => record.id),
   };
 }
 
@@ -263,7 +363,10 @@ function main() {
   const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const baseRef = process.env.OPENAPI_BASE_REF ?? process.env.NX_BASE ?? 'origin/main';
   const baseline = `${baseRef}:${CONTRACT_PATH}`;
-  const probe = spawnSync('git', ['cat-file', '-e', baseline], { encoding: 'utf8' });
+  const probe = spawnSync('git', ['cat-file', '-e', baseline], {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+  });
   if (probe.status !== 0) {
     console.log(
       `No OpenAPI baseline exists at ${baseRef}; treating this as the initial v1 contract.`,
@@ -280,7 +383,7 @@ function main() {
   const report = spawnSync(
     command,
     ['report', '--reproducible', '--no-logo', '-c', rules, baseline, CONTRACT_PATH],
-    { encoding: 'utf8' },
+    { cwd: repositoryRoot, encoding: 'utf8' },
   );
   if (report.error) {
     console.error(`Rejected: the compatibility tool failed to run: ${report.error.message}`);
@@ -291,21 +394,15 @@ function main() {
     console.error(`Rejected: the compatibility tool exited ${report.status}.`);
     return 1;
   }
-  let parsed;
-  try {
-    parsed = JSON.parse(report.stdout);
-  } catch (error) {
-    console.error(
-      `Rejected: the compatibility report is not JSON: ${String(error && error.message)}`,
-    );
+  const parsed = parseReport(report.stdout ?? '');
+  if (parsed.failures) {
+    for (const failure of parsed.failures) console.error(`Rejected: ${failure}`);
     return 1;
   }
-  const enumerated = breakingChangesOf(parsed);
-  if (enumerated.failures) {
-    for (const failure of enumerated.failures) console.error(`Rejected: ${failure}`);
-    return 1;
-  }
-  const baselineText = spawnSync('git', ['show', baseline], { encoding: 'utf8' });
+  const baselineText = spawnSync('git', ['show', baseline], {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+  });
   if (baselineText.status !== 0 || typeof baselineText.stdout !== 'string') {
     console.error(`Rejected: the baseline contract at ${baseline} could not be read.`);
     return 1;
@@ -317,7 +414,7 @@ function main() {
   }
   const verdict = classifyChanges({
     baselineText: baselineText.stdout,
-    breaking: enumerated.breaking,
+    breaking: parsed.breaking,
     candidateText: readFileSync(path.join(repositoryRoot, CONTRACT_PATH), 'utf8'),
     records: loaded.records,
   });
@@ -328,20 +425,26 @@ function main() {
     spawnSync(
       command,
       ['summary', '--no-logo', '--no-color', '-c', rules, baseline, CONTRACT_PATH],
-      { stdio: 'inherit' },
+      { cwd: repositoryRoot, stdio: 'inherit' },
     );
   }
   for (const entry of verdict.approved)
     console.log(`Accepted one approved exception (${entry.id}): ${entry.change}`);
+  for (const id of verdict.historical)
+    console.log(`Exception ${id} is historical: its approved value is already the baseline.`);
   for (const id of verdict.unused)
-    console.log(`Exception ${id} matches nothing in this comparison; it is historical.`);
+    console.log(`Exception ${id} is active but matches no change in this comparison.`);
   for (const failure of verdict.failures) console.error(`Rejected: ${failure}`);
   for (const change of verdict.blocked)
     console.error(`Rejected breaking change with no approved exception: ${change}`);
   if (verdict.failures.length > 0 || verdict.blocked.length > 0) return 1;
+  if (parsed.kind === 'no-change') {
+    console.log(`Verified OpenAPI compatibility against ${baseRef}; the contract is unchanged.`);
+    return 0;
+  }
   console.log(
-    `Verified OpenAPI compatibility against ${baseRef}; ${enumerated.changes.length} change(s), ` +
-      `${enumerated.breaking.length} breaking, ${verdict.approved.length} approved by exception.`,
+    `Verified OpenAPI compatibility against ${baseRef}; ${parsed.changes.length} change(s), ` +
+      `${parsed.breaking.length} breaking, ${verdict.approved.length} approved by exception.`,
   );
   return 0;
 }

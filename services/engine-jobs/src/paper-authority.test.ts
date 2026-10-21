@@ -70,9 +70,12 @@ describe('paper configuration design; injected audited fixture is not production
     expect(decodePaperConfiguration(missing)).toBeUndefined();
     for (const patch of [
       { extra: true },
-      // Version 1 is refused outright: never upgraded, defaulted or back-filled.
+      // Versions other than 2 are refused outright: never upgraded, defaulted or
+      // back-filled, and `0` is refused like any other, not treated as absent.
+      { paper_config_version: 0 },
       { paper_config_version: 1 },
       { paper_config_version: 3 },
+      { paper_config_version: '2' },
       { entry_cap_cents: '200' },
       { funding_id: null },
       { market_id: 'crypto-1h' },

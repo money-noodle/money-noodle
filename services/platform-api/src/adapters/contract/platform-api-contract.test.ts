@@ -35,6 +35,37 @@ describe('createPlatformApiContract', () => {
       total_cap_cents: 1000,
     };
     expect(Object.keys(parameters)).toHaveLength(19);
+    // A genuine twentieth legal scalar, so the twenty-field vector is not a slice of
+    // nineteen: a response bound accidentally set to nineteen would pass otherwise.
+    const twentyFields = { ...parameters, regime_profile_revision: 1 };
+    const twentyOneFields = { ...twentyFields, regime_profile_note: 'synthetic' };
+    expect(Object.keys(twentyFields)).toHaveLength(20);
+    expect(Object.keys(twentyOneFields)).toHaveLength(21);
+    const historyOf = (recorded: Record<string, unknown>) => ({
+      capability: 'budget:paper',
+      entries: [
+        {
+          intent: {
+            action: 'configure',
+            actor: 'synthetic-account',
+            capability: 'budget:paper',
+            epoch: 1,
+            id: 'intent-1',
+            parameters: recorded,
+            recordedAt: '2026-10-21T00:00:00.000Z',
+            runId: 'synthetic-run',
+          },
+          outcomes: [],
+        },
+      ],
+      requestId: 'request-123',
+      schemaVersion: '1',
+    });
+    expect(() => contract.assertIntentHistory(historyOf(parameters))).not.toThrow();
+    expect(() => contract.assertIntentHistory(historyOf(twentyFields))).not.toThrow();
+    expect(() => contract.assertIntentHistory(historyOf(twentyOneFields))).toThrow(
+      ContractResponseError,
+    );
     const history = (count: number) => ({
       capability: 'budget:paper',
       entries: [

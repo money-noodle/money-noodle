@@ -35,7 +35,11 @@ import { runCycleJob } from '../dist/application/cycle.js';
 import { createPostgresPaperGateWriter } from '../dist-test-support/adapters/engine-store/postgres-paper-gate-writer.js';
 import { AUDITED_POLICY_FIXTURE } from '../dist-test-support/test-support/paper-gate-audited-policy-fixture.js';
 import { createPostgresControlRecorder } from '../../platform-api/dist/adapters/engine-store/postgres-engine-store.js';
-import { createEngineRecorderClient } from '../../platform-api/dist/adapters/engine-store/engine-query-client.js';
+import {
+  createEngineReaderClient,
+  createEngineRecorderClient,
+} from '../../platform-api/dist/adapters/engine-store/engine-query-client.js';
+import { createPostgresEngineReader } from '../../platform-api/dist/adapters/engine-store/postgres-engine-store.js';
 import { validateParameters } from '../../platform-api/dist/application/manage-budget-control.js';
 
 const CAPABILITY = 'budget:paper';
@@ -97,6 +101,8 @@ export async function paperRunEndToEndPostgresContract(admin, port) {
   assert.ok(/^\d+$/.test(String(port)));
   const writerUrl = 'postgres://engine_writer@127.0.0.1:' + port + '/postgres';
   const recorderUrl = 'postgres://engine_control_recorder@127.0.0.1:' + port + '/postgres';
+  // The role that actually holds SELECT: the API's read path, not the recorder's.
+  const readerUrl = 'postgres://engine_reader@127.0.0.1:' + port + '/postgres';
   const describe = (value) =>
     JSON.stringify(value, (_k, v) => (typeof v === 'bigint' ? v.toString() : v));
 
@@ -128,7 +134,9 @@ export async function paperRunEndToEndPostgresContract(admin, port) {
   };
 
   const recorderClient = createEngineRecorderClient(recorderUrl);
+  const readerClient = createEngineReaderClient(readerUrl);
   const recorder = createPostgresControlRecorder({ client: recorderClient, schema: 'engine' });
+  const apiReader = createPostgresEngineReader({ client: readerClient, schema: 'engine' });
   const cycleStore = createPostgresCycleStore(writerUrl);
   const authority = createPostgresPaperAuthorityStore(writerUrl);
   const facts = {};
@@ -171,6 +179,46 @@ export async function paperRunEndToEndPostgresContract(admin, port) {
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(CONFIG_INTENT),
       'the recorder returned something that is not a v4 UUID: ' + describe(configureRecorded),
     );
+    // 1b. THE SAME ROW, THROUGH THE API'S OWN READ PORT, as `engine_reader`.
+    //
+    //     This is the row the authority read, the pure mapping and the persisted
+    //     generation below all descend from, so the document is proved to survive the
+    //     real read path — not a different probe row, and not admin SQL standing in for
+    //     the port. The reader refuses a string or a nested value outright, so a document
+    //     that came back at all came back as an object of scalars.
+    const historyEntries = await apiReader.readIntentHistory(CAPABILITY, 50);
+    const sameRow = historyEntries.filter((entry) => entry.intent.id === CONFIG_INTENT);
+    assert.equal(sameRow.length, 1, 'the API reader did not return exactly this configure row');
+    const readConfigure = sameRow[0].intent;
+    assert.deepEqual(
+      {
+        action: readConfigure.action,
+        actor: readConfigure.actor,
+        capability: readConfigure.capability,
+        epoch: readConfigure.epoch,
+        id: readConfigure.id,
+        runId: readConfigure.runId,
+      },
+      {
+        action: 'configure',
+        actor: ACTOR,
+        capability: CAPABILITY,
+        epoch: EPOCH,
+        id: CONFIG_INTENT,
+        runId: RUN,
+      },
+    );
+    assert.equal(Object.keys(readConfigure.parameters).length, 19);
+    assert.deepEqual({ ...readConfigure.parameters }, { ...CONFIG });
+    // The fractional profile fields are still decimal TEXT after the round trip, which is
+    // what keeps the operator's digits out of a binary64 conversion.
+    for (const field of [
+      'regime_evidence_half_life_windows',
+      'regime_pause_confidence',
+      'regime_resume_confidence',
+    ])
+      assert.equal(typeof readConfigure.parameters[field], 'string', field);
+
     // The synthetic funding and budget roots the authority reader requires. ADMIN, because
     // these are FK fixtures no port on this branch writes — and they are bound to the
     // configure row the REAL recorder just created, not to a hand-made id.
@@ -264,6 +312,10 @@ export async function paperRunEndToEndPostgresContract(admin, port) {
     const overridden = evaluatePaperAuthority(evidence.snapshot, true);
     assert.equal(overridden.allowed, true, describe(overridden));
     assert.deepEqual({ ...overridden.config }, { ...CONFIG });
+    // The engine re-read the persisted facts independently, under `engine_writer`, and
+    // its configuration equals the document the API's reader returned for that same row.
+    // The authority is not replaced by the history read; the two are compared.
+    assert.deepEqual({ ...overridden.config }, { ...readConfigure.parameters });
     assert.deepEqual(
       { configIntentId: overridden.configIntentId, latestIntentId: overridden.latestIntentId },
       { configIntentId: CONFIG_INTENT, latestIntentId: resumeRecorded.id },
@@ -961,7 +1013,7 @@ export async function paperRunEndToEndPostgresContract(admin, port) {
     facts.leaseReleaseClamp = 'released-at-acquired_at-microseconds';
 
     facts.configureDocumentVersion = 2;
-    facts.profileRoundTrip = 'recorder-authority-persisted-equal';
+    facts.profileRoundTrip = 'recorder-reader-authority-equal';
     facts.generationInputsSource = 'decoded-configure';
     facts.authorityDecisionDefault = 'bundle-unavailable';
     facts.authorityDecisionOverride = 'allowed';
@@ -987,6 +1039,7 @@ export async function paperRunEndToEndPostgresContract(admin, port) {
     await step().catch((error) => teardownErrors.push(String((error && error.message) || error)));
   };
   await teardown(() => recorderClient.close());
+  await teardown(() => readerClient.close());
   await teardown(() => authority.close());
   await teardown(() => cycleStore.close());
   for (const [statement, values] of [
