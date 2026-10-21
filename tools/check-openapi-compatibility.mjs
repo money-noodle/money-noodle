@@ -22,6 +22,18 @@
 //   * a normal report, or the no-change form, while the approved value is ALREADY the
 //     baseline — the record is then historical and inert, and admits nothing.
 //
+// The no-change form while an approved exception is ACTIVE is a contradiction, not a
+// pass: the documents demonstrably differ at the approved property, so an empty
+// comparison cannot be the truth about them. The pinned binary does not produce that pair
+// under normal operation; a substituted or broken tool can, and it fails closed.
+//
+// One known limitation, deliberately not relaxed: the counts are required to agree with
+// the enumerated changes exactly, and the pinned libopenapi (0.38.5) enumerates root
+// `x-` extension changes without counting them in `reportSummary`. A future contract that
+// changed a root extension could therefore be REJECTED by this check rather than wrongly
+// accepted. That direction is safe, no such change exists here, and loosening the count
+// agreement to accommodate it would reopen the malformed-report boundary.
+//
 // The tool is always invoked with an explicit neutral rules file: it otherwise
 // auto-discovers `./changes-rules.yaml` and `~/.config/changes-rules.yaml`, and such a
 // file can turn a whole class of changes non-breaking.
@@ -293,7 +305,9 @@ export function parseReport(text) {
  * It is HISTORICAL and inert once the approved value is on both sides, which is the
  * ordinary state after the change has merged; it admits nothing at all in that state, so a
  * later move away from the approved value is blocked like any other breaking change.
- * Anything else is a stale record and rejects.
+ * Anything else is a stale record and rejects. The active ids are returned as well, so a
+ * caller can tell an empty comparison apart from a comparison that genuinely had nothing
+ * to say.
  */
 export function classifyChanges({ breaking, records, baselineText, candidateText }) {
   const failures = [];
@@ -323,7 +337,15 @@ export function classifyChanges({ breaking, records, baselineText, candidateText
         `exception ${record.id} is stale: it approves ${record.original} -> ${record.new} but the documents hold ${baselineValue} -> ${candidateValue}`,
       );
   }
-  if (failures.length > 0) return { approved, blocked, failures, historical, unused: [] };
+  if (failures.length > 0)
+    return {
+      active: active.map((record) => record.id),
+      approved,
+      blocked,
+      failures,
+      historical,
+      unused: [],
+    };
   for (const change of breaking) {
     const matches = active.filter(
       (record) =>
@@ -351,6 +373,7 @@ export function classifyChanges({ breaking, records, baselineText, candidateText
     approved.push({ change: describe(change), id: record.id });
   }
   return {
+    active: active.map((record) => record.id),
     approved,
     blocked,
     failures,
@@ -418,6 +441,15 @@ function main() {
     candidateText: readFileSync(path.join(repositoryRoot, CONTRACT_PATH), 'utf8'),
     records: loaded.records,
   });
+  // The tool said the documents are identical while an approved exception is ACTIVE,
+  // which means they differ at the approved property. One of the two is wrong, so neither
+  // is believed.
+  if (parsed.kind === 'no-change' && verdict.active.length > 0)
+    verdict.failures.push(
+      `the tool reported no changes while exception(s) ${verdict.active.join(', ')} are active: ` +
+        'the documents hold the approved transition at that property, so an empty comparison ' +
+        'contradicts them',
+    );
   // The human-readable summary is printed only when something is actually rejected: the
   // subcommand reports every breaking change it finds, including one this checker has
   // accepted by exception, and printing that on a passing run reads like a failure.

@@ -13,7 +13,9 @@ import {
   chmodSync,
   cpSync,
   mkdirSync,
+  existsSync,
   mkdtempSync,
+  rmSync,
   readFileSync,
   symlinkSync,
   writeFileSync,
@@ -21,7 +23,7 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
 
 import {
   APPROVED_EXCEPTIONS,
@@ -37,6 +39,38 @@ import {
 } from './check-openapi-compatibility.mjs';
 
 const repositoryRoot = process.cwd();
+
+/**
+ * Every temporary directory THIS suite created, registered the moment it exists so a
+ * failure during fixture construction or in an assertion still leaves it recorded.
+ *
+ * Only these exact paths are removed, and only with `fs.rmSync`: no glob over the
+ * temporary directory, nothing shared or user-owned, and no traversal into the real
+ * repository — the fixture roots link to its `node_modules/.bin/openapi-changes`, and a
+ * recursive remove unlinks that symlink rather than following it.
+ */
+const ownedTemporaryDirectories = [];
+const ownTemporary = (prefix) => {
+  const directory = mkdtempSync(path.join(tmpdir(), prefix));
+  ownedTemporaryDirectories.push(directory);
+  return directory;
+};
+
+after(() => {
+  // Every failure is collected so one undeletable fixture cannot skip the rest, and the
+  // cleanup result is reported without replacing a test failure.
+  const failures = [];
+  for (const directory of ownedTemporaryDirectories) {
+    try {
+      rmSync(directory, { force: true, recursive: true });
+    } catch (error) {
+      failures.push(`${directory}: ${String(error && error.message)}`);
+    }
+  }
+  const remaining = ownedTemporaryDirectories.filter((directory) => existsSync(directory));
+  assert.deepEqual(failures, [], 'temporary fixture cleanup failed');
+  assert.deepEqual(remaining, [], 'temporary fixtures were left behind');
+});
 const CHECKER = 'tools/check-openapi-compatibility.mjs';
 const APPROVED = Object.freeze({
   ...APPROVED_EXCEPTIONS[0],
@@ -82,7 +116,7 @@ const exceptionsFile = (exceptions, version = EXCEPTIONS_VERSION) =>
  * either the real pinned binary or a stub in its own `node_modules/.bin`.
  */
 const fixtureRoot = ({ baseline, candidate, exceptions = [APPROVED], stub }) => {
-  const root = mkdtempSync(path.join(tmpdir(), 'mn-openapi-root-'));
+  const root = ownTemporary('mn-openapi-root-');
   mkdirSync(path.join(root, 'tools'), { recursive: true });
   mkdirSync(path.join(root, path.dirname(CONTRACT_PATH)), { recursive: true });
   cpSync(path.join(repositoryRoot, CHECKER), path.join(root, CHECKER));
@@ -356,16 +390,34 @@ describe('the checker CLI, when the tool misbehaves', () => {
     assert.match(run.stdout, /the contract is unchanged/u);
   });
 
-  it('still rejects a no-change claim while an active record expects a transition', () => {
-    // The documents say 12 -> 20, so the record is active; a tool that reports nothing
-    // cannot make that disappear, and the active-but-unmatched state is reported.
+  it('rejects a no-change claim while an active record expects a transition', () => {
+    // The documents say 12 -> 20, so the record is ACTIVE and they demonstrably differ at
+    // the approved property. A tool that answers "nothing changed" contradicts them, and
+    // a contradiction is not a pass. The pinned binary cannot produce this pair; a
+    // substituted or broken one can, which is why this boundary is closed.
     const run = runChecker({
       baseline: SPEC(12),
       candidate: SPEC(20),
       stub: printing(JSON.stringify({ message: NO_CHANGE_MESSAGE })),
     });
+    assert.equal(run.status, 1, run.text);
+    assert.match(
+      run.stderr,
+      /reported no changes while exception\(s\) control-parameters-max-properties-12-to-20 are active/u,
+    );
+  });
+
+  it('accepts the no-change form when the approved value is already the baseline', () => {
+    // The same stub, with the documents in their post-merge state: nothing is active, the
+    // record is historical, and an empty comparison is simply the truth.
+    const run = runChecker({
+      baseline: SPEC(20),
+      candidate: SPEC(20),
+      stub: printing(JSON.stringify({ message: NO_CHANGE_MESSAGE })),
+    });
     assert.equal(run.status, 0, run.text);
-    assert.match(run.stdout, /is active but matches no change in this comparison/u);
+    assert.match(run.stdout, /the contract is unchanged/u);
+    assert.match(run.stdout, /is historical/u);
   });
 });
 
@@ -402,9 +454,11 @@ describe('record lifecycle states', () => {
     });
 
   it('is active in flight, historical after merge, and stale otherwise', () => {
+    assert.deepEqual(states(12, 20).active, [APPROVED.id]);
     assert.deepEqual(states(12, 20).unused, [APPROVED.id]);
     assert.deepEqual(states(12, 20).historical, []);
     assert.deepEqual(states(20, 20).historical, [APPROVED.id]);
+    assert.deepEqual(states(20, 20).active, []);
     assert.deepEqual(states(20, 20).unused, []);
     assert.deepEqual(states(20, 20).failures, []);
     for (const [baseline, candidate] of [
@@ -508,7 +562,7 @@ describe('ambient rules files', () => {
     // Each location on its own, so neither result depends on the other being present.
     for (const location of ['cwd', 'home']) {
       const root = fixtureRoot({ baseline: SPEC(20), candidate: SPEC(21) });
-      const home = mkdtempSync(path.join(tmpdir(), 'mn-openapi-home-'));
+      const home = ownTemporary('mn-openapi-home-');
       if (location === 'cwd') writeFileSync(path.join(root, 'changes-rules.yaml'), permissive);
       else {
         mkdirSync(path.join(home, '.config'), { recursive: true });
