@@ -34,6 +34,7 @@ import {
   type RegimeGatePhase,
   type RegimeGateSettings,
 } from './paper-regime.js';
+import { paperBoundDecimalWithin, paperBoundMarginSatisfied } from './paper-bound-decimal.js';
 import { PAPER_GATE_UNIVERSE_LIMIT } from './paper-gate-coverage.js';
 import { paperGateRowScopeIsValid, type PaperGateRowScope } from './paper-gate-row-codec.js';
 
@@ -191,21 +192,20 @@ export function paperGateGenerationInputsAreValid(inputs: PaperGateGenerationInp
     inputs.minimumPolicyWindows > 500
   )
     return false;
-  // Exactly the 0006 domains, as decimal text.
+  // Exactly the 0006 domains, as decimal text, and decided on that text. The bounds and
+  // the margin are the column's own; what changed is only HOW they are decided. Deciding
+  // them through `Number` disagreed with `numeric` in both directions: it refused legal
+  // pairs (`0.94`/`0.93`, `0.9007`/`0.8907`, where the subtraction rounds) and admitted
+  // values the column rejects, because excess digits round away before the comparison.
+  // Spelling is still the writer's: `'2.50'`, `'2.5'`, `'08'` and `'0.970'` all pass.
   if (!decimal(inputs.evidenceHalfLifeWindows)) return false;
   if (!decimal(inputs.pauseConfidence)) return false;
   if (!decimal(inputs.resumeConfidence)) return false;
-  const half = Number(inputs.evidenceHalfLifeWindows);
-  const pause = Number(inputs.pauseConfidence);
-  const resume = Number(inputs.resumeConfidence);
   return (
-    half >= 2 &&
-    half <= 500 &&
-    pause >= 0.9 &&
-    pause <= 0.9999 &&
-    resume >= 0.5 &&
-    resume <= 0.98 &&
-    resume <= pause - 0.01
+    paperBoundDecimalWithin(inputs.evidenceHalfLifeWindows, '2', '500') &&
+    paperBoundDecimalWithin(inputs.pauseConfidence, '0.9', '0.9999') &&
+    paperBoundDecimalWithin(inputs.resumeConfidence, '0.5', '0.98') &&
+    paperBoundMarginSatisfied(inputs.resumeConfidence, inputs.pauseConfidence)
   );
 }
 
@@ -327,7 +327,17 @@ export function paperGateSettingsFromRow(
     !Number.isSafeInteger(row.minimumPolicyWindows) ||
     !decimal(row.evidenceHalfLifeWindows) ||
     !decimal(row.pauseConfidence) ||
-    !decimal(row.resumeConfidence)
+    !decimal(row.resumeConfidence) ||
+    // The 0006 domains, decided on the persisted TEXT and BEFORE the `Number`
+    // conversions below, because that conversion is lossy: a column value such as
+    // `0.99990000000000000001` is outside `pause_confidence between 0.9 and 0.9999`, yet
+    // `Number` makes it exactly `0.9999` and no later check could tell the difference.
+    // The conversion that follows is unchanged, and so is the number-based settings
+    // descriptor it is compared against.
+    !paperBoundDecimalWithin(row.evidenceHalfLifeWindows, '2', '500') ||
+    !paperBoundDecimalWithin(row.pauseConfidence, '0.9', '0.9999') ||
+    !paperBoundDecimalWithin(row.resumeConfidence, '0.5', '0.98') ||
+    !paperBoundMarginSatisfied(row.resumeConfidence, row.pauseConfidence)
   )
     return undefined;
   const settings: RegimeGateSettings = {

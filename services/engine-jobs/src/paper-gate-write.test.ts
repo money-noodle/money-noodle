@@ -160,6 +160,53 @@ describe('paper gate write request validation', () => {
     ).toBe(false);
   });
 
+  it('decides those domains on the recorded digits, not on a binary64 round trip', () => {
+    const inputs = (pause: string, resume: string, half = GENERATION.evidenceHalfLifeWindows) =>
+      paperGateGenerationInputsAreValid({
+        ...GENERATION,
+        evidenceHalfLifeWindows: half,
+        pauseConfidence: pause,
+        resumeConfidence: resume,
+      });
+    // Legal under `resume_confidence<=pause_confidence-0.01` in `numeric`, and refused by
+    // the same rule in doubles, which is the defect this repairs.
+    for (const [pause, resume] of [
+      ['0.94', '0.93'],
+      ['0.9007', '0.8907'],
+      ['0.938', '0.928'],
+    ] as const) {
+      expect(inputs(pause, resume)).toBe(true);
+      expect(Number(resume) <= Number(pause) - 0.01).toBe(false);
+    }
+    // Inclusive corners of all three domains.
+    expect(inputs('0.9', '0.5')).toBe(true);
+    expect(inputs('0.9999', '0.98')).toBe(true);
+    expect(inputs('0.99', '0.75', '2')).toBe(true);
+    expect(inputs('0.99', '0.75', '500')).toBe(true);
+    // A mixed-scale pair one ten-thousandth over the margin is still refused.
+    expect(inputs('0.9400', '0.9301')).toBe(false);
+    // Excess precision is refused HERE, before any value reaches `::numeric`: these are
+    // outside the 0006 domains, and `Number` would round each one inside them.
+    expect(inputs('0.99990000000000000001', '0.75')).toBe(false);
+    expect(inputs('0.9999', '0.98000000000000000001')).toBe(false);
+    expect(inputs('0.99', '0.75', '500.00000000000000001')).toBe(false);
+    expect(Number('0.99990000000000000001')).toBe(0.9999);
+    // Spellings the writer has always accepted keep working, by value.
+    for (const half of ['2.5', '2.50', '08', '2.500000'] as const)
+      expect(inputs('0.970', '0.9', half)).toBe(true);
+    // Malformed text is still refused by the writer's own grammar, unchanged.
+    for (const pause of ['9.9e-1', '+0.99', ' 0.99', '0.99 ', '.99', '0.', ''])
+      expect(inputs(pause, '0.75')).toBe(false);
+    expect(
+      paperGateGenerationInputsAreValid({
+        ...GENERATION,
+        pauseConfidence: 0.99 as unknown as string,
+      }),
+    ).toBe(false);
+    // 25 characters of decimal text is past the writer's text bound.
+    expect(inputs('0.99', '0.75', `2.${'0'.repeat(23)}`)).toBe(false);
+  });
+
   it('refuses a reset whose prior generation is the one being created', () => {
     expect(
       paperGateWriteRequestIsValid(
@@ -294,6 +341,43 @@ describe('paper gate settings and evaluation derivation', () => {
       }),
     ).toBeUndefined();
     expect(paperGateSettingsFromRow({ ...GEN_ROW, pauseConfidence: 'x' })).toBeUndefined();
+  });
+
+  it('bounds the persisted row on its text before the lossy number conversion', () => {
+    // A legal boundary pair the old binary64 margin refused now converts normally.
+    const boundary = {
+      ...GEN_ROW,
+      pauseConfidence: '0.94',
+      resumeConfidence: '0.93',
+      settingsDescriptor: 'regime-settings-v1:true:4:2.5:0.94:0.93',
+    };
+    expect(paperGateSettingsFromRow(boundary)).toEqual({
+      enabled: true,
+      evidenceHalfLifeWindows: 2.5,
+      minimumPolicyWindows: 4,
+      pauseConfidence: 0.94,
+      resumeConfidence: 0.93,
+    });
+    // The spelling stays the writer's: '2.50' is the same value as '2.5'.
+    expect(paperGateSettingsFromRow({ ...boundary, evidenceHalfLifeWindows: '2.50' })).toEqual(
+      paperGateSettingsFromRow(boundary),
+    );
+    // Out of the 0006 domain by digits `Number` would round away.
+    expect(
+      paperGateSettingsFromRow({
+        ...boundary,
+        pauseConfidence: '0.99990000000000000001',
+        settingsDescriptor: 'regime-settings-v1:true:4:2.5:0.9999:0.93',
+      }),
+    ).toBeUndefined();
+    // Margin violated by a hundredth-of-a-percent.
+    expect(
+      paperGateSettingsFromRow({
+        ...boundary,
+        resumeConfidence: '0.9301',
+        settingsDescriptor: 'regime-settings-v1:true:4:2.5:0.94:0.9301',
+      }),
+    ).toBeUndefined();
   });
 
   it('derives warming with nothing resolved, from the genesis lineage', () => {

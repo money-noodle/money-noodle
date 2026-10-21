@@ -1207,6 +1207,137 @@ export async function paperGateWriterPostgresContract(admin, port) {
       await reader.end({ timeout: 5 });
     }
 
+    // 19a-exact. THE 0006 NUMERIC DOMAINS, DECIDED ON DIGITS, through the real writer.
+    //
+    // 0006 states `resume_confidence<=pause_confidence-0.01` in `numeric`, on the recorded
+    // digits. The domain validator and the regime evaluator decided it in binary64, which
+    // disagreed with the column in BOTH directions: it refused legal pairs, because the
+    // subtraction rounds, and it admitted values whose excess digits round away. This
+    // vector drives both directions through the real path, on its own namespace so no
+    // earlier vector is disturbed, and it EVALUATES rather than only initializing -- the
+    // evaluated transition is what reads the persisted columns back, rebuilds the
+    // settings from their text and runs the qualified arithmetic.
+    const BOUNDARY_EPOCH = 1100;
+    const BOUNDARY_ACTOR = 'boundary-actor';
+    const BOUNDARY_BUDGET = BOUNDARY_ACTOR + ':paper';
+    const BOUNDARY_FUNDING = 'writer-boundary-funding';
+    const BOUNDARY_CONFIG = 'writer-boundary-config';
+    const BOUNDARY_GEN = 'writer-generation-boundary';
+    // Legal under `numeric`; refused by the same rule in doubles. The half-life keeps the
+    // long-accepted spelling `2.50`, which is the same number as `2.5`.
+    const BOUNDARY_PROFILE = {
+      ...GENERATION_INPUTS,
+      evidenceHalfLifeWindows: '2.50',
+      pauseConfidence: '0.94',
+      resumeConfidence: '0.93',
+    };
+    assert.equal(0.93 <= 0.94 - 0.01, false);
+    await intent(
+      BOUNDARY_CONFIG,
+      'configure',
+      T_CONFIG,
+      { ...CONFIG, budget_id: BOUNDARY_BUDGET, funding_id: BOUNDARY_FUNDING },
+      BOUNDARY_ACTOR,
+      BOUNDARY_EPOCH,
+    );
+    await admin.unsafe(
+      'insert into engine.paper_funding_root(funding_id,epoch,budget_id,actor,birth_config_intent_id,origin_run_id,materialized_run_id,recorded_at) values($1,$2,$3,$4,$5,$6,$6,clock_timestamp())',
+      [BOUNDARY_FUNDING, BOUNDARY_EPOCH, BOUNDARY_BUDGET, BOUNDARY_ACTOR, BOUNDARY_CONFIG, RUN],
+    );
+    await admin.unsafe(
+      'insert into engine.paper_budget_root(funding_id,epoch,budget_id,birth_config_intent_id,latest_intent_id,starting_cents,available_cents,reserved_cents,realized_cents,correction_cents,revision,last_run_id,recorded_at) values($1,$2,$3,$4,$4,1000,700,300,0,0,4,$5,clock_timestamp())',
+      [BOUNDARY_FUNDING, BOUNDARY_EPOCH, BOUNDARY_BUDGET, BOUNDARY_CONFIG, RUN],
+    );
+    const boundaryScope = {
+      budget_id: BOUNDARY_BUDGET,
+      epoch: BOUNDARY_EPOCH,
+      funding_id: BOUNDARY_FUNDING,
+      generation_config_intent_id: BOUNDARY_CONFIG,
+      generation_key: BOUNDARY_GEN,
+      sample_policy: POLICY,
+    };
+    const boundaryRequest = (over = {}) =>
+      requestOf({
+        eventKey: 'writer-boundary-genesis',
+        generation: BOUNDARY_PROFILE,
+        scope: boundaryScope,
+        ...over,
+      });
+    const boundaryBefore = await stateSnapshot();
+    // Excess precision is OUTSIDE the 0006 domain and `Number` rounds it back inside, so
+    // it must be refused before anything is written. The probe effect fires right after
+    // the in-transaction authority read; it never runs, which is the proof that no
+    // statement was issued for these requests at all.
+    let boundarySqlReached = false;
+    const probing = auditedWriter({
+      afterAuthorityRead: () => {
+        boundarySqlReached = true;
+      },
+    });
+    try {
+      for (const over of [
+        { generation: { ...BOUNDARY_PROFILE, pauseConfidence: '0.99990000000000000001' } },
+        { generation: { ...BOUNDARY_PROFILE, resumeConfidence: '0.98000000000000000001' } },
+        { generation: { ...BOUNDARY_PROFILE, evidenceHalfLifeWindows: '500.00000000000000001' } },
+        { generation: { ...BOUNDARY_PROFILE, resumeConfidence: '0.9301' } },
+      ])
+        await refusal(
+          await probing.write(boundaryRequest(over), fence),
+          'request',
+          'request',
+          boundaryBefore,
+        );
+      assert.equal(boundarySqlReached, false);
+      // What the old rule would have done with the first of those values.
+      assert.equal(Number('0.99990000000000000001'), 0.9999);
+    } finally {
+      await probing.close();
+    }
+    const boundaryGenesis = await audited.write(boundaryRequest(), fence);
+    assert.equal(boundaryGenesis.kind, 'written', describe(boundaryGenesis));
+    assert.equal(boundaryGenesis.receipt.revisionAfter, 0n);
+    assert.equal(boundaryGenesis.receipt.generationCreated, true);
+    // The columns hold the recorded digits; `numeric` keeps the scale it was handed, and
+    // PostgreSQL agrees the pair satisfies 0006's own margin expression.
+    const [boundaryRow] = await admin.unsafe(
+      'select pause_confidence::text as pause, resume_confidence::text as resume, evidence_half_life_windows::text as half_life, minimum_policy_windows::text as windows, enabled, settings_descriptor, (resume_confidence <= pause_confidence - 0.01) as margin_ok from engine.paper_gate_generation where generation_key=$1',
+      [BOUNDARY_GEN],
+    );
+    assert.deepEqual(boundaryRow, {
+      enabled: true,
+      half_life: '2.50',
+      margin_ok: true,
+      pause: '0.94',
+      resume: '0.93',
+      // The descriptor is still the NUMBER-based serialization: `2.50` and `2.5` share
+      // one identity, which is the known and unchanged limit of that contract.
+      settings_descriptor: 'regime-settings-v1:true:4:2.5:0.94:0.93',
+      windows: '4',
+    });
+    // The REAL evaluated transition on that generation: it reads those columns, rebuilds
+    // the settings from their text and runs the qualified arithmetic. Before this repair
+    // the same row refused as a settings mismatch and no evaluation was possible.
+    const boundaryEval = await audited.write(
+      {
+        coverageCutoffAtIso: CUTOFF_ISO,
+        coverageReceiptId: 'writer-receipt',
+        evidenceObservedAtIso: OBSERVED_ISO,
+        eventKey: 'writer-boundary-eval',
+        expectedRevision: 0n,
+        kind: 'evaluate',
+        runId: RUN,
+        scope: boundaryScope,
+      },
+      fence,
+    );
+    assert.equal(boundaryEval.kind, 'written', describe(boundaryEval));
+    assert.equal(boundaryEval.receipt.eventKind, 'evaluated');
+    assert.equal(boundaryEval.receipt.revisionBefore, 0n);
+    assert.equal(boundaryEval.receipt.revisionAfter, 1n);
+    assert.equal(boundaryEval.receipt.projectedPhase, 'warming');
+    assert.equal(boundaryEval.receipt.headMoved, true);
+    assert.deepEqual(boundaryEval.receipt.inputCandidateKeys, []);
+
     // 19b. F5: the FULL epoch domain, end to end. A seven-digit count parser would have
     // rejected this legitimate epoch; the canonical parser accepts it, so a genesis write
     // and its exact replay both succeed at the ceiling. Invalid epochs are refused before
@@ -1271,16 +1402,17 @@ export async function paperGateWriterPostgresContract(admin, port) {
 
     // 20. Nothing outside this contract's own fixtures and writes exists.
     const after = await counts();
-    // Seven writes always commit here: the first generation's genesis, the reset
+    // Nine writes always commit here: the first generation's genesis, the reset
     // generation's genesis, two evaluated transitions on it, the head race winner, the
-    // namespace race winner and the max-epoch genesis. The eighth depends on the MEASURED
+    // namespace race winner, the exact-bounds generation's genesis and its evaluated
+    // transition, and the max-epoch genesis. The tenth depends on the MEASURED
     // outcome of the superseded-intent vector above, so the expectation is derived from
     // that measurement rather than assumed either way. Only the two transitions with a
     // resolved universe carry inputs; the race and max-epoch generations have none.
     const lateCommitted = lateOutcome === 'committed-under-superseded-intent' ? 1 : 0;
-    assert.equal(Number(after[0].generations), Number(before[0].generations) + 5);
-    assert.equal(Number(after[0].heads), Number(before[0].heads) + 5);
-    assert.equal(Number(after[0].events), Number(before[0].events) + 8 + lateCommitted);
+    assert.equal(Number(after[0].generations), Number(before[0].generations) + 6);
+    assert.equal(Number(after[0].heads), Number(before[0].heads) + 6);
+    assert.equal(Number(after[0].events), Number(before[0].events) + 10 + lateCommitted);
     assert.equal(Number(after[0].inputs), Number(before[0].inputs) + 10 + 5 * lateCommitted);
     assert.equal(Number(after[0].leases), 1);
     return { lateOutcome, raceDetail };
@@ -1309,6 +1441,7 @@ export async function paperGateWriterPostgresContract(admin, port) {
     ]);
     for (const key of [
       'writer-generation-max-epoch',
+      'writer-generation-boundary',
       'writer-generation-diffkey-a',
       'writer-generation-diffkey-b',
     ]) {
@@ -1318,12 +1451,10 @@ export async function paperGateWriterPostgresContract(admin, port) {
       ]);
       await admin.unsafe('delete from engine.paper_gate_generation where generation_key=$1', [key]);
     }
-    await admin.unsafe('delete from engine.paper_budget_root where funding_id=$1', [
-      'writer-max-funding',
-    ]);
-    await admin.unsafe('delete from engine.paper_funding_root where funding_id=$1', [
-      'writer-max-funding',
-    ]);
+    for (const funding of ['writer-max-funding', 'writer-boundary-funding']) {
+      await admin.unsafe('delete from engine.paper_budget_root where funding_id=$1', [funding]);
+      await admin.unsafe('delete from engine.paper_funding_root where funding_id=$1', [funding]);
+    }
     await admin.unsafe('delete from engine.control_intent where id=$1', [
       'writer-max-epoch-config',
     ]);

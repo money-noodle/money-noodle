@@ -51,6 +51,34 @@ const evaluate = (input: PaperRegimeEvidence | undefined, config = settings) =>
     settingsIdentity: paperRegimeSettingsIdentity(config),
   });
 describe('explicit regime evidence without active sentinel collector', () => {
+  it('accepts a legal confidence boundary and still refuses a violated margin', () => {
+    // Evidence and expectation share the settings identity, so the only thing under test
+    // is the settings gate itself.
+    const withSettings = (config: RegimeGateSettings) => {
+      const settingsIdentity = paperRegimeSettingsIdentity(config);
+      const expected = { ...identity, settingsIdentity };
+      return evaluatePaperRegimeEvidence(
+        { ...evidence(0), identity: expected },
+        PAPER_REGIME_SAMPLE_BUY_POLICY,
+        config,
+        now,
+        30000,
+        expected,
+      );
+    };
+    // `resume <= pause - 0.01` holds exactly for this pair; in doubles the subtraction
+    // rounded and the evaluator refused the settings outright.
+    expect(0.93 <= 0.94 - 0.01).toBe(false);
+    const allowed = withSettings({ ...settings, pauseConfidence: 0.94, resumeConfidence: 0.93 });
+    expect(allowed.reason).not.toBe('Unsupported explicit paper regime settings.');
+    expect(allowed.phase).toBe('open');
+    expect(allowed.allowsEntries).toBe(true);
+    for (const violated of [
+      { ...settings, pauseConfidence: 0.94, resumeConfidence: 0.9301 },
+      { ...settings, pauseConfidence: 0.9, resumeConfidence: 0.8901 },
+    ])
+      expect(withSettings(violated).reason).toBe('Unsupported explicit paper regime settings.');
+  });
   it('preserves independent zero-edge mean and neutral confidence with bounded decay', () => {
     const result = evaluate(evidence(0));
     expect(result.phase).toBe('open');

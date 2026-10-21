@@ -1,4 +1,5 @@
 // Selected historical pure arithmetic only; no environment/store/sentinel/network imports.
+import { paperNumberMarginSatisfied } from './paper-bound-decimal.js';
 export const REGIME_GATE_POLICY_VERSION = 'adaptive-fee-edge-window-v1';
 
 export type RegimeGatePhase = 'disabled' | 'warming' | 'open' | 'closed';
@@ -227,7 +228,11 @@ function evaluatePaperRegimeContract(
     !Number.isFinite(settings.resumeConfidence) ||
     settings.resumeConfidence < 0.5 ||
     settings.resumeConfidence > 0.98 ||
-    settings.resumeConfidence > settings.pauseConfidence - 0.01
+    // `resume <= pause - 0.01`, decided on each number's own exact decimal spelling
+    // rather than on a binary64 subtraction, which refused legal pairs such as
+    // `pause 0.94` / `resume 0.93`. Same rule, same bound, no tolerance added; the
+    // settings themselves stay numbers and their descriptor is untouched.
+    !paperNumberMarginSatisfied(settings.resumeConfidence, settings.pauseConfidence)
   )
     return refuse('Unsupported explicit paper regime settings.');
   const identityValid =
