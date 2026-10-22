@@ -45,8 +45,12 @@
 // bounds differ from JS UTF16/Unicode trim; decoder must check both"): 61 astral code
 // points are 122 UTF-16 units and are refused here although PostgreSQL `length()` counts
 // 61, and `'fund\u3000'` or `'\ufefffund'` are refused by JavaScript `trim()` although
-// `btrim` keeps those characters. Every value this module accepts is column-legal; not
-// every column-legal value is accepted. The well-formed requirement is a derivation
+// `btrim` keeps those characters. That length and trim comparison is about
+// Postgres-representable text, and it is NOT a proof of column admission: what this
+// module enforces is the documented identity shape, the JavaScript length and trim
+// bounds, and well-formed UTF-16, as derivation PRECONDITIONS. The shared validator does
+// not exclude U+0000 (`'\0'.trim() === '\0'`), which PostgreSQL `text` cannot store, and
+// this module adds no NUL precondition of its own. The well-formed requirement is a derivation
 // PRECONDITION, not a column rule: both `TextEncoder` and the hash encode a lone surrogate
 // as the replacement character, so without it `'\ud800'`, `'\udc00'` and `'�'` would
 // frame identically and the injectivity claimed above would be false.
@@ -138,9 +142,14 @@ const framing = (domain: string, values: readonly string[]): string =>
   component(domain) + values.map(component).join('');
 
 /** Well-formed UTF-16: every high surrogate is followed by a low one and every low
- * surrogate is preceded by a high one. Written out rather than taken from
- * `String.prototype.isWellFormed`, which the repository's TypeScript library target does
- * not declare; this needs no library, target or dependency change. U+FFFD and every proper
+ * surrogate is preceded by a high one. Written out rather than called through
+ * `String.prototype.isWellFormed` — which this target DOES declare: both tsconfigs set
+ * `lib: ["ES2024"]` (`tsconfig.base.json:9`, `services/engine-jobs/tsconfig.json:4`) and
+ * the pinned typescript 6.0.3 declares `isWellFormed(): boolean` in
+ * `lib.es2024.string.d.ts:21`. It is written out so that this derivation precondition is
+ * explicit in the module that depends on it and independent of the runtime and library
+ * surface, and so that no library, target, tsconfig or dependency change is needed for
+ * it — not because the library lacks the method. U+FFFD and every proper
  * astral pair are well-formed — only a LONE surrogate is not, and a lone surrogate is
  * exactly what both `TextEncoder` and the hash would silently turn into U+FFFD. */
 const wellFormedUtf16 = (value: string): boolean => {
@@ -292,7 +301,11 @@ export type PaperGatePhaseEventIdentity =
 export function paperGatePhaseEventKeyFraming(identity: unknown): string | undefined {
   // Both shapes go through the same snapshot helper; whichever own-key set matches, every
   // value below comes from that one snapshot, and `kind` is read from it rather than from
-  // the caller's object. The matched key set and `kind` must then agree.
+  // the caller's object. The matched key set and `kind` must then agree. At the REFLECTION
+  // level the caller's object may therefore be examined twice — the evaluated-shaped
+  // attempt, then the genesis-shaped one — but no value is ever taken through `[[Get]]`,
+  // every framed value comes from ONE self-consistent snapshot, and a reflection trap that
+  // throws during an attempt refuses that attempt.
   const taken = snapshot(identity, EVALUATED_FIELDS) ?? snapshot(identity, GENESIS_FIELDS);
   if (taken === undefined) return undefined;
   const kind = taken.kind;

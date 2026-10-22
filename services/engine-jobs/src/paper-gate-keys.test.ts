@@ -406,8 +406,11 @@ describe('deterministic paper gate key derivation', () => {
   it('accepts a strict subset of the 0006 bounds: 1-120 UTF-16 units, JS-trim-stable', () => {
     // The column allows 1-120 CHARACTERS and `btrim(..., E' \t\n\r\f\013')`
     // (`0006-paper-cycle-overlay.sql:378`, `:514`); 0006 itself records that the two
-    // domains differ (`:406`). This validator is the narrower one in both directions, and
-    // everything it accepts is column-legal.
+    // domains differ (`:406`). This validator is the narrower one in both directions on
+    // length and trim. That is a derivation precondition, not persistence admission: the
+    // shared validator does not exclude U+0000, which PostgreSQL `text` cannot store, and
+    // this module adds no NUL precondition — the comparison below is about
+    // Postgres-representable text.
     const at120 = 'f'.repeat(120);
     expect(key(identity({ funding_id: at120 }))).toMatch(PAPER_GATE_KEY_PATTERN);
     expect(paperGateGenerationKey(identity({ funding_id: 'f'.repeat(121) }))).toBeUndefined();
