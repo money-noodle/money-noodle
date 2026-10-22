@@ -224,23 +224,7 @@ describe('deterministic paper gate key derivation', () => {
     ).toBe(4);
   });
 
-  it('accepts exactly the 0006 bounds and refuses everything outside them', () => {
-    const at120 = 'f'.repeat(120);
-    expect(key(identity({ funding_id: at120 }))).toMatch(PAPER_GATE_KEY_PATTERN);
-    expect(paperGateGenerationKey(identity({ funding_id: 'f'.repeat(121) }))).toBeUndefined();
-    expect(eventKey(genesis({ runId: at120 }))).toMatch(PAPER_GATE_KEY_PATTERN);
-    expect(paperGatePhaseEventKey(genesis({ runId: 'r'.repeat(121) }))).toBeUndefined();
-    expect(paperGatePhaseEventKey(genesis({ generationKey: 'g'.repeat(121) }))).toBeUndefined();
-    // Every derived key is itself a legal value for the column it names.
-    for (const derived of [VECTOR_GENERATION, VECTOR_GENESIS, VECTOR_EVALUATED]) {
-      expect(derived).toHaveLength(69);
-      expect(derived.trim()).toBe(derived);
-      expect(derived).toMatch(/^[a-z0-9-]+$/);
-      expect(derived.length).toBeLessThanOrEqual(120);
-    }
-  });
-
-  it('refuses a malformed identity with undefined, never a throw and never a repair', () => {
+  it('refuses a malformed identity with undefined, and repairs nothing', () => {
     for (const bad of [
       undefined,
       null,
@@ -417,5 +401,203 @@ describe('deterministic paper gate key derivation', () => {
       'services/engine-jobs/src/domain/paper-gate-keys.ts',
       'services/engine-jobs/src/paper-gate-keys.test.ts',
     ]);
+  });
+
+  it('accepts a strict subset of the 0006 bounds: 1-120 UTF-16 units, JS-trim-stable', () => {
+    // The column allows 1-120 CHARACTERS and `btrim(..., E' \t\n\r\f\013')`
+    // (`0006-paper-cycle-overlay.sql:378`, `:514`); 0006 itself records that the two
+    // domains differ (`:406`). This validator is the narrower one in both directions, and
+    // everything it accepts is column-legal.
+    const at120 = 'f'.repeat(120);
+    expect(key(identity({ funding_id: at120 }))).toMatch(PAPER_GATE_KEY_PATTERN);
+    expect(paperGateGenerationKey(identity({ funding_id: 'f'.repeat(121) }))).toBeUndefined();
+    expect(eventKey(genesis({ runId: at120 }))).toMatch(PAPER_GATE_KEY_PATTERN);
+    expect(paperGatePhaseEventKey(genesis({ runId: 'r'.repeat(121) }))).toBeUndefined();
+    expect(paperGatePhaseEventKey(genesis({ generationKey: 'g'.repeat(121) }))).toBeUndefined();
+    // 61 astral code points are 122 UTF-16 units: refused here, although PostgreSQL
+    // `length()` counts 61 characters and the column would accept it.
+    const astral61 = '\u{1d11e}'.repeat(61);
+    expect(astral61.length).toBe(122);
+    expect([...astral61]).toHaveLength(61);
+    expect(paperGateGenerationKey(identity({ funding_id: astral61 }))).toBeUndefined();
+    // JavaScript `trim()` strips Unicode whitespace and the BOM; 0006's `btrim` strips only
+    // those six ASCII characters, so these two are column-legal and refused here.
+    expect(paperGateGenerationKey(identity({ funding_id: 'fund\u3000' }))).toBeUndefined();
+    expect(paperGateGenerationKey(identity({ funding_id: '\ufefffund' }))).toBeUndefined();
+    // An ASCII space, by contrast, is in 0006's own btrim set: refused by BOTH domains.
+    expect(paperGateGenerationKey(identity({ funding_id: ' fund-7' }))).toBeUndefined();
+    // Every derived key is itself a legal value for the column it names.
+    for (const derived of [VECTOR_GENERATION, VECTOR_GENESIS, VECTOR_EVALUATED]) {
+      expect(derived).toHaveLength(69);
+      expect(derived.trim()).toBe(derived);
+      expect(derived).toMatch(/^[a-z0-9-]+$/);
+      expect(derived.length).toBeLessThanOrEqual(120);
+    }
+  });
+
+  it('refuses a lone surrogate in every framed text component', () => {
+    // `TextEncoder` and the hash both encode a lone surrogate as U+FFFD (`EF BF BD`), so
+    // before this precondition `'\ud800'`, `'\udc00'` and `'�'` framed identically and
+    // derived ONE key — the module's own injectivity claim was false. Each of these cases
+    // produced a key on 1059b35.
+    for (const bad of ['\ud800', '\udc00', 'a\ud800b', 'a\udc00', '\ud800\ud800']) {
+      for (const field of ['funding_id', 'budget_id', 'generation_config_intent_id'])
+        expect(paperGateGenerationKey(identity({ [field]: bad }))).toBeUndefined();
+      expect(paperGatePhaseEventKey(genesis({ runId: bad }))).toBeUndefined();
+      expect(paperGatePhaseEventKey(evaluated({ runId: bad }))).toBeUndefined();
+      expect(paperGatePhaseEventKey(genesis({ generationKey: bad }))).toBeUndefined();
+    }
+    // U+FFFD itself is a real character and stays accepted; a proper astral pair is too,
+    // and the two no longer share a key with anything.
+    const replacement = key(identity({ funding_id: '�' }));
+    const emoji = key(identity({ funding_id: '\u{1f600}' }));
+    expect(replacement).not.toBe(emoji);
+    expect(eventKey(genesis({ runId: '�' }))).not.toBe(eventKey(genesis({ runId: '\u{1f600}' })));
+    // The existing astral vector (60 code points, 240 framed bytes) is unaffected.
+    const astral = '\u{1d11e}'.repeat(60);
+    expect(paperGateGenerationKeyFraming(identity({ funding_id: astral }))).toContain(
+      `240:${astral}\n`,
+    );
+  });
+
+  it('takes one own-data snapshot: accessors, exotic objects and extra keys are refused', () => {
+    // Every case here produced a key, or a self-inconsistent scope, on 1059b35, where the
+    // shape check used `Object.keys` + `Object.hasOwn` and the caller's object was read
+    // again for framing (and a third and fourth time for the scope).
+    let reads = 0;
+    const flipping = (values: readonly unknown[]): unknown => ({
+      budget_id: 'actor-7:paper',
+      epoch: 12,
+      generation_config_intent_id: 'intent-cfg-7',
+      get funding_id() {
+        const value = values[Math.min(reads, values.length - 1)];
+        reads += 1;
+        return value;
+      },
+      sample_policy: PAPER_REGIME_SAMPLE_BUY_POLICY,
+    });
+    // 1059b35: validated `'fund-7'`, then framed `8: fund-7 `.
+    reads = 0;
+    expect(paperGateGenerationKey(flipping(['fund-7', ' fund-7 ']))).toBeUndefined();
+    // 1059b35: validated `'fund-7'`, then framed 5000 `x`s.
+    reads = 0;
+    expect(paperGateGenerationKey(flipping(['fund-7', 'x'.repeat(5000)]))).toBeUndefined();
+    // 1059b35: returned a scope whose `funding_id` was `'fund-8'` while its
+    // `generation_key` was the key of `'fund-7'`, so the scope did not re-derive to itself.
+    reads = 0;
+    expect(
+      paperGateRowScopeFromGenerationIdentity(flipping(['fund-7', 'fund-7', 'fund-7', 'fund-8'])),
+    ).toBeUndefined();
+    // The accessor is refused from its descriptor and is NEVER invoked.
+    expect(reads).toBe(0);
+
+    // 1059b35: `epoch` validated as 12, then framed as `15:[object Object]`.
+    const epochGetter = {
+      budget_id: 'actor-7:paper',
+      get epoch() {
+        return 12;
+      },
+      funding_id: 'fund-7',
+      generation_config_intent_id: 'intent-cfg-7',
+      sample_policy: PAPER_REGIME_SAMPLE_BUY_POLICY,
+    };
+    expect(paperGateGenerationKey(epochGetter)).toBeUndefined();
+
+    // A throwing accessor escaped `paperGateGenerationKey` and `paperGatePhaseEventKey` on
+    // 1059b35 despite the "never a throw" claim; now it is never called.
+    let thrown = 0;
+    const thrower = () => {
+      thrown += 1;
+      throw new Error('accessor must never run');
+    };
+    const generationThrower = { ...VECTOR_IDENTITY } as Record<string, unknown>;
+    Object.defineProperty(generationThrower, 'funding_id', { enumerable: true, get: thrower });
+    const runIdThrower = { ...(genesis() as object) } as Record<string, unknown>;
+    Object.defineProperty(runIdThrower, 'runId', { enumerable: true, get: thrower });
+    const kindThrower = { ...(genesis() as object) } as Record<string, unknown>;
+    Object.defineProperty(kindThrower, 'kind', { enumerable: true, get: thrower });
+    expect(() => paperGateGenerationKey(generationThrower)).not.toThrow();
+    expect(paperGateGenerationKey(generationThrower)).toBeUndefined();
+    expect(() => paperGateRowScopeFromGenerationIdentity(generationThrower)).not.toThrow();
+    expect(paperGateRowScopeFromGenerationIdentity(generationThrower)).toBeUndefined();
+    for (const bad of [runIdThrower, kindThrower]) {
+      expect(() => paperGatePhaseEventKey(bad)).not.toThrow();
+      expect(paperGatePhaseEventKey(bad)).toBeUndefined();
+      expect(paperGatePhaseEventKeyFraming(bad)).toBeUndefined();
+    }
+    expect(thrown).toBe(0);
+
+    // A hostile Proxy: each reflection trap that this module uses, made to throw.
+    for (const trap of ['getPrototypeOf', 'ownKeys', 'getOwnPropertyDescriptor'] as const) {
+      const handler: ProxyHandler<Record<string, unknown>> = {
+        [trap]: () => {
+          throw new Error(`${trap} trap`);
+        },
+      };
+      const hostileGeneration = new Proxy({ ...VECTOR_IDENTITY }, handler);
+      const hostileEvent = new Proxy(
+        { ...(genesis() as object) } as Record<string, unknown>,
+        {
+          ...handler,
+        } as ProxyHandler<Record<string, unknown>>,
+      );
+      expect(() => paperGateGenerationKey(hostileGeneration)).not.toThrow();
+      expect(paperGateGenerationKey(hostileGeneration)).toBeUndefined();
+      expect(() => paperGatePhaseEventKey(hostileEvent)).not.toThrow();
+      expect(paperGatePhaseEventKey(hostileEvent)).toBeUndefined();
+    }
+    // A Proxy that reports the right own keys but hands back an accessor descriptor.
+    const lying = new Proxy({ ...VECTOR_IDENTITY }, {
+      getOwnPropertyDescriptor: (target, property) =>
+        property === 'funding_id'
+          ? { configurable: true, enumerable: true, get: () => 'fund-7' }
+          : Object.getOwnPropertyDescriptor(target, property),
+    } as ProxyHandler<Record<string, unknown>>);
+    expect(paperGateGenerationKey(lying)).toBeUndefined();
+
+    // Extra own keys the old `Object.keys` count could not see.
+    const symbolExtra = { ...VECTOR_IDENTITY, [Symbol('x')]: 'extra' };
+    expect(paperGateGenerationKey(symbolExtra)).toBeUndefined();
+    const hiddenExtra = { ...VECTOR_IDENTITY } as Record<string, unknown>;
+    Object.defineProperty(hiddenExtra, 'extra', { enumerable: false, value: 1 });
+    expect(paperGateGenerationKey(hiddenExtra)).toBeUndefined();
+    const hiddenEventExtra = { ...(genesis() as object) } as Record<string, unknown>;
+    Object.defineProperty(hiddenEventExtra, 'extra', { enumerable: false, value: 1 });
+    expect(paperGatePhaseEventKey(hiddenEventExtra)).toBeUndefined();
+
+    // Non-plain objects: only `Object.prototype` and a null prototype are own-data shapes.
+    class Identity {
+      budget_id = 'actor-7:paper';
+      epoch = 12;
+      funding_id = 'fund-7';
+      generation_config_intent_id = 'intent-cfg-7';
+      sample_policy = PAPER_REGIME_SAMPLE_BUY_POLICY;
+    }
+    expect(paperGateGenerationKey(new Identity())).toBeUndefined();
+    expect(paperGateGenerationKey(new Map(Object.entries(VECTOR_IDENTITY)))).toBeUndefined();
+    expect(paperGateGenerationKey(Object.values(VECTOR_IDENTITY))).toBeUndefined();
+    expect(paperGateGenerationKey(Object.assign(() => 0, VECTOR_IDENTITY))).toBeUndefined();
+    expect(paperGateGenerationKey(Object.assign(new Date(0), VECTOR_IDENTITY))).toBeUndefined();
+    class Event {
+      generationKey = VECTOR_GENERATION;
+      kind = 'genesis';
+      runId = 'run-7';
+    }
+    expect(paperGatePhaseEventKey(new Event())).toBeUndefined();
+
+    // Positive controls: a plain object and a null-prototype object derive the vector, and
+    // the returned scope carries no symbol property and re-derives to its own key.
+    expect(paperGateGenerationKey({ ...VECTOR_IDENTITY })).toBe(VECTOR_GENERATION);
+    const bare = Object.assign(Object.create(null) as Record<string, unknown>, VECTOR_IDENTITY);
+    expect(Object.getPrototypeOf(bare)).toBeNull();
+    expect(paperGateGenerationKey(bare)).toBe(VECTOR_GENERATION);
+    expect(paperGatePhaseEventKey(Object.assign(Object.create(null), genesis()))).toBe(
+      VECTOR_GENESIS,
+    );
+    const scope = paperGateRowScopeFromGenerationIdentity(bare);
+    expect(scope).toEqual({ ...VECTOR_IDENTITY, generation_key: VECTOR_GENERATION });
+    expect(Object.getOwnPropertySymbols(scope!)).toEqual([]);
+    const { generation_key: derivedKey, ...namespace } = scope!;
+    expect(paperGateGenerationKey(namespace)).toBe(derivedKey);
   });
 });
