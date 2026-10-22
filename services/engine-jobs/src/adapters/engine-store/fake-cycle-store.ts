@@ -146,8 +146,13 @@ export class FakeCycleStore implements CycleStore {
   async releaseLease(grant: LeaseGrant, at: Date): Promise<void> {
     this.logicalNow = at;
     const lease = this.fence(grant, 'a lease release');
-    lease.expiresAt = at;
-    lease.heartbeatAt = at;
+    // Mirrors the real adapter's clamp: the release instant never lands before the
+    // lease was acquired, which `engine.job_lease`'s `expires_at >= acquired_at`
+    // check enforces in SQL. A fresh `Date` is stored rather than the acquisition's
+    // own object, so the two fields can never alias and be mutated together.
+    const released = new Date(Math.max(at.getTime(), lease.acquiredAt.getTime()));
+    lease.expiresAt = released;
+    lease.heartbeatAt = new Date(released.getTime());
   }
 
   async readRunRecord(runId: string): Promise<CycleRunRecord | null> {

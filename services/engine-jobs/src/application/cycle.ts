@@ -14,7 +14,9 @@
 //   2. check the run id, so a Scheduler retry of a recorded run writes nothing;
 //   3. open this run's record, so a crash still leaves the run id spent;
 //   4. evaluate intent, and refuse if the engine is paused or the row is stale;
-//   5. refuse a mode later stages implement, before any tick body exists;
+//   5. decide the lane: a mode later stages implement is refused before any tick body
+//      exists, and the paper lane asks the persisted authority and refuses with what it
+//      said;
 //   6. tick, with a heartbeat each time;
 //   7. append exactly one outcome row against the intent that was evaluated;
 //   8. update the job-health row;
@@ -24,6 +26,33 @@
 // `intent-paused`, not a mode problem, because paused is the stronger statement;
 // and the mode gate still sits before every tick, so a premature `cycle.tfvars`
 // change cannot execute an unported lane.
+//
+// ## The paper lane, wired 2026-10-19 — FAIL-CLOSED, NOT ACTIVATED
+//
+// The paper lane no longer answers `mode-not-implemented` on sight when an authority
+// reader is wired. It reads the persisted authority under THIS run's own lease fence and
+// records what that read said. What it still does not do is run: no candidate is read, no
+// evidence is produced, no generation is advanced, no order is placed and no gate row is
+// written by this job on any path.
+//
+// Why that is safe rather than one flag away from unsafe:
+//
+//   * The decision it records is `decisionUnderProductionBundle`, which the adapter
+//     computes with the build's own `COMPILED_PAPER_BUNDLE_AVAILABLE`. That constant is
+//     `false`, so an otherwise perfectly valid configure and resume refuses
+//     `bundle-unavailable`. Nothing here takes an availability argument, reads an
+//     environment flag or accepts a token, so there is no input to this job that can turn
+//     the refusal into an admission.
+//   * The ALLOWED branch is reachable only if that constant changes, and it still does not
+//     run a tick: it records `paper-admission-unimplemented`, because the producers a tick
+//     would need do not exist. An allowed decision must never be mistaken for a performed
+//     run, so it is spelled out rather than left to a TODO.
+//   * A historical read is not a write permission. This job never hands the evidence to a
+//     writer; the production gate writer re-derives current authority inside its own
+//     transaction if it is ever called, and it is not called from here.
+//
+// The lane is wired only when the caller supplies the reader, so the default — and every
+// `dry` and `forecast` run — is byte-for-byte what it was.
 //
 // A refusal is the job working. Every refusal path closes the run record,
 // updates job health and releases the lease, and the entrypoint exits 0.
@@ -38,6 +67,11 @@ import {
   type LeaseGrant,
 } from '../domain/cycle-store.js';
 import { evaluateIntent, type IntentRow } from '../domain/intent.js';
+import type {
+  PaperAuthorityFence,
+  PaperAuthorityReadResult,
+  PaperAuthorityScope,
+} from '../domain/paper-authority-evidence.js';
 import { runForecastTick } from './forecast-cycle.js';
 import type { ForecastFeeds, ForecastStore } from '../domain/forecast.js';
 
@@ -54,6 +88,18 @@ export const CYCLE_CAPABILITY = 'budget:paper';
  */
 export const CYCLE_JOB_RUN_CAPABILITY = 'engine-cycle';
 
+/**
+ * The read side of the persisted paper authority, as THIS job needs it: one call, and no
+ * way to ask for an availability override. The adapter satisfies it structurally, so the
+ * application keeps its own narrow port and does not depend on the adapter module.
+ */
+export interface PaperAuthorityReader {
+  readAuthority(
+    scope: PaperAuthorityScope,
+    fence: PaperAuthorityFence,
+  ): Promise<PaperAuthorityReadResult>;
+}
+
 export interface CycleJobInput {
   readonly store: CycleStore;
   readonly mode: CycleMode;
@@ -64,6 +110,12 @@ export interface CycleJobInput {
   /** Injected so a test does not wait 15 seconds a tick. */
   readonly sleep: (ms: number) => Promise<void>;
   readonly forecast?: { readonly store: ForecastStore; readonly feeds: ForecastFeeds };
+  /**
+   * Supplied only for the paper lane. Absent means the lane answers exactly what it
+   * answered before this was added, so nothing about `dry` or `forecast` — or about a
+   * caller that does not wire it — changes.
+   */
+  readonly paper?: { readonly authority: PaperAuthorityReader };
   readonly capability?: string;
   readonly jobRunCapability?: string;
 }
@@ -189,10 +241,57 @@ export async function runCycleJob(input: CycleJobInput): Promise<CycleJobResult>
     return finish('refused', decision.reason, { intent: decision.intent, ticksCompleted: 0 });
   }
 
-  // 5. The lanes stage 1 does not implement. Accepted by the parser so the
-  //    argument shape is settled, refused here so a tfvars change cannot run one.
-  if (input.mode === 'paper' || (input.mode === 'forecast' && input.forecast === undefined)) {
+  // 5. The lane.
+  //
+  // 5a. A mode this build cannot run at all: the forecast lane without its store and
+  //     feeds, and the paper lane with no authority reader wired. Accepted by the parser
+  //     so the argument shape is settled, refused here so a tfvars change cannot run one.
+  if (
+    (input.mode === 'forecast' && input.forecast === undefined) ||
+    (input.mode === 'paper' && input.paper === undefined)
+  ) {
     return finish('refused', 'mode-not-implemented', {
+      intent: decision.intent,
+      ticksCompleted: 0,
+    });
+  }
+
+  // 5b. The paper lane, wired. One read, under this run's OWN fence — the owner and the
+  //     fencing token the lease granted a moment ago, never a token from a caller — and
+  //     the scope this job is governed by. No heartbeat is in flight while it runs, and
+  //     no write transaction is open: this is a read between transactions, which is the
+  //     order the tick loop below already keeps.
+  if (input.mode === 'paper' && input.paper !== undefined) {
+    const read = await input.paper.authority.readAuthority(
+      { capability, epoch: input.controlEpoch },
+      { capability, owner: grant.owner, fencingToken: BigInt(grant.fencingToken) },
+    );
+    // The read itself refused: a malformed scope, or this run's lease not held at the
+    // read's own fence. Nothing was decided, so nothing is claimed about admission.
+    if (read.kind !== 'read') {
+      return finish('refused', 'paper-authority-unreadable', {
+        intent: decision.intent,
+        ticksCompleted: 0,
+      });
+    }
+    // The decision the build itself makes. `decisionUnderProductionBundle` is the pure
+    // reducer run with `COMPILED_PAPER_BUNDLE_AVAILABLE`, which is `false`, so this job
+    // cannot be handed an availability it does not compile with.
+    const admission = read.evidence.decisionUnderProductionBundle;
+    if (!admission.allowed) {
+      return finish(
+        'refused',
+        admission.reason === 'bundle-unavailable'
+          ? 'paper-bundle-unavailable'
+          : 'paper-authority-refused',
+        { intent: decision.intent, ticksCompleted: 0 },
+      );
+    }
+    // Admission granted, and still nothing runs: the candidate, evidence and generation
+    // producers a paper tick needs are not implemented, and inventing them from
+    // placeholder values would be a pretend pipeline. Unreachable today, and recorded as
+    // its own reason so it can never read as a performed run.
+    return finish('refused', 'paper-admission-unimplemented', {
       intent: decision.intent,
       ticksCompleted: 0,
     });

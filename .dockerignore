@@ -9,3 +9,5 @@
 *.log
 .env
 .env.*
+**/dist-test-support
+**/.test-support-src

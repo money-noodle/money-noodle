@@ -80,7 +80,14 @@ export interface RecordControlRequest {
  * its own version, and refusing it now is cheaper than migrating it later.
  */
 const PARAMETER_KEY = /^[a-z][a-z0-9_]{0,38}$/u;
-const MAX_PARAMETERS = 12;
+// Twenty since October 21, 2026, up from twelve: the paper configure document carries its
+// generation profile and is nineteen fields wide, so twenty leaves one field of headroom
+// and nothing more. The SHAPE did not change — a nested object, an array, an encoded
+// document, a long string and an unbounded key are all still refused, and no key, type or
+// text bound moved. The published contract carries the same twenty for the request and
+// for the intent-history response, under a named approval recorded in
+// `services/platform-api/openapi/compatibility-exceptions.json`.
+const MAX_PARAMETERS = 20;
 const MAX_PARAMETER_TEXT = 120;
 
 export function validateParameters(

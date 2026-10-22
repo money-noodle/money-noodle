@@ -1,0 +1,20 @@
+{
+  "version": "openapi-compatibility-exception-v1",
+  "note": "One record per explicitly approved published-contract change. A record authorises exactly the change it names, by resolved schema path, property, change kind and exact old and new value. It never widens to another component, path, property or value pair, and every other breaking change stays blocked even when an approved one is present in the same comparison. Adding a record requires the same named human approval this one carries.",
+  "exceptions": [
+    {
+      "id": "control-parameters-max-properties-12-to-20",
+      "approvedAtIso": "2026-10-21T01:25:02Z",
+      "approver": "Rai",
+      "approvalSource": "#orbit 1562275489748484137",
+      "reason": "The paper configure document carries its generation profile and is nineteen fields wide. On the request side a larger maxProperties is additive; on the intent-history response the widening was accepted so the published bound stays truthful for both directions rather than describing a bound the service does not enforce.",
+      "contract": "services/platform-api/openapi/platform-api.v1.yaml",
+      "type": "schema",
+      "schemaPath": "$.components.schemas['ControlParameters']",
+      "property": "maxProperties",
+      "changeKind": "modified",
+      "original": "12",
+      "new": "20"
+    }
+  ]
+}
