@@ -86,3 +86,6 @@ crash.*.log
 !.claude/skills/start-work
 !.claude/skills/start-plan
 !.claude/skills/start-debug
+# The test-support artifact is built on demand and never shipped.
+services/engine-jobs/dist-test-support/
+services/engine-jobs/.test-support-src/

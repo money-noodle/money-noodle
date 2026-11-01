@@ -49,9 +49,32 @@
     "contract": {
       "executor": "nx:run-commands",
       "cache": false,
-      "dependsOn": ["build"],
+      "dependsOn": [
+        "build",
+        "build-test-support",
+        {
+          "projects": ["platform-api"],
+          "target": "build"
+        }
+      ],
       "options": {
         "command": "node services/engine-jobs/checks/forecast-postgres.mjs"
+      }
+    },
+    "build-test-support": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "outputs": ["{projectRoot}/dist-test-support"],
+      "options": {
+        "parallel": false,
+        "commands": [
+          "rm -rf services/engine-jobs/.test-support-src services/engine-jobs/dist-test-support",
+          "cp -R services/engine-jobs/src services/engine-jobs/.test-support-src",
+          "cp services/engine-jobs/src/test-support/paper-gate-audited-policy-gate.test-artifact.ts services/engine-jobs/.test-support-src/adapters/engine-store/paper-gate-audited-policy-gate.ts",
+          "rm -f services/engine-jobs/.test-support-src/test-support/paper-gate-audited-policy-gate.test-artifact.ts",
+          "tsc --project services/engine-jobs/tsconfig.test-support.json",
+          "rm -rf services/engine-jobs/.test-support-src"
+        ]
       }
     }
   }

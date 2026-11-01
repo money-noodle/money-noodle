@@ -5,3 +5,12 @@
 # what the generic rule matched.
 d3a586a78d2a29806e6dcba5ca80244c68d4468e:apps/web/src/presentation/synthetic-records.test.ts:generic-api-key:213
 d3a586a78d2a29806e6dcba5ca80244c68d4468e:apps/web/src/presentation/synthetic-records.test.ts:generic-api-key:229
+# Exact synthetic disabled-generation association fixture (#243); not a credential.
+ab625363e8f4d231c0ef679b9ceb6b661a486cb9:services/engine-jobs/checks/paper-gate-head-postgres.mjs:generic-api-key:95
+# Fixed public SHA-256 test digests of framing text (test vectors, not credentials) that
+# ancestor commit 1e2570e assigned to KEY-named constants; 1059b35 removed those
+# assignments from the tree, so only the historical patches still carry them. Approved by
+# Rai, Discord #orbit msg 1565987269054300201, 2026-10-31T07:14:19Z.
+1e2570e94f9ade139b6c1c29a44a7cd0b742f949:services/engine-jobs/src/paper-gate-keys.test.ts:generic-api-key:62
+1e2570e94f9ade139b6c1c29a44a7cd0b742f949:services/engine-jobs/src/paper-gate-keys.test.ts:generic-api-key:64
+1e2570e94f9ade139b6c1c29a44a7cd0b742f949:services/engine-jobs/src/paper-gate-keys.test.ts:generic-api-key:65

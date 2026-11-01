@@ -14,7 +14,7 @@ The cycle job is the engine's cadence. It is not a resident worker: Cloud Schedu
 4. **Evaluates intent** against `engine.control_intent` (below). Paused, missing or stale ends the run here.
 5. **Refuses a lane it cannot run.** `--mode forecast` and `--mode paper` are accepted by the entrypoint and refused at run start, so changing the committed arguments before the lane is ported changes what is refused rather than what runs.
 6. **Ticks.** `--ticks 4` by default: four ticks at 15-second spacing, which is one scheduled minute at v1's cadence. Each tick pushes the lease's heartbeat forward. In stage 1 that is the whole tick body.
-7. **Writes exactly one outcome row** against the intent it evaluated, updates its job-health row, closes its run record and releases the lease.
+7. **Writes exactly one outcome row** against the intent it evaluated, updates its job-health row, closes its run record and releases the lease. *(October 21, 2026: the release records `greatest(<the instant it is given>, acquired_at)` — a floor for **any** earlier instant, not only a sub-millisecond one. `acquired_at` is the database clock in microseconds while a release carries a millisecond `Date`, which is how this became reachable: a run that acquired and released inside one millisecond offered an earlier instant, and 0004's `check (expires_at >= acquired_at)` refused the update, leaving the lease held until it expired. An instant at or after the acquisition is recorded exactly as given, including one in the future, so no clock policy or validation is introduced; the clamp cannot extend a lease, and the owner, token and live-expiry fences are unchanged.)*
 
 Every write after step 1 carries the fencing token the run was granted, and the store refuses a write whose token is no longer the current one. A run that lost its lease to an expiry — a long pause, a stalled network — finds its own late writes refused instead of overwriting the new owner's.
 
@@ -38,8 +38,14 @@ A run records a fixed code, never a sentence, so two runs in the same situation 
 | `intent-future` | `refused` | The latest row was recorded further ahead than the allowed five minutes. |
 | `intent-paused` | `refused` | The latest row is a `pause`, a `reset`, or another non-running action. |
 | `lease-held` | `refused` | Another owner holds a live lease on this capability. |
-| `mode-not-implemented` | `refused` | A lane stage 2 or 3 implements was requested. Nothing ran. |
+| `mode-not-implemented` | `refused` | A lane this build cannot run was requested: the forecast lane without its store and feeds, or the paper lane with no authority reader wired. Nothing ran. |
+| `paper-authority-unreadable` | `refused` | The paper lane asked the persisted authority and the **read itself** refused — a malformed scope, or this run's lease not held at the read's own fence. Nothing was decided. |
+| `paper-bundle-unavailable` | `refused` | The paper lane read authority and the decision under the production bundle was `bundle-unavailable`: the audited policy closure this build carries is not available, so admission is refused however valid the recorded intent is. This is the reason a correctly configured and resumed paper budget records today. |
+| `paper-authority-refused` | `refused` | The paper lane read authority and the production decision refused for another reason the reducer gave — a paused or superseded control, an invalid configuration or resume reference, an unusable funding root. The specific reason is the authority's and is not re-coded here. |
+| `paper-admission-unimplemented` | `refused` | Admission was granted and the lane still did not run, because the producers a paper tick needs — candidates, evidence, a generation to advance — are not implemented. Unreachable while the compiled bundle is unavailable, and present so an allowed decision can never read as a performed run. |
 | `run-already-recorded` | `refused` | This run id already has a record: the execution is a retry of a recorded run. |
+
+The four `paper-*` codes were added on October 19, 2026 with the fail-closed paper wiring. They are **not** named by migration 0004's comment, which predates them: `engine.control_outcome.reason` and `engine.job_run_record.reason` are free text with **no CHECK**, so the codes needed no migration, and [the paper-engine port contract](paper-engine-port-contract.md) is the document that owns them. `engine.job_run.last_outcome` is a different column — it carries the **outcome**, and it **does** have a CHECK on `('applied','refused','superseded')` — and every paper path above records `refused`, which that CHECK already allows.
 
 `run-incomplete` also appears in `engine.job_run_record`, but it is not a run outcome: it is the placeholder an open record carries between step 3 and step 7, so a record that still says `run-incomplete` is a run that never finished.
 

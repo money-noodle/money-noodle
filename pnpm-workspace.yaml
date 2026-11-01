@@ -38,6 +38,17 @@ overrides:
   # upstream fix, and `next` itself is untouched. Remove it once the path
   # resolves >=0.35.5 on its own.
   'sharp@<0.35.5': 0.35.5
+  # 2026-10-21 (GHSA-q3jh-wrc6-jgq8, GHSA-8r9p-f939-6h3c, Refs #243): follow-redirects
+  # <1.16.1 leaks cross-origin credentials through array-form headers and can expose
+  # sensitive headers because its `sensitiveHeaders` regular expression is not escaped.
+  # Reached only through dev tooling: `nx@23.2.1` declares the exact version `1.16.0`
+  # rather than a range, and also reaches it through `axios`, which the existing
+  # `axios@<1.20.0` floor lifts to 1.20.0 — and axios declares `^1.16.0`, so it already
+  # accepts the patch. Because nx pins the exact version, a lockfile refresh alone cannot
+  # move it, which makes this an explicit, auditable floor rather than a substitute for an
+  # upstream fix. Remove it once every path resolves >=1.16.1 on its own; an nx bump is
+  # out of this commit's scope.
+  'follow-redirects@<1.16.1': 1.16.1
 
 audit:
   ignore:

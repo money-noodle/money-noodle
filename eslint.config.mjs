@@ -40,6 +40,9 @@ export default tseslint.config(
       '**/.next/**',
       '**/coverage/**',
       '**/dist/**',
+      // Built on demand by `build-test-support`, never shipped and never linted.
+      '**/dist-test-support/**',
+      '**/.test-support-src/**',
       '**/node_modules/**',
       'packages/platform-api-client/src/generated/**',
     ],

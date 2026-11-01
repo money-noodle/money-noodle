@@ -1186,7 +1186,7 @@ export type ControlActionName = 'configure' | 'pause' | 'resume' | 'reset' | 'pr
 export type IntentOutcomeState = 'applied' | 'refused' | 'superseded';
 
 /**
- * Bounded scalar parameters for a control. An intent row is an audit record a person reads, so keys are short identifiers and values are strings, numbers or booleans; anything richer needs a schema and a version of its own.
+ * Bounded scalar parameters for a control. An intent row is an audit record a person reads, so keys are short identifiers and values are strings, numbers or booleans; anything richer needs a schema and a version of its own. At most twenty fields, for the request and for the recorded parameters a read returns alike: the paper configure document carries its generation profile and is nineteen fields wide.
  */
 export type ControlParameters = {
     [key: string]: string | number | boolean;

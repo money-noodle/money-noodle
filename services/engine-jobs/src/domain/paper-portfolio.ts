@@ -1,0 +1,184 @@
+// Constraints are mandatory caller inputs; no historical cap becomes authority.
+export type CryptoExposureGroup = 'majors' | 'layer1-beta' | 'alt-beta';
+
+export interface PortfolioCandidate {
+  id: string;
+  symbol: string;
+  closesAt: string;
+  expectedProfitCents: number;
+}
+export interface PortfolioExposure {
+  symbol: string;
+  closesAt: string;
+}
+export interface PortfolioSelection {
+  id: string;
+  symbol: string;
+  selected: boolean;
+  rank: number | null;
+  expectedProfitCents: number;
+  adjustedExpectedContributionCents: number;
+  correlatedPositions: number;
+  reason: string;
+}
+export interface PortfolioConstraints {
+  maximumPositions: number;
+  maximumSameWindow: number;
+  maximumSameGroupPerWindow: number;
+  correlationPenaltyCents: number;
+  sameGroupPenaltyCents: number;
+}
+
+export function cryptoExposureGroup(symbol: string): CryptoExposureGroup {
+  if (symbol === 'BTC' || symbol === 'ETH') return 'majors';
+  if (symbol === 'SOL' || symbol === 'BNB' || symbol === 'HYPE') return 'layer1-beta';
+  return 'alt-beta';
+}
+
+const validSymbol = (s: string) => typeof s === 'string' && /^[A-Z0-9-]{1,24}$/.test(s);
+const validClose = (s: string) =>
+  typeof s === 'string' &&
+  Number.isSafeInteger(Date.parse(s)) &&
+  new Date(Date.parse(s)).toISOString().replace('.000Z', 'Z') === s.replace('.000Z', 'Z');
+
+function adjusted(
+  candidate: PortfolioCandidate,
+  exposures: PortfolioExposure[],
+  constraints: PortfolioConstraints,
+): { value: number; correlated: number; sameGroup: number } {
+  const sameWindow = exposures.filter((item) => item.closesAt === candidate.closesAt);
+  const group = cryptoExposureGroup(candidate.symbol);
+  const sameGroup = sameWindow.filter((item) => cryptoExposureGroup(item.symbol) === group).length;
+  return {
+    value:
+      candidate.expectedProfitCents -
+      sameWindow.length * constraints.correlationPenaltyCents -
+      sameGroup * constraints.sameGroupPenaltyCents,
+    correlated: sameWindow.length,
+    sameGroup,
+  };
+}
+
+export function selectPortfolio(
+  candidates: PortfolioCandidate[],
+  existing: PortfolioExposure[],
+  constraints: PortfolioConstraints,
+): PortfolioSelection[] {
+  if (
+    !Array.isArray(candidates) ||
+    !Array.isArray(existing) ||
+    candidates.length > 2_000 ||
+    existing.length > 2_000 ||
+    constraints.maximumPositions > 10 ||
+    constraints.maximumSameWindow > constraints.maximumPositions ||
+    constraints.maximumSameGroupPerWindow > constraints.maximumSameWindow ||
+    existing.some((e) => !e || !validSymbol(e.symbol) || !validClose(e.closesAt)) ||
+    ![
+      constraints.maximumPositions,
+      constraints.maximumSameWindow,
+      constraints.maximumSameGroupPerWindow,
+    ].every((n) => Number.isSafeInteger(n) && n > 0) ||
+    ![constraints.correlationPenaltyCents, constraints.sameGroupPenaltyCents].every(
+      (n) => Number.isFinite(n) && n >= 0 && n <= 1000000,
+    ) ||
+    candidates.some(
+      (c) =>
+        !c ||
+        typeof c.id !== 'string' ||
+        !c.id.trim() ||
+        c.id.length > 120 ||
+        !validSymbol(c.symbol) ||
+        !Number.isFinite(c.expectedProfitCents) ||
+        Math.abs(c.expectedProfitCents) > 1000000 ||
+        !validClose(c.closesAt),
+    ) ||
+    new Set(candidates.map((c) => c.id)).size !== candidates.length
+  )
+    throw new Error('Invalid paper portfolio inputs.');
+  // Canonical working identity; every subsequent window/group/penalty comparison uses these values.
+  candidates = candidates.map((c) => ({
+    ...c,
+    closesAt: new Date(Date.parse(c.closesAt)).toISOString(),
+  }));
+  const remaining = [...candidates];
+  const exposures = existing.map((e) => ({
+    ...e,
+    closesAt: new Date(Date.parse(e.closesAt)).toISOString(),
+  }));
+  const selected = new Map<string, PortfolioSelection>();
+  let rank = 1;
+  while (remaining.length && exposures.length < constraints.maximumPositions) {
+    const scored = remaining
+      .map((candidate) => ({ candidate, ...adjusted(candidate, exposures, constraints) }))
+      .sort(
+        (a, b) =>
+          b.value - a.value ||
+          b.candidate.expectedProfitCents - a.candidate.expectedProfitCents ||
+          a.candidate.symbol.localeCompare(b.candidate.symbol),
+      );
+    const viable = scored.find((item) => {
+      const sameWindow = exposures.filter(
+        (exposure) => exposure.closesAt === item.candidate.closesAt,
+      ).length;
+      const sameAssetWindow = exposures.some(
+        (exposure) =>
+          exposure.symbol === item.candidate.symbol &&
+          exposure.closesAt === item.candidate.closesAt,
+      );
+      return (
+        !sameAssetWindow &&
+        sameWindow < constraints.maximumSameWindow &&
+        item.sameGroup < constraints.maximumSameGroupPerWindow &&
+        item.value > 0
+      );
+    });
+    if (!viable) break;
+    selected.set(viable.candidate.id, {
+      id: viable.candidate.id,
+      symbol: viable.candidate.symbol,
+      selected: true,
+      rank,
+      expectedProfitCents: viable.candidate.expectedProfitCents,
+      adjustedExpectedContributionCents: viable.value,
+      correlatedPositions: viable.correlated,
+      reason: `Portfolio rank #${rank}: ${viable.value.toFixed(2)}c expected contribution after correlation penalties.`,
+    });
+    exposures.push({ symbol: viable.candidate.symbol, closesAt: viable.candidate.closesAt });
+    remaining.splice(
+      remaining.findIndex((item) => item.id === viable.candidate.id),
+      1,
+    );
+    rank += 1;
+  }
+  for (const candidate of remaining) {
+    const score = adjusted(candidate, exposures, constraints);
+    const sameWindow = exposures.filter((item) => item.closesAt === candidate.closesAt).length;
+    const sameAssetWindow = exposures.some(
+      (exposure) =>
+        exposure.symbol === candidate.symbol && exposure.closesAt === candidate.closesAt,
+    );
+    const reason =
+      exposures.length >= constraints.maximumPositions
+        ? `Blocked: portfolio already has ${constraints.maximumPositions} positions.`
+        : sameAssetWindow
+          ? `Blocked: ${candidate.symbol} already has exposure in this contract window; opposite-side exposure requires a validated reduce-only switch.`
+          : score.sameGroup >= constraints.maximumSameGroupPerWindow
+            ? `Blocked: ${cryptoExposureGroup(candidate.symbol)} group limit ${constraints.maximumSameGroupPerWindow} reached for this window.`
+            : sameWindow >= constraints.maximumSameWindow
+              ? `Blocked: same-window exposure limit ${constraints.maximumSameWindow} reached.`
+              : score.value <= 0
+                ? `Blocked: correlation-adjusted expected contribution is ${score.value.toFixed(2)}c.`
+                : 'Blocked by a higher-ranked constrained portfolio candidate.';
+    selected.set(candidate.id, {
+      id: candidate.id,
+      symbol: candidate.symbol,
+      selected: false,
+      rank: null,
+      expectedProfitCents: candidate.expectedProfitCents,
+      adjustedExpectedContributionCents: score.value,
+      correlatedPositions: score.correlated,
+      reason,
+    });
+  }
+  return candidates.map((candidate) => selected.get(candidate.id)!);
+}
