@@ -123,7 +123,7 @@ jobs:
         with:
           version: 11.24.0
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version-file: .node-version
           cache: pnpm
@@ -378,7 +378,7 @@ jobs:
         with:
           version: 11.24.0
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version-file: .node-version
           cache: pnpm
@@ -585,7 +585,7 @@ jobs:
         with:
           version: 11.24.0
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version-file: .node-version
           cache: pnpm
@@ -595,7 +595,7 @@ jobs:
       # only be inspected after publication, which is the ordering this job
       # exists to avoid.
       - name: Enable Docker containerd image store
-        uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70 # v5
+        uses: docker/setup-docker-action@7ec28a010822b4626af4874f9448a4b05ac6f3e5 # v5
         with:
           daemon-config: |
             {
@@ -802,7 +802,7 @@ jobs:
           audience: money-noodle-delivery
           token_format: access_token
 
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ${{ vars.GCP_REGISTRY_HOST }}
           username: oauth2accesstoken
@@ -1006,7 +1006,7 @@ jobs:
           audience: money-noodle-delivery
           token_format: access_token
 
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ${{ vars.GCP_REGISTRY_HOST }}
           username: oauth2accesstoken
@@ -1674,7 +1674,7 @@ jobs:
           audience: money-noodle-delivery
           token_format: access_token
 
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         if: matrix.stack != 'platform'
         with:
           registry: ${{ vars.GCP_REGISTRY_HOST }}
@@ -2079,7 +2079,7 @@ jobs:
           audience: money-noodle-delivery
           token_format: access_token
 
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         if: github.event.inputs.stack != 'platform'
         with:
           registry: ${{ vars.GCP_REGISTRY_HOST }}
@@ -2468,7 +2468,7 @@ jobs:
           audience: money-noodle-delivery
           token_format: access_token
 
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ${{ vars.GCP_REGISTRY_HOST }}
           username: oauth2accesstoken
