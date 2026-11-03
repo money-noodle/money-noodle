@@ -10,8 +10,16 @@ overrides:
   # 2026-10-04 (#214): vulnerable transitives with no updated parent release yet.
   'axios@<1.20.0': 1.20.0
   'brace-expansion@>=4.0.0 <5.0.11': 5.0.12
-  'fast-uri@>=3.0.0 <3.1.7': 3.1.8
-  'fast-uri@>=4.0.0 <4.1.4': 4.2.1
+  # 2026-11-03 (GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr, GHSA-xhq7-xmqj-769h,
+  # GHSA-333x-w4r6-6crp, Refs #243): the two floors below were raised from 3.1.8 and
+  # 4.2.1, which the new scheme-spoofing, host-confusion, path-equivalence and
+  # scheme-injection advisories now cover. Each stays inside its own major and inside
+  # every declared range: `ajv@8.20.0` declares `^3.0.1` on the 3.x path, and
+  # `@fastify/ajv-compiler@4.0.6` and `fast-json-stringify@7.0.1` declare `^4.0.0` on
+  # the 4.x path, so both already accept the patch. Remove each once its path resolves
+  # at or above the floor on its own.
+  'fast-uri@>=3.0.0 <3.1.9': 3.1.9
+  'fast-uri@>=4.0.0 <4.2.3': 4.2.3
   # 2026-10-06 (GHSA-68fv-2mgg-jv7q): source-map-js <1.2.2 spends unbounded time
   # on a crafted indexed source map's section offsets, which stalls the event
   # loop. Reached only transitively, at build and generate time, through postcss
@@ -48,7 +56,33 @@ overrides:
   # move it, which makes this an explicit, auditable floor rather than a substitute for an
   # upstream fix. Remove it once every path resolves >=1.16.1 on its own; an nx bump is
   # out of this commit's scope.
-  'follow-redirects@<1.16.1': 1.16.1
+  # Raised 2026-11-03 (GHSA-mrwp-f3q8-3g9p, Refs #243): 1.16.1 itself leaks
+  # `sensitiveHeaders` across realms, and 1.16.2 is the patch. The path is unchanged --
+  # dev tooling only, through `nx@23.2.1`'s exact `1.16.0` pin and through `axios`,
+  # which declares `^1.16.0` and so already accepts it.
+  'follow-redirects@<1.16.2': 1.16.2
+  # 2026-11-03 (GHSA-mrhx-c7xc-m3w5, Refs #243): zod <4.6.6 can exhaust memory while
+  # validating an oversized input. Reached only at lint time, through the root
+  # devDependency `eslint-plugin-react-hooks@7.1.1`, which declares
+  # `^3.25.0 || ^4.0.0`, and its `zod-validation-error@4.0.2`, whose peer range is the
+  # same -- so this floor stays inside both declared ranges and inside the installed
+  # major. 4.6.6 is the lowest patched release; 4.6.7 exists and is not adopted.
+  # Remove it once the plugin resolves >=4.6.6 on its own.
+  'zod@>=4.0.0 <4.6.6': 4.6.6
+  # 2026-11-03 (GHSA-g3hv-75wg-m249, Refs #243): minimatch <11.0.1 can spend
+  # unbounded time on a crafted pattern. Unlike every other floor here this one FORCES
+  # A MAJOR: there is no patched 10.x release (10.2.6 is the newest 10.x and is
+  # vulnerable), while every consumer declares 10.x -- `nx@23.2.1` and
+  # `@nx/devkit@23.2.1` the exact `10.2.5`, and `eslint@10.12.0`,
+  # `@eslint/config-array@0.23.5`, `@typescript-eslint/typescript-estree@8.69.0`/`8.71.0`
+  # and `eslint-plugin-jsx-a11y-x@0.2.0` a `^10.2.x` range. 11.0.1 is the lowest patched
+  # release, keeps 10.2.6's `engines` (`18||20||>=22`) and CommonJS entry point, and adds
+  # only `@isaacs/nonrecursive-glob-match`; 11.0.4 raises the Node floor and is not
+  # adopted. Because it is out of every declared range, it is justified BEHAVIOURALLY --
+  # the repository's own lint, typecheck, test, contract and build targets and the
+  # twenty forbidden-dependency probes all pass with it -- not by declared
+  # compatibility. Remove it once the consumers release ranges that accept 11.
+  'minimatch@>=10.0.0 <11.0.1': 11.0.1
 
 audit:
   ignore:
