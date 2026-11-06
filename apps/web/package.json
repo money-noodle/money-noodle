@@ -19,9 +19,9 @@
     "@opentelemetry/sdk-metrics": "2.11.0",
     "@opentelemetry/sdk-trace-base": "2.12.0",
     "@opentelemetry/sdk-trace-node": "2.12.0",
-    "@opentelemetry/semantic-conventions": "1.43.0",
-    "google-auth-library": "11.3.1",
-    "next": "16.4.2",
+    "@opentelemetry/semantic-conventions": "1.44.0",
+    "google-auth-library": "11.3.2",
+    "next": "16.4.3",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },
