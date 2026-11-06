@@ -69,20 +69,15 @@ overrides:
   # major. 4.6.6 is the lowest patched release; 4.6.7 exists and is not adopted.
   # Remove it once the plugin resolves >=4.6.6 on its own.
   'zod@>=4.0.0 <4.6.6': 4.6.6
-  # 2026-11-03 (GHSA-g3hv-75wg-m249, Refs #243): minimatch <11.0.1 can spend
-  # unbounded time on a crafted pattern. Unlike every other floor here this one FORCES
-  # A MAJOR: there is no patched 10.x release (10.2.6 is the newest 10.x and is
-  # vulnerable), while every consumer declares 10.x -- `nx@23.2.1` and
-  # `@nx/devkit@23.2.1` the exact `10.2.5`, and `eslint@10.12.0`,
-  # `@eslint/config-array@0.23.5`, `@typescript-eslint/typescript-estree@8.69.0`/`8.71.0`
-  # and `eslint-plugin-jsx-a11y-x@0.2.0` a `^10.2.x` range. 11.0.1 is the lowest patched
-  # release, keeps 10.2.6's `engines` (`18||20||>=22`) and CommonJS entry point, and adds
-  # only `@isaacs/nonrecursive-glob-match`; 11.0.4 raises the Node floor and is not
-  # adopted. Because it is out of every declared range, it is justified BEHAVIOURALLY --
-  # the repository's own lint, typecheck, test, contract and build targets and the
-  # twenty forbidden-dependency probes all pass with it -- not by declared
-  # compatibility. Remove it once the consumers release ranges that accept 11.
-  'minimatch@>=10.0.0 <11.0.1': 11.0.1
+  # 2026-11-06 (GHSA-g3hv-75wg-m249, Refs #243): the floor that forced minimatch 11.0.1 is
+  # REMOVED, under its own authorisation. v11 drops `minimatch.makeRe`, which `nx@23.2.1`
+  # calls at `dist/src/utils/find-matching-projects.js:204`,
+  # `dist/src/generators/utils/glob.js:36` and
+  # `dist/src/command-line/release/utils/repository-git-tags.js:113`, and every consumer
+  # declares 10.x while no patched 10.x exists. minimatch therefore resolves back to its
+  # consumer-declared versions, and the MODERATE advisory stays VISIBLE and unignored: it is
+  # deliberately not waived, not added to `audit.ignore` and not hidden behind a threshold
+  # change. Revisit when a consumer ships a range that accepts a patched minimatch.
 
 audit:
   ignore:
