@@ -10,8 +10,16 @@ overrides:
   # 2026-10-04 (#214): vulnerable transitives with no updated parent release yet.
   'axios@<1.20.0': 1.20.0
   'brace-expansion@>=4.0.0 <5.0.11': 5.0.12
-  'fast-uri@>=3.0.0 <3.1.7': 3.1.8
-  'fast-uri@>=4.0.0 <4.1.4': 4.2.1
+  # 2026-11-03 (GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr, GHSA-xhq7-xmqj-769h,
+  # GHSA-333x-w4r6-6crp, Refs #243): the two floors below were raised from 3.1.8 and
+  # 4.2.1, which the new scheme-spoofing, host-confusion, path-equivalence and
+  # scheme-injection advisories now cover. Each stays inside its own major and inside
+  # every declared range: `ajv@8.20.0` declares `^3.0.1` on the 3.x path, and
+  # `@fastify/ajv-compiler@4.0.6` and `fast-json-stringify@7.0.1` declare `^4.0.0` on
+  # the 4.x path, so both already accept the patch. Remove each once its path resolves
+  # at or above the floor on its own.
+  'fast-uri@>=3.0.0 <3.1.9': 3.1.9
+  'fast-uri@>=4.0.0 <4.2.3': 4.2.3
   # 2026-10-06 (GHSA-68fv-2mgg-jv7q): source-map-js <1.2.2 spends unbounded time
   # on a crafted indexed source map's section offsets, which stalls the event
   # loop. Reached only transitively, at build and generate time, through postcss
@@ -38,6 +46,38 @@ overrides:
   # upstream fix, and `next` itself is untouched. Remove it once the path
   # resolves >=0.35.5 on its own.
   'sharp@<0.35.5': 0.35.5
+  # 2026-10-21 (GHSA-q3jh-wrc6-jgq8, GHSA-8r9p-f939-6h3c, Refs #243): follow-redirects
+  # <1.16.1 leaks cross-origin credentials through array-form headers and can expose
+  # sensitive headers because its `sensitiveHeaders` regular expression is not escaped.
+  # Reached only through dev tooling: `nx@23.2.1` declares the exact version `1.16.0`
+  # rather than a range, and also reaches it through `axios`, which the existing
+  # `axios@<1.20.0` floor lifts to 1.20.0 — and axios declares `^1.16.0`, so it already
+  # accepts the patch. Because nx pins the exact version, a lockfile refresh alone cannot
+  # move it, which makes this an explicit, auditable floor rather than a substitute for an
+  # upstream fix. Remove it once every path resolves >=1.16.1 on its own; an nx bump is
+  # out of this commit's scope.
+  # Raised 2026-11-03 (GHSA-mrwp-f3q8-3g9p, Refs #243): 1.16.1 itself leaks
+  # `sensitiveHeaders` across realms, and 1.16.2 is the patch. The path is unchanged --
+  # dev tooling only, through `nx@23.2.1`'s exact `1.16.0` pin and through `axios`,
+  # which declares `^1.16.0` and so already accepts it.
+  'follow-redirects@<1.16.2': 1.16.2
+  # 2026-11-03 (GHSA-mrhx-c7xc-m3w5, Refs #243): zod <4.6.6 can exhaust memory while
+  # validating an oversized input. Reached only at lint time, through the root
+  # devDependency `eslint-plugin-react-hooks@7.1.1`, which declares
+  # `^3.25.0 || ^4.0.0`, and its `zod-validation-error@4.0.2`, whose peer range is the
+  # same -- so this floor stays inside both declared ranges and inside the installed
+  # major. 4.6.6 is the lowest patched release; 4.6.7 exists and is not adopted.
+  # Remove it once the plugin resolves >=4.6.6 on its own.
+  'zod@>=4.0.0 <4.6.6': 4.6.6
+  # 2026-11-06 (GHSA-g3hv-75wg-m249, Refs #243): NO minimatch floor is introduced here.
+  # The patched release is 11.0.1, but v11 drops `minimatch.makeRe`, which `nx@23.2.1`
+  # calls at `dist/src/utils/find-matching-projects.js:204`,
+  # `dist/src/generators/utils/glob.js:36` and
+  # `dist/src/command-line/release/utils/repository-git-tags.js:113`, and every consumer
+  # declares 10.x while no patched 10.x exists. minimatch therefore stays on its
+  # consumer-declared versions and the MODERATE advisory stays VISIBLE and unignored:
+  # deliberately not waived, not added to `audit.ignore`, no threshold change. Revisit when
+  # a consumer ships a range that accepts a patched minimatch.
 
 audit:
   ignore:
