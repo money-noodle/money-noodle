@@ -10,8 +10,11 @@
 // that runs beside them.
 import assert from 'node:assert/strict';
 import console from 'node:console';
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import process from 'node:process';
 import postgres from 'postgres';
+import { FORECAST_BASELINE_DIVERGENCES } from '../dist/domain/forecast-baseline.js';
 import { evaluateForecastBaseline } from '../dist/domain/forecast-baseline.js';
 import { createPostgresForecastStore } from '../dist/adapters/engine-store/postgres-forecast-store.js';
 
@@ -186,6 +189,94 @@ export async function forecastBaselinePostgresContract(admin, port) {
     ]);
     await probe.unsafe(`update engine.restore_run set completed_at=now() where run_id='${BASE}'`);
     assert.equal(evaluateForecastBaseline(await store.readBaseline()).kind, 'reconciled');
+
+    // 7. The job's own output. A refusal an operator cannot act on is a refusal that
+    //    wasted a run: the log line has to name WHICH divergence, not just that the
+    //    baseline did not reconcile. This runs the real compiled entrypoint against this
+    //    database, so the assertion is on what the job actually prints.
+    await probe.unsafe(
+      `insert into engine.control_intent(id,capability,action,actor,epoch,recorded_at,run_id,parameters)
+         values('probe-resume','budget:paper','resume','synthetic-principal',1,now(),'probe-intent-run',null)`,
+    );
+    await probe.unsafe(
+      `insert into engine.restore_run(run_id,manifest_digest,manifest_key,schema_version,started_at,completed_at)
+         values('${OTHER}','other-digest','other-key','probe',now() - interval '3 hours',now() - interval '3 hours');
+       insert into engine.ledger_state(key,value,restore_run_id) values('probe-d','{}','${OTHER}')`,
+    );
+    const printed = execFileSync(
+      process.execPath,
+      ['services/engine-jobs/dist/cycle/main.js', '--mode', 'forecast', '--ticks', '1'],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          CLOUD_RUN_EXECUTION: 'probe-entrypoint-run',
+          ENGINE_CYCLE_CONTROL_EPOCH: '1',
+          ENGINE_CYCLE_WRITER_DATABASE_URL:
+            'postgres://engine_writer@127.0.0.1:' + port + '/' + DATABASE,
+        },
+      },
+    )
+      .trim()
+      .split('\n')
+      .filter((line) => line.startsWith('{'));
+    assert.equal(printed.length, 1, 'the job prints exactly one JSON line');
+    const line = JSON.parse(printed[0]);
+    assert.equal(line.outcome, 'refused');
+    assert.equal(line.reason, 'forecast-baseline-unreconciled');
+    assert.deepEqual(
+      line.baselineDivergences,
+      ['baseline-ambiguous', 'paper-state-changed'],
+      'the printed line must name which divergences refused the run',
+    );
+    // Codes only. Nothing read out of a row, no count, no connection string, and no key
+    // beyond the ones this job has always printed.
+    for (const code of line.baselineDivergences)
+      assert.ok(FORECAST_BASELINE_DIVERGENCES.includes(code), code);
+    assert.deepEqual(Object.keys(line).sort(), [
+      'baselineDivergences',
+      'capability',
+      'fencingToken',
+      'intentId',
+      'mode',
+      'outcome',
+      'reason',
+      'runId',
+      'ticksCompleted',
+    ]);
+    assert.ok(
+      !printed[0].includes('engine_writer') && !printed[0].includes('127.0.0.1'),
+      'the line must never carry the connection reference',
+    );
+    // An applied run prints no divergence field at all.
+    await probe.unsafe(
+      `delete from engine.ledger_state where restore_run_id='${OTHER}';
+       delete from engine.restore_run where run_id='${OTHER}'`,
+    );
+    const appliedLine = JSON.parse(
+      execFileSync(
+        process.execPath,
+        ['services/engine-jobs/dist/cycle/main.js', '--mode', 'forecast', '--ticks', '1'],
+        {
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            CLOUD_RUN_EXECUTION: 'probe-entrypoint-applied',
+            ENGINE_CYCLE_CONTROL_EPOCH: '1',
+            ENGINE_CYCLE_WRITER_DATABASE_URL:
+              'postgres://engine_writer@127.0.0.1:' + port + '/' + DATABASE,
+          },
+        },
+      )
+        .trim()
+        .split('\n')
+        .filter((l) => l.startsWith('{'))[0],
+    );
+    assert.equal(appliedLine.reason, 'forecast-run');
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(appliedLine, 'baselineDivergences'),
+      'an applied run prints no divergence field',
+    );
     console.log('Synthetic restored-baseline reconciliation contract passed.');
   } finally {
     await store.close();

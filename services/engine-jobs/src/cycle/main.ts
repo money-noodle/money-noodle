@@ -120,8 +120,18 @@ async function main(): Promise<number> {
     });
     // One line, counts and codes only: no connection string, no row content, no
     // account identifier (SECURITY.md).
+    //
+    // `baselineDivergences` is present only on the baseline refusal, and carries only
+    // codes from the closed `FORECAST_BASELINE_DIVERGENCES` vocabulary — never a count,
+    // a key, a run id or anything read out of a row. Without it the log says
+    // `forecast-baseline-unreconciled` and nothing about WHICH divergence, which is the
+    // one thing an operator needs before deciding whether a restore is incomplete or the
+    // excluded paper tables moved.
     console.log(
       JSON.stringify({
+        ...(result.baselineDivergences === undefined
+          ? {}
+          : { baselineDivergences: result.baselineDivergences }),
         capability: result.capability,
         fencingToken: result.fencingToken,
         intentId: result.intentId,

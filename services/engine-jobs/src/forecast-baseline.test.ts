@@ -267,6 +267,33 @@ describe('restored baseline reconciliation before the first recording', () => {
     expect(contended.cycle.runRecords.size).toBe(0);
   });
 
+  it('reports the codes out of the job and keeps the lane off the paper tables', () => {
+    // The refusal reason alone does not tell an operator which divergence refused the
+    // run, so the entrypoint must put the codes on its one JSON line. The hosted vector
+    // in checks/forecast-baseline-postgres.mjs asserts the printed line itself; this is
+    // the cheap tripwire that the field is not dropped again.
+    const entrypoint = readFileSync(join(import.meta.dirname, 'cycle', 'main.ts'), 'utf8');
+    expect(entrypoint).toContain('baselineDivergences: result.baselineDivergences');
+    // And nothing else about the baseline leaves the process: no snapshot, no count, no
+    // row content.
+    expect(entrypoint).not.toMatch(/readBaseline|ledger_state|ledger_order|forecastRows/u);
+
+    // The forecast lane's own adapter may COUNT the paper tables for the gate and must
+    // never write them. `engine_writer` holds `update` on both (migration 0002), so this
+    // is a real boundary rather than a theoretical one, and the value-invariance vector
+    // in checks/forecast-paper-invariance-postgres.mjs measures the same claim against a
+    // real database.
+    const adapter = readFileSync(
+      join(import.meta.dirname, 'adapters', 'engine-store', 'postgres-forecast-store.ts'),
+      'utf8',
+    );
+    for (const table of ['engine.ledger_state', 'engine.ledger_order']) {
+      expect(adapter).toContain('from ' + table);
+      for (const write of ['insert into ' + table, 'update ' + table, 'delete from ' + table])
+        expect(adapter, `the forecast adapter must never ${write}`).not.toContain(write);
+    }
+  });
+
   it('places the gate before the tick loop and names its code in the runbook', () => {
     const application = readFileSync(join(import.meta.dirname, 'application', 'cycle.ts'), 'utf8');
     const gate = application.indexOf('evaluateForecastBaseline');

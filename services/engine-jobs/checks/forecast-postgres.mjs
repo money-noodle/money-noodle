@@ -1,5 +1,6 @@
 import { paperRootPostgresContract } from './paper-root-postgres.mjs';
 import { forecastBaselinePostgresContract } from './forecast-baseline-postgres.mjs';
+import { forecastPaperInvariancePostgresContract } from './forecast-paper-invariance-postgres.mjs';
 import {
   forecastStoreConformance,
   eventFailureConformance,
@@ -645,6 +646,10 @@ try {
   // every row that decides its answer, so it runs after the lane contract above rather
   // than sharing that database's restore runs.
   await forecastBaselinePostgresContract(admin, port);
+  // And, in a third database of its own, whether a real cycle leaves the excluded paper
+  // balances and orders byte-for-byte unchanged — the part of the acceptance a count
+  // cannot answer.
+  await forecastPaperInvariancePostgresContract(admin, port);
   console.log(
     'Synthetic PostgreSQL migration/reapply/lease-expiry/provenance/overlay/uniqueness/role contract passed.',
   );
