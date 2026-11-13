@@ -25,7 +25,7 @@ RUN apk add --no-cache --upgrade \
     'libssl3=3.5.9-r0' \
     'musl=1.2.5-r13' \
     'musl-utils=1.2.5-r13' \
-    'zlib=1.3.2-r1' \
+    'zlib=1.4-r0' \
   && rm -rf /usr/local/lib/node_modules /opt/yarn-v1.22.22 \
   && rm -f \
     /usr/local/bin/corepack \
