@@ -25,7 +25,7 @@ import {
   createSignIn,
   type SessionDependencies,
 } from '../../application/manage-session.js';
-import type { BudgetRecord, IntentRow } from '../../domain/budget-control.js';
+import type { BudgetRecord, IntentHistoryEntry, IntentRow } from '../../domain/budget-control.js';
 import type { Session, VerifiedIdentity } from '../../domain/identity.js';
 import { SESSION_COOKIE_NAME } from '../identity/session-cookie.js';
 import type {
@@ -53,7 +53,13 @@ const budget = (kind: 'paper' | 'live'): BudgetRecord => ({
 const unavailable = async () =>
   ({ failure: 'unreachable', ok: false }) as Awaited<ReturnType<GetPaperBudget>>;
 
-function harness(options: { identity?: VerifiedIdentity | null; recorderFails?: boolean } = {}): {
+function harness(
+  options: {
+    identity?: VerifiedIdentity | null;
+    intentHistory?: readonly IntentHistoryEntry[];
+    recorderFails?: boolean;
+  } = {},
+): {
   appended: Omit<IntentRow, 'id'>[];
   rows: Map<string, Session>;
   server: ReturnType<typeof createHttpServer>;
@@ -92,7 +98,7 @@ function harness(options: { identity?: VerifiedIdentity | null; recorderFails?: 
     budgets: { readBudgets: async () => [budget('paper'), budget('live')] },
     clock: { now: () => NOW },
     engine: {
-      readIntentHistory: async () => [],
+      readIntentHistory: async () => options.intentHistory ?? [],
       readJobHealth: async () => [
         { capability: 'budget:live', lastOutcome: null, lastRunAt: null, lastRunId: null },
       ],
@@ -447,6 +453,69 @@ describe('the budget surface', () => {
     });
     expect(session.statusCode).toBe(200);
     expect(session.json()).toMatchObject({ accountId: ACCOUNT });
+  });
+});
+
+describe('the signed-in intent history over a recorded configure document', () => {
+  it('serves a nineteen-field document, and a twenty-field one, without a 500', async () => {
+    // The route serialises history and then runs the real contract assertion compiled
+    // from the published document. Before the published cap was raised to twenty, a
+    // nineteen-field configure row the API itself had accepted would have failed that
+    // assertion here and the route would have answered 500. Synthetic values only.
+    const parameters: Record<string, string | number | boolean> = {
+      budget_id: `${ACCOUNT}:paper`,
+      entry_cap_cents: 200,
+      funding_id: 'synthetic-funding',
+      kalshi_cap_cents: 500,
+      kalshi_market_percent: 100,
+      market_id: 'crypto-15m',
+      paper_config_version: 2,
+      paper_providers: 'kalshi',
+      policy_bundle: 'paper-v1-blend04-neutral-v7',
+      polymarket_cap_cents: 0,
+      polymarket_market_percent: 0,
+      regime_bundle_id: 'paper-regime-historical-warm-lineage-v1',
+      regime_enabled: true,
+      regime_evidence_half_life_windows: '2.50',
+      regime_minimum_policy_windows: 12,
+      regime_pause_confidence: '0.970',
+      regime_profile_claim: 'synthetic-profile-claim',
+      regime_resume_confidence: '0.9',
+      total_cap_cents: 1000,
+    };
+    expect(Object.keys(parameters)).toHaveLength(19);
+    const entryWith = (recorded: Record<string, string | number | boolean>) => [
+      {
+        intent: {
+          action: 'configure' as const,
+          actor: ACCOUNT,
+          capability: 'budget:paper',
+          epoch: 4,
+          id: 'intent-1',
+          parameters: recorded,
+          recordedAt: NOW,
+          runId: 'run-identifier',
+        },
+        outcomes: [],
+      },
+    ];
+    for (const recorded of [parameters, { ...parameters, regime_profile_revision: 1 }]) {
+      const { server } = harness({ intentHistory: entryWith(recorded) });
+      const cookie = await signIn(server);
+      const response = await server.inject({
+        headers: { cookie },
+        method: 'GET',
+        url: '/v1/budgets/paper/intents',
+      });
+      expect(response.statusCode).toBe(200);
+      const body = response.json() as {
+        entries: { intent: { parameters: Record<string, unknown> } }[];
+      };
+      expect(body.entries).toHaveLength(1);
+      expect(body.entries[0]!.intent.parameters).toEqual(recorded);
+      // The fractional profile fields are still decimal TEXT on the wire.
+      expect(typeof body.entries[0]!.intent.parameters.regime_pause_confidence).toBe('string');
+    }
   });
 });
 

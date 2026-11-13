@@ -63,6 +63,10 @@ export function createEngineReaderClient(connectionString: string): EngineQueryC
  * The control connection. `engine_control_recorder`, which may `INSERT` into one
  * append-only table and holds no other grant anywhere in the database, so the
  * narrowness is the role's rather than this file's.
+ *
+ * It reads NOTHING, including the rows it writes: the recorder generates each intent's
+ * identifier before inserting it (ADR-0013 §2, amended 2026-10-19) rather than asking
+ * PostgreSQL to return it, which would have required `SELECT` on the returned column.
  */
 export function createEngineRecorderClient(connectionString: string): EngineQueryClient {
   return create(connectionString, 'platform-api-control-recorder', false);

@@ -7,6 +7,8 @@ import {
 // Ported from the v1 basis, forecast model, observation window and resolver, sanitized.
 // Probability arithmetic is independent of venue prices and observation-only candidates.
 import type { LeaseGrant } from './cycle-store.js';
+import type { ForecastBaselineSnapshot } from './forecast-baseline.js';
+
 export type Venue = 'polymarket' | 'kalshi';
 export type Side = 'UP' | 'DOWN';
 export interface Contract {
@@ -104,6 +106,9 @@ export interface Outcome {
 }
 export interface ForecastStore {
   assertLease(grant: LeaseGrant): Promise<void>;
+  /** The restored baseline, counted from the rows themselves. Read before the lane
+   * records anything; `domain/forecast-baseline.ts` decides on it. */
+  readBaseline(): Promise<ForecastBaselineSnapshot>;
   readEnabledVenues(): Promise<readonly Venue[]>;
   readOracleHistory(asset: string, since: Date): Promise<readonly PricePoint[]>;
   recordObservation(grant: LeaseGrant, row: ForecastRow, input: ForecastInput): Promise<boolean>;

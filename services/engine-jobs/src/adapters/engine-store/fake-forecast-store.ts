@@ -9,6 +9,7 @@ import {
   type Venue,
 } from '../../domain/forecast.js';
 import type { FakeCycleStore } from './fake-cycle-store.js';
+import type { ForecastBaselineSnapshot } from '../../domain/forecast-baseline.js';
 /** SQL constraints and overlay semantics, not an unconstrained bag of rows. */
 export class FakeForecastStore implements ForecastStore {
   readonly rows = new Map<string, DueForecast>();
@@ -54,6 +55,23 @@ export class FakeForecastStore implements ForecastStore {
     if (this.failureAt === stage) throw Error('Synthetic transaction failure ' + stage);
   }
   venues: readonly Venue[] = ['polymarket', 'kalshi'];
+  /** The baseline this fake reports. A restored, untouched baseline by default — one
+   * completed restore run and no unattributed rows — so a test that cares about the
+   * forecast lane does not have to build one, and a test that cares about the gate
+   * perturbs exactly the field it is about. */
+  baseline: ForecastBaselineSnapshot = {
+    completedRuns: [
+      { manifestDigest: 'sha256:fake-manifest', runId: 'restore-1', schemaVersion: '0003' },
+    ],
+    cycleRows: { adoptedFromBaseline: 0, recordedByRuns: 0 },
+    forecastRows: { attributedToBaseline: 0, total: 0 },
+    ledgerOrders: { attributedToBaseline: 0, total: 0 },
+    ledgerState: { attributedToBaseline: 0, total: 0 },
+    openRuns: 0,
+  };
+  /** How many times the lane asked for the baseline, so a test can prove the read
+   * happened before any recording. */
+  baselineReads = 0;
   constructor(
     readonly cycleStore: FakeCycleStore,
     readonly now: () => Date,
@@ -70,6 +88,10 @@ export class FakeForecastStore implements ForecastStore {
   }
   async assertLease(grant: LeaseGrant): Promise<void> {
     this.fence(grant);
+  }
+  async readBaseline(): Promise<ForecastBaselineSnapshot> {
+    this.baselineReads += 1;
+    return this.baseline;
   }
   async readEnabledVenues(): Promise<readonly Venue[]> {
     return this.venues;

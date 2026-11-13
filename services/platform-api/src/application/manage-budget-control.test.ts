@@ -175,7 +175,7 @@ describe('recording a control', () => {
       { nested: { a: 1 } as unknown as string },
       { unbounded: 'x'.repeat(121) },
       { infinite: Number.POSITIVE_INFINITY },
-      Object.fromEntries(Array.from({ length: 13 }, (_, index) => [`k${index}`, 1])),
+      Object.fromEntries(Array.from({ length: 21 }, (_, index) => [`k${index}`, 1])),
     ]) {
       const refused = await record({
         accountId: ACCOUNT,
@@ -242,6 +242,44 @@ describe('parameter validation', () => {
   it('accepts null and the empty object', () => {
     expect(validateParameters(null)).toBe(true);
     expect(validateParameters({})).toBe(true);
+  });
+
+  it('bounds the count at twenty, which the nineteen-field paper document fits', () => {
+    const keyed = (count: number) =>
+      Object.fromEntries(Array.from({ length: count }, (_, index) => [`k${index}`, 1]));
+    expect(validateParameters(keyed(20))).toBe(true);
+    expect(validateParameters(keyed(21))).toBe(false);
+    // The shape of the version-2 paper configure document: nineteen scalar fields, with
+    // the fractional profile values recorded as decimal TEXT. Synthetic values only.
+    const configureDocument = {
+      budget_id: 'synthetic:paper',
+      entry_cap_cents: 200,
+      funding_id: 'synthetic-funding',
+      kalshi_cap_cents: 500,
+      kalshi_market_percent: 100,
+      market_id: 'crypto-15m',
+      paper_config_version: 2,
+      paper_providers: 'kalshi',
+      policy_bundle: 'paper-v1-blend04-neutral-v7',
+      polymarket_cap_cents: 0,
+      polymarket_market_percent: 0,
+      regime_bundle_id: 'paper-regime-historical-warm-lineage-v1',
+      regime_enabled: true,
+      regime_evidence_half_life_windows: '2.50',
+      regime_minimum_policy_windows: 12,
+      regime_pause_confidence: '0.970',
+      regime_profile_claim: 'synthetic-profile-claim',
+      regime_resume_confidence: '0.9',
+      total_cap_cents: 1000,
+    };
+    expect(Object.keys(configureDocument)).toHaveLength(19);
+    expect(validateParameters(configureDocument)).toBe(true);
+    // Nothing else about the shape moved: nesting, arrays, long text and bad keys are
+    // still refused at nineteen or twenty fields just as they were at twelve.
+    expect(validateParameters({ ...configureDocument, nested: { a: 1 } })).toBe(false);
+    expect(validateParameters({ ...configureDocument, listed: [1] })).toBe(false);
+    expect(validateParameters({ ...configureDocument, long: 'x'.repeat(121) })).toBe(false);
+    expect(validateParameters({ ...configureDocument, 'Bad-Key': 'x' })).toBe(false);
   });
 });
 

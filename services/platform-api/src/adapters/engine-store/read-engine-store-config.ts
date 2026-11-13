@@ -20,7 +20,8 @@
 /** `SELECT` on a granted subset of the engine schema. */
 export const ENGINE_READER_URL_ENV = 'PLATFORM_API_ENGINE_READER_DATABASE_URL';
 
-/** `INSERT` on the append-only control table, and nothing else. */
+/** `INSERT` on the append-only control table, and nothing else — not even a read of its
+ * own insert, since the recorder generates the intent id itself (ADR-0013 §2). */
 export const ENGINE_RECORDER_URL_ENV = 'PLATFORM_API_ENGINE_RECORDER_DATABASE_URL';
 
 const SCHEMA_ENV = 'PLATFORM_API_ENGINE_SCHEMA';

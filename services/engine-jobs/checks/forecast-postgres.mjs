@@ -1,3 +1,6 @@
+import { paperRootPostgresContract } from './paper-root-postgres.mjs';
+import { forecastBaselinePostgresContract } from './forecast-baseline-postgres.mjs';
+import { forecastPaperInvariancePostgresContract } from './forecast-paper-invariance-postgres.mjs';
 import {
   forecastStoreConformance,
   eventFailureConformance,
@@ -56,6 +59,7 @@ try {
     '0003-ledger-order-position.sql',
     '0004-engine-cycle-lease-and-runs.sql',
     '0005-forecast-cycle-overlay.sql',
+    '0006-paper-cycle-overlay.sql',
   ]) {
     const sql = readFileSync('services/platform-api/migrations/' + file, 'utf8').replaceAll(
       ":'account_id'",
@@ -66,9 +70,13 @@ try {
   await admin.unsafe(
     readFileSync('services/platform-api/migrations/0005-forecast-cycle-overlay.sql', 'utf8'),
   );
+  await admin.unsafe(
+    readFileSync('services/platform-api/migrations/0006-paper-cycle-overlay.sql', 'utf8'),
+  );
   console.log('Synthetic schema migration and reapply completed.');
   const writerUrl = 'postgres://engine_writer@127.0.0.1:' + port + '/postgres';
   writer = postgres(writerUrl, { max: 1, prepare: false });
+  await paperRootPostgresContract(admin, writer, port);
   store = createPostgresForecastStore(writerUrl);
   cycle = createPostgresCycleStore(writerUrl);
   const now = new Date(),
@@ -634,6 +642,14 @@ try {
     "select count(*) n from engine.forecast_cycle_row where forecast_id in ('expired','stale-token')",
   );
   assert.equal(Number(absent.n), 0);
+  // Last, and in its own database: the restored-baseline reconciliation gate. It owns
+  // every row that decides its answer, so it runs after the lane contract above rather
+  // than sharing that database's restore runs.
+  await forecastBaselinePostgresContract(admin, port);
+  // And, in a third database of its own, whether a real cycle leaves the excluded paper
+  // balances and orders byte-for-byte unchanged — the part of the acceptance a count
+  // cannot answer.
+  await forecastPaperInvariancePostgresContract(admin, port);
   console.log(
     'Synthetic PostgreSQL migration/reapply/lease-expiry/provenance/overlay/uniqueness/role contract passed.',
   );

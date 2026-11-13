@@ -19,6 +19,7 @@ import { randomUUID } from 'node:crypto';
 import { createPostgresCycleStore } from '../adapters/engine-store/postgres-cycle-store.js';
 import { runCycleJob } from '../application/cycle.js';
 import { createPostgresForecastStore } from '../adapters/engine-store/postgres-forecast-store.js';
+import { createPostgresPaperAuthorityStore } from '../adapters/engine-store/postgres-paper-authority-store.js';
 import { createPublicForecastFeeds } from '../adapters/feeds/forecast-feeds.js';
 import { CYCLE_MODES, DEFAULT_TICKS, isCycleMode, type CycleMode } from '../domain/cycle-store.js';
 
@@ -94,11 +95,21 @@ async function main(): Promise<number> {
 
   const store = createPostgresCycleStore(connectionString);
   const forecastStore = mode === 'forecast' ? createPostgresForecastStore(connectionString) : null;
+  // Wired 2026-10-19, for the paper lane only: the persisted authority READER, over the
+  // same `engine_writer` reference this job already holds. It is the read side and
+  // nothing else — no writer is constructed here, because nothing on this path may write
+  // a gate row, and a reader that is never handed to a writer cannot become one. There is
+  // no new environment variable, argument or token: the lane is decided by `--mode`,
+  // whose default is still `dry`, and admission is decided by the build's own
+  // `COMPILED_PAPER_BUNDLE_AVAILABLE`, which is `false`.
+  const paperAuthority =
+    mode === 'paper' ? createPostgresPaperAuthorityStore(connectionString) : null;
   try {
     const result = await runCycleJob({
       ...(forecastStore === null
         ? {}
         : { forecast: { store: forecastStore, feeds: createPublicForecastFeeds() } }),
+      ...(paperAuthority === null ? {} : { paper: { authority: paperAuthority } }),
       controlEpoch,
       mode,
       now: () => new Date(),
@@ -109,8 +120,18 @@ async function main(): Promise<number> {
     });
     // One line, counts and codes only: no connection string, no row content, no
     // account identifier (SECURITY.md).
+    //
+    // `baselineDivergences` is present only on the baseline refusal, and carries only
+    // codes from the closed `FORECAST_BASELINE_DIVERGENCES` vocabulary — never a count,
+    // a key, a run id or anything read out of a row. Without it the log says
+    // `forecast-baseline-unreconciled` and nothing about WHICH divergence, which is the
+    // one thing an operator needs before deciding whether a restore is incomplete or the
+    // excluded paper tables moved.
     console.log(
       JSON.stringify({
+        ...(result.baselineDivergences === undefined
+          ? {}
+          : { baselineDivergences: result.baselineDivergences }),
         capability: result.capability,
         fencingToken: result.fencingToken,
         intentId: result.intentId,
@@ -126,6 +147,7 @@ async function main(): Promise<number> {
   } finally {
     await store.close();
     if (forecastStore !== null) await forecastStore.close();
+    if (paperAuthority !== null) await paperAuthority.close();
   }
 }
 

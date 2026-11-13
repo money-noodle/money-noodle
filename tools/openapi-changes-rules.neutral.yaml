@@ -1,0 +1,18 @@
+# Neutral breaking-change rules for `openapi-changes`.
+#
+# This file deliberately overrides NOTHING: with it, the tool's own built-in
+# classification decides what is breaking, exactly as it does with no configuration at
+# all. It exists so the checker can pass `-c` explicitly, because the tool otherwise
+# auto-discovers `./changes-rules.yaml` and then `~/.config/changes-rules.yaml`, and such
+# a file can waive a whole CLASS of changes. Measured on the pinned 0.2.11 binary, with a
+# `components.schemas.ControlParameters.maxProperties` 12 -> 20 change:
+#
+#   no config, no ambient file                     -> breaking: true
+#   ambient ./changes-rules.yaml waiving it        -> breaking: FALSE
+#   ambient ~/.config/changes-rules.yaml waiving   -> breaking: FALSE
+#   either ambient file plus `-c` on this file     -> breaking: true
+#
+# So the one accepted exception is granted by the checker, against an exact reviewed
+# record, and never by a rules file that would also waive every other change of the same
+# shape. Do not add rules here: an entry would silence a class of changes repository-wide.
+{}

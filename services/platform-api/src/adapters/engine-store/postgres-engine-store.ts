@@ -15,6 +15,8 @@
 // job's to append (ADR-0013 §3), so the shape a future edit would need in order
 // to make the API apply its own intent simply is not here.
 
+import { randomUUID } from 'node:crypto';
+
 import type {
   ControlRecorderPort,
   EngineReadPort,
@@ -228,19 +230,85 @@ export function createPostgresEngineReader(options: EngineStoreOptions): EngineR
   });
 }
 
+/** The namespace half of the per-capability control write lock text.
+ *
+ * This literal is DUPLICATED from the engine side, which owns it:
+ * `services/engine-jobs/src/adapters/engine-store/paper-gate-write-lock.ts`
+ * (`PAPER_GATE_WRITE_LOCK_NAMESPACE`). There is no cross-project import between these
+ * two deployables, so the two copies are kept honest by a hosted contract that runs THIS
+ * adapter against THAT writer and observes one waiting on the other's lock — a string
+ * mismatch would stop the wait being observed and fail the vector.
+ *
+ * Approved by Rai on 2026-10-18 as code and tests only: not deployed, not activated, and
+ * no schema, grant, role, migration, API shape or access-policy change accompanies it. */
+export const CONTROL_WRITE_LOCK_NAMESPACE = 'money-noodle/paper-gate-capability-write/v1';
+
 export function createPostgresControlRecorder(options: EngineStoreOptions): ControlRecorderPort {
   const { client, schema } = options;
   return Object.freeze({
     async record(intent: Omit<IntentRow, 'id'>): Promise<{ readonly id: string }> {
-      // `returning id` is the only thing this connection reads, and it reads its
-      // own insert. The role holds no `SELECT`, so this cannot become a query.
-      const rows = await run(
+      // The identifier is generated HERE, before the insert, and written as a column.
+      // Approved by Rai on 2026-10-19 (#orbit 1561601104473493547, "I approve") in answer
+      // to exactly this: the API generates each intent's UUID before inserting, the port's
+      // response is unchanged, and no database grant or migration accompanies it. Code and
+      // tests only: nothing is deployed by this change.
+      //
+      // Why it is generated rather than read back: `returning id` requires `SELECT` on the
+      // returned column, and `engine_control_recorder` is granted `INSERT` and no `SELECT`
+      // (migration 0001, whose comment claiming otherwise is corrected in
+      // `docs/architecture/decisions/ADR-0013-m4-engine-boundary.md`). The role therefore
+      // could not execute the previous statement at all — a pre-existing defect, not one
+      // the advisory lock introduced, which
+      // `services/engine-jobs/checks/paper-gate-control-recorder-lock-postgres.mjs`
+      // measures as `42501` and keeps as a regression. Generating the id keeps the role
+      // able to READ NOTHING, which is the invariant ADR-0013 §2 exists to protect, and
+      // leaves the applied migration untouched.
+      //
+      // `gen_random_uuid()::text` remains the column's default and is simply not used on
+      // this path. The value is never taken from a caller, so this is not an
+      // idempotency key and gives no retry semantics: a second call records a second
+      // intent, exactly as before.
+      //
+      // The per-capability advisory lock is taken by the SAME single statement, so it is
+      // acquired before the insert can take effect and released by that statement's
+      // implicit commit. One statement is one transaction, so a transaction pooler cannot
+      // split the hold from the insert. Every capability's intent takes its own key: only
+      // `budget:paper` has a gate writer today, and the rest simply serialize their own
+      // inserts. The engine side owns the key derivation and this is kept honest by a
+      // hosted contract that observes each side waiting on the other's hold.
+      const id = randomUUID();
+      // `$8::text::jsonb`, fixed 2026-10-19, and the cast is the fix. The parameters were
+      // being DOUBLE-ENCODED: this adapter binds the document as JSON text, the server
+      // described `$8` as `jsonb`, and the driver then JSON-encoded that string a second
+      // time, so the column held a JSON *string* — `"{\"k\":\"v\"}"` — rather than the
+      // document. Every reader contract in this repository requires an object, and this
+      // adapter's own `parameters` decoder refuses a string outright, so a `configure` or
+      // `resume` written that way could not be read back at all. A `pause` with no
+      // parameters was unaffected, which is why it went unnoticed.
+      //
+      // Casting the placeholder makes the server describe `$8` as `text`: the driver sends
+      // the string verbatim and PostgreSQL parses it exactly once. That is what every
+      // engine-side seeder in this repository already does, and it does not depend on the
+      // describe-then-serialise behaviour that caused the bug. `null` still binds as SQL
+      // NULL, because a NULL text cast to jsonb is NULL, and `{}` is preserved as `{}`.
+      // The stored shape is the one the contracts always specified: this corrects the
+      // writer, and no reader was loosened to accept the old one.
+      // Success accounting, with no row to count: the statement selects FROM a `void`
+      // function, which yields exactly ONE row, and the insert has no `on conflict`, no
+      // rule and no trigger on this table (migration 0001 creates none, and the hosted
+      // contract asserts the catalog has none), so PostgreSQL cannot insert zero rows and
+      // still succeed. An empty result is therefore the expected shape and is NOT a
+      // failure. Anything the driver raises propagates through `run` as this service's own
+      // error, so the return below is reached only after the single autocommit statement
+      // has committed.
+      await run(
         client,
         `insert into "${schema}"."${CONTROL_INTENT_TABLE}"
-           (capability, action, actor, epoch, recorded_at, run_id, parameters)
-         values ($1, $2, $3, $4, $5, $6, $7)
-         returning id`,
+           (id, capability, action, actor, epoch, recorded_at, run_id, parameters)
+         select $1, $2, $3, $4, $5, $6, $7, $8::text::jsonb
+           from pg_advisory_xact_lock(hashtextextended($9::text, 0))`,
         [
+          id,
           intent.capability,
           intent.action,
           intent.actor,
@@ -248,11 +316,10 @@ export function createPostgresControlRecorder(options: EngineStoreOptions): Cont
           intent.recordedAt,
           intent.runId,
           intent.parameters === null ? null : JSON.stringify(intent.parameters),
+          `${CONTROL_WRITE_LOCK_NAMESPACE}:${intent.capability}`,
         ],
       );
-      const first = rows[0];
-      if (first === undefined) throw new EngineStoreError('engine-unexpected-shape');
-      return Object.freeze({ id: text(first, 'id') });
+      return Object.freeze({ id });
     },
   });
 }

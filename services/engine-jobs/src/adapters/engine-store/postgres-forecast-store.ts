@@ -2,6 +2,10 @@ import postgres from 'postgres';
 import { FencingTokenRejectedError, type LeaseGrant } from '../../domain/cycle-store.js';
 import { boundReference, recordObject } from '../../domain/contract-binding.js';
 import type {
+  ForecastBaselineRun,
+  ForecastBaselineSnapshot,
+} from '../../domain/forecast-baseline.js';
+import type {
   DueForecast,
   ForecastRow,
   ForecastStore,
@@ -52,6 +56,89 @@ export function createPostgresForecastStore(
       await sql.begin(async (tx) => {
         await guard(tx, grant);
       });
+    },
+    /**
+     * The restored baseline, counted from the rows themselves. One read-only statement
+     * over tables migration 0002 and 0005 already define: no new table, column, grant or
+     * migration, and no write. The baseline is the single COMPLETED restore run; counts
+     * attributed to it come from the `restore_run_id` every restored row carries, and the
+     * overlay split comes from 0005's `origin_run_id` XOR `origin_restore_run_id`. With no
+     * completed run the attributed counts are zero by construction, which the pure
+     * decision reports as a missing baseline rather than a clean one.
+     */
+    async readBaseline(): Promise<ForecastBaselineSnapshot> {
+      const [row] = await sql.unsafe<
+        {
+          runs: string;
+          open_runs: string;
+          ledger_state_total: string;
+          ledger_state_baseline: string;
+          ledger_order_total: string;
+          ledger_order_baseline: string;
+          forecast_row_total: string;
+          forecast_row_baseline: string;
+          cycle_adopted: string;
+          cycle_recorded: string;
+        }[]
+      >(
+        `with baseline as (
+           select run_id, manifest_digest, schema_version
+             from engine.restore_run
+            where completed_at is not null
+            order by started_at desc, run_id
+         ), one as (select run_id from baseline limit 1)
+         select
+           (select coalesce(json_agg(json_build_object(
+                     'runId', run_id, 'manifestDigest', manifest_digest,
+                     'schemaVersion', schema_version)), '[]'::json) from baseline)::text as runs,
+           (select count(*) from engine.restore_run where completed_at is null)::text as open_runs,
+           (select count(*) from engine.ledger_state)::text as ledger_state_total,
+           (select count(*) from engine.ledger_state
+             where restore_run_id = (select run_id from one))::text as ledger_state_baseline,
+           (select count(*) from engine.ledger_order)::text as ledger_order_total,
+           (select count(*) from engine.ledger_order
+             where restore_run_id = (select run_id from one))::text as ledger_order_baseline,
+           (select count(*) from engine.forecast_row)::text as forecast_row_total,
+           (select count(*) from engine.forecast_row
+             where restore_run_id = (select run_id from one))::text as forecast_row_baseline,
+           (select count(*) from engine.forecast_cycle_row
+             where origin_restore_run_id is not null)::text as cycle_adopted,
+           (select count(*) from engine.forecast_cycle_row
+             where origin_run_id is not null)::text as cycle_recorded`,
+      );
+      // A count that is not a plain non-negative integer is not believed: `-1` makes the
+      // pure decision refuse `baseline-malformed` rather than letting a bad read pass.
+      const count = (value: unknown): number =>
+        typeof value === 'string' && /^[0-9]+$/.test(value) && Number.isSafeInteger(Number(value))
+          ? Number(value)
+          : -1;
+      const runs: ForecastBaselineRun[] = [];
+      try {
+        const parsed: unknown = JSON.parse(row?.runs ?? '[]');
+        if (Array.isArray(parsed)) runs.push(...(parsed as ForecastBaselineRun[]));
+      } catch {
+        // Leave `runs` empty: no baseline is proven, so the decision refuses.
+      }
+      return {
+        completedRuns: runs,
+        cycleRows: {
+          adoptedFromBaseline: count(row?.cycle_adopted),
+          recordedByRuns: count(row?.cycle_recorded),
+        },
+        forecastRows: {
+          attributedToBaseline: count(row?.forecast_row_baseline),
+          total: count(row?.forecast_row_total),
+        },
+        ledgerOrders: {
+          attributedToBaseline: count(row?.ledger_order_baseline),
+          total: count(row?.ledger_order_total),
+        },
+        ledgerState: {
+          attributedToBaseline: count(row?.ledger_state_baseline),
+          total: count(row?.ledger_state_total),
+        },
+        openRuns: count(row?.open_runs),
+      };
     },
     async readEnabledVenues(): Promise<readonly Venue[]> {
       const rows = await sql.unsafe<{ provider_id: string; record: Record<string, unknown> }[]>(

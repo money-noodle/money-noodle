@@ -49,10 +49,36 @@ export const CYCLE_REASONS = [
   'intent-paused',
   /** Another owner holds a live lease on this capability. */
   'lease-held',
-  /** A mode later stages implement was requested. Nothing ran. */
+  /** A mode later stages implement was requested, or the paper lane was asked for
+   * with no authority reader wired. Nothing ran. */
   'mode-not-implemented',
+  /** The paper lane asked the persisted authority and the READ itself refused — a
+   * malformed scope, or this run's lease no longer held at the read's own fence.
+   * Nothing was decided and nothing ran. */
+  'paper-authority-unreadable',
+  /** The paper lane read authority and the decision under the PRODUCTION bundle was
+   * `bundle-unavailable`: the audited policy closure this build carries is not
+   * available, so admission is refused however valid the operator's intent is. This
+   * is the reason a correctly configured and resumed paper budget records today. */
+  'paper-bundle-unavailable',
+  /** The paper lane read authority and the production decision refused for some other
+   * reason the reducer gave — a paused or superseded control, an invalid configuration
+   * or resume reference, an unusable funding root. The specific reason is the
+   * authority's and is not re-coded here. */
+  'paper-authority-refused',
+  /** Admission was granted and the lane still did not run, because the producers a
+   * paper tick would need — candidates, evidence, a generation to advance — are not
+   * implemented. Unreachable while the compiled bundle is unavailable, and present so
+   * that an allowed decision can never be mistaken for a performed run. */
+  'paper-admission-unimplemented',
   /** This run id already has a record, so the run is a retry of a recorded run. */
   'run-already-recorded',
+  /** The forecast lane read the restored baseline and it did not reconcile: a missing,
+   * ambiguous or incomplete restore run, or rows in `engine.ledger_state`,
+   * `engine.ledger_order` or `engine.forecast_row` that the baseline restore did not
+   * load. Nothing was recorded. The specific divergences are the baseline decision's
+   * and are reported by the run rather than re-coded here. */
+  'forecast-baseline-unreconciled',
 ] as const;
 
 export type CycleReason = (typeof CYCLE_REASONS)[number];

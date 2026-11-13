@@ -7,5 +7,5 @@
     "types": ["node"]
   },
   "include": ["src/**/*.ts", "vitest.config.ts"],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "src/test-support/**/*.test-artifact.ts"]
 }
