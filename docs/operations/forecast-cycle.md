@@ -34,3 +34,24 @@ New forecast recording requires a valid current Polymarket 15-minute target and 
 Candidate probability-family math retains the historical model-spec identities. Prospective candidate entries use a pure Kalshi observational compatibility allowlist intersected with enabled valid quotes. No execution capability, live flag or credential is imported. All available candidate probabilities remain recorded even when no eligible candidate entry exists. The DTO distinguishes the unconstrained best quote option from an admissible selected entry; probability and production paper qualification retain their original quote set and are never narrowed by candidate metadata. Archived promotions remain inert.
 
 Issuance calibration uses compatible `calibration-replay-v1` fields, finite raw basis inputs and independently recomputed confidence/probability errors. Historical reconstruction never fabricates missing raw or confidence inputs. Non-control research candidates require issuance-exact probability and confidence replay errors at most 1e-12. Archived promotions remain inert.
+
+## Restored-baseline reconciliation (November 13, 2026)
+
+The reduced #243 acceptance requires the restored forecast/paper baseline to be reconciled **before the lane records anything**, and the excluded paper balances and orders to be unchanged. The forecast lane therefore reads one read-only snapshot of the restored tables through `ForecastStore.readBaseline()` after it holds the lease and before its first tick, and `services/engine-jobs/src/domain/forecast-baseline.ts` decides on it. A reconciled snapshot carries exactly one completed `engine.restore_run`, no open one, and every row in `engine.ledger_state`, `engine.ledger_order` and `engine.forecast_row` attributed to that run's `restore_run_id`. Nothing is counted by content, hash or sample: migration 0002 gives every restored row its `restore_run_id`, so the question is answered by counting attribution, and this check needs no migration, no new column and no new grant.
+
+Anything else refuses the run with reason **`forecast-baseline-unreconciled`**, before `recordObservation` or `patchForecast` is reached, and the refusal is an ordinary complete run record: the outcome row is appended, job health updated and the lease released, so the run id stays spent and a retry does not re-enter the gate. The refusal reports every divergence it found, in a fixed order:
+
+| Divergence | Meaning |
+| --- | --- |
+| `baseline-malformed` | The snapshot is unreadable — a missing field, a non-integer or negative count, an untrimmed or empty run id, digest or schema version. Unreadable fails closed; it never reads as clean. |
+| `baseline-missing` | No completed restore run, so there is no baseline to reconcile against. |
+| `baseline-ambiguous` | More than one completed restore run, so "the" baseline is not identified. |
+| `baseline-incomplete` | A restore run is still open; the baseline may still be loading. |
+| `paper-state-changed` | `engine.ledger_state` holds rows the baseline restore did not load. The excluded paper balances must be unchanged. |
+| `paper-orders-changed` | `engine.ledger_order` holds rows the baseline restore did not load. The excluded paper orders must be unchanged. |
+| `forecast-baseline-changed` | `engine.forecast_row` holds rows the baseline restore did not load, so the recording baseline is not the restored one. |
+| `baseline-adoption-exceeds-restored` | More `engine.forecast_cycle_row` rows claim a restore origin than the baseline restored, so overlay attribution contradicts the baseline. |
+
+Rows a previous cycle recorded (`engine.forecast_cycle_row.origin_run_id`) are **not** a divergence: after the first recording run they are expected, and the reconciled decision reports their count so an operator can tell a first run from a later one. The reason code is part of the closed `CYCLE_REASONS` set; this section is the document that names it, and `services/engine-jobs/src/cycle.test.ts` fails if a code loses its owning document.
+
+Status: implemented and offline-tested only. `services/engine-jobs/src/forecast-baseline.test.ts` covers the decision table and the wiring against the in-memory stores; `services/engine-jobs/checks/forecast-postgres.mjs` exercises `readBaseline()` against a disposable loopback PostgreSQL 16 instance. No deployed run has executed this gate — the cycle schedule remains paused (`infra/stacks/engine-jobs/cycle.tfvars`) and the first recording run stays separately approved.

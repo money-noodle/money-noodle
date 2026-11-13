@@ -73,6 +73,10 @@ import type {
   PaperAuthorityScope,
 } from '../domain/paper-authority-evidence.js';
 import { runForecastTick } from './forecast-cycle.js';
+import {
+  evaluateForecastBaseline,
+  type ForecastBaselineDivergence,
+} from '../domain/forecast-baseline.js';
 import type { ForecastFeeds, ForecastStore } from '../domain/forecast.js';
 
 /** How many intent rows to read. The decision needs the latest; this is head-room. */
@@ -131,6 +135,9 @@ export interface CycleJobResult {
   readonly ticksCompleted: number;
   /** The intent row this run evaluated, when there was one. */
   readonly intentId: string | null;
+  /** Set only on `forecast-baseline-unreconciled`: every divergence the baseline
+   * decision found, so one refusal names everything an operator must resolve. */
+  readonly baselineDivergences?: readonly ForecastBaselineDivergence[];
 }
 
 export async function runCycleJob(input: CycleJobInput): Promise<CycleJobResult> {
@@ -295,6 +302,26 @@ export async function runCycleJob(input: CycleJobInput): Promise<CycleJobResult>
       intent: decision.intent,
       ticksCompleted: 0,
     });
+  }
+
+  // 5c. The restored baseline, before the first recording. The restore job reconciled
+  //     the load inside its own transaction; this is the check that nothing has changed
+  //     the restored rows since, and that the excluded paper balances and orders are
+  //     still exactly what the restore loaded. It is one read, between transactions, in
+  //     the same order as everything else here, and it runs on EVERY forecast run rather
+  //     than only the first: a later divergence is no safer than an initial one. A
+  //     refusal happens before the tick loop, so nothing is recorded.
+  if (input.mode === 'forecast' && input.forecast !== undefined) {
+    const baseline = evaluateForecastBaseline(await input.forecast.store.readBaseline());
+    if (baseline.kind !== 'reconciled') {
+      // `finish` is async: it appends the outcome row, updates job health and releases
+      // the lease before this returns.
+      const refusal = await finish('refused', 'forecast-baseline-unreconciled', {
+        intent: decision.intent,
+        ticksCompleted: 0,
+      });
+      return { ...refusal, baselineDivergences: baseline.divergences };
+    }
   }
 
   // 6. The ticks. v1's cadence, inside one short run: `ticks` ticks at 15-second

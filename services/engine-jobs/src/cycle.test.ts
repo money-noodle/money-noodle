@@ -716,6 +716,7 @@ describe('what stage 1 refuses to be', () => {
   it('keeps the reason codes a closed set the migration and the runbook both name', () => {
     expect([...CYCLE_REASONS].sort()).toEqual([
       'dry-run',
+      'forecast-baseline-unreconciled',
       'forecast-run',
       'intent-future',
       'intent-missing',
@@ -768,13 +769,24 @@ describe('what stage 1 refuses to be', () => {
       ),
       'utf8',
     );
+    // The forecast lane's own refusal is named by its runbook, for the same reason the
+    // paper lane's are named by the port contract: the reason columns carry free text
+    // with no CHECK, the applied migrations are immutable, and the document an operator
+    // reads for this lane is the runbook. Every code still has one durable owning
+    // document, and that document is asserted below.
+    const forecastRunbook = readFileSync(
+      join(import.meta.dirname, '..', '..', '..', 'docs', 'operations', 'forecast-cycle.md'),
+      'utf8',
+    );
     for (const reason of CYCLE_REASONS) {
       // Stage 2 adds its applied reason without rewriting the stage-1 migration.
       const owner = reason.startsWith('paper-')
         ? portContract
         : reason === 'forecast-run'
           ? forecastMigration
-          : migration;
+          : reason.startsWith('forecast-')
+            ? forecastRunbook
+            : migration;
       expect(owner, `owning document must name the reason code ${reason}`).toContain(reason);
     }
     // `run-incomplete` is the open-record placeholder, not a run outcome, so it is

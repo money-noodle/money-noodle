@@ -73,6 +73,12 @@ export const CYCLE_REASONS = [
   'paper-admission-unimplemented',
   /** This run id already has a record, so the run is a retry of a recorded run. */
   'run-already-recorded',
+  /** The forecast lane read the restored baseline and it did not reconcile: a missing,
+   * ambiguous or incomplete restore run, or rows in `engine.ledger_state`,
+   * `engine.ledger_order` or `engine.forecast_row` that the baseline restore did not
+   * load. Nothing was recorded. The specific divergences are the baseline decision's
+   * and are reported by the run rather than re-coded here. */
+  'forecast-baseline-unreconciled',
 ] as const;
 
 export type CycleReason = (typeof CYCLE_REASONS)[number];

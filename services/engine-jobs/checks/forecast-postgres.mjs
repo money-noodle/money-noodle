@@ -1,4 +1,5 @@
 import { paperRootPostgresContract } from './paper-root-postgres.mjs';
+import { forecastBaselinePostgresContract } from './forecast-baseline-postgres.mjs';
 import {
   forecastStoreConformance,
   eventFailureConformance,
@@ -640,6 +641,10 @@ try {
     "select count(*) n from engine.forecast_cycle_row where forecast_id in ('expired','stale-token')",
   );
   assert.equal(Number(absent.n), 0);
+  // Last, and in its own database: the restored-baseline reconciliation gate. It owns
+  // every row that decides its answer, so it runs after the lane contract above rather
+  // than sharing that database's restore runs.
+  await forecastBaselinePostgresContract(admin, port);
   console.log(
     'Synthetic PostgreSQL migration/reapply/lease-expiry/provenance/overlay/uniqueness/role contract passed.',
   );
